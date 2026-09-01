@@ -22,8 +22,8 @@ import { generateModularCopy } from './modular-copy-generator.mjs';
 import { mergeParallelImageResult } from './image-copy-consistency.mjs';
 import { activeGenerationByFingerprint, generationFingerprint } from './generation-dedup.mjs';
 import { modelTaskProfile } from '../config/model-task-routing.mjs';
-import { buildCopyTargetContext, issuesForTarget, planCopyRepairs } from './copy-repair.mjs';
-import { recheckCopyData } from './copy-recheck.mjs';
+import { buildCopyTargetContext, composeCurrentFinalIssues, finalControlledRepairDecision, isBlockingCopyIssue, isRepairableGeneratedFactIssue, issuesForTarget, mergeTargetRepairIssues, planCopyRepairs, targetScopeFromPath } from './copy-repair.mjs';
+import { applySafeCopyCorrections } from './fact-provenance.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const projectRoot = path.resolve(root, "..");
@@ -151,6 +151,146 @@ function uniqueCopyIssues(issues = []) {
   return [...unique.values()];
 }
 
+function normalizeCopyIssue(item = {}, unresolved = false) {
+  const normalized = {
+    ...item,
+    ruleIds: item.ruleIds || (item.ruleId ? [item.ruleId] : ['COPY-001']),
+    severity: item.severity || (unresolved ? 'fact' : 'quality'),
+    action: item.action || (unresolved ? 'block' : 'targeted_rewrite'),
+  };
+  if (isRepairableGeneratedFactIssue(normalized)) return { ...normalized, action: 'safe_fact_fallback', repairable: true };
+  return normalized;
+}
+
+function pathsOverlap(left = '', right = '') {
+  return left === right || left.startsWith(`${right}.`) || right.startsWith(`${left}.`);
+}
+
+function originalDeterministicBaseline(data = {}) {
+  if (!data.copySourceFacts) return data;
+  return { ...data.copySourceFacts, sourceImportCoverage: data.sourceImportCoverage };
+}
+
+async function runTargetedCopyRepairBatch({ currentData, sourceData, deterministicBaseline = sourceData, sourceFacts, mainline = {}, issues = [], jobId, batchName, onStage = () => {} }) {
+  const initialIssues = uniqueCopyIssues(issues.map((item) => normalizeCopyIssue(item)));
+  const initialPlan = planCopyRepairs(initialIssues);
+  const scopePaths = initialPlan.targets.map((target) => target.path);
+  const safeStart = applySafeCopyCorrections(currentData, sourceData, { paths: scopePaths });
+  const correctedPaths = safeStart.corrections.map((item) => item.path);
+  const currentIssues = initialIssues.filter((issue) => !correctedPaths.some((path) => pathsOverlap(path, issue.path)));
+  const repairPlan = planCopyRepairs(currentIssues);
+  const usages = [];
+  const targetRuns = await Promise.all(repairPlan.targets.map(async (target, targetIndex) => {
+    let targetData = safeStart.data;
+    let remaining = target.issues;
+    const acceptedPatches = [];
+    const changedPaths = [];
+    const attempts = [];
+    const reasoningOrder = target.firstReasoning === 'high' ? ['high'] : ['low', 'high'];
+    for (const reasoning of reasoningOrder) {
+      const started = Date.now();
+      const taskKind = reasoning === 'high' ? 'targetedPatchHigh' : 'targetedPatch';
+      const targetContext = buildCopyTargetContext(sourceFacts, selectCustomerRenderData(targetData), mainline, { ...target, issues: remaining });
+      onStage({ phase: 'brand_review', currentAction: `正在修订 ${target.key}（${reasoning === 'high' ? '高推理' : '低推理'}）`, currentUnit: `${batchName}-${target.key}`, completedUnits: targetIndex, totalUnits: repairPlan.targets.length });
+      let response;
+      try {
+        response = await requestCopyModel('customer-itinerary-target-patch-v1.md', { targetContext }, reasoning === 'high' ? 9000 : 6000, reasoning, { taskKind, taskId: `${jobId}:${batchName}:${target.key}:${reasoning}`, onStatus: (stream) => onStage({ phase: 'brand_review', currentAction: `正在修订 ${target.key}`, currentUnit: `${batchName}-${target.key}`, completedUnits: targetIndex, totalUnits: repairPlan.targets.length, stream }) });
+        usages.push({ taskKind, target: target.key, usage: response.usage, attemptUsages: response.attemptUsages || [], requestProfile: response.requestProfile });
+      } catch (error) {
+        attempts.push({ reasoning, status: 'request_failed', durationMs: Date.now() - started, error: error?.message || String(error), ruleIds: target.ruleIds, ruleVersion: target.ruleVersion });
+        remaining = target.issues.map((issue) => ({ ...issue, message: `局部修复调用失败：${error?.message || String(error)}` }));
+        continue;
+      }
+      const payload = response.json && Array.isArray(response.json.patches) && Array.isArray(response.json.unresolvedIssues) ? response.json : { patches: [], unresolvedIssues: [{ ruleId: target.ruleIds[0] || 'COPY-001', path: target.path, message: '局部补丁返回结构无效' }] };
+      const rejectedPatches = [];
+      for (const candidate of payload.patches) {
+        try {
+          const applied = applyTargetedRevisions(targetData, { reviewIssues: target.issues, patches: [candidate] });
+          const comparison = compareDeterministicFacts(deterministicBaseline, applied.data);
+          if (!comparison.preserved) throw new Error('补丁改变了原始确定性事实');
+          targetData = applied.data;
+          acceptedPatches.push(candidate);
+          changedPaths.push(...applied.changedPaths);
+        } catch (error) {
+          rejectedPatches.push({ ruleId: target.ruleIds[0] || 'COPY-001', path: candidate?.path || target.path, message: `补丁被拒绝：${error.message}`, severity: /事实/.test(error.message) ? 'fact' : 'quality', action: /事实/.test(error.message) ? 'block' : 'targeted_rewrite' });
+        }
+      }
+      const deterministicTargetIssues = issuesForTarget(reviewCustomerContent(targetData, { sourceData }).issues, target);
+      let targetReviewIssues = [];
+      let targetReviewUnresolved = [];
+      try {
+        const recheckContext = buildCopyTargetContext(sourceFacts, selectCustomerRenderData(targetData), mainline, { ...target, issues: [...deterministicTargetIssues, ...payload.unresolvedIssues, ...rejectedPatches] });
+        const recheckTaskKind = reasoning === 'high' ? 'targetRecheck' : 'targetRecheckLow';
+        const recheck = await requestCopyModel('customer-itinerary-brand-reviewer-v1.md', { mode: 'target_recheck', sourceFacts: recheckContext.sourceTarget, firstDraft: recheckContext.currentTarget, deterministicIssues: deterministicTargetIssues, targetContext: recheckContext, copyRules: target.ruleCards }, 6000, reasoning, { taskKind: recheckTaskKind, taskId: `${jobId}:${batchName}-recheck:${target.key}:${reasoning}` });
+        if (!recheck.json || !Array.isArray(recheck.json.reviewIssues) || !Array.isArray(recheck.json.unresolvedIssues)) throw new Error('目标复检返回结构无效');
+        targetReviewIssues = recheck.json.reviewIssues.map((item) => normalizeCopyIssue(item));
+        targetReviewUnresolved = recheck.json.unresolvedIssues.map((item) => normalizeCopyIssue(item, true));
+        usages.push({ taskKind: recheckTaskKind, target: target.key, usage: recheck.usage, attemptUsages: recheck.attemptUsages || [], requestProfile: recheck.requestProfile });
+      } catch (error) {
+        targetReviewIssues = [{ ruleIds: target.ruleIds, ruleId: target.ruleIds[0], path: target.path, message: `目标规则复检失败：${error?.message || String(error)}`, severity: 'quality', action: 'manual_revision' }];
+      }
+      remaining = uniqueCopyIssues([...deterministicTargetIssues, ...targetReviewIssues, ...targetReviewUnresolved, ...rejectedPatches]);
+      attempts.push({ reasoning, status: remaining.length ? 'still_failed' : 'passed', durationMs: Date.now() - started, ruleIds: target.ruleIds, ruleVersion: target.ruleVersion, changedPaths: [...new Set(changedPaths)], remainingIssues: remaining });
+      if (!remaining.length) break;
+    }
+    return { target: { key: target.key, kind: target.kind, index: target.index, path: target.path }, ruleIds: target.ruleIds, ruleVersion: target.ruleVersion, acceptedPatches, changedPaths: [...new Set(changedPaths)], attempts, remainingIssues: remaining };
+  }));
+
+  let revisedData = safeStart.data;
+  const changedPaths = [];
+  const mergeRejected = [];
+  for (const run of targetRuns) for (const candidate of run.acceptedPatches) {
+    try {
+      const target = repairPlan.targets.find((item) => item.key === run.target.key);
+      const applied = applyTargetedRevisions(revisedData, { reviewIssues: target.issues, patches: [candidate] });
+      const comparison = compareDeterministicFacts(deterministicBaseline, applied.data);
+      if (!comparison.preserved) throw new Error('补丁改变了原始确定性事实');
+      revisedData = applied.data;
+      changedPaths.push(...applied.changedPaths);
+    } catch (error) {
+      mergeRejected.push({ ruleId: run.ruleIds[0], path: candidate?.path || run.target.path, message: `最终合并拒绝：${error.message}`, severity: /事实/.test(error.message) ? 'fact' : 'quality', action: /事实/.test(error.message) ? 'block' : 'manual_revision' });
+    }
+  }
+  const safeEnd = applySafeCopyCorrections(revisedData, sourceData, { paths: scopePaths });
+  return { data: safeEnd.data, blockers: repairPlan.blockers, targetRuns, usages, changedPaths: [...new Set(changedPaths)], mergeRejected, safeCorrections: [...safeStart.corrections, ...safeEnd.corrections], factProvenance: safeEnd.provenance };
+}
+
+async function recheckCopyWithBrand(data = {}, jobId = `copy-recheck-${randomUUID()}`) {
+  const sourceData = data.copySourceFacts || data;
+  const deterministicBaseline = originalDeterministicBaseline(data);
+  const safePass = applySafeCopyCorrections(data, sourceData);
+  const deterministic = reviewCustomerContent(safePass.data, { sourceData });
+  let brandReview = { reviewIssues: [], unresolvedIssues: [] };
+  let usage = null;
+  try {
+    const response = await requestCopyModel('customer-itinerary-brand-reviewer-v1.md', {
+      mode: 'final_full', sourceFacts: sourceData, firstDraft: selectCustomerRenderData(safePass.data), deterministicIssues: deterministic.issues,
+      copyRules: COPY_RULE_RUNTIME,
+    }, 18000, 'high', { taskKind: 'brandReview', taskId: `${jobId}:brand-recheck` });
+    if (!response.json || !Array.isArray(response.json.reviewIssues) || !Array.isArray(response.json.unresolvedIssues)) throw new Error('品牌复检返回结构无效');
+    brandReview = {
+      reviewIssues: response.json.reviewIssues.map((item) => normalizeCopyIssue(item)),
+      unresolvedIssues: response.json.unresolvedIssues.map((item) => normalizeCopyIssue(item, true)),
+    };
+    usage = { usage: response.usage, attemptUsages: response.attemptUsages || [], requestProfile: response.requestProfile };
+  } catch (error) {
+    brandReview = { reviewIssues: [{ ruleId: 'COPY-001', ruleIds: ['COPY-001'], path: 'customer', message: `品牌复检失败：${error?.message || String(error)}`, severity: 'quality', action: 'manual_revision' }], unresolvedIssues: [] };
+  }
+  const factComparison = compareDeterministicFacts(deterministicBaseline, safePass.data);
+  const issues = uniqueCopyIssues([...deterministic.issues, ...brandReview.reviewIssues, ...brandReview.unresolvedIssues]);
+  if (!factComparison.preserved) issues.push({ ruleId: 'COPY-015', ruleIds: ['COPY-011','COPY-014','COPY-015'], path: 'customer', message: '修订结果改变了原始确定性事实', severity: 'fact', action: 'block' });
+  const hardIssues = issues.filter((item) => isBlockingCopyIssue(item));
+  const passed = factComparison.preserved && issues.length === 0;
+  const status = passed ? 'passed' : hardIssues.length ? 'blocked_generation' : 'needs_copy_revision';
+  const contentQuality = {
+    ...(data.copyQuality || {}), version: '5.1', ruleVersion: COPY_RULE_VERSION, checkedAt: new Date().toISOString(),
+    passed, status, needsReview: !passed && !hardIssues.length, blocked: hardIssues.length > 0,
+    hardIssueCount: hardIssues.length, remainingIssueCount: issues.length, allIssues: issues,
+    safeCorrections: safePass.corrections, factProvenance: safePass.provenance, factComparison, finalReview: deterministic, brandRecheck: brandReview, usage,
+  };
+  return { data: { ...safePass.data, copyQuality: { version: '5.1', ruleVersion: COPY_RULE_VERSION, passed, status, needsReview: contentQuality.needsReview, blocked: contentQuality.blocked, hardIssueCount: hardIssues.length, remainingIssueCount: issues.length, allIssues: issues, checkedAt: contentQuality.checkedAt } }, contentQuality };
+}
+
 async function refineWithTextModel(data, context = {}, onStage = () => {}, jobId = `direct-${randomUUID()}`, options = {}) {
   const sourceFacts = compactForModel(data, context);
   const modular = await generateModularCopy({
@@ -163,8 +303,9 @@ async function refineWithTextModel(data, context = {}, onStage = () => {}, jobId
     reuseCompleted: options.reuseCompleted !== false,
   });
   const firstMerged = mergeRefinement(data, modular.draft);
-  const firstDraft = selectCustomerRenderData(firstMerged.data);
-  const reviewedFirstDraft = reviewCustomerContent(firstMerged.data, { sourceData: data });
+  const safeFirstPass = applySafeCopyCorrections(firstMerged.data, data);
+  const firstDraft = selectCustomerRenderData(safeFirstPass.data);
+  const reviewedFirstDraft = reviewCustomerContent(safeFirstPass.data, { sourceData: data });
   const structuralIssues = [
     ...modular.errors.map((item) => ({ ruleIds: item.ruleIds, code: 'copy_unit_safe_fallback', path: item.dayIndexes?.length ? `days.${item.dayIndexes[0]}` : item.unitId, message: item.message, action: 'targeted_rewrite', severity: 'quality' })),
     ...(!firstMerged.dailyRefinement.accepted ? [{ ruleIds: ['COPY-010'], code: 'daily_copy_safe_fallback', path: 'days', message: `逐日文案结构无效，已保留原始DAY并继续图片流程：${firstMerged.dailyRefinement.errors.join('；') || '模型没有返回完整days数组'}`, action: 'targeted_rewrite', severity: 'quality' }] : []),
@@ -192,20 +333,14 @@ async function refineWithTextModel(data, context = {}, onStage = () => {}, jobId
     brandReview = { reviewIssues: [], unresolvedIssues: [{ ruleId: 'COPY-001', path: 'customer', message: `独立品牌审查失败：${error?.message || String(error)}`, severity: 'quality', action: 'manual_revision' }] };
   }
 
-  const normalizeIssue = (item, unresolved = false) => ({
-    ...item,
-    ruleIds: item.ruleIds || (item.ruleId ? [item.ruleId] : ['COPY-001']),
-    severity: item.severity || (unresolved ? 'fact' : 'quality'),
-    action: item.action || (unresolved ? 'block' : 'targeted_rewrite'),
-  });
   const authoritativeIssues = uniqueCopyIssues([
-    ...initialReview.issues.map((item) => normalizeIssue(item)),
-    ...brandReview.reviewIssues.map((item) => normalizeIssue(item)),
-    ...brandReview.unresolvedIssues.map((item) => normalizeIssue(item, true)),
+    ...initialReview.issues.map((item) => normalizeCopyIssue(item)),
+    ...brandReview.reviewIssues.map((item) => normalizeCopyIssue(item)),
+    ...brandReview.unresolvedIssues.map((item) => normalizeCopyIssue(item, true)),
   ]);
   const repairPlan = planCopyRepairs(authoritativeIssues);
   const targetRuns = await Promise.all(repairPlan.targets.map(async (target, targetIndex) => {
-    let targetData = firstMerged.data;
+    let targetData = safeFirstPass.data;
     let remaining = target.issues;
     const acceptedPatches = [];
     const changedPaths = [];
@@ -244,20 +379,20 @@ async function refineWithTextModel(data, context = {}, onStage = () => {}, jobId
         const recheckContext = buildCopyTargetContext(sourceFacts, selectCustomerRenderData(targetData), modular.mainline, { ...target, issues: [...deterministicTargetIssues, ...payload.unresolvedIssues, ...rejectedPatches] });
         const recheck = await requestCopyModel('customer-itinerary-brand-reviewer-v1.md', { mode: 'target_recheck', sourceFacts: recheckContext.sourceTarget, firstDraft: recheckContext.currentTarget, deterministicIssues: deterministicTargetIssues, targetContext: recheckContext, copyRules: target.ruleCards }, 6000, 'high', { taskKind: 'targetRecheck', taskId: `${jobId}:recheck:${target.key}:${reasoning}` });
         if (!recheck.json || !Array.isArray(recheck.json.reviewIssues) || !Array.isArray(recheck.json.unresolvedIssues)) throw new Error('目标复检返回结构无效');
-        targetReviewIssues = recheck.json.reviewIssues.map((item) => normalizeIssue(item));
-        targetReviewUnresolved = recheck.json.unresolvedIssues.map((item) => normalizeIssue(item, true));
+        targetReviewIssues = recheck.json.reviewIssues.map((item) => normalizeCopyIssue(item));
+        targetReviewUnresolved = recheck.json.unresolvedIssues.map((item) => normalizeCopyIssue(item, true));
         reviewUsages.push({ taskKind: 'targetRecheck', target: target.key, usage: recheck.usage, attemptUsages: recheck.attemptUsages || [], requestProfile: recheck.requestProfile });
       } catch (error) {
         targetReviewIssues = [{ ruleIds: target.ruleIds, ruleId: target.ruleIds[0], path: target.path, message: `目标规则复检失败：${error?.message || String(error)}`, severity: 'quality', action: 'manual_revision' }];
       }
-      remaining = uniqueCopyIssues([...deterministicTargetIssues, ...targetReviewIssues, ...targetReviewUnresolved, ...payload.unresolvedIssues.map((item) => normalizeIssue(item)), ...rejectedPatches]);
+      remaining = uniqueCopyIssues([...deterministicTargetIssues, ...targetReviewIssues, ...targetReviewUnresolved, ...rejectedPatches]);
       attempts.push({ reasoning, status: remaining.length ? 'still_failed' : 'passed', durationMs: Date.now() - started, ruleIds: target.ruleIds, ruleVersion: target.ruleVersion, changedPaths: [...new Set(changedPaths)], remainingIssues: remaining });
       if (!remaining.length) break;
     }
     return { target: { key: target.key, kind: target.kind, index: target.index, path: target.path }, ruleIds: target.ruleIds, ruleVersion: target.ruleVersion, firstReasoning: target.firstReasoning, acceptedPatches, changedPaths: [...new Set(changedPaths)], attempts, remainingIssues: remaining };
   }));
 
-  let revisedData = firstMerged.data;
+  let revisedData = safeFirstPass.data;
   const allChangedPaths = [];
   const mergeRejected = [];
   for (const run of targetRuns) for (const candidate of run.acceptedPatches) {
@@ -268,22 +403,75 @@ async function refineWithTextModel(data, context = {}, onStage = () => {}, jobId
       allChangedPaths.push(...applied.changedPaths);
     } catch (error) { mergeRejected.push({ ruleId: run.ruleIds[0], path: candidate?.path || run.target.path, message: `最终合并拒绝：${error.message}`, severity: 'quality', action: 'manual_revision' }); }
   }
-  const firstFactComparison = compareDeterministicFacts(data, firstMerged.data);
+  const finalSafePass = applySafeCopyCorrections(revisedData, data);
+  revisedData = finalSafePass.data;
+  const firstFactComparison = compareDeterministicFacts(data, safeFirstPass.data);
   const finalFactComparison = compareDeterministicFacts(data, revisedData);
   const factsPreserved = firstFactComparison.preserved && finalFactComparison.preserved;
   const finalReview = reviewCustomerContent(revisedData, { sourceData: data });
-  const finalUnresolved = uniqueCopyIssues([...repairPlan.blockers, ...targetRuns.flatMap((run) => run.remainingIssues), ...mergeRejected]);
-  if (!factsPreserved) finalUnresolved.push({ ruleIds: ['COPY-011','COPY-014','COPY-015'], ruleId: 'COPY-015', path: 'customer', message: '最终文案改变了原始确定性事实', severity: 'fact', action: 'block' });
-  const remainingIssues = uniqueCopyIssues([...finalReview.issues, ...finalUnresolved]);
-  const hardIssues = remainingIssues.filter((item) => ['fact','safety','structure'].includes(item?.severity) || item?.action === 'block');
-  const passed = factsPreserved && remainingIssues.length === 0;
-  const status = passed ? 'passed' : hardIssues.length ? 'blocked_generation' : 'needs_final_review';
+  let finalBrandReview = { reviewIssues: [], unresolvedIssues: [] };
+  onStage({ phase: 'brand_review', currentAction: '正在复核最终合并后的客户文案', currentUnit: 'brand-review-final', completedUnits: repairPlan.targets.length, totalUnits: repairPlan.targets.length + 1 });
+  try {
+    const finalEditor = await requestCopyModel('customer-itinerary-brand-reviewer-v1.md', {
+      mode: 'final_full', sourceFacts, firstDraft: selectCustomerRenderData(revisedData), deterministicIssues: finalReview.issues,
+      copyRules: COPY_RULE_RUNTIME,
+    }, 18000, 'high', { taskKind: 'brandReview', taskId: `${jobId}:brand-review-final`, onStatus: (stream) => onStage({ phase: 'brand_review', currentAction: '正在复核最终合并后的客户文案', currentUnit: 'brand-review-final', completedUnits: repairPlan.targets.length, totalUnits: repairPlan.targets.length + 1, stream }) });
+    if (!finalEditor.json || !Array.isArray(finalEditor.json.reviewIssues) || !Array.isArray(finalEditor.json.unresolvedIssues)) throw new Error('最终品牌复核返回结构无效');
+    finalBrandReview = finalEditor.json;
+    reviewUsages.push({ taskKind: 'brandReviewFinal', usage: finalEditor.usage, attemptUsages: finalEditor.attemptUsages || [], requestProfile: finalEditor.requestProfile });
+  } catch (error) {
+    finalBrandReview = { reviewIssues: [{ ruleId: 'COPY-001', path: 'customer', message: `最终品牌复核失败：${error?.message || String(error)}`, severity: 'quality', action: 'manual_revision' }], unresolvedIssues: [] };
+  }
+  const normalizedFinalBrandReview = {
+    reviewIssues: finalBrandReview.reviewIssues.map((item) => normalizeCopyIssue(item)),
+    unresolvedIssues: finalBrandReview.unresolvedIssues.map((item) => normalizeCopyIssue(item, true)),
+  };
+  const finalIssuesBeforeRepair = uniqueCopyIssues([...finalReview.issues, ...composeCurrentFinalIssues([], normalizedFinalBrandReview, mergeRejected)]);
+  if (!factsPreserved) finalIssuesBeforeRepair.push({ ruleIds: ['COPY-011','COPY-014','COPY-015'], ruleId: 'COPY-015', path: 'customer', message: '最终文案改变了原始确定性事实', severity: 'fact', action: 'block' });
+
+  let finalRepair = { data: revisedData, blockers: [], targetRuns: [], usages: [], changedPaths: [], mergeRejected: [], safeCorrections: [], factProvenance: finalSafePass.provenance };
+  const finalRepairDecision = finalControlledRepairDecision(finalIssuesBeforeRepair);
+  if (finalRepairDecision.shouldRun) {
+    onStage({ phase: 'brand_review', currentAction: `最终审查发现 ${finalIssuesBeforeRepair.length} 项，正在执行最后一次定点修正`, currentUnit: 'final-controlled-repair', completedUnits: 0, totalUnits: 1 });
+    finalRepair = await runTargetedCopyRepairBatch({ currentData: revisedData, sourceData: data, sourceFacts, mainline: modular.mainline, issues: finalIssuesBeforeRepair, jobId, batchName: 'final-controlled-repair', onStage });
+    revisedData = finalRepair.data;
+    reviewUsages.push(...finalRepair.usages);
+  }
+
+  const postRepairReview = reviewCustomerContent(revisedData, { sourceData: data });
+  let postRepairBrandReview = normalizedFinalBrandReview;
+  if (finalRepair.targetRuns.length || finalRepair.safeCorrections.length) {
+    onStage({ phase: 'brand_review', currentAction: '正在复检最后一次定点修正结果', currentUnit: 'brand-review-post-repair', completedUnits: 0, totalUnits: 1 });
+    try {
+      const postRepairEditor = await requestCopyModel('customer-itinerary-brand-reviewer-v1.md', {
+        mode: 'final_full', sourceFacts, firstDraft: selectCustomerRenderData(revisedData), deterministicIssues: postRepairReview.issues,
+        copyRules: COPY_RULE_RUNTIME,
+      }, 18000, 'high', { taskKind: 'brandReview', taskId: `${jobId}:brand-review-post-repair` });
+      if (!postRepairEditor.json || !Array.isArray(postRepairEditor.json.reviewIssues) || !Array.isArray(postRepairEditor.json.unresolvedIssues)) throw new Error('最终修正复检返回结构无效');
+      postRepairBrandReview = {
+        reviewIssues: postRepairEditor.json.reviewIssues.map((item) => normalizeCopyIssue(item)),
+        unresolvedIssues: postRepairEditor.json.unresolvedIssues.map((item) => normalizeCopyIssue(item, true)),
+      };
+      reviewUsages.push({ taskKind: 'brandReviewPostRepair', usage: postRepairEditor.usage, attemptUsages: postRepairEditor.attemptUsages || [], requestProfile: postRepairEditor.requestProfile });
+    } catch (error) {
+      postRepairBrandReview = { reviewIssues: [{ ruleId: 'COPY-001', ruleIds: ['COPY-001'], path: 'customer', message: `最终修正复检失败：${error?.message || String(error)}`, severity: 'quality', action: 'manual_revision' }], unresolvedIssues: [] };
+    }
+  }
+  const finalFactComparisonAfterRepair = compareDeterministicFacts(data, revisedData);
+  const finalFactsPreserved = factsPreserved && finalFactComparisonAfterRepair.preserved;
+  const finalUnresolved = uniqueCopyIssues(composeCurrentFinalIssues([], postRepairBrandReview, [...mergeRejected, ...finalRepair.mergeRejected, ...finalRepair.blockers]));
+  if (!finalFactsPreserved) finalUnresolved.push({ ruleIds: ['COPY-011','COPY-014','COPY-015'], ruleId: 'COPY-015', path: 'customer', message: '最终文案改变了原始确定性事实', severity: 'fact', action: 'block' });
+  const remainingIssues = uniqueCopyIssues([...postRepairReview.issues, ...finalUnresolved]);
+  const hardIssues = remainingIssues.filter((item) => isBlockingCopyIssue(item));
+  const passed = finalFactsPreserved && remainingIssues.length === 0;
+  const status = passed ? 'passed' : hardIssues.length ? 'blocked_generation' : 'needs_copy_revision';
   const contentQuality = {
     version: '5.0', ruleVersion: COPY_RULE_VERSION, checkedAt: new Date().toISOString(),
     promptVersions: ['customer-itinerary-mainline-v1.md','customer-itinerary-module-v1.md','customer-itinerary-brand-reviewer-v1.md','customer-itinerary-target-patch-v1.md'],
     firstDraft, initialReview,
-    brandEditor: { reviewProfile: brandReviewProfile, reviewIssues: brandReview.reviewIssues, unresolvedIssues: brandReview.unresolvedIssues, repairTargets: targetRuns, changedPaths: [...new Set(allChangedPaths)], revisedDraft: selectCustomerRenderData(revisedData) },
-    factComparison: { firstDraft: firstFactComparison, final: finalFactComparison }, factsPreserved, finalReview,
+    safeCorrections: [...safeFirstPass.corrections, ...finalSafePass.corrections, ...finalRepair.safeCorrections], factProvenance: finalRepair.factProvenance,
+    brandEditor: { reviewProfile: brandReviewProfile, reviewIssues: brandReview.reviewIssues, unresolvedIssues: brandReview.unresolvedIssues, repairTargets: targetRuns, changedPaths: [...new Set([...allChangedPaths, ...finalRepair.changedPaths])], finalReview: finalBrandReview, finalControlledRepair: { ...finalRepairDecision, attempted: finalRepairDecision.shouldRun, targetRuns: finalRepair.targetRuns, postRepairReview: postRepairBrandReview }, revisedDraft: selectCustomerRenderData(revisedData) },
+    factComparison: { firstDraft: firstFactComparison, final: finalFactComparison, afterFinalRepair: finalFactComparisonAfterRepair }, factsPreserved: finalFactsPreserved, finalReview: postRepairReview,
     unresolvedIssues: finalUnresolved, allIssues: remainingIssues,
     passed, status, needsReview: !passed && !hardIssues.length, blocked: hardIssues.length > 0,
     hardIssueCount: hardIssues.length, remainingIssueCount: remainingIssues.length,
@@ -421,6 +609,67 @@ async function runGeneration(job, data, context = {}) {
   }
 }
 
+async function runCopyRepair(job, data, targetPath = '') {
+  job.status = 'repairing_copy';
+  job.phase = 'brand_review';
+  job.progress = 12;
+  job.startedAt = Date.now();
+  job.updatedAt = Date.now();
+  job.currentAction = targetPath ? `正在定点修正 ${targetPath}` : '正在修正全部可自动处理的文案问题';
+  try {
+    const sourceData = data.copySourceFacts || data;
+    const deterministicBaseline = originalDeterministicBaseline(data);
+    const sourceFacts = data.copySourceFacts || compactForModel(sourceData, {});
+    const allIssues = uniqueCopyIssues(data.copyQuality?.allIssues || []);
+    const selectedIssues = targetPath ? allIssues.filter((issue) => pathsOverlap(targetPath, issue.path)) : allIssues;
+    if (!selectedIssues.length) throw new Error('当前没有可修正的问题，请先重新检查');
+    const batch = await runTargetedCopyRepairBatch({
+      currentData: data, sourceData, deterministicBaseline, sourceFacts, mainline: data.contentVisualMainline || {}, issues: selectedIssues,
+      jobId: job.id, batchName: targetPath ? 'editor-target-repair' : 'editor-repair-all',
+      onStage: (update = {}) => {
+        job.currentAction = update.currentAction || job.currentAction;
+        job.currentUnit = update.currentUnit || job.currentUnit;
+        job.progress = monotonicProgress(job.progress, Math.min(82, 18 + Math.round(((update.completedUnits || 0) / Math.max(1, update.totalUnits || 1)) * 64)));
+        job.updatedAt = Date.now();
+      },
+    });
+    job.progress = 86;
+    job.currentAction = '正在只复检本次修正的目标字段';
+    const targetScopes = [...new Set((targetPath ? [targetPath] : selectedIssues.map((issue) => targetScopeFromPath(issue.path).path)).filter(Boolean))];
+    const deterministic = reviewCustomerContent(batch.data, { sourceData });
+    const deterministicTargetIssues = deterministic.issues.filter((issue) => targetScopes.some((scope) => pathsOverlap(scope, issue.path)));
+    const targetRemaining = batch.targetRuns.flatMap((run) => run.remainingIssues || []);
+    const refreshedIssues = uniqueCopyIssues([...deterministicTargetIssues, ...targetRemaining, ...batch.blockers, ...batch.mergeRejected]);
+    const factComparison = compareDeterministicFacts(deterministicBaseline, batch.data);
+    if (!factComparison.preserved) refreshedIssues.push({ ruleId: 'COPY-015', ruleIds: ['COPY-011','COPY-014','COPY-015'], path: 'customer', message: '修订结果改变了原始确定性事实', severity: 'fact', action: 'block' });
+    const mergedIssues = mergeTargetRepairIssues(allIssues, targetScopes, uniqueCopyIssues(refreshedIssues));
+    const hardIssues = mergedIssues.filter((item) => isBlockingCopyIssue(item));
+    const passed = factComparison.preserved && mergedIssues.length === 0;
+    const status = passed ? 'passed' : hardIssues.length ? 'blocked_generation' : 'needs_copy_revision';
+    const checkedAt = new Date().toISOString();
+    job.contentQuality = {
+      ...(data.copyQuality || {}), version: '5.2', ruleVersion: COPY_RULE_VERSION, checkedAt,
+      passed, status, needsReview: !passed && !hardIssues.length, blocked: hardIssues.length > 0,
+      hardIssueCount: hardIssues.length, remainingIssueCount: mergedIssues.length, allIssues: mergedIssues,
+      factComparison, finalReview: { ...deterministic, issues: deterministicTargetIssues },
+      brandRecheck: { mode: 'target_recheck_only', targetScopes, targetRuns: batch.targetRuns },
+      editorRepair: { targetPath: targetPath || null, targetScopes, targetRuns: batch.targetRuns, changedPaths: batch.changedPaths, safeCorrections: batch.safeCorrections, mergeRejected: batch.mergeRejected, blockers: batch.blockers },
+    };
+    job.data = { ...batch.data, copyQuality: { version: '5.2', ruleVersion: COPY_RULE_VERSION, passed, status, needsReview: job.contentQuality.needsReview, blocked: job.contentQuality.blocked, hardIssueCount: hardIssues.length, remainingIssueCount: mergedIssues.length, allIssues: mergedIssues, checkedAt } };
+    job.status = passed ? 'complete' : hardIssues.length ? 'blocked' : 'needs_copy_revision';
+    job.phase = job.status;
+    job.progress = passed ? 100 : 98;
+    job.currentAction = passed ? '目标修正通过，当前文案检查全部完成' : hardIssues.length ? `仍有 ${hardIssues.length} 项事实、费用、安全或结构问题需要处理` : `本次目标已复检；仍有 ${mergedIssues.length} 项普通文案建议，可继续编辑或确认后正式导出`;
+    job.updatedAt = Date.now();
+  } catch (error) {
+    job.status = 'failed';
+    job.phase = 'failed';
+    job.progress = 0;
+    job.error = error?.message || '文案修正失败';
+    job.updatedAt = Date.now();
+  }
+}
+
 async function runSlotResearch(job, data, slotId) {
   job.status = "researching-images"; job.phase = "searching"; job.progress = 12; job.startedAt = Date.now(); job.currentAction = `正在重新搜索：${slotId}`;
   try {
@@ -436,11 +685,11 @@ async function runSlotResearch(job, data, slotId) {
   }
 }
 
-function runRender(job, data) {
+function runRender(job, data, options = {}) {
   const dataFile = path.join(jobDir, `${job.id}.json`);
   const outputFile = path.join(outputDir, `${job.id}-itinerary-2000.png`);
   const qaFile = path.join(outputDir, `${job.id}-layout-qa.json`);
-  const preflight = reviewFinalOutputData(data);
+  const preflight = reviewFinalOutputData(data, null, options);
   if (!preflight.passed) { job.status = 'failed'; job.progress = 0; job.error = '正式输出检查未通过：' + preflight.issues.map((item) => item.message).join('；'); job.outputQa = preflight; return; }
   writeFileSync(dataFile, JSON.stringify(selectCustomerRenderData(data)), "utf8");
   job.status = "rendering";
@@ -464,7 +713,7 @@ function runRender(job, data) {
     if (existsSync(dataFile)) unlinkSync(dataFile);
     if (code === 0 && existsSync(outputFile)) {
       const layoutQa = existsSync(qaFile) ? JSON.parse(readFileSync(qaFile, 'utf8')) : null;
-      const outputQa = reviewFinalOutputData(data, layoutQa);
+      const outputQa = reviewFinalOutputData(data, layoutQa, options);
       job.outputQa = outputQa;
       if (!outputQa.passed) { job.status = 'failed'; job.progress = 0; job.error = '正式输出检查未通过：' + outputQa.issues.map((item) => item.message).join('；'); return; }
       job.status = "complete";
@@ -540,8 +789,19 @@ const server = createServer(async (request, response) => {
     try {
       const payload = await requestBody(request);
       if (!payload?.data?.days?.length) return json(response, 400, { error: '缺少可复检的行程数据' });
-      return json(response, 200, recheckCopyData(safeCustomerData(payload.data)));
+      return json(response, 200, await recheckCopyWithBrand(safeCustomerData(payload.data)));
     } catch (error) { return json(response, 400, { error: error?.message || '文案复检失败' }); }
+  }
+  if (request.method === "POST" && url.pathname === "/api/copy/repair") {
+    try {
+      const payload = await requestBody(request);
+      if (!payload?.data?.days?.length) return json(response, 400, { error: '缺少可修正的行程数据' });
+      const job = { id: randomUUID(), kind: 'copy-repair', targetPath: payload.targetPath ? String(payload.targetPath) : '', status: 'queued', phase: 'queued', currentAction: '文案修正已排队', progress: 5, createdAt: Date.now(), updatedAt: Date.now() };
+      jobs.set(job.id, job);
+      json(response, 202, job);
+      setImmediate(() => runCopyRepair(job, safeCustomerData(payload.data), job.targetPath));
+    } catch (error) { json(response, 400, { error: error?.message || '无法创建文案修正任务' }); }
+    return;
   }
   if (request.method === "POST" && url.pathname === "/api/render") {
     try {
@@ -550,7 +810,7 @@ const server = createServer(async (request, response) => {
       const job = { id: randomUUID(), status: "queued", progress: 5, createdAt: Date.now() };
       jobs.set(job.id, job);
       json(response, 202, job);
-      setImmediate(() => runRender(job, normalizeItineraryFacts(payload.data)));
+      setImmediate(() => runRender(job, normalizeItineraryFacts(payload.data), { allowCopyReviewPending: payload.options?.allowCopyReviewPending === true }));
     } catch (error) {
       json(response, 400, { error: error?.message || "无法读取生成请求" });
     }

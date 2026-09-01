@@ -9,7 +9,7 @@ export function generationCompletionGate(results = {}) {
   if (results.finalReview && results.finalReview?.outputQa?.passed !== true) missing.push('final_output_qa');
   const quality = results.copy?.contentQuality || results.copy?.data?.copyQuality || {};
   const blocked = quality.blocked === true || quality.status === 'blocked_generation' || Number(quality.hardIssueCount || 0) > 0;
-  const needsRevision = !blocked && (quality.needsReview === true || quality.status === 'needs_final_review' || quality.passed !== true);
+  const needsRevision = !blocked && (quality.needsReview === true || quality.status === 'needs_copy_revision' || quality.status === 'needs_final_review' || quality.passed !== true);
   const stagesComplete = missing.length === 0;
   const state = !stagesComplete ? 'incomplete' : blocked ? 'blocked_generation' : needsRevision ? 'needs_copy_revision' : 'complete';
   return { complete: state === 'complete', stagesComplete, blocked, needsRevision, state, missing };

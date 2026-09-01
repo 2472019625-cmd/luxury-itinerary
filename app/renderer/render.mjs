@@ -44,7 +44,8 @@ try {
   const page = await browser.newPage();
   await page.setViewport({ width: Math.max(2000, width), height: 1200, deviceScaleFactor: 1 });
   if (dataFile) {
-    const workspaceData = JSON.parse(fs.readFileSync(dataFile, "utf8"));
+    const parsedData = JSON.parse(fs.readFileSync(dataFile, "utf8"));
+    const workspaceData = parsedData?.data?.days?.length ? parsedData.data : parsedData;
     await page.evaluateOnNewDocument((data) => {
       localStorage.setItem("sheyou-export-data-v1", JSON.stringify(data));
     }, workspaceData);

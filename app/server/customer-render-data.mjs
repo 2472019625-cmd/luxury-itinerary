@@ -7,7 +7,7 @@ const ROOT_FIELDS = new Set([
   'notesSectionTitle','notesIntro','showBookingSection','showSecuritySection','showPaymentSection','payment','contact','pendingConfirmations','designer'
 ]);
 
-const INTERNAL_KEYS = new Set(['audit','terminalAudit','initialAudit','status','adoptable','requiresDecision','hardRejectCode','duplicateOf','candidateId','sha256','dHash','perceptualHash','originalImageUrl','sourceMedia','sourcePage','sourceTitle','officialSource','baseScore','shortlist','humanDecision','libraryEligible','userProvided','licenseNotice','internalPath','verifiedAt','verificationStatus','copyEvidence','sourceImportCoverage','authoritativeFacts']);
+const INTERNAL_KEYS = new Set(['audit','terminalAudit','initialAudit','status','adoptable','requiresDecision','hardRejectCode','duplicateOf','candidateId','sha256','dHash','perceptualHash','originalImageUrl','sourceMedia','sourcePage','sourceTitle','sourceUrl','sourceType','officialSource','baseScore','shortlist','humanDecision','libraryEligible','userProvided','licenseNotice','internalPath','verifiedAt','verificationStatus','confirmedByUser','sourceEvidence','usageSegments','verifiedFacts','copyEvidence','sourceImportCoverage','authoritativeFacts']);
 
 function clean(value) {
   if (Array.isArray(value)) return value.map(clean);

@@ -31,6 +31,16 @@ test("compact model input contains customer boundaries and fulfillment facts wit
   assert.equal("profit" in compact, false);
 });
 
+test("verified official hotel facts reach the copy model and remain deterministic evidence", () => {
+  const data = sourceData();
+  data.hotels[0].verifiedFacts = [{ statement:'酒店设有室外泳池。', sourceUrl:'https://official.example/facilities', verifiedAt:'2026-09-01', sourceType:'official' }];
+  const compact = compactForModel(data);
+  assert.equal(compact.hotels[0].verifiedFacts[0].statement, '酒店设有室外泳池。');
+  const changed = structuredClone(data);
+  changed.hotels[0].verifiedFacts[0].statement = '酒店设有私人动物园。';
+  assert.equal(compareDeterministicFacts(data, changed).preserved, false);
+});
+
 test("merges every allowed field by the same DAY index and keeps deterministic facts", () => {
   const data = sourceData();
   const refinement = { days: [

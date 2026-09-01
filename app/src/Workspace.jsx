@@ -5,7 +5,7 @@ import { buildLayoutImageSlots, getSlotImage, listImagePlacements, moveImageToSl
 import { safeWriteStorage } from './lib/storageSafety.js';
 import { recordImageDecision } from './lib/imageDecisions.js';
 import { humanReviewReady, recordHumanReview } from './lib/humanReview.js';
-import { collectCopyIssues, generationStateLabel, groupCopyIssues } from './lib/copyIssuePresentation.js';
+import { collectCopyIssues, copyExportEligibility, generationStateLabel, groupCopyIssueTargets, groupCopyIssues } from './lib/copyIssuePresentation.js';
 import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
 
 const STORAGE_USERS = "sheyou-workspace-users-v1";
@@ -236,8 +236,9 @@ function GenerationStep({ project, progress, status, error, onStart, onEdit, onR
   const phaseLabels = { queued: "准备生成", copy: "生成客户文案", copy_mainline: "建立整程内容与视觉主线", copy_modules: "并行生成文案模块", brand_review: "独立品牌审查与目标修复", blueprint: "理解整份行程并规划图片", images: "准备图片检索", searching: "搜索与下载图片", auditing: "检查候选图片", allocating: "放入版面", final_review: "检查实际长图", complete: "生成完成", needs_copy_revision: "待文案修订", blocked: "已阻止生成" };
   const quality = status?.contentQuality || project.aiGeneration?.contentQuality || {};
   const copyIssues = collectCopyIssues(quality);
+  const copyIssueTargets = groupCopyIssueTargets(quality);
   const groupedIssues = groupCopyIssues(quality);
-  const terminal = generationStateLabel(status, copyIssues.length);
+  const terminal = generationStateLabel(status, copyIssueTargets.length);
   const activeTitle = terminal?.title || phaseLabels[status?.phase] || "处理真实数据";
   const stats = status?.stats || {};
   const copyProgress = status?.copyProgress || {};
@@ -250,11 +251,11 @@ function GenerationStep({ project, progress, status, error, onStart, onEdit, onR
       {copyProgress.totalUnits > 0 && <div className="live-stats"><span>文案模块 <strong>{copyProgress.completedUnits || 0}/{copyProgress.totalUnits}</strong></span><span>当前模块 <strong>{copyProgress.currentUnit || "准备中"}</strong></span><span>模型状态 <strong>{streamText || "准备中"}</strong></span><span>尝试 <strong>{copyStream.attempt || 1}</strong></span>{copyStream.receivedContentChars > 0 && <span>已接收 <strong>{copyStream.receivedContentChars} 字符</strong></span>}</div>}
       {stats.slotCount > 0 && <div className="live-stats"><span>已搜索图片位 <strong>{stats.searchedSlots || 0}/{stats.slotCount || 0}</strong></span><span>搜索轮次 <strong>{stats.searchAttempts || 0}</strong></span><span>候选 <strong>{stats.candidateCount || 0}</strong></span><span>已审核 <strong>{stats.auditedCandidates || 0}</strong></span><span>自动通过 <strong>{stats.autoApproved || 0}</strong></span><span>待人工位置 <strong>{stats.manualReviewSlots ?? stats.manualReview ?? 0}</strong></span><span>审核超时 <strong>{stats.auditTimeout || 0}</strong></span><span>审核服务异常 <strong>{stats.auditUnavailable || 0}</strong></span><span>明确拒绝 <strong>{stats.hardRejected || 0}</strong></span></div>}
       {error && <p className="generation-error"><UiIcon name="warning" />{error}</p>}
-      {copyIssues.length > 0 && <section className="copy-issue-list" aria-label="全部文案问题"><header><strong>系统已发现的全部问题</strong><span>{copyIssues.length} 项</span></header>{Object.entries(groupedIssues).map(([group, issues]) => <div key={group}><h3>{group}</h3>{issues.map((issue, index) => <p key={`${group}-${index}`}><b>{issue.ruleIds?.join('/') || issue.ruleId || 'COPY'}</b><span>{issue.message}</span></p>)}</div>)}</section>}
+      {copyIssues.length > 0 && <section className="copy-issue-list" aria-label="全部文案问题"><header><strong>系统已发现的问题</strong><span>{copyIssueTargets.length} 个修改位置 · {copyIssues.length} 条检查记录</span></header>{Object.entries(groupedIssues).map(([group, issues]) => <div key={group}><h3>{group}</h3>{issues.map((issue, index) => <p key={`${group}-${index}`}><b>{issue.ruleIds?.join('/') || issue.ruleId || 'COPY'}</b><span>{issue.message}</span></p>)}</div>)}</section>}
       {progress === 0 && error && <Button tone="primary" onClick={() => { startedRef.current = true; onStart(); }}>重新生成</Button>}
     </div>
     <aside className="generation-preview"><header><strong>当前项目</strong><span>真实数据</span></header><div className="mini-itinerary"><img src="/assets/logos/logo-gold.png" alt="奢游国际" /><small>PRIVATE JOURNEY · {project.data.destination || "目的地待确认"}</small><h2>{project.data.title || project.title}</h2><div className="mini-image">{project.data.heroImage ? <img src={project.data.heroImage} alt={project.data.destination || "行程封面"} /> : <span>封面图片检索中</span>}</div></div><h3><UiIcon name="process" />处理状态</h3><p>{terminal?.detail || "正在生成客户版文案并检索、下载和审核真实图片，请保持页面打开。"}</p></aside>
-    <footer className="generation-footer"><Button onClick={onReview}>查看识别结果</Button>{status?.status === 'needs_copy_revision' && <Button tone="primary" onClick={onRevision}>进入修订模式</Button>}{status?.status === 'complete' && <Button tone="primary" onClick={onEdit}>进入编辑</Button>}</footer>
+    <footer className="generation-footer"><Button onClick={onReview}>查看识别结果</Button>{['needs_copy_revision','blocked'].includes(status?.status) && <Button tone="primary" onClick={onRevision}>进入编辑查看并处理</Button>}{status?.status === 'complete' && <Button tone="primary" onClick={onEdit}>进入编辑</Button>}</footer>
   </section></main>;
 }
 
@@ -354,7 +355,7 @@ function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, on
   </section></div>;
 }
 
-export function Editor({ project, ItineraryComponent, onProject, onVersions, onResearchSlot, defaultDesigner, initialSelection, initialTab = "copy" }) {
+export function Editor({ project, ItineraryComponent, onProject, onVersions, onResearchSlot, onRepairCopy, onRecheckCopy, onReviewFacts, copyRepairState, defaultDesigner, initialSelection, initialTab = "copy" }) {
   const [selection, setSelection] = useState(initialSelection || { module: "days", itemIndex: Math.min(2, project.data.days.length - 1), subItemIndex: null, imageIndex: 0 });
   const [tab, setTab] = useState(initialTab);
   const [historyTick, setHistoryTick] = useState(0);
@@ -368,9 +369,9 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
   const selectedModule = MODULES.find((module) => module.id === selection.module) || MODULES[0];
   const selectedDay = selection.module === "days" ? project.data.days[selection.itemIndex] : null;
   const hasImages = ["cover", "hotels", "dining", "transport", "days"].includes(selection.module);
-  const copyReview = project.aiGeneration?.contentQuality || project.data.copyQuality;
+  const copyReview = project.data.copyQuality || project.aiGeneration?.contentQuality;
   const copyReviewIssues = collectCopyIssues(copyReview);
-  const copyReviewGroups = groupCopyIssues(copyReview);
+  const copyIssueTargets = groupCopyIssueTargets(copyReview);
 
   const commit = (nextProject, group = uid("edit")) => {
     const history = historyRef.current;
@@ -385,7 +386,16 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
     setHistoryTick((value) => value + 1);
     onProject(nextProject);
   };
-  const updateData = (updater, group) => { const next = clone(project.data); updater(next); commit({ ...project, data: next }, group); };
+  const updateData = (updater, group) => {
+    const next = clone(project.data);
+    updater(next);
+    const imageOnly = /^(image-|upload-|delete-image-|choose-image-)/.test(String(group || ''));
+    if (!imageOnly) {
+      next.copyQuality = { ...(next.copyQuality || {}), passed: false, status: 'needs_copy_revision', needsReview: true, blocked: false, checkedAt: null, manualEditPendingRecheck: true };
+      next.humanReview = { ...(next.humanReview || {}), exportWithCopyWarningsConfirmed: false };
+    }
+    commit({ ...project, workflowStage: imageOnly ? project.workflowStage : 'needs-copy-revision', revisionMode: imageOnly ? project.revisionMode : true, data: next }, group);
+  };
   const restore = (direction) => {
     const history = historyRef.current;
     const source = direction === "undo" ? history.undo : history.redo;
@@ -429,6 +439,21 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
     const collections = { highlights: project.data.highlights, overview: project.data.days, hotels: project.data.hotels, dining: project.data.diningExperiences, transport: project.data.transportSummary, notes: project.data.notes };
     const nextIndex = module === "days" ? Math.max(0, itemIndex ?? selection.itemIndex ?? 0) : collections[module]?.length ? Math.max(0, itemIndex ?? 0) : null;
     choose({ module, itemIndex: nextIndex, subItemIndex: null, imageIndex: 0 }, "copy");
+  };
+  const selectIssueTarget = (targetPath = '') => {
+    let match = targetPath.match(/^days\.(\d+)/);
+    if (match) return selectModule('days', Number(match[1]));
+    match = targetPath.match(/^hotels\.(\d+)/);
+    if (match) return selectModule('hotels', Number(match[1]));
+    match = targetPath.match(/^diningExperiences\.(\d+)/);
+    if (match) return selectModule('dining', Number(match[1]));
+    match = targetPath.match(/^transportSummary\.(\d+)/);
+    if (match) return selectModule('transport', Number(match[1]));
+    match = targetPath.match(/^notes\.(\d+)/);
+    if (match) return selectModule('notes', Number(match[1]));
+    if (targetPath === 'highlights') return selectModule('highlights');
+    if (targetPath === 'expenses') return selectModule('expenses');
+    return selectModule('cover');
   };
   useEffect(() => {
     const editorPage = previewRef.current?.closest(".editor-page");
@@ -474,7 +499,7 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
     copyPanel = <><Field label="模块标题" value={project.data.diningSectionTitle || "特色餐饮"} onChange={(value) => updateData((next) => { next.diningSectionTitle = value; }, "dining-section-title")} /><Field label="模块引导标题" value={project.data.diningIntroTitle || ""} onChange={(value) => updateData((next) => { next.diningIntroTitle = value; }, "dining-intro-title")} /><Field label="模块引导文案" rows={3} value={project.data.diningIntroCopy || ""} onChange={(value) => updateData((next) => { next.diningIntroCopy = value; }, "dining-intro-copy")} />{picker("diningExperiences", "餐饮项目", (value, index) => value.title || `餐饮${index + 1}`, () => ({ id: uid("dining"), location: "", title: "新餐饮体验", officialName: "", editorialCopy: "", images: [] }))}<Field label="地点" value={item.location} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].location = value; }, `dining-location-${selection.itemIndex}`)} /><Field label="餐饮名称" value={item.title} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].title = value; }, `dining-title-${selection.itemIndex}`)} /><Field label="正式/英文名称" value={item.officialName} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].officialName = value; }, `dining-official-${selection.itemIndex}`)} /><Field label="餐饮介绍" rows={6} value={item.editorialCopy} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].editorialCopy = value; }, `dining-copy-${selection.itemIndex}`)} /></>;
   } else if (selection.module === "transport") {
     const item = project.data.transportSummary?.[selection.itemIndex] || {};
-    copyPanel = <><Field label="模块标题" value={project.data.transportSectionTitle || "全程交通"} onChange={(value) => updateData((next) => { next.transportSectionTitle = value; }, "transport-section-title")} /><Field label="模块引导标题" value={project.data.transportIntroTitle || "移动不是赶路，而是旅程体验的一部分"} onChange={(value) => updateData((next) => { next.transportIntroTitle = value; }, "transport-intro-title")} /><Field label="模块引导文案" rows={3} value={project.data.transportIntroCopy || "城市接送、专属游猎、草原飞行与海上衔接各司其职，让跨区域移动保持私密、舒适与从容。"} onChange={(value) => updateData((next) => { next.transportIntroCopy = value; }, "transport-intro-copy")} />{picker("transportSummary", "交通项目", (value, index) => value.category || `交通${index + 1}`, () => ({ id: uid("transport"), category: "新交通项目", serviceLevel: "", usageSegments: [], editorialCopy: "", features: [], images: [] }))}<Field label="交通类别" value={item.category} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].category = value; }, `transport-category-${selection.itemIndex}`)} /><Field label="服务等级" value={item.serviceLevel} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].serviceLevel = value; }, `transport-level-${selection.itemIndex}`)} /><Field label="使用区间（每行一个）" rows={3} value={(item.usageSegments || []).join("\n")} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].usageSegments = splitLines(value); }, `transport-segments-${selection.itemIndex}`)} /><div className="field-grid-compact"><Field label="参考车型" value={item.model || ""} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].model = value; }, `transport-model-${selection.itemIndex}`)} /><Field label="座位数" type="number" value={item.seatCount || ""} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].seatCount = value; }, `transport-seats-${selection.itemIndex}`)} /></div><Field label="交通介绍" rows={5} value={item.editorialCopy} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].editorialCopy = value; }, `transport-copy-${selection.itemIndex}`)} /><Field label="服务特色（每行一个）" rows={4} value={(item.features || []).join("\n")} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].features = splitLines(value); }, `transport-features-${selection.itemIndex}`)} /></>;
+    copyPanel = <><Field label="模块标题" value={project.data.transportSectionTitle || "全程交通"} onChange={(value) => updateData((next) => { next.transportSectionTitle = value; }, "transport-section-title")} /><Field label="模块引导标题" value={project.data.transportIntroTitle || "移动不是赶路，而是旅程体验的一部分"} onChange={(value) => updateData((next) => { next.transportIntroTitle = value; }, "transport-intro-title")} /><Field label="模块引导文案" rows={3} value={project.data.transportIntroCopy || "城市接送、专属游猎、草原飞行与海上衔接各司其职，让跨区域移动保持私密、舒适与从容。"} onChange={(value) => updateData((next) => { next.transportIntroCopy = value; }, "transport-intro-copy")} />{picker("transportSummary", "交通项目", (value, index) => value.category || `交通${index + 1}`, () => ({ id: uid("transport"), category: "新交通项目", serviceLevel: "", usageLabel: "全程专属交通衔接", usageSegments: [], editorialCopy: "", features: [], images: [] }))}<Field label="交通类别" value={item.category} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].category = value; }, `transport-category-${selection.itemIndex}`)} /><Field label="服务等级" value={item.serviceLevel} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].serviceLevel = value; }, `transport-level-${selection.itemIndex}`)} /><Field label="客户可见适用场景" value={item.usageLabel || ""} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].usageLabel = value; }, `transport-usage-label-${selection.itemIndex}`)} /><div className="field-grid-compact"><Field label="参考车型" value={item.model || ""} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].model = value; }, `transport-model-${selection.itemIndex}`)} /><Field label="座位数" type="number" value={item.seatCount || ""} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].seatCount = value; }, `transport-seats-${selection.itemIndex}`)} /></div><Field label="交通介绍" rows={5} value={item.editorialCopy} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].editorialCopy = value; }, `transport-copy-${selection.itemIndex}`)} /><Field label="服务特色（每行一个）" rows={4} value={(item.features || []).join("\n")} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].features = splitLines(value); }, `transport-features-${selection.itemIndex}`)} /></>;
   } else if (selection.module === "days") {
     const day = selectedDay || {};
     const spots = day.spots || [];
@@ -557,7 +582,7 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
   return <main className="editor-page"><StepRail active={3} maxStep={4} onStep={(step) => step === 4 && onVersions()} /><div className="editor-grid">
     <aside className="structure-panel"><header><span><UiIcon name="itinerary" />行程结构</span></header><nav>{MODULES.map((module) => module.id === "days" ? <div key={module.id} className="day-nav-group"><button className={selection.module === "days" ? "active" : ""} onClick={() => selectModule("days", selection.itemIndex)}><span className="nav-dot" />每日行程</button><div>{project.data.days.map((day, index) => <button key={index} className={selection.module === "days" && selection.itemIndex === index ? "active" : ""} onClick={() => selectModule("days", index)}><span>DAY {String(index + 1).padStart(2, "0")}</span><em>{day.city || day.theme}</em></button>)}</div></div> : <button key={module.id} className={selection.module === module.id ? "active" : ""} onClick={() => selectModule(module.id)}><span className="nav-dot" />{module.label}{visibility[module.id] === false && <small>已隐藏</small>}</button>)}</nav></aside>
     <section className="canvas-stage" ref={previewRef} onClick={onPreviewClick} tabIndex="0" aria-label="行程长图预览，使用滚轮、PageDown、Home 或 End 浏览"><div className="workspace-itinerary"><ItineraryComponent data={viewData} /></div></section>
-    <aside className="inspector-panel"><header><div><small>{project.revisionMode ? 'REVISION MODE' : 'EDIT CONTENT'}</small><h2>{title}</h2></div><div className="history-actions"><button disabled={!historyRef.current.undo.length} onClick={() => restore("undo")} title="撤销 Ctrl+Z"><UiIcon name="return" />撤销</button><button disabled={!historyRef.current.redo.length} onClick={() => restore("redo")} title="重做 Ctrl+Shift+Z"><UiIcon name="process" />重做</button></div></header>{(copyReview?.needsReview || project.revisionMode) && <div className="copy-review-banner" role="status"><strong>修订模式 · 待处理 {copyReviewIssues.length} 项</strong><span>图片和版面已保留；全部规则复检通过前不能正式导出。</span><div className="copy-review-details">{Object.entries(copyReviewGroups).map(([group, issues]) => <section key={group}><b>{group}</b>{issues.map((issue, index) => <p key={`${group}-${index}`}><em>{issue.ruleIds?.join('/') || issue.ruleId || 'COPY'}</em>{issue.message}</p>)}</section>)}</div></div>}<div className="inspector-tabs"><button className={tab === "copy" ? "active" : ""} onClick={() => setTab("copy")}>文案</button>{hasImages && <button className={tab === "image" ? "active" : ""} onClick={() => setTab("image")}>图片</button>}</div>
+    <aside className="inspector-panel"><header><div><small>{project.revisionMode ? 'REVISION MODE' : 'EDIT CONTENT'}</small><h2>{title}</h2></div><div className="history-actions"><button disabled={!historyRef.current.undo.length} onClick={() => restore("undo")} title="撤销 Ctrl+Z"><UiIcon name="return" />撤销</button><button disabled={!historyRef.current.redo.length} onClick={() => restore("redo")} title="重做 Ctrl+Shift+Z"><UiIcon name="process" />重做</button></div></header>{(copyReview?.needsReview || copyReview?.blocked || project.revisionMode) && <div className="copy-review-banner" role="status"><strong>修订模式 · {copyIssueTargets.length} 个修改位置</strong><span>底层共发现 {copyReviewIssues.length} 条检查记录；图片和版面已保留。普通文案建议可继续修订，也可在正式版本页确认后按当前内容导出；事实、费用、安全或结构问题仍会阻止。</span><div className="copy-review-actions"><Button tone="primary" disabled={copyRepairState?.busy || !copyIssueTargets.some((target) => target.aiRepairable)} onClick={() => onRepairCopy?.('')}>{copyRepairState?.busy && !copyRepairState.targetPath ? 'AI正在修正…' : 'AI修正全部可修项'}</Button><Button disabled={copyRepairState?.busy} onClick={() => onRecheckCopy?.()}>重新检查全部</Button></div>{copyRepairState?.message && <span className="copy-repair-state">{copyRepairState.message}</span>}<div className="copy-review-details">{copyIssueTargets.map((target) => <section key={target.targetPath}><button className="copy-issue-target" onClick={() => selectIssueTarget(target.targetPath)}><b>{target.label}</b><small>{target.ruleIds.join('/') || 'COPY'} · {target.issues.length}条记录</small></button>{target.issues.map((issue, index) => <p key={`${target.targetPath}-${index}`}><em>{issue.ruleIds?.join('/') || issue.ruleId || 'COPY'}</em>{issue.message}</p>)}<div className="copy-target-actions"><Button disabled={copyRepairState?.busy} onClick={() => target.aiRepairable ? onRepairCopy?.(target.targetPath) : onReviewFacts?.()}>{copyRepairState?.busy && copyRepairState.targetPath === target.targetPath ? '正在修正…' : target.aiRepairable ? 'AI修正这项' : '返回确认原始事实'}</Button></div></section>)}</div></div>}<div className="inspector-tabs"><button className={tab === "copy" ? "active" : ""} onClick={() => setTab("copy")}>文案</button>{hasImages && <button className={tab === "image" ? "active" : ""} onClick={() => setTab("image")}>图片</button>}</div>
       {tab === "copy" && <div className="inspector-body">{copyPanel}</div>}
       {tab === "image" && <div className="inspector-body">{imagePanel}</div>}
       <footer className="module-toggle"><div><UiIcon name="city" /><span><strong>模块显示</strong><small>{selectedModule.required ? "品牌固定模块" : "控制是否进入正式版本"}</small></span></div><label className="switch"><input type="checkbox" checked={selectedModule.required || visibility[selectedModule.id] !== false} disabled={selectedModule.required} onChange={(event) => updateVisibility(event.target.checked)} /><span /></label></footer>
@@ -568,9 +593,10 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
 function VersionsStep({ project, exporting, exportError, onExport, onBack, onReviewDecision }) {
   const humanReview = project.data.humanReview || {};
   const ready = humanReviewReady(humanReview);
-  const copyReady = project.workflowStage === 'generated' && project.data.copyQuality?.passed === true && !project.revisionMode;
+  const exportEligibility = copyExportEligibility(project);
+  const warningAccepted = !exportEligibility.requiresWarningAcknowledgement || humanReview.exportWithCopyWarningsConfirmed === true;
   return <main className="flow-page"><StepRail active={4} onStep={(step) => step === 3 && onBack()} /><section className="flow-content versions-content"><header className="flow-heading"><small>STEP 05</small><h1>正式版本</h1><p>每次生成都会冻结当时内容，之后仍可返回草稿继续修改。</p></header>
-    <div className="export-hero"><div><UiIcon name="included" size={32} /><h2>{exporting > 0 && exporting < 100 ? "正在生成高清成品" : "生成新的正式版本"}</h2><p>{exporting > 0 && exporting < 100 ? "正在排版并检查超长页尾，请保持此页面打开。" : "输出一张供客户查看的2000px高清长图。"}</p>{!copyReady && <p className="export-error">当前仍处于文案修订或阻止状态；必须返回编辑并通过同规则复检后才能正式导出。</p>}<label><input type="checkbox" checked={humanReview.aestheticConfirmed === true} onChange={(event) => onReviewDecision('aestheticConfirmed', event.target.checked)} /> 我已查看完整预览，确认整体审美、层级和客户可读性</label><label><input type="checkbox" checked={humanReview.licenseReviewed === true} onChange={(event) => onReviewDecision('licenseReviewed', event.target.checked)} /> 我已核对最终图片来源和使用权；授权不明素材会在正式发布前替换</label>{!ready && <p className="export-error">人工复核不会阻止进入编辑器，但生成正式客户版本前必须留下确认记录。</p>}{exporting > 0 && exporting < 100 && <div className="export-progress"><span style={{ width: `${exporting}%` }} /><strong>{exporting}%</strong></div>}{exportError && <p className="export-error">{exportError}</p>}</div><Button tone="primary" disabled={!copyReady || !ready || (exporting > 0 && exporting < 100)} onClick={onExport}>生成版本</Button></div>
+    <div className="export-hero"><div><UiIcon name="included" size={32} /><h2>{exporting > 0 && exporting < 100 ? "正在生成高清成品" : "生成新的正式版本"}</h2><p>{exporting > 0 && exporting < 100 ? "正在排版并检查超长页尾，请保持此页面打开。" : "输出一张供客户查看的2000px高清长图。"}</p>{exportEligibility.hardBlocked && <p className="export-error">当前仍有事实、费用、安全或结构问题，必须先处理后才能正式导出。</p>}{exportEligibility.hasWarnings && <label><input type="checkbox" checked={humanReview.exportWithCopyWarningsConfirmed === true} onChange={(event) => onReviewDecision('exportWithCopyWarningsConfirmed', event.target.checked)} /> 我已查看全部文案待修项，仍确认按当前内容生成正式版本</label>}<label><input type="checkbox" checked={humanReview.aestheticConfirmed === true} onChange={(event) => onReviewDecision('aestheticConfirmed', event.target.checked)} /> 我已查看完整预览，确认整体审美、层级和客户可读性</label><label><input type="checkbox" checked={humanReview.licenseReviewed === true} onChange={(event) => onReviewDecision('licenseReviewed', event.target.checked)} /> 我已核对最终图片来源和使用权；授权不明素材会在正式发布前替换</label>{!ready && <p className="export-error">人工复核不会阻止进入编辑器，但生成正式客户版本前必须留下确认记录。</p>}{exporting > 0 && exporting < 100 && <div className="export-progress"><span style={{ width: `${exporting}%` }} /><strong>{exporting}%</strong></div>}{exportError && <p className="export-error">{exportError}</p>}</div><Button tone="primary" disabled={!exportEligibility.allowed || !warningAccepted || !ready || (exporting > 0 && exporting < 100)} onClick={onExport}>生成版本</Button></div>
     <div className="version-list"><header><h2>版本历史</h2><span>{project.versions?.length || 0} 个版本</span></header>{project.versions?.length ? project.versions.slice().reverse().map((version, index) => <article key={version.id}><div className="version-index">V{String(project.versions.length - index).padStart(2, "0")}</div><div><strong>{version.name}</strong><span>{formatTime(version.createdAt)} · 2000px</span></div><div className="version-downloads">{version.downloadUrl ? <a href={version.downloadUrl} download>下载高清长图</a> : <span>旧版未生成文件</span>}</div></article>) : <div className="empty-versions">还没有正式版本，点击上方按钮生成。</div>}</div>
   </section></main>;
 }
@@ -601,6 +627,7 @@ export function Workspace({ initialData, ItineraryComponent }) {
   const [progress, setProgress] = useState(0);
   const [generationStatus, setGenerationStatus] = useState({ phase: "queued", status: "idle", currentAction: "尚未开始", stats: {}, elapsedMs: 0 });
   const [generationError, setGenerationError] = useState("");
+  const [copyRepairState, setCopyRepairState] = useState({ busy: false, targetPath: '', message: '' });
   const [exporting, setExporting] = useState(0);
   const [exportError, setExportError] = useState("");
   const [adminOpen, setAdminOpen] = useState(false);
@@ -623,7 +650,7 @@ export function Workspace({ initialData, ItineraryComponent }) {
   const openProject = (project) => {
     if (project.data?.notes?.some((item) => typeof item === 'string')) {
       const issues = [{ ruleIds:['COPY-013'], ruleId:'COPY-013', code:'notes_legacy_structure', path:'notes', message:'历史字符串注意事项已转换为分组展示，仍需复核后才能正式导出', severity:'quality', action:'manual_revision' }];
-      const normalized = { ...project, workflowStage:'needs-copy-revision', revisionMode:false, data:{ ...project.data, notes:normalizeLegacyNotesForDisplay(project.data.notes), copyQuality:{ ...(project.data.copyQuality || {}), version:'5.0', passed:false, status:'needs_final_review', needsReview:true, remainingIssueCount:issues.length, allIssues:issues } }, aiGeneration:{ ...(project.aiGeneration || {}), contentQuality:{ ...(project.aiGeneration?.contentQuality || {}), version:'5.0', passed:false, status:'needs_final_review', needsReview:true, remainingIssueCount:issues.length, allIssues:issues } } };
+      const normalized = { ...project, workflowStage:'needs-copy-revision', revisionMode:false, data:{ ...project.data, notes:normalizeLegacyNotesForDisplay(project.data.notes), copyQuality:{ ...(project.data.copyQuality || {}), version:'5.0', passed:false, status:'needs_copy_revision', needsReview:true, remainingIssueCount:issues.length, allIssues:issues } }, aiGeneration:{ ...(project.aiGeneration || {}), contentQuality:{ ...(project.aiGeneration?.contentQuality || {}), version:'5.0', passed:false, status:'needs_copy_revision', needsReview:true, remainingIssueCount:issues.length, allIssues:issues } } };
       const next = projects.map((item) => item.id === normalized.id ? normalized : item);
       commitProjects(next);
       project = normalized;
@@ -633,7 +660,8 @@ export function Workspace({ initialData, ItineraryComponent }) {
       const blocked = project.workflowStage === 'blocked';
       setProgress(98);
       setGenerationStatus({ status: blocked ? 'blocked' : 'needs_copy_revision', phase: blocked ? 'blocked' : 'needs_copy_revision', currentAction: blocked ? '该项目存在阻断问题' : '该项目仍需文案修订', contentQuality: project.aiGeneration?.contentQuality || project.data?.copyQuality, elapsedMs: 0 });
-      setScreen('generate');
+      if (!project.revisionMode) updateProject({ ...project, revisionMode: true }, true);
+      setScreen('editor');
       return;
     }
     setScreen(project.workflowStage === "generated" || project.workflowStage === "image-review" || project.revisionMode ? "editor" : project.files?.length ? "confirm" : "upload");
@@ -660,10 +688,10 @@ export function Workspace({ initialData, ItineraryComponent }) {
       }
       if (result.status === "failed") throw new Error(result.error || "内容生成失败");
       const workflowStage = result.status === 'complete' ? 'generated' : result.status === 'needs_copy_revision' ? 'needs-copy-revision' : 'blocked';
-      updateProject({ ...currentProject, workflowStage, revisionMode: false, data: { ...result.data, designer: currentProject.data.designer }, aiGeneration: { taskId: result.id, model: result.model, usage: result.usage, contentQuality: result.contentQuality, imageResearch: result.imageResearch, imageBlueprint: result.imageBlueprint, finalLayoutReview: result.finalLayoutReview, generatedAt: Date.now() } }, true);
+      updateProject({ ...currentProject, workflowStage, revisionMode: result.status !== 'complete', data: { ...result.data, designer: currentProject.data.designer }, aiGeneration: { taskId: result.id, model: result.model, usage: result.usage, contentQuality: result.contentQuality, imageResearch: result.imageResearch, imageBlueprint: result.imageBlueprint, finalLayoutReview: result.finalLayoutReview, generatedAt: Date.now() } }, true);
       setGenerationStatus(result);
       setProgress(result.status === 'complete' ? 100 : Number(result.progress || 98));
-      if (result.status === 'complete') setScreen("editor");
+      setScreen("editor");
     } catch (error) {
       setGenerationError(error?.message || "内容生成失败，请重试");
       setProgress(0);
@@ -718,11 +746,13 @@ export function Workspace({ initialData, ItineraryComponent }) {
   };
   const exportProject = async () => {
     if (!currentProject || (exporting > 0 && exporting < 100)) return;
-    if (currentProject.workflowStage !== 'generated' || currentProject.revisionMode || currentProject.data.copyQuality?.passed !== true) { setExportError('文案尚未通过同规则复检，不能生成正式版本。'); return; }
+    const exportEligibility = copyExportEligibility(currentProject);
+    if (!exportEligibility.allowed) { setExportError('仍有事实、费用、安全或结构问题，不能生成正式版本。'); return; }
+    if (exportEligibility.requiresWarningAcknowledgement && currentProject.data.humanReview?.exportWithCopyWarningsConfirmed !== true) { setExportError('请先确认已查看全部文案待修项。'); return; }
     setExportError("");
     setExporting(5);
     try {
-      const response = await fetch("/api/render", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data: visibilityData(currentProject.data, currentProject.visibility || {}) }) });
+      const response = await fetch("/api/render", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data: visibilityData(currentProject.data, currentProject.visibility || {}), options: { allowCopyReviewPending: exportEligibility.hasWarnings } }) });
       const created = await response.json();
       if (!response.ok) throw new Error(created.error || "无法创建生成任务");
       let job = created;
@@ -736,7 +766,7 @@ export function Workspace({ initialData, ItineraryComponent }) {
         setExporting(job.status === "rendering" ? Math.max(18, Math.min(92, job.progress || 65)) : job.progress || 8);
       }
       if (job.status === "failed") throw new Error(job.error || "长图生成失败");
-      const version = { id: uid("version"), name: `${currentProject.title} · 正式版`, createdAt: Date.now(), snapshot: versionSnapshot(currentProject.data), downloadUrl: job.downloadUrl };
+      const version = { id: uid("version"), name: `${currentProject.title} · 正式版${exportEligibility.hasWarnings ? '（带文案确认）' : ''}`, createdAt: Date.now(), snapshot: versionSnapshot(currentProject.data), downloadUrl: job.downloadUrl, exportWithCopyWarnings: exportEligibility.hasWarnings, warningAcknowledgedAt: exportEligibility.hasWarnings ? currentProject.data.humanReview?.updatedAt : null };
       updateProject({ ...currentProject, versions: [...(currentProject.versions || []), version] }, true);
       setExporting(100);
     } catch (error) {
@@ -744,28 +774,65 @@ export function Workspace({ initialData, ItineraryComponent }) {
       setExporting(0);
     }
   };
-  const recheckBeforeVersions = async () => {
+  const recheckCopy = async ({ navigateOnPass = false } = {}) => {
     if (!currentProject) return;
     setExportError('');
+    setCopyRepairState({ busy: true, targetPath: '', message: '正在用完整品牌规则重新检查…' });
     try {
       const response = await fetch('/api/copy/recheck', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data: currentProject.data }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || '文案复检失败');
       const passed = result.contentQuality?.passed === true;
-      const nextProject = { ...currentProject, workflowStage: passed ? 'generated' : result.contentQuality?.blocked ? 'blocked' : 'needs-copy-revision', revisionMode: !passed, data: { ...result.data, designer: currentProject.data.designer }, aiGeneration: { ...(currentProject.aiGeneration || {}), contentQuality: result.contentQuality } };
+      const nextProject = { ...currentProject, workflowStage: passed ? 'generated' : result.contentQuality?.blocked ? 'blocked' : 'needs-copy-revision', revisionMode: !passed, data: { ...result.data, humanReview: { ...(result.data?.humanReview || currentProject.data.humanReview || {}), exportWithCopyWarningsConfirmed: false }, designer: currentProject.data.designer }, aiGeneration: { ...(currentProject.aiGeneration || {}), contentQuality: result.contentQuality } };
       updateProject(nextProject, true);
-      if (passed) setScreen('versions');
-      else alert(`文案复检未通过：仍有 ${result.contentQuality?.remainingIssueCount || 0} 项问题，暂不能正式导出。`);
-    } catch (error) { setExportError(error?.message || '文案复检失败'); }
+      setProgress(passed ? 100 : 98);
+      setGenerationStatus({ status: passed ? 'complete' : result.contentQuality?.blocked ? 'blocked' : 'needs_copy_revision', phase: passed ? 'complete' : result.contentQuality?.blocked ? 'blocked' : 'needs_copy_revision', currentAction: passed ? '文案复检通过，正式导出已解锁' : `仍有 ${result.contentQuality?.remainingIssueCount || 0} 个问题需要处理`, contentQuality: result.contentQuality });
+      setCopyRepairState({ busy: false, targetPath: '', message: passed ? '复检通过，已解锁正式导出。' : `复检后仍有 ${result.contentQuality?.remainingIssueCount || 0} 条检查记录。` });
+      if (passed && navigateOnPass) setScreen('versions');
+    } catch (error) {
+      const message = error?.message || '文案复检失败';
+      setExportError(message);
+      setCopyRepairState({ busy: false, targetPath: '', message });
+    }
+  };
+  const repairCopy = async (targetPath = '') => {
+    if (!currentProject || copyRepairState.busy) return;
+    setExportError('');
+    setCopyRepairState({ busy: true, targetPath, message: targetPath ? `正在定点修正 ${targetPath}…` : '正在修正全部可自动处理的问题…' });
+    try {
+      const response = await fetch('/api/copy/repair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data: currentProject.data, targetPath }) });
+      let result = await response.json();
+      if (!response.ok) throw new Error(result.error || '无法创建文案修正任务');
+      const deadline = Date.now() + 20 * 60 * 1000;
+      while (!['complete', 'needs_copy_revision', 'blocked', 'failed'].includes(result.status)) {
+        if (Date.now() > deadline) throw new Error('文案修正超过20分钟，请稍后重试');
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        const statusResponse = await fetch(`/api/jobs/${result.id}`);
+        result = await statusResponse.json();
+        if (!statusResponse.ok) throw new Error(result.error || '无法读取文案修正进度');
+        setCopyRepairState({ busy: true, targetPath, message: result.currentAction || '正在修正文案…' });
+      }
+      if (result.status === 'failed') throw new Error(result.error || '文案修正失败');
+      const passed = result.status === 'complete' && result.contentQuality?.passed === true;
+      const nextProject = { ...currentProject, workflowStage: passed ? 'generated' : result.status === 'blocked' ? 'blocked' : 'needs-copy-revision', revisionMode: !passed, data: { ...result.data, humanReview: { ...(result.data?.humanReview || currentProject.data.humanReview || {}), exportWithCopyWarningsConfirmed: false }, designer: currentProject.data.designer }, aiGeneration: { ...(currentProject.aiGeneration || {}), contentQuality: result.contentQuality } };
+      updateProject(nextProject, true);
+      setProgress(passed ? 100 : 98);
+      setGenerationStatus(result);
+      setCopyRepairState({ busy: false, targetPath: '', message: passed ? 'AI修正和复检已通过，正式导出已解锁。' : `已完成修正，仍有 ${result.contentQuality?.remainingIssueCount || 0} 条检查记录。` });
+    } catch (error) {
+      const message = error?.message || '文案修正失败';
+      setCopyRepairState({ busy: false, targetPath: '', message });
+      setExportError(message);
+    }
   };
   const logout = () => { localStorage.removeItem(STORAGE_SESSION); setUser(null); setProjectId(null); setScreen("list"); };
   if (!user) return <AuthScreen onAuth={(nextUser) => { setUsers(readStorage(STORAGE_USERS, [])); setUser(nextUser); }} />;
-  return <div className="workspace-shell"><AppHeader user={user} project={currentProject && !["list", "admin"].includes(screen) ? currentProject : null} saved={saveState} canGenerate={currentProject?.workflowStage === "generated" && currentProject?.data?.copyQuality?.passed === true} onHome={() => setScreen("list")} onLogout={logout} onAdmin={() => setAdminOpen(true)} onProfile={() => setProfileOpen(true)} onGenerate={recheckBeforeVersions} />
+  return <div className="workspace-shell"><AppHeader user={user} project={currentProject && !["list", "admin"].includes(screen) ? currentProject : null} saved={saveState} canGenerate={copyExportEligibility(currentProject || {}).allowed} onHome={() => setScreen("list")} onLogout={logout} onAdmin={() => setAdminOpen(true)} onProfile={() => setProfileOpen(true)} onGenerate={() => setScreen('versions')} />
     {screen === "list" && <ProjectList user={user} projects={projects} onCreate={createProject} onOpen={openProject} onDelete={setDeleteProject} />}
     {screen === "upload" && currentProject && <UploadStep project={currentProject} onFiles={(files, recognition) => updateProject({ ...currentProject, workflowStage: "uploaded", title: recognition.data.title || currentProject.title, data: { ...recognition.data, designer: currentProject.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type })) }, true)} onContinue={() => setScreen("confirm")} />}
     {screen === "confirm" && currentProject && <ConfirmStep project={currentProject} onChange={(data, metadata = {}) => updateProject({ ...currentProject, ...metadata, data })} onBack={() => setScreen("upload")} onContinue={() => { setProgress(0); setGenerationError(""); setGenerationStatus({ phase: "queued", status: "idle", currentAction: "尚未开始", stats: {}, elapsedMs: 0 }); setScreen("generate"); }} />}
     {screen === "generate" && currentProject && <GenerationStep project={currentProject} progress={progress} status={generationStatus} error={generationError} onStart={generateProject} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onRevision={() => { updateProject({ ...currentProject, revisionMode: true }, true); setScreen('editor'); }} />}
-    {screen === "editor" && currentProject && <Editor project={currentProject} ItineraryComponent={ItineraryComponent} onProject={updateProject} onResearchSlot={async (slotId) => { try { await researchImageSlot(slotId); } catch (error) { setGenerationError(error?.message || "当前位置搜索失败"); alert(error?.message || "当前位置搜索失败"); } }} onVersions={recheckBeforeVersions} defaultDesigner={designerProfile(user)} />}
+    {screen === "editor" && currentProject && <Editor project={currentProject} ItineraryComponent={ItineraryComponent} onProject={updateProject} onResearchSlot={async (slotId) => { try { await researchImageSlot(slotId); } catch (error) { setGenerationError(error?.message || "当前位置搜索失败"); alert(error?.message || "当前位置搜索失败"); } }} onRepairCopy={repairCopy} onRecheckCopy={() => recheckCopy()} onReviewFacts={() => setScreen('confirm')} copyRepairState={copyRepairState} onVersions={() => setScreen('versions')} defaultDesigner={designerProfile(user)} />}
     {screen === "versions" && currentProject && <VersionsStep project={currentProject} exporting={exporting} exportError={exportError} onExport={exportProject} onBack={() => setScreen("editor")} onReviewDecision={(key, checked) => updateProject({ ...currentProject, data: { ...currentProject.data, humanReview: recordHumanReview(currentProject.data.humanReview, key, checked, user.id) } }, true)} />}
     {adminOpen && <AdminPanel users={users} projects={projects} onClose={() => setAdminOpen(false)} onToggle={(target) => { const next = users.map((item) => item.id === target.id ? { ...item, active: item.active === false } : item); setUsers(next); writeStorage(STORAGE_USERS, next); }} onReset={(target) => { const next = users.map((item) => item.id === target.id ? { ...item, pin: "123456" } : item); setUsers(next); writeStorage(STORAGE_USERS, next); alert(`${target.name} 的PIN已重置为 123456`); }} />}
     {profileOpen && <ProfilePanel user={user} onClose={() => setProfileOpen(false)} onSave={(profile, syncProjects) => { const nextUsers = users.map((item) => item.id === user.id ? { ...item, name: profile.name || item.name, profile } : item); const nextUser = nextUsers.find((item) => item.id === user.id); setUsers(nextUsers); setUser(nextUser); writeStorage(STORAGE_USERS, nextUsers); if (syncProjects) { const nextProjects = projects.map((item) => item.ownerId === user.id ? { ...item, data: { ...item.data, designer: clone(profile) }, updatedAt: Date.now() } : item); commitProjects(nextProjects); } setProfileOpen(false); }} />}

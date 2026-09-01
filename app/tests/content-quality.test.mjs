@@ -8,11 +8,11 @@ function goodSample() {
     subtitle: '以私家节奏从城市抵达草原，在晨昏光线里完成一段从容的野奢初见',
     highlights: [
       '一家一团：专属节奏不用迁就陌生团友',
-      '在地安排：定制师与向导协同减少无效等待',
       '草原腹地：把清晨黄金时段留给深入游猎',
       '从容转场：合理衔接城市与保护区停留',
+      '营地连住：减少反复收拾行李，把时间留给草原晨昏',
     ],
-    hotels: [{ id:'h1', officialName:'Test Camp', editorialCopy:'营地位于草原腹地，省去清晨长途折返；抵达后可在帐篷露台看暮色铺开，也让第二天的游猎动线更从容。', proofPoints:['草原腹地','帐篷露台','少走折返'] }],
+    hotels: [{ id:'h1', officialName:'Test Camp', sourceEvidence:['营地位于草原腹地','帐篷露台'], editorialCopy:'营地位于草原腹地，省去清晨长途折返；抵达后可在帐篷露台看暮色铺开，也让第二天的游猎动线更从容。', proofPoints:['草原腹地','帐篷露台','少走折返'] }],
     diningExperiences: [],
     transportSummary: [{ id:'t1', category:'专属游猎车', serviceLevel:'专属', seatCount:6, model:'', modelGuaranteed:false, editorialCopy:'专属游猎车贯穿草原段，充足空间让长距离移动更舒适，也为清晨出发和途中停靠保留从容节奏。' }],
     days: [
@@ -117,4 +117,45 @@ test('reports invalid notes schema as a blocking structure issue', () => {
   const invalid = result.issues.find((item) => item.code === 'notes_invalid_structure');
   assert.equal(invalid.severity, 'structure');
   assert.equal(invalid.action, 'block');
+});
+
+test('detects comma-separated subtitle lists, incomplete highlights and overlong DAY fact dumps', () => {
+  const data = goodSample();
+  data.dayCount = 7;
+  data.subtitle = '草原飞机直达，庄园帐篷连住，敞篷越野车，一价全包，私人保护区';
+  data.highlights = ['一家一团：专属节奏不用迁就陌生团友','在地服务：定制师协同减少等待','草原腹地：把清晨时段留给游猎'];
+  data.days[0].description = `抵达后乘车深入草原，眼前逐渐转为开阔旷野；${'随后安排一项具体体验并感受草原节奏；'.repeat(14)}让这一天承接整段旅程。`;
+  const codes = reviewCustomerContent(data).issues.map((item) => item.code);
+  assert.ok(codes.includes('subtitle_selling_point_list'));
+  assert.ok(codes.includes('highlight_incomplete'));
+  assert.ok(codes.includes('day_overlong'));
+  assert.ok(codes.includes('day_fact_dump'));
+});
+
+test('detects unsupported guide credentials, photographer and activity inventions', () => {
+  const data = goodSample();
+  const source = structuredClone(data);
+  data.days[0].description += ' 由KPSGA认证专家导游与驻场摄影师陪同，并参加文化大使主持的串珠制作课程。';
+  const result = reviewCustomerContent(data, { sourceData: source });
+  const unsupported = result.issues.filter((item) => item.code === 'factual_sentence_without_evidence');
+  assert.ok(unsupported.length > 0);
+  assert.match(unsupported.map((item) => item.message).join(' '), /KPSGA|驻场摄影师|文化大使|串珠制作/);
+});
+
+test('rejects a long-trip subtitle that uses facts but still lacks a narrative arc', () => {
+  const data = goodSample();
+  data.dayCount = 7;
+  data.days = Array.from({length:7}, (_, index) => ({ ...structuredClone(data.days[index % 2]), index }));
+  data.subtitle = '自乞力马扎罗降落，深入塞伦盖蒂西部私人保护区，从营地到草原飞机，一价全包的旷野之旅。';
+  const codes = reviewCustomerContent(data).issues.map((item) => item.code);
+  assert.ok(codes.includes('subtitle_narrative_arc_missing'));
+});
+
+test('accepts a long-trip subtitle with semantic progression and outcome without fixed connective words', () => {
+  const data = goodSample();
+  data.dayCount = 7;
+  data.days = Array.from({length:7}, (_, index) => ({ ...structuredClone(data.days[index % 2]), index }));
+  data.subtitle = '自乞力马扎罗乘草原飞机进入塞伦盖蒂西部，换乘敞篷越野深入保护区，在徒步与热气球间切换，于双营地完成一场私享旷野之旅。';
+  const codes = reviewCustomerContent(data).issues.map((item) => item.code);
+  assert.equal(codes.includes('subtitle_narrative_arc_missing'), false);
 });

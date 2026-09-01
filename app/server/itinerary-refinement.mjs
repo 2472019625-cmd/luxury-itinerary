@@ -14,7 +14,7 @@ function compactHotel(hotel = {}) {
     nights: hotel.nights, roomType: hotel.roomType, mealPlan: hotel.mealPlan,
     status: hotel.status, confirmationStatus: hotel.confirmationStatus ?? hotel.confirmed,
     referenceOnly: hotel.referenceOnly, replacementPolicy: hotel.replacementPolicy,
-    editorialCopy: hotel.editorialCopy, proofPoints: hotel.proofPoints, sourceEvidence: hotel.sourceEvidence || [],
+    editorialCopy: hotel.editorialCopy, proofPoints: hotel.proofPoints, sourceEvidence: hotel.sourceEvidence || [], verifiedFacts: hotel.verifiedFacts || [],
   };
 }
 
@@ -22,7 +22,7 @@ function compactTransport(item = {}) {
   return {
     id: item.id, category: item.category, serviceLevel: item.serviceLevel, seatCount: item.seatCount,
     model: item.model, modelGuaranteed: item.modelGuaranteed === true,
-    usageSegments: item.usageSegments, features: item.features, editorialCopy: item.editorialCopy, sourceEvidence: item.sourceEvidence || [],
+    usageLabel: item.usageLabel, usageSegments: item.usageSegments, features: item.features, editorialCopy: item.editorialCopy, sourceEvidence: item.sourceEvidence || [],
   };
 }
 
@@ -106,7 +106,7 @@ function deterministicFacts(data = {}) {
     adults: data.adults, children: data.children, travelers: data.travelers,
     included: data.included, excluded: data.excluded, cancellation: data.cancellation,
     totalPrice: data.totalPrice, priceUnit: data.priceUnit,
-    hotels: (data.hotels || []).map(({ id, officialName, shortName, region, nights, roomType, mealPlan, status, confirmationStatus, referenceOnly, replacementPolicy, sourceEvidence }) => ({ id, officialName, shortName, region, nights, roomType, mealPlan, status, confirmationStatus, referenceOnly, replacementPolicy, sourceEvidence })),
+    hotels: (data.hotels || []).map(({ id, officialName, shortName, region, nights, roomType, mealPlan, status, confirmationStatus, referenceOnly, replacementPolicy, sourceEvidence, verifiedFacts }) => ({ id, officialName, shortName, region, nights, roomType, mealPlan, status, confirmationStatus, referenceOnly, replacementPolicy, sourceEvidence, verifiedFacts })),
     transportSummary: (data.transportSummary || []).map(({ id, category, serviceLevel, seatCount, model, modelGuaranteed, usageSegments, sourceEvidence }) => ({ id, category, serviceLevel, seatCount, model, modelGuaranteed, usageSegments, sourceEvidence })),
     days: (data.days || []).map((day) => ({
       date: day.date, city: day.city, routeNodes: day.routeNodes, mealPlan: day.mealPlan, hotel: day.hotel,

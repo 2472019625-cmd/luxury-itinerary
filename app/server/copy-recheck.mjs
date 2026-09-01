@@ -1,5 +1,7 @@
 import { COPY_RULE_VERSION } from '../config/copy-rule-runtime.mjs';
 import { reviewCustomerContent } from './content-quality.mjs';
+import { applySafeCopyCorrections } from './fact-provenance.mjs';
+import { isBlockingCopyIssue } from './copy-repair.mjs';
 
 function uniqueIssues(issues = []) {
   const values = new Map();
@@ -12,16 +14,17 @@ function uniqueIssues(issues = []) {
 
 export function recheckCopyData(data = {}) {
   const sourceData = data.copySourceFacts || data;
-  const report = reviewCustomerContent(data, { sourceData });
+  const safePass = applySafeCopyCorrections(data, sourceData);
+  const report = reviewCustomerContent(safePass.data, { sourceData });
   const issues = uniqueIssues(report.issues);
-  const hardIssues = issues.filter((item) => ['fact','safety','structure'].includes(item?.severity) || item?.action === 'block');
+  const hardIssues = issues.filter((item) => isBlockingCopyIssue(item));
   const passed = issues.length === 0;
-  const status = passed ? 'passed' : hardIssues.length ? 'blocked_generation' : 'needs_final_review';
+  const status = passed ? 'passed' : hardIssues.length ? 'blocked_generation' : 'needs_copy_revision';
   const copyQuality = {
     ...(data.copyQuality || {}), version: '5.0', ruleVersion: COPY_RULE_VERSION,
     passed, status, needsReview: !passed && !hardIssues.length, blocked: hardIssues.length > 0,
     hardIssueCount: hardIssues.length, remainingIssueCount: issues.length, allIssues: issues,
     checkedAt: new Date().toISOString(), revisionMode: !passed,
   };
-  return { data: { ...data, copyQuality }, contentQuality: { ...copyQuality, finalReview: report, allIssues: issues } };
+  return { data: { ...safePass.data, copyQuality }, contentQuality: { ...copyQuality, safeCorrections: safePass.corrections, factProvenance: safePass.provenance, finalReview: report, allIssues: issues } };
 }

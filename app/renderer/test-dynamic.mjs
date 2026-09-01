@@ -11,11 +11,21 @@ const candidates = [
   "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
 ].filter(Boolean);
-const executablePath = candidates.find((candidate) => fs.existsSync(candidate));
-if (!executablePath) throw new Error("未找到 Edge/Chrome");
+const executablePaths = [...new Set(candidates.filter((candidate) => fs.existsSync(candidate)))];
+if (!executablePaths.length) throw new Error("未找到 Edge/Chrome");
 
 const scenarios = ["short", "standard", "long", "no-images", "four-images", "composite-images", "long-copy", "missing-services", "no-payment", "no-security", "payment-no-qr"];
-const browser = await puppeteer.launch({ executablePath, headless: true, args: ["--disable-gpu", "--font-render-hinting=none"] });
+let browser = null;
+const launchErrors = [];
+for (const executablePath of executablePaths) {
+  try {
+    browser = await puppeteer.launch({ executablePath, headless: true, args: ["--disable-gpu", "--font-render-hinting=none"] });
+    break;
+  } catch (error) {
+    launchErrors.push(`${path.basename(executablePath)}: ${error?.message || String(error)}`);
+  }
+}
+if (!browser) throw new Error(`Edge/Chrome 均无法启动：${launchErrors.join(' | ')}`);
 const results = [];
 
 try {

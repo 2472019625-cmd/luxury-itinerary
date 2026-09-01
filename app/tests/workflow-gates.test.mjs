@@ -9,7 +9,7 @@ test('generation cannot complete after copy or before final 2000px QA', () => {
   assert.equal(generationCompletionGate({ copy: {}, blueprint: {}, images: {}, finalReview: { failed: true } }).complete, false);
   assert.equal(generationCompletionGate({ copy: {}, blueprint: {}, images: {}, finalReview: {} }).complete, false);
   assert.equal(generationCompletionGate({ copy: { contentQuality: { passed: true, status: 'passed' } }, blueprint: {}, images: {}, finalReview: { outputQa: { passed: true } } }).complete, true);
-  const pending = generationCompletionGate({ copy: { contentQuality: { passed: false, needsReview: true, status: 'needs_final_review' } }, blueprint: {}, images: {}, finalReview: { outputQa: { passed: true } } });
+  const pending = generationCompletionGate({ copy: { contentQuality: { passed: false, needsReview: true, status: 'needs_copy_revision' } }, blueprint: {}, images: {}, finalReview: { outputQa: { passed: true } } });
   assert.equal(pending.complete, false);
   assert.equal(pending.state, 'needs_copy_revision');
   const blocked = generationCompletionGate({ copy: { contentQuality: { passed: false, blocked: true, hardIssueCount: 1 } }, blueprint: {}, images: {}, finalReview: { outputQa: { passed: true } } });

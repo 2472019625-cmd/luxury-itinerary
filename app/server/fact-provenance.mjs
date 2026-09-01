@@ -1,11 +1,11 @@
 const FACT_TERMS = [
   '私人保护区','泳池','水疗','SPA','健身房','餐厅','酒吧','保险箱','房间','客房','帐篷营地','营地',
-  '狮子','猎豹','花豹','大象','黑犀牛','非洲五霸','五霸','兽群','渡河','迁徙','动物饮水',
+  '狮子','狮群','猎豹','花豹','大象','黑犀牛','非洲五霸','五霸','兽群','渡河','迁徙','动物饮水','饮水',
   '热气球','徒步','夜间游猎','浮潜','潜水','反偷猎观察站','马赛部落','草原飞机','敞篷越野车','四驱动敞篷式越野车',
-  '包场','活动开放','营业时间',
+  '包场','活动开放','营业时间','KPSGA','认证导游','专家导游','追踪员','驻场摄影师','文化大使','串珠制作','制作课程','恒温泳池','武装向导','持枪向导','鳄鱼',
 ];
 
-const FACTUAL_MARKER = /位于|坐落|毗邻|(?:距|距离).{0,12}(?:公里|分钟|小时|机场|公园|保护区)|仅有\d|共有\d|房间|泳池|水疗|SPA|健身房|餐厅|酒吧|私密|狮子|猎豹|花豹|大象|黑犀牛|五霸|兽群|渡河|迁徙|热气球|徒步|夜间游猎|浮潜|潜水|包场|活动开放|营业时间|反偷猎观察站|马赛部落/i;
+const FACTUAL_MARKER = /位于|坐落|毗邻|(?:距|距离).{0,12}(?:公里|分钟|小时|机场|公园|保护区)|仅有\d|共有\d|房间|泳池|水疗|SPA|健身房|餐厅|酒吧|私密|狮子|猎豹|花豹|大象|黑犀牛|五霸|兽群|渡河|迁徙|热气球|徒步|夜间游猎|浮潜|潜水|包场|活动开放|营业时间|反偷猎观察站|马赛部落|KPSGA|认证(?:的)?(?:导游|专家)|专家导游|追踪员|驻场摄影师|文化大使|串珠|制作课程|恒温泳池|武装向导|持枪向导|鳄鱼/i;
 export const TIME_SENSITIVE_CONTEXT = /签证|入境|海关|检疫|疫苗|黄热病|健康|运营季节|迁徙季节|季节窗口/i;
 export const SPECIFIC_TIME_CLAIM = /\d+\s*(?:个?月|天|年|美元|美金|元)|\d{1,2}\s*月\s*(?:至|到|-|—)\s*\d{1,2}\s*月/i;
 
@@ -14,9 +14,22 @@ const list = (value) => Array.isArray(value) ? value : [];
 const canonical = (value) => text(value).toLowerCase().replace(/[，。！？、；：,.!?;:\s”“"'（）()—→\-]/g, '');
 const unique = (items) => [...new Set(items.filter(Boolean))];
 
+const CLAIM_EQUIVALENCE = new Map([
+  ['敞篷越野车', ['敞篷越野车', '敞篷式越野车', '敞篷越野游猎', '敞篷式越野游猎']],
+  ['四驱动敞篷式越野车', ['四驱动敞篷式越野车', '四驱敞篷式越野车', '四驱动敞篷越野车', '四驱敞篷越野车', '敞篷越野游猎']],
+]);
+
 function record(sourcePath, value) {
   const content = text(value);
   return content ? { sourcePath, text: content } : null;
+}
+
+function evidenceRecord(sourcePath, value) {
+  if (typeof value === 'string') return record(sourcePath, value);
+  if (!value || typeof value !== 'object') return null;
+  const statement = text(value.statement || value.text || value.value);
+  const verified = value.confirmedByUser === true || value.sourceType === 'supplier' || value.sourceType === 'official' || (text(value.sourceUrl) && text(value.verifiedAt));
+  return statement && verified ? { sourcePath, text: statement, sourceUrl: text(value.sourceUrl), verifiedAt: text(value.verifiedAt), sourceType: value.sourceType || (value.confirmedByUser ? 'user_confirmed' : 'verified_external') } : null;
 }
 
 function objectText(value) {
@@ -33,7 +46,7 @@ function dayRecords(day = {}, index, suffix = '') {
     record(`${base}.mealPlan`, objectText(day.mealPlan)), record(`${base}.estimatedTravelTime`, day.estimatedTravelTime),
     ...list(day.spots).flatMap((spot, spotIndex) => [
       record(`${base}.spots.${spotIndex}.name`, spot.name), record(`${base}.spots.${spotIndex}.description`, spot.description),
-      ...list(spot.sourceEvidence).map((entry, evidenceIndex) => record(`${base}.spots.${spotIndex}.sourceEvidence.${evidenceIndex}`, entry)),
+      ...list(spot.sourceEvidence).map((entry, evidenceIndex) => evidenceRecord(`${base}.spots.${spotIndex}.sourceEvidence.${evidenceIndex}`, entry)),
     ]),
   ].filter(Boolean);
 }
@@ -43,29 +56,36 @@ export function sourceRecordsForPath(path = '', sourceData = {}) {
   if (match) {
     const index = Number(match[1]); const hotel = list(sourceData.hotels)[index] || {};
     const names = [hotel.officialName, hotel.shortName].filter(Boolean);
-    const relatedDays = list(sourceData.days).flatMap((day, dayIndex) => names.some((name) => text(day.hotel).includes(text(name)) || text(name).includes(text(day.hotel))) ? dayRecords(day, dayIndex) : []);
+    const relatedDays = list(sourceData.days).flatMap((day, dayIndex) => text(day.hotel) && names.some((name) => text(day.hotel).includes(text(name)) || text(name).includes(text(day.hotel))) ? dayRecords(day, dayIndex) : []);
     return [
       record(`hotels.${index}.identity`, [hotel.officialName, hotel.shortName, hotel.region, hotel.roomType, hotel.mealPlan, Number.isFinite(Number(hotel.nights)) ? `${hotel.nights}晚` : ''].filter(Boolean).join('；')),
-      ...list(hotel.sourceEvidence).map((entry, evidenceIndex) => record(`hotels.${index}.sourceEvidence.${evidenceIndex}`, entry)), ...relatedDays,
+      ...list(hotel.sourceEvidence).map((entry, evidenceIndex) => evidenceRecord(`hotels.${index}.sourceEvidence.${evidenceIndex}`, entry)),
+      ...list(hotel.verifiedFacts).map((entry, evidenceIndex) => evidenceRecord(`hotels.${index}.verifiedFacts.${evidenceIndex}`, entry)), ...relatedDays,
     ].filter(Boolean);
   }
   match = String(path).match(/^transportSummary\.(\d+)/);
   if (match) {
     const index = Number(match[1]); const item = list(sourceData.transportSummary)[index] || {};
     const transportTerms = [item.category, item.serviceLevel, item.model].map(text).filter(Boolean);
-    const relatedDays = list(sourceData.days).flatMap((day, dayIndex) => transportTerms.some((term) => text(day.vehicle).includes(term) || term.includes(text(day.vehicle))) ? dayRecords(day, dayIndex) : []);
+    const relatedDays = list(sourceData.days).flatMap((day, dayIndex) => text(day.vehicle) && transportTerms.some((term) => text(day.vehicle).includes(term) || term.includes(text(day.vehicle))) ? dayRecords(day, dayIndex) : []);
     return [
       record(`transportSummary.${index}.identity`, [item.category, item.serviceLevel, item.model, item.seatCount ? `${item.seatCount}座` : '', ...list(item.usageSegments)].filter(Boolean).join('；')),
-      ...list(item.sourceEvidence).map((entry, evidenceIndex) => record(`transportSummary.${index}.sourceEvidence.${evidenceIndex}`, entry)), ...relatedDays,
+      ...list(item.sourceEvidence).map((entry, evidenceIndex) => evidenceRecord(`transportSummary.${index}.sourceEvidence.${evidenceIndex}`, entry)), ...relatedDays,
     ].filter(Boolean);
   }
   match = String(path).match(/^days\.(\d+)/);
   if (match) {
     const index = Number(match[1]); const days = list(sourceData.days);
+    const dayHotel = text(days[index]?.hotel);
+    const relatedHotelRecords = list(sourceData.hotels).flatMap((hotel, hotelIndex) => {
+      const names = [text(hotel.officialName), text(hotel.shortName)].filter(Boolean);
+      return dayHotel && names.some((name) => dayHotel.includes(name) || name.includes(dayHotel)) ? sourceRecordsForPath(`hotels.${hotelIndex}`, sourceData).filter((entry) => entry.sourcePath.includes('sourceEvidence') || entry.sourcePath.includes('verifiedFacts') || entry.sourcePath.endsWith('.identity')) : [];
+    });
     return [
       ...dayRecords(days[index] || {}, index),
       ...(index > 0 ? dayRecords(days[index - 1] || {}, index - 1, '.previous_context') : []),
       ...(days[index + 1] ? dayRecords(days[index + 1], index + 1, '.next_context') : []),
+      ...relatedHotelRecords,
     ];
   }
   match = String(path).match(/^(includedCustomer|excludedCustomer|cancellationCustomer)\.(\d+)/);
@@ -81,6 +101,11 @@ export function sourceRecordsForPath(path = '', sourceData = {}) {
       ...list(sourceData.authoritativeFacts).map((entry, index) => record(`authoritativeFacts.${index}`, entry?.statement)),
     ].filter(Boolean);
   }
+  match = String(path).match(/^diningExperiences\.(\d+)/);
+  if (match) {
+    const index = Number(match[1]); const item = list(sourceData.diningExperiences)[index] || {};
+    return [record(`diningExperiences.${index}`, objectText(item)), ...list(item.sourceEvidence).map((entry, evidenceIndex) => evidenceRecord(`diningExperiences.${index}.sourceEvidence.${evidenceIndex}`, entry))].filter(Boolean);
+  }
   return [record('source', objectText(sourceData))].filter(Boolean);
 }
 
@@ -90,7 +115,7 @@ function factualFields(data = {}) {
     ...list(data.diningExperiences).map((item, index) => [`diningExperiences.${index}.editorialCopy`, item.editorialCopy]),
     ...list(data.transportSummary).map((item, index) => [`transportSummary.${index}.editorialCopy`, item.editorialCopy]),
     ...list(data.days).flatMap((day, index) => [[`days.${index}.theme`, day.theme], [`days.${index}.description`, day.description]]),
-    ...list(data.notes).map((item, index) => [`notes.${index}`, `${item?.title || ''} ${list(item?.items).join('；')}`]),
+    ...list(data.notes).flatMap((group, groupIndex) => list(group?.items).map((item, itemIndex) => [`notes.${groupIndex}.items.${itemIndex}`, item])),
   ];
 }
 
@@ -101,8 +126,11 @@ function sentenceClaims(sentence) {
 }
 
 function claimSupported(claim, records, validEvidence) {
-  const needle = canonical(claim);
-  return [...records, ...validEvidence].some((item) => canonical(item.text || item).includes(needle));
+  const needles = CLAIM_EQUIVALENCE.get(text(claim)) || [claim];
+  return [...records, ...validEvidence].some((item) => {
+    const haystack = canonical(item.text || item);
+    return needles.some((needle) => haystack.includes(canonical(needle)));
+  });
 }
 
 function validatedEvidence(path, data, sourceData) {
@@ -117,8 +145,8 @@ export function buildFactProvenanceReport(data = {}, sourceData = {}) {
     const validEvidence = validatedEvidence(path, data, sourceData);
     const sentences = text(value).split(/[。！？；]/).map(text).filter(Boolean);
     for (const sentence of sentences) {
-      if (!FACTUAL_MARKER.test(sentence)) continue;
       const claims = sentenceClaims(sentence);
+      if (!FACTUAL_MARKER.test(sentence) && !claims.length) continue;
       const missingClaims = claims.filter((claim) => !claimSupported(claim, records, validEvidence));
       const matchedSources = records.filter((item) => claims.some((claim) => claimSupported(claim, [item], [])));
       const supported = claims.length ? missingClaims.length === 0 : validEvidence.length > 0;
@@ -158,6 +186,35 @@ function setAtPath(target, path, value) {
   cursor[/^\d+$/.test(parts.at(-1)) ? Number(parts.at(-1)) : parts.at(-1)] = value;
 }
 
+function fallbackForPath(path, corrected, sourceData) {
+  let match = String(path).match(/^days\.(\d+)\.(theme|description)$/);
+  if (match) return text(sourceData.days?.[Number(match[1])]?.[match[2]]) || (match[2] === 'theme' ? '今日行程' : '今日按已确认行程推进，具体安排以最终确认资料为准。');
+  match = String(path).match(/^hotels\.(\d+)\.editorialCopy$/);
+  if (match) {
+    const hotel = sourceData.hotels?.[Number(match[1])] || {};
+    return `${hotel.officialName || hotel.shortName || '本程酒店'}${hotel.nights ? `安排入住${hotel.nights}晚` : '按已确认安排入住'}。`;
+  }
+  match = String(path).match(/^hotels\.(\d+)\.proofPoints\.\d+$/);
+  if (match) {
+    const hotel = sourceData.hotels?.[Number(match[1])] || {};
+    return text(hotel.sourceEvidence?.[0]) || (hotel.nights ? `本程入住${hotel.nights}晚` : '以最终确认酒店资料为准');
+  }
+  match = String(path).match(/^transportSummary\.(\d+)\.editorialCopy$/);
+  if (match) {
+    const item = sourceData.transportSummary?.[Number(match[1])] || {};
+    return `本程使用${item.serviceLevel || item.category || '已确认交通安排'}衔接行程。`;
+  }
+  match = String(path).match(/^diningExperiences\.(\d+)\.editorialCopy$/);
+  if (match) return text(sourceData.diningExperiences?.[Number(match[1])]?.editorialCopy) || '餐饮安排以当前已确认行程资料为准。';
+  if (/^notes\.\d+\.items\.\d+$/.test(path)) return '相关要求请在出发前与定制师按最终确认资料复核。';
+  return text(getAtPath(corrected, path));
+}
+
+function removeUnsupportedSentences(value, unsupported = []) {
+  const rejected = new Set(unsupported.map((entry) => canonical(entry.sentence)));
+  return text(value).split(/[。！？；]/).map(text).filter((sentence) => sentence && !rejected.has(canonical(sentence))).join('；');
+}
+
 function timeSensitivePaths(data = {}) {
   return [
     ...list(data.notes).flatMap((group, groupIndex) => list(group?.items).map((_item, itemIndex) => `notes.${groupIndex}.items.${itemIndex}`)),
@@ -167,9 +224,18 @@ function timeSensitivePaths(data = {}) {
   ];
 }
 
-export function applySafeCopyCorrections(data = {}, sourceData = {}) {
+function pathInScope(path, scopePaths = []) {
+  if (!scopePaths.length) return true;
+  return scopePaths.some((scope) => {
+    const left = String(scope || ''); const right = String(path || '');
+    return left === right || right.startsWith(`${left}.`) || left.startsWith(`${right}.`) || (left === 'expenses' && /^(includedCustomer|excludedCustomer|cancellationCustomer|expenses)/.test(right));
+  });
+}
+
+export function applySafeCopyCorrections(data = {}, sourceData = {}, options = {}) {
   const corrected = structuredClone(data); const corrections = [];
-  for (const path of timeSensitivePaths(corrected)) {
+  const scopePaths = Array.isArray(options.paths) ? options.paths.filter(Boolean) : [];
+  for (const path of timeSensitivePaths(corrected).filter((item) => pathInScope(item, scopePaths))) {
     const value = text(getAtPath(corrected, path));
     if (!TIME_SENSITIVE_CONTEXT.test(value) || !SPECIFIC_TIME_CLAIM.test(value) || hasAuthoritativeSupport(value, sourceData.authoritativeFacts)) continue;
     const replacement = conservativeTimeSensitiveText(value, path);
@@ -177,11 +243,28 @@ export function applySafeCopyCorrections(data = {}, sourceData = {}) {
     corrections.push({ path, code: 'time_sensitive_safe_fallback', before: value, after: replacement, reason: '缺少权威来源URL与核验日期，已移除具体金额、期限或时间窗口' });
   }
 
-  const report = buildFactProvenanceReport(corrected, sourceData);
+  let report = buildFactProvenanceReport(corrected, sourceData);
+  const byPath = new Map();
+  for (const entry of report.unsupported) {
+    if (!byPath.has(entry.path)) byPath.set(entry.path, []);
+    byPath.get(entry.path).push(entry);
+  }
+  for (const [path, unsupported] of byPath) {
+    if (!pathInScope(path, scopePaths)) continue;
+    const raw = getAtPath(corrected, path);
+    if (typeof raw !== 'string') continue;
+    const before = text(raw);
+    if (!before) continue;
+    const after = removeUnsupportedSentences(before, unsupported) || fallbackForPath(path, corrected, sourceData);
+    if (!after || after === before) continue;
+    setAtPath(corrected, path, after);
+    corrections.push({ path, code: 'unsupported_generated_fact_removed', before, after, missingClaims: unique(unsupported.flatMap((entry) => entry.missingClaims)), reason: '客户文案中的具体断言缺少对应来源，已删除或回退为来源内表达' });
+  }
+
+  report = buildFactProvenanceReport(corrected, sourceData);
   const evidence = { ...(corrected.copyEvidence || {}) };
   for (const entry of report.entries.filter((item) => item.supported && item.evidence.length)) evidence[entry.path] = unique([...(evidence[entry.path] || []), ...entry.evidence]);
   corrected.copyEvidence = evidence;
   corrected.factProvenance = buildFactProvenanceReport(corrected, sourceData);
   return { data: corrected, corrections, provenance: corrected.factProvenance };
 }
-

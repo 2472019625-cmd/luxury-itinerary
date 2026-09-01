@@ -6,6 +6,7 @@ import tanzaniaLuxury10dData from "../data/tanzania-luxury-10d.json";
 import { Workspace } from "./Workspace.jsx";
 import { createProductionDefaultData, formatTravelerCount, inferOvernightType, isUsableFinalImageSource } from "./lib/itineraryRules.js";
 import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
+import { transportUsageLabel } from './lib/transportPresentation.js';
 
 const ICON = "/assets/icons/";
 const SLOGAN = "高品质度假管家，懂度假，更懂你";
@@ -160,7 +161,7 @@ function TransportOverview({ items = [], disclaimer, title = "全程交通", int
     const isWide = item.layout === "wide";
     return <article className={`transport-card${isWide ? " transport-card-wide" : ""}`} key={item.id || item.category} data-edit-path={`transport.${itemIndex}`}>
     {item.images?.length > 0 ? <div className={`transport-image transport-image-count-${Math.min(item.images.length, 2)}`}>{item.images.slice(0, 2).map((image, imageIndex) => <SafeImage key={`${item.id}-${imageIndex}`} src={image.src || image} alt={`${item.category}${imageIndex ? "内部空间" : "出行场景"}`} data-edit-path={`transport.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="交通图片待补充" compact className="card-missing-image" />}
-    <div className="transport-copy"><div className="transport-heading"><span className="transport-icon"><Icon name="vehicle" size={44} tone="light" /></span><div><small>{item.usageSegments?.join(" · ")}</small><h3>{item.category}</h3></div></div>
+    <div className="transport-copy"><div className="transport-heading"><span className="transport-icon"><Icon name="vehicle" size={44} tone="light" /></span><div><small>{transportUsageLabel(item)}</small><h3>{item.category}</h3></div></div>
       <div className="transport-specs">{item.serviceLevel && <span>{item.serviceLevel}</span>}{item.seatCount && <span>{item.seatCount}座</span>}{item.model && <span>{item.modelGuaranteed ? "指定车型" : "参考车型"} · {item.model}</span>}</div>
       {item.editorialCopy && <p className="transport-editorial">{item.editorialCopy}</p>}
       {item.features?.length > 0 && <ul>{item.features.map((feature) => <li key={feature}>{feature}</li>)}</ul>}

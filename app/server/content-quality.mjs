@@ -86,6 +86,19 @@ function checkSubtitle(data, issues) {
   const value = text(data.subtitle);
   if (!value || chars(value) < 14 || /^(?:尊享|奢华|非凡|探索|发现|顶奢).{0,8}(?:之旅|旅程)$/.test(value)) issues.push(issue('COPY-004','subtitle_generic','subtitle','副标题须用具体路线、体验画面和定制节奏说明价值'));
   if (list(data.hotels).filter((hotel) => text(hotel.shortName || hotel.officialName) && value.includes(text(hotel.shortName || hotel.officialName))).length > 1) issues.push(issue('COPY-004','subtitle_hotel_list','subtitle','副标题不应成为酒店清单'));
+  const clauses = value.split(/[，,、；]/).map(text).filter(Boolean);
+  const narrativeSignals = value.match(/以|从|串联|穿行|深入|抵达|守候|把|让|形成|展开|收束|安排|衔接|进入|走向|留给/g) || [];
+  if (clauses.length >= 4 && narrativeSignals.length < 2) issues.push(issue('COPY-004','subtitle_selling_point_list','subtitle','副标题不能用逗号罗列交通、酒店和卖点，须写成一条有路线推进与旅程意义的完整叙事句'));
+  if (chars(value) > 76) issues.push(issue('COPY-004','subtitle_too_long','subtitle','副标题应控制为封面可读的2—3行完整叙事句，不超过76字'));
+  const groundedAnchors = [...new Set([
+    ...list(data.days).flatMap((day) => [...list(day.routeNodes), ...list(day.spots).map((spot) => spot?.name || spot?.experience)]),
+    ...list(data.transportSummary).map((item) => item?.category),
+  ].map(text).filter((item) => chars(item) >= 3 && !/国际机场$/.test(item)))];
+  const groundedHits = groundedAnchors.filter((anchor) => value.includes(anchor) || (chars(anchor) >= 6 && value.includes(anchor.slice(0, 4))));
+  if ((data.dayCount || data.days?.length || 0) >= 5 && groundedHits.length < 2) issues.push(issue('COPY-004','subtitle_grounding_thin','subtitle','长行程副标题至少应承接两个已确认的路线、核心体验或交通锚点，不能只写目的地和泛化服务价值'));
+  const hasNarrativeStart = /(?:以|从|自).{2,}(?:串联|穿行|深入|抵达|进入|换乘|走向|展开)/.test(value);
+  const hasNarrativeOutcome = /(?:把|让|形成|安排成|收束为|完成|成为|留下一段|展开一段).{0,16}(?:旅程|之旅|体验)/.test(value);
+  if ((data.dayCount || data.days?.length || 0) >= 5 && (!hasNarrativeStart || !hasNarrativeOutcome)) issues.push(issue('COPY-004','subtitle_narrative_arc_missing','subtitle','长行程副标题需要形成“从哪里/以何种节奏展开—串联或深入哪些核心体验—最终为客户形成什么旅程”的叙事关系，不能只是换一种方式继续列卖点'));
 }
 
 function checkHighlights(data, sourceData, issues) {
@@ -97,13 +110,18 @@ function checkHighlights(data, sourceData, issues) {
     const parts = item.split(/[：:]/);
     if (parts.length < 2 || chars(parts.slice(1).join('：')) < 8) issues.push(issue('COPY-005','highlight_bare_value',`highlights.${index}`,'亮点必须使用“短标题：客户具体价值”，不能只有裸标签'));
     if (/^(?:顶奢连住|私人保护区|一价全包|草原飞机|一家一团|专属用车|深度游猎)$/.test(item)) issues.push(issue('COPY-005','highlight_bare_label',`highlights.${index}`,'亮点是裸卖点，没有解释客户得到的价值'));
+    if (parts[0] && chars(parts[0]) > 8) issues.push(issue('COPY-005','highlight_title_long',`highlights.${index}`,'亮点冒号前应是2—8字价值锚点，不能写成长句'));
+    if (DISCOUNT_TONE.test(item)) issues.push(issue('COPY-005','highlight_discount_tone',`highlights.${index}`,'产品亮点不得使用特惠、超值等廉价促销表达'));
   });
   for (let index = 1; index < items.length; index += 1) if (similarity(items[index - 1], items[index]) > 0.72) issues.push(issue('COPY-005','highlight_near_duplicate',`highlights.${index}`,'相邻亮点只是换词重复'));
   if (items.length >= 3) {
     const service = items.filter((item) => /一家一团|1V1|定制师|专属|不拼车|灵活|在地资源|服务/.test(item)).length;
     const route = items.length - service;
     if (!service || !route) issues.push(issue('COPY-005','highlight_value_mix','highlights','亮点须同时包含奢游服务价值和路线独有价值'));
+    else if (route <= service) issues.push(issue('COPY-005','highlight_route_not_primary','highlights','产品亮点应以路线独有价值为主，服务价值只占1—2条'));
   }
+  const tripDays = Number(data.dayCount || data.days?.length || 0);
+  if (tripDays >= 6 && items.length < 5) issues.push(issue('COPY-005','highlight_incomplete','highlights','六天以上且内容丰富的行程应提炼5—6条完整亮点，不能只保留少量概括标签'));
   const sourceHighlights = list(sourceData?.sourcePosterHighlights).map(canonical).filter((item) => item.length >= 4);
   const generated = canonical(items.join(' '));
   const preserved = sourceHighlights.some((source) => {
@@ -166,6 +184,9 @@ function checkDays(data, sourceData, issues) {
   days.forEach((day, index) => {
     const body = text(day.description); const simple = isSimpleTransitDay(day);
     if (chars(body) < (simple ? 24 : 46)) issues.push(issue('COPY-010','day_thin',`days.${index}.description`, `DAY ${index + 1} 文案过薄，未形成客户体验`));
+    const maximum = simple ? 130 : 220;
+    if (chars(body) > maximum) issues.push(issue('COPY-010','day_overlong',`days.${index}.description`, `DAY ${index + 1} 正文超过${maximum}字，信息密度过高；应只保留当天最重要的动作、画面、价值和承接`));
+    if (body.split(/[。！？；]/).map(text).filter(Boolean).length > (simple ? 3 : 5)) issues.push(issue('COPY-010','day_fact_dump',`days.${index}.description`, `DAY ${index + 1} 细节堆叠过多，须压缩成客户可读的核心体验叙事`));
     if (!PROGRESSION.test(body)) issues.push(issue('COPY-010','day_no_progression',`days.${index}.description`, `DAY ${index + 1} 缺少基于事实的自然推进`));
     if (!CUSTOMER_ACTION.test(body) && !SCENE.test(body)) issues.push(issue('COPY-010','day_no_action_scene',`days.${index}.description`, `DAY ${index + 1} 没有客户动作或现场画面`));
     if (!simple && !SCENE.test(body)) issues.push(issue('COPY-010','day_no_scene',`days.${index}.description`, `DAY ${index + 1} 没有可感知的现场画面`));
@@ -194,6 +215,9 @@ function checkNotes(data, issues) {
   const all = notes.flatMap((item) => [item?.title, ...list(item?.items)]).map(text).join(' ');
   if (COLD_DISCLAIMER.test(all) || /后果自负|概不负责/.test(all)) issues.push(issue(['COPY-013','COPY-015'],'notes_cold_tone','notes','注意事项语气冷硬或推责'));
   if (notes.some((item) => !/自然/.test(text(item.title)) && list(item.items).some((entry) => text(entry) && !ACTIONABLE.test(text(entry)) && chars(entry) > 12))) issues.push(issue('COPY-013','notes_not_actionable','notes','注意事项应温和、具体并给出可执行建议'));
+  notes.forEach((group, groupIndex) => list(group?.items).forEach((entry, itemIndex) => {
+    if (chars(entry) > 82) issues.push(issue('COPY-013','notes_item_overlong',`notes.${groupIndex}.items.${itemIndex}`,'单条注意事项过长；应拆为一个明确主题和一条可执行建议，避免重新拼成大段落'));
+  }));
   if ((data.days?.length || 0) >= 5) {
     const categories = [/运营|行程/,/气候|穿着|健康/,/安全|游猎|水上/,/自然|天气|动物|海况/,/证件|财物|行李/,/儿童|长者|特殊/].filter((pattern) => pattern.test(all)).length;
     if (categories < 3) issues.push(issue('COPY-013','notes_category_thin','notes','长行程注意事项覆盖面不足，须按相关性补充运营、健康、安全、自然、行李或特殊人群提醒'));

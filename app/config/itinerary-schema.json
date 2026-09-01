@@ -116,6 +116,7 @@
           "seatCount": { "type": "integer", "minimum": 1 },
           "model": { "type": "string", "title": "车型或机型" },
           "modelGuaranteed": { "type": "boolean", "default": false },
+          "usageLabel": { "type": "string", "title": "客户可见适用场景" },
           "usageSegments": { "type": "array", "items": { "type": "string" } },
           "features": { "type": "array", "items": { "type": "string" } },
           "editorialCopy": { "type": "string", "title": "交通价值叙事" },

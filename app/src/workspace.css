@@ -277,11 +277,17 @@
 .copy-review-banner { display: grid; gap: 4px; padding: 10px 16px; border-bottom: 1px solid #ead8a9; background: #fff8e7; color: #76591d; }
 .copy-review-banner strong { font-size: 12px; }
 .copy-review-banner span { font-size: 10px; line-height: 1.55; }
+.copy-review-actions, .copy-target-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 7px; }
+.copy-review-actions button, .copy-target-actions button { min-height: 30px; padding: 6px 10px; font-size: 10px; }
+.copy-repair-state { padding: 6px 8px; border-radius: 5px; background: rgba(181,133,40,.1); }
 .copy-review-details { max-height: 220px; overflow: auto; margin-top: 6px; padding-top: 6px; border-top: 1px solid #ead8a9; }
 .copy-review-details section { margin-bottom: 8px; }
 .copy-review-details section > b { font-size: 10px; }
 .copy-review-details p { display: grid; grid-template-columns: 66px 1fr; gap: 5px; margin: 3px 0; font-size: 9px; line-height: 1.5; }
 .copy-review-details em { color: #9a6c27; font-style: normal; }
+.copy-issue-target { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; border: 0; background: transparent; color: #76591d; text-align: left; cursor: pointer; }
+.copy-issue-target b { font-size: 10px; }
+.copy-issue-target small { color: #9a8261; font-size: 9px; }
 .inspector-panel h2 { max-width: 300px; margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
 .inspector-tabs { height: 48px; display: flex; align-items: flex-end; gap: 18px; padding: 0 24px; border-bottom: 1px solid var(--ws-line); }
 .inspector-tabs button { height: 100%; padding: 0 2px; color: var(--ws-muted); border: 0; border-bottom: 2px solid transparent; background: transparent; }

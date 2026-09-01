@@ -5,6 +5,7 @@ export const MODEL_TASK_PROFILES = Object.freeze({
   imageBlueprint: Object.freeze({ reasoningEffort: "low", thinkingType: "enabled" }),
   targetedPatch: Object.freeze({ reasoningEffort: "low", thinkingType: "enabled" }),
   targetedPatchHigh: Object.freeze({ reasoningEffort: "high", thinkingType: "enabled" }),
+  targetRecheckLow: Object.freeze({ reasoningEffort: "low", thinkingType: "enabled" }),
   targetRecheck: Object.freeze({ reasoningEffort: "high", thinkingType: "enabled" }),
   mechanicalRepair: Object.freeze({ reasoningEffort: "low", thinkingType: "disabled" }),
 });

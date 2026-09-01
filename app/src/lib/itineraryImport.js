@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import { addDays, normalizeItineraryFacts, splitRouteNodes } from "./itineraryRules.js";
+import { transportUsageLabel } from './transportPresentation.js';
 
 const INTERNAL_PATTERNS = [
   /成本|利润|毛利|供应商|底价|采购价|内部|结算价|操作费/i,
@@ -231,7 +232,7 @@ function buildTransportSummary(days) {
       grouped.set(key, current);
     }
   });
-  return [...grouped.values()].map((item) => ({ ...item, usageSegments: unique(item.usageSegments), sourceEvidence: unique(item.sourceEvidence) }));
+  return [...grouped.values()].map((item) => ({ ...item, usageLabel: transportUsageLabel(item), usageSegments: unique(item.usageSegments), sourceEvidence: unique(item.sourceEvidence) }));
 }
 
 function hotelNames(days, lines) {

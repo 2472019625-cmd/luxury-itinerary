@@ -14,7 +14,11 @@ export function reviewFinalOutputData(data = {}, layout = null, options = {}) {
   if (!customer.title || !customer.days?.length) add('blocker', 'required_module_missing', '封面标题或每日行程缺失');
   const sourceData = data.copySourceFacts || data;
   const brand = reviewCustomerContent(data, { sourceData });
-  brand.issues.forEach((item) => add(options.allowCopyReviewPending ? 'warning' : 'blocker', `brand_${item.code}`, `${item.ruleIds.join('/')}: ${item.message}`, item.path));
+  brand.issues.forEach((item) => {
+    const hardCopyIssue = ['fact','safety','structure'].includes(item.severity) || item.action === 'block';
+    add(options.allowCopyReviewPending && !hardCopyIssue ? 'warning' : 'blocker', `brand_${item.code}`, `${item.ruleIds.join('/')}: ${item.message}`, item.path);
+  });
+  if (data.copyQuality?.blocked === true || Number(data.copyQuality?.hardIssueCount || 0) > 0) add('blocker', 'copy_hard_block_pending', '仍有事实、费用、安全或结构问题，不能生成正式版本');
   if (data.copyQuality?.passed !== true && !brand.issues.length) add(options.allowCopyReviewPending ? 'warning' : 'blocker', 'copy_revision_pending', '文案修订尚未完成同规则复检');
   if (customer.heroImage && !isUsableFinalImageSource(customer.heroImage)) add('blocker', 'remote_final_image', '封面仍使用未本地化远程图片', 'heroImage');
   const allImages = [customer.heroImage, ...(customer.hotels || []).flatMap((item) => item.images || []), ...(customer.diningExperiences || []).flatMap((item) => item.images || []), ...(customer.transportSummary || []).flatMap((item) => item.images || []), ...(customer.days || []).flatMap((day) => (day.spots || []).flatMap((spot) => spot.images || []))]
