@@ -1,0 +1,28 @@
+{
+  "sourceDocument": "用户提供的坦桑尼亚与桑给巴尔原始行程及旧版定制 PDF",
+  "policy": "原始资料照片优先；缺图时依次使用官方媒体图片与经地点核验的开放授权图片。完整商业发布清单以 public/assets/travel/africa/sources.json 为准。",
+  "originalPhotos": [
+    "source-day01-kilimanjaro-giraffes.jpg",
+    "source-day01-safari-drive.jpg",
+    "source-day02-tarangire-elephants.jpg",
+    "source-day03-ngorongoro-herds.jpg",
+    "source-day03-safari-vehicle.jpg",
+    "source-day04-serengeti-lions.jpg",
+    "source-day05-mara-crossing.jpg",
+    "source-day06-serengeti-balloon.jpg",
+    "source-day07-zanzibar-sandbar.jpg",
+    "source-day08-mnemba-snorkeling.jpg",
+    "source-day09-zanzibar-beach.jpg"
+  ],
+  "webPhotos": [
+    { "file": "web-day02-tarangire-baobab.jpg", "verifiedLocation": "Tarangire National Park, Tanzania", "source": "https://commons.wikimedia.org/wiki/File:Baobab_(Adansonia_digitata),_parque_nacional_de_Tarangire,_Tanzania,_2024-05-24,_DD_78.jpg" },
+    { "file": "web-day04-serengeti-acacia.jpg", "verifiedLocation": "Serengeti National Park, Tanzania", "source": "https://commons.wikimedia.org/wiki/File:Acacia_(Vachellia_tortilis),_parque_nacional_Serengueti,_Tanzania,_2024-05-26,_DD_26.jpg" },
+    { "file": "web-day05-mara-crossing.jpg", "verifiedLocation": "Mara River", "source": "https://commons.wikimedia.org/wiki/File:Wildebeest_Jumping_Into_the_Mara_River.jpg" },
+    { "file": "web-day06-serengeti-balloon.jpg", "verifiedLocation": "Serengeti National Park, Tanzania", "source": "https://commons.wikimedia.org/wiki/File:Serengeti_Balloon.jpg" },
+    { "file": "web-day07-zanzibar-sunset.jpg", "verifiedLocation": "Zanzibar, Tanzania", "source": "https://commons.wikimedia.org/wiki/File:Sunset_on_zanzibar.jpg" },
+    { "file": "web-day08-mnemba-island.jpg", "verifiedLocation": "Mnemba Island, Zanzibar", "source": "https://commons.wikimedia.org/wiki/File:Mnemba_Island_-_Zanzibar_-_Flickr_-_Jorge_Lascar.jpg" },
+    { "file": "web-day09-zanzibar-sunset.jpg", "verifiedLocation": "Zanzibar, Tanzania", "source": "https://commons.wikimedia.org/wiki/File:Sunset_Zanzibar.jpg" },
+    { "file": "web-day10-zanzibar-airport.jpg", "verifiedLocation": "Abeid Amani Karume International Airport", "source": "https://commons.wikimedia.org/wiki/File:Abeid_Amani_Karume_International_Airport.jpg" },
+    { "file": "web-day10-zanzibar-airport-aerial.jpg", "verifiedLocation": "Abeid Amani Karume International Airport", "source": "https://commons.wikimedia.org/wiki/File:Aerial_view_of_Zanzibar_airport.jpg" }
+  ]
+}

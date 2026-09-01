@@ -1,0 +1,491 @@
+{
+  "policy": "按奢游图片使用规范：原始资料无照片，改用可核验来源图片；正式商业发布前仍需做授权复核与必要署名。",
+  "items": [
+    {
+      "file": "angama-amboseli-elephants-kilimanjaro.jpg",
+      "url": "https://www.jacadatravel.com/_next/image/?q=100&url=https%3A%2F%2Fcdn.jacadatravel.com%2Fwp-content%2Fuploads%2F2023%2F06%2FAngama-Amboseli-elephants-Mount-Kilimanjaro-crop-scaled.jpg&w=1600",
+      "source": "https://www.jacadatravel.com/africa/kenya/amboseli/accommodation/angama-amboseli/",
+      "use": "封面、DAY1/DAY2 安博塞利象群与雪山",
+      "path": "/assets/travel/kenya-luxury-8d/angama-amboseli-elephants-kilimanjaro.jpg",
+      "width": 1600,
+      "height": 1173
+    },
+    {
+      "file": "angama-amboseli-mnara-viewpoint.jpg",
+      "url": "https://www.jacadatravel.com/_next/image/?q=100&url=https%3A%2F%2Fcdn.jacadatravel.com%2Fwp-content%2Fuploads%2F2023%2F06%2FAngama-Amboseli-Mnara-4-photographed-by-Dook-2.jpg&w=1600",
+      "source": "https://www.jacadatravel.com/africa/kenya/amboseli/accommodation/angama-amboseli/",
+      "use": "DAY1 Angama 专属观景台",
+      "path": "/assets/travel/kenya-luxury-8d/angama-amboseli-mnara-viewpoint.jpg",
+      "width": 1570,
+      "height": 1280
+    },
+    {
+      "file": "angama-amboseli-terrace-dining.jpg",
+      "url": "https://cdn2.indagare.com/i/146471/w3840",
+      "source": "https://indagare.com/lodging/angama-amboseli",
+      "use": "酒店/餐饮 Angama 露台",
+      "path": "/assets/travel/kenya-luxury-8d/angama-amboseli-terrace-dining.jpg",
+      "width": 3840,
+      "height": 2560
+    },
+    {
+      "file": "ritz-masai-mara-villa-exterior.jpg",
+      "url": "https://travelport.leonardocontentcloud.com/imageRepo/4/0/194/881/820/KSx8371Eq0OnuUdIJk9MA_Two_Bedroom_Exterior28355_O.jpg",
+      "source": "https://thevendry.com/venue/407272/the-ritz-carlton-masai-mara-safari-camp-kenya",
+      "use": "酒店 丽思卡尔顿马赛马拉营地",
+      "path": "/assets/travel/kenya-luxury-8d/ritz-masai-mara-villa-exterior.jpg",
+      "width": 4000,
+      "height": 2667
+    },
+    {
+      "file": "ritz-masai-mara-cultural-evening.jpg",
+      "url": "https://cache.marriott.com/is/image/marriotts7prod/rz-nbomr-masai-mara-safari-camp-16940%3AWide-Hor?fit=constrain&wid=1600",
+      "source": "https://www.ritzcarlton.com/en/hotels/nbomr-the-ritz-carlton-masai-mara-safari-camp/photos/",
+      "use": "DAY3 黄昏召唤、boma/文化晚会、Sundowner",
+      "path": "/assets/travel/kenya-luxury-8d/ritz-masai-mara-cultural-evening.jpg",
+      "width": 1600,
+      "height": 900
+    },
+    {
+      "file": "mara-wildebeest-crossing.jpg",
+      "url": "https://rocksure.b-cdn.net/gallery_image/image/18679/full_ANGAMA_MARA_-_time_to_cross.jpg",
+      "source": "https://www.rocksure.com/properties/angama-mara",
+      "use": "DAY4 马拉河迁徙渡河",
+      "path": "/assets/travel/kenya-luxury-8d/mara-wildebeest-crossing.jpg",
+      "width": 1600,
+      "height": 1067
+    },
+    {
+      "file": "masai-mara-balloon.jpg",
+      "url": "https://images.squarespace-cdn.com/content/v1/5df6cd6b7c01e26e415ae807/1632691280853-JCAQNV9P3NFQFXDEOUBW/Governors%2BBalloon%2BSafaris.jpg?format=2500w",
+      "source": "https://www.safaritrue.com/maasai-mara",
+      "use": "DAY6 热气球",
+      "path": "/assets/travel/kenya-luxury-8d/masai-mara-balloon.jpg",
+      "width": 2160,
+      "height": 1440
+    },
+    {
+      "file": "saruni-leopard-hill-star-bedroom.jpg",
+      "url": "https://cf.bstatic.com/xdata/images/hotel/max1024x768/216259308.jpg?k=8e98a649989d6967d3b2719eab4330bfeccd178f53da86ace5d1f1a602cc30e2&o=",
+      "source": "https://www.booking.com/hotel/ke/leopard-hill.en-gb.html",
+      "use": "酒店/Saruni 星空床",
+      "path": "/assets/travel/kenya-luxury-8d/saruni-leopard-hill-star-bedroom.jpg",
+      "width": 858,
+      "height": 768
+    },
+    {
+      "file": "saruni-star-bed-experience.jpg",
+      "url": "https://sarunibasecamp.com/wp-content/uploads/2025/03/Saruni-photographed-by-Brian-Siambi-3-scaled-1.jpg",
+      "source": "https://sarunibasecamp.com/star-bed-experience/",
+      "use": "DAY6 星空床、户外淋浴氛围",
+      "path": "/assets/travel/kenya-luxury-8d/saruni-star-bed-experience.jpg",
+      "width": 2560,
+      "height": 1707
+    },
+    {
+      "file": "mara-naboisho-leopard.jpg",
+      "url": "https://kated.com/wp-content/uploads/2020/04/KEN61a-Leopard-in-Tree-Mara-Naboisho-.jpg",
+      "source": "https://kated.com/moments/kenya/mara-naboisho-leopard-safari/",
+      "use": "DAY5 Naboisho 花豹追踪",
+      "path": "/assets/travel/kenya-luxury-8d/mara-naboisho-leopard.jpg",
+      "width": 1024,
+      "height": 683
+    },
+    {
+      "file": "mara-night-drive.jpg",
+      "url": "https://www.masaimara.travel/images/night-safari-game-drive-in-maasai-mara-mobile.jpg",
+      "source": "https://www.masaimara.travel/night-safari-game-drive-maasai-mara.php",
+      "use": "DAY2/DAY5 夜间游猎",
+      "path": "/assets/travel/kenya-luxury-8d/mara-night-drive.jpg",
+      "width": 515,
+      "height": 750
+    },
+    {
+      "file": "mara-walking-safari.jpg",
+      "url": "https://mara.exploreans.com/images/uploads/walking-safari-guide-maasai-mara-mara-river-camp-kenya.jpg",
+      "source": "https://mara.exploreans.com/",
+      "use": "DAY5/DAY6 徒步 Safari",
+      "path": "/assets/travel/kenya-luxury-8d/mara-walking-safari.jpg",
+      "width": 1316,
+      "height": 796
+    },
+    {
+      "file": "masai-beadwork.jpg",
+      "url": "https://img2.chinadaily.com.cn/images/202206/28/62ba56d7a310fd2bec923d87.jpeg",
+      "source": "https://global.chinadaily.com.cn/a/202206/28/WS62ba56d7a310fd2b29e68ec7.html",
+      "use": "DAY4 马赛村与串珠课程",
+      "path": "/assets/travel/kenya-luxury-8d/masai-beadwork.jpg",
+      "width": 1200,
+      "height": 800
+    },
+    {
+      "file": "masai-mara-sundowner.jpg",
+      "url": "https://echoesflyinsafarimara.com/cdn/shop/files/two-friends-enjoying-drinks-at-sunset.jpg?v=1732880292",
+      "source": "https://echoesflyinsafarimara.com/products/affordable-2-people-masai-mara-fly-in-safari-package",
+      "use": "DAY3/DAY6 Sundowner 落日酒会",
+      "path": "/assets/travel/kenya-luxury-8d/masai-mara-sundowner.jpg",
+      "width": 700,
+      "height": 1000
+    },
+    {
+      "file": "giraffe-centre-nairobi.jpg",
+      "url": "https://www.natureobjectivesafaris.com/wp-content/uploads/2022/09/giraffe1.jpg",
+      "source": "https://www.natureobjectivesafaris.com/tours/karen-blixen-giraffe-centre/",
+      "use": "DAY7 长颈鹿中心",
+      "path": "/assets/travel/kenya-luxury-8d/giraffe-centre-nairobi.jpg",
+      "width": 1100,
+      "height": 733
+    },
+    {
+      "file": "carnivore-nairobi.jpg",
+      "url": "https://www.pelago.com/img/products/KE-Kenya/the-carnivore-restaurant-experience-in-nairobi-lunch-or-dinner/9c5e0bf8-551f-43f4-ba35-803333f7b795_the-carnivore-restaurant-experience-in-nairobi-lunch-or-dinner.jpg",
+      "source": "https://www.pelago.com/en-US/activity/p3147gc3s-the-carnivore-restaurant-experience-in-nairobi-lunch-or-dinner-nairobi/",
+      "use": "DAY7 The Carnivore 特色晚餐",
+      "path": "/assets/travel/kenya-luxury-8d/carnivore-nairobi.jpg",
+      "width": 720,
+      "height": 480
+    },
+    {
+      "file": "mara-bush-breakfast.jpg",
+      "url": "https://www.thesafaricollection.com/wp-content/uploads/2026/07/Salas-Camp-Activities-P1-BUSH-BREAKFAST.jpg",
+      "source": "https://www.thesafaricollection.com/properties/salas-camp/activities/bush-breakfast/",
+      "use": "DAY4 丛林早餐",
+      "path": "/assets/travel/kenya-luxury-8d/mara-bush-breakfast.jpg",
+      "width": 600,
+      "height": 800
+    },
+    {
+      "file": "mara-bush-dinner.jpg",
+      "url": "https://www.masaimara.travel/images/bush-dinner-masai-mara-kenya.jpg",
+      "source": "https://www.masaimara.travel/picnic-meal-sundowners.php",
+      "use": "DAY3/DAY6 星空晚宴、boma 晚餐",
+      "path": "/assets/travel/kenya-luxury-8d/mara-bush-dinner.jpg",
+      "width": 601,
+      "height": 400
+    },
+    {
+      "file": "mara-sundowner-picnic.jpg",
+      "url": "https://www.masaimara.travel/images/sundowner%20-in-masai-mara-kenya.jpg",
+      "source": "https://www.masaimara.travel/picnic-meal-sundowners.php",
+      "use": "DAY3/DAY6 Sundowner 落日酒会",
+      "path": "/assets/travel/kenya-luxury-8d/mara-sundowner-picnic.jpg",
+      "width": 600,
+      "height": 400
+    },
+    {
+      "file": "masai-mara-airstrip.jpg",
+      "url": "https://www.masaimara.travel/images/maasai-mara-airstrip%20airport.jpg",
+      "source": "https://www.masaimara.travel/maasai-mara-airport-airstrips.php",
+      "use": "DAY3/DAY7 草原小飞机接驳",
+      "path": "/assets/travel/kenya-luxury-8d/masai-mara-airstrip.jpg",
+      "width": 750,
+      "height": 375
+    },
+    {
+      "file": "angama-mara-airstrip.jpg",
+      "url": "https://www.masaimara.travel/images/angama-mara-airstrip.jpg",
+      "source": "https://www.masaimara.travel/maasai-mara-airport-airstrips.php",
+      "use": "草原飞机与马拉空中接驳",
+      "path": "/assets/travel/kenya-luxury-8d/angama-mara-airstrip.jpg",
+      "width": 750,
+      "height": 375
+    },
+    {
+      "file": "jw-marriott-nairobi-exterior.jpg",
+      "url": "https://cache.marriott.com/is/image/marriotts7prod/jw-nbojw-exterior-41131-32588:Wide-Hor?wid=1600&fit=constrain",
+      "source": "https://www.marriott.com/en-us/hotels/nbojw-jw-marriott-hotel-nairobi/photos/",
+      "use": "DAY7/JW 万豪酒店外观",
+      "path": "/assets/travel/kenya-luxury-8d/jw-marriott-nairobi-exterior.jpg",
+      "width": 1600,
+      "height": 899
+    },
+    {
+      "file": "jw-marriott-nairobi-room.jpg",
+      "url": "https://cache.marriott.com/is/image/marriotts7prod/jw-nbojw-standard-king-38788:Wide-Hor?wid=1600&fit=constrain",
+      "source": "https://www.marriott.com/en-us/hotels/nbojw-jw-marriott-hotel-nairobi/photos/",
+      "use": "DAY8/JW 万豪城市休整",
+      "path": "/assets/travel/kenya-luxury-8d/jw-marriott-nairobi-room.jpg",
+      "width": 1600,
+      "height": 900
+    },
+    {
+      "file": "jw-marriott-nairobi-lobby.jpg",
+      "url": "https://cache.marriott.com/is/image/marriotts7prod/jw-nbojw-lobby-39939-19502:Wide-Hor?wid=1600&fit=constrain",
+      "source": "https://www.marriott.com/en-us/hotels/nbojw-jw-marriott-hotel-nairobi/photos/",
+      "use": "酒店总览/JW 万豪酒店",
+      "path": "/assets/travel/kenya-luxury-8d/jw-marriott-nairobi-lobby.jpg",
+      "width": 1600,
+      "height": 900
+    },
+    {
+      "file": "karen-blixen-museum.jpg",
+      "url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Karen%20blixen%20museum%20in%20nairobi%20kenya%2001.jpg",
+      "source": "https://commons.wikimedia.org/wiki/File:Karen_blixen_museum_in_nairobi_kenya_01.jpg",
+      "use": "DAY7 凯伦·布里克森博物馆",
+      "path": "/assets/travel/kenya-luxury-8d/karen-blixen-museum.jpg",
+      "width": 3008,
+      "height": 2000
+    },
+    {
+      "file": "ritz-wine-cellar.jpg",
+      "url": "https://secure.s.forbestravelguide.com/img/properties/the-ritz-carlton-masai-mara-safari-camp/the-ritz-carlton-masai-mara-safari-camp-wine-cellar.jpg",
+      "source": "https://www.forbestravelguide.com/hotels/masai-mara-kenya/the-ritz-carlton-masai-mara-safari-camp",
+      "use": "特色餐饮 私人酒窖品酒",
+      "path": "/assets/travel/kenya-luxury-8d/ritz-wine-cellar.jpg",
+      "width": 760,
+      "height": 425
+    },
+    {
+      "file": "ritz-whispering-tree-spa-pool.jpg",
+      "url": "https://cache.marriott.com/is/image/marriotts7prod/rz-nbomr-rc-nbomr-spa-relax-10807:Wide-Hor?fit=constrain&wid=1600",
+      "source": "https://www.ritzcarlton.com/en/hotels/nbomr-the-ritz-carlton-masai-mara-safari-camp/experiences/",
+      "use": "DAY4 低语树水疗中心与私人恒温泳池",
+      "path": "/assets/travel/kenya-luxury-8d/ritz-whispering-tree-spa-pool.jpg",
+      "width": 1600,
+      "height": 899
+    },
+    {
+      "file": "jw-mara-bush-breakfast.jpg",
+      "url": "https://wetu.com/ImageHandler/w1920x1080/304839/jwmara_bushbreakfastlargetablesetup.jpg",
+      "source": "https://wetu.com/iBrochure/en/Home/304839/jw_marriott_masai_mara_lodge",
+      "use": "特色餐饮 丛林早餐",
+      "path": "/assets/travel/kenya-luxury-8d/jw-mara-bush-breakfast.jpg",
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "file": "sala-bush-breakfast-food.jpg",
+      "url": "https://www.thesafaricollection.com/wp-content/uploads/2021/03/Salas-Camp-Activities-P2-A-BUSH-BREAKFAST.jpg",
+      "source": "https://www.thesafaricollection.com/properties/salas-camp/activities/bush-breakfast/",
+      "use": "备用素材，不用于当前正式长图；DAY4 已改用酒店水疗/恒温泳池以提升图文对应和高级感",
+      "path": "/assets/travel/kenya-luxury-8d/sala-bush-breakfast-food.jpg",
+      "width": 600,
+      "height": 800
+    },
+    {
+      "file": "ritz-boma-starry-dinner.jpg",
+      "url": "https://b-cdn.springnest.com/media/img/xc/ritz_carlton_masai_mara_boma5174f7f.jpg?width=1600",
+      "source": "https://www.secretsviptravel.com/ritz-carlton-masai-mara/",
+      "use": "特色餐饮 星空晚宴/boma",
+      "path": "/assets/travel/kenya-luxury-8d/ritz-boma-starry-dinner.jpg",
+      "width": 1600,
+      "height": 1066
+    },
+    {
+      "file": "carnivore-tableside-meat.jpg",
+      "url": "https://cdn.getyourguide.com/img/tour/19f3740aaf7085c0b3deabecff5887ad4ce629b6f67e6bc0e67350b5494d4517.jpg/155.jpg",
+      "source": "https://www.getyourguide.com/nairobi-l267/nairobi-carnivore-restaurant-dinner-experience-t852205/",
+      "use": "特色餐饮 The Carnivore 餐桌烤肉",
+      "path": "/assets/travel/kenya-luxury-8d/carnivore-tableside-meat.jpg",
+      "width": 1080,
+      "height": 1080
+    },
+    {
+      "file": "carnivore-rotisserie-meat.jpg",
+      "url": "https://www.pelago.com/img/products/KE-Kenya/carnivore-restaurant-the-carnivore-eating-experience/8217e4d7-74be-4bad-84e9-f585808d91c3_carnivore-restaurant-the-carnivore-eating-experience.jpg",
+      "source": "https://www.pelago.com/en/activity/poqhk5ux6-carnivore-restaurant-the-carnivore-eating-experience-nairobi/",
+      "use": "备用素材，不用于当前正式长图；炉火近景易显脏乱，不适合顶奢客户版",
+      "path": "/assets/travel/kenya-luxury-8d/carnivore-rotisserie-meat.jpg",
+      "width": 720,
+      "height": 480
+    },
+    {
+      "file": "carnivore-official-carving.jpg",
+      "url": "https://www.tamarind.co.ke/_next/image?q=75&url=https%3A%2F%2Fs3.tamarind.michaelgift.cloud%2Flive%2Flocations%2Fcarnivore%2Ffood%2F01.jpeg&w=1920",
+      "source": "https://www.tamarind.co.ke/locations/the-carnivore",
+      "use": "候选素材；当前正式长图未使用，横向卡片中环境仍偏杂",
+      "path": "/assets/travel/kenya-luxury-8d/carnivore-official-carving.jpg",
+      "width": 1080,
+      "height": 1600
+    },
+    {
+      "file": "carnivore-skewer-clean.jpg",
+      "url": "https://www.pelago.com/img/products/KE-Kenya/the-carnivore-restaurant-experience-in-nairobi-lunch-or-dinner/3296be72-741b-4675-9c85-96e8214a3ad2_the-carnivore-restaurant-experience-in-nairobi-lunch-or-dinner.jpg",
+      "source": "https://www.pelago.com/en-US/activity/p3147gc3s-the-carnivore-restaurant-experience-in-nairobi-lunch-or-dinner-nairobi/",
+      "use": "DAY7 The Carnivore 烤肉餐食近景",
+      "path": "/assets/travel/kenya-luxury-8d/carnivore-skewer-clean.jpg",
+      "width": 720,
+      "height": 480
+    },
+    {
+      "file": "mercedes-vclass-business-van.jpg",
+      "url": "https://static.wixstatic.com/media/fead91_1093af81526b4f1dad891f92f7411ae2~mv2.jpg/v1/fill/w_980%2Ch_980%2Cal_c%2Cq_85%2Cusm_0.66_1.00_0.01%2Cenc_avif%2Cquality_auto/V-Klasse.jpg",
+      "source": "https://www.drivernow.ch/",
+      "use": "交通 城市商务用车",
+      "path": "/assets/travel/kenya-luxury-8d/mercedes-vclass-business-van.jpg",
+      "width": 980,
+      "height": 980
+    },
+    {
+      "file": "mercedes-vclass-interior.jpg",
+      "url": "https://powertraveller.com/wp-content/uploads/2024/09/1_airport-transfer-narita-airport-and-tokyo-23-wards.jpg",
+      "source": "https://powertraveller.com/airport-transfer-narita-airport-and-tokyo-23-wards/",
+      "use": "DAY8 商务车内饰/送机",
+      "path": "/assets/travel/kenya-luxury-8d/mercedes-vclass-interior.jpg",
+      "width": 520,
+      "height": 780
+    },
+    {
+      "file": "amboseli-elephants-alt.jpg",
+      "url": "https://wilderness-bookings-app.fra1.cdn.digitaloceanspaces.com/wilderness-bookings-ltd/angama-amboseli/photos/angama-amboseli-amboseli-amboseli-national-reserve-wilderness-bookings-game-drive.jpeg",
+      "source": "https://amboseli.com/accommodation/angama-amboseli",
+      "use": "DAY1 安博塞利象群",
+      "path": "/assets/travel/kenya-luxury-8d/amboseli-elephants-alt.jpg",
+      "width": 2500,
+      "height": 1650
+    },
+    {
+      "file": "amboseli-elephants-clouds.jpg",
+      "url": "https://www.pelago.com/img/products/KE-Kenya/2-days-amboseli-national-park-safari-escape-with-kentau/5edefa4f-b374-4f26-ba16-01928438383f_2-days-amboseli-national-park-safari-escape-with-kentau.jpg",
+      "source": "https://www.pelago.com/en-IN/activity/p2fi9q9fw-2-days-amboseli-national-park-safari-escape-with-kentau-nairobi/",
+      "use": "DAY2 大象与雪山",
+      "path": "/assets/travel/kenya-luxury-8d/amboseli-elephants-clouds.jpg",
+      "width": 720,
+      "height": 480
+    },
+    {
+      "file": "angama-veranda-view.jpg",
+      "url": "https://www.luxurytopics.com/storage/posts/gallery/2024/Mar/60090/angama-amboseli-novo-lice-odrzivog-safarija-u-keniji-5.jpg",
+      "source": "https://www.luxurytopics.com/travelling/destinations/angama-amboseli-a-new-face-of-sustainable-safari-in-kenya",
+      "use": "DAY1 Angama 观景台/露台",
+      "path": "/assets/travel/kenya-luxury-8d/angama-veranda-view.jpg",
+      "width": 750,
+      "height": 500
+    },
+    {
+      "file": "observation-hill-amboseli.jpg",
+      "url": "https://www.sentrim-hotels.com/resources/experience/sentrim-amboseli-observation-hill2.jpg",
+      "source": "https://www.sentrim-hotels.com/sentrim-amboseli-experiences.html",
+      "use": "DAY2 Observation Hill",
+      "path": "/assets/travel/kenya-luxury-8d/observation-hill-amboseli.jpg",
+      "width": 974,
+      "height": 650
+    },
+    {
+      "file": "naboisho-lion-game-drive.jpg",
+      "url": "https://cdn2.rhinoafrica.com/thumbnails/objects/service-providers/naboisho-camp/_img/2024/57780/image-thumb__57780__background-cover/naboisho-camp-game-drive-wildlife-lions-01.ac883fd3.jpg",
+      "source": "https://www.rhinoafrica.com/en/accommodation/naboisho-camp/24981",
+      "use": "DAY4 KPSGA 专家导游游猎",
+      "path": "/assets/travel/kenya-luxury-8d/naboisho-lion-game-drive.jpg",
+      "width": 1900,
+      "height": 1268
+    },
+    {
+      "file": "naboisho-leopard-walking.jpg",
+      "url": "https://www.masaimara.com/assets/img/leopard-masai-mara-naboisho-conservancy-kenya.jpg",
+      "source": "https://www.masaimara.com/mara-naboisho-conservancy.php",
+      "use": "DAY5 Naboisho 花豹",
+      "path": "/assets/travel/kenya-luxury-8d/naboisho-leopard-walking.jpg",
+      "width": 1441,
+      "height": 758
+    },
+    {
+      "file": "night-safari-leopard-spotlight.jpg",
+      "url": "https://storage.googleapis.com/48877118-7272-4a4d-b302-0465d8aa4548/1f16cfef-258b-464c-aebc-594225fe2436/eb03b8ed-0c3d-4541-908d-7ecc2018eff2.jpg",
+      "source": "https://www.beyondtheplainssafaris.com/blogs/beyond-the-plains-safaris-your-premier-kenya-safari-operator",
+      "use": "DAY5 热成像夜间追踪",
+      "path": "/assets/travel/kenya-luxury-8d/night-safari-leopard-spotlight.jpg",
+      "width": 1344,
+      "height": 768
+    },
+    {
+      "file": "night-safari-leopard-close.jpg",
+      "url": "https://cdn.naturettl.com/wp-content/uploads/2019/10/11130234/tips-to-photograph-wildlife-on-a-night-safari-in-africa-9-800x472.jpg",
+      "source": "https://www.naturettl.com/night-wildlife-safari-photography-tips-africa/",
+      "use": "DAY2 夜间游猎",
+      "path": "/assets/travel/kenya-luxury-8d/night-safari-leopard-close.jpg",
+      "width": 800,
+      "height": 472
+    },
+    {
+      "file": "masai-mara-walking-guide-alt.jpg",
+      "url": "https://mara.exploreans.com/images/uploads/walking-safari-guide-maasai-mara-mara-river-camp-kenya.jpg",
+      "source": "https://mara.exploreans.com/",
+      "use": "DAY5 徒步 Safari",
+      "path": "/assets/travel/kenya-luxury-8d/masai-mara-walking-guide-alt.jpg",
+      "width": 1316,
+      "height": 796
+    },
+    {
+      "file": "naboisho-lioness-cubs.jpg",
+      "url": "https://images.squarespace-cdn.com/content/v1/676986374b335b0e528ba351/1c3dead9-f470-424d-93b9-20edb35acb9c/ilkisausiau-lion-pride-naboisho-conservancy-kenya-B8A4445.jpg",
+      "source": "https://markevansphotography.com/kenya",
+      "use": "DAY6 日间游猎",
+      "path": "/assets/travel/kenya-luxury-8d/naboisho-lioness-cubs.jpg",
+      "width": 2500,
+      "height": 1562
+    },
+    {
+      "file": "ritz-canopy-bar-lounge.jpg",
+      "url": "https://cache.marriott.com/is/image/marriotts7prod/rz-nbomr-canopy-bar-and-lounge-13004%3AClassic-Hor?fit=constrain&wid=1200",
+      "source": "https://www.ritzcarlton.com/en/hotels/nbomr-the-ritz-carlton-masai-mara-safari-camp/overview/",
+      "use": "DAY3 营地酒廊/欢迎",
+      "path": "/assets/travel/kenya-luxury-8d/ritz-canopy-bar-lounge.jpg",
+      "width": 1200,
+      "height": 802
+    },
+    {
+      "file": "safari-vehicle-lions.jpg",
+      "url": "https://veronikasadventure.com/wp-content/uploads/2024/07/2_nairobi-national-park-game-drive-and-transfer.jpg",
+      "source": "https://veronikasadventure.com/best-private-driver-services-in-nairobi/",
+      "use": "交通 游猎车示意",
+      "path": "/assets/travel/kenya-luxury-8d/safari-vehicle-lions.jpg",
+      "width": 669,
+      "height": 446
+    },
+    {
+      "file": "masai-mara-cheetah-game-drive.jpg",
+      "url": "https://masai-mara.in/wp-content/uploads/2023/11/Safari-1920x1920-2-1024x1024.webp",
+      "source": "https://masai-mara.in/nairobi-to-masai-mara/",
+      "use": "DAY3 马拉首场游猎",
+      "path": "/assets/travel/kenya-luxury-8d/masai-mara-cheetah-game-drive.jpg",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "saruni-leopard-hill-exterior.jpg",
+      "url": "https://sarunibasecamp.com/wp-content/uploads/2023/10/Saruni-Basecamp-Saruni-Leopard-Hill-tent-exterior.jpg",
+      "source": "https://sarunibasecamp.com/our-properties/saruni-leopard-hill/",
+      "use": "酒店总览 Saruni Leopard Hill",
+      "path": "/assets/travel/kenya-luxury-8d/saruni-leopard-hill-exterior.jpg",
+      "width": 2300,
+      "height": 1530
+    },
+    {
+      "file": "saruni-leopard-hill-aerial.jpg",
+      "url": "https://static.wixstatic.com/media/5e1650_6d36b4ca56b542a4b67fc28bdb833841~mv2.jpg/v1/fill/w_1200,h_900,al_c,q_90/2023-SBC-Leopard-Hill-14.jpg",
+      "source": "https://www.mopanisafaris.com/properties/saruni-leopard-hill",
+      "use": "DAY5 Saruni Leopard Hill",
+      "path": "/assets/travel/kenya-luxury-8d/saruni-leopard-hill-aerial.jpg",
+      "width": 1200,
+      "height": 900
+    },
+    {
+      "file": "airkenya-plane-boarding.jpg",
+      "url": "https://www.shoortravel.com/image/airstrip-pick-up-julias-river-camp-masai-mara.jpg",
+      "source": "https://www.shoortravel.com/picturesofkenya.html",
+      "use": "交通 草原小飞机",
+      "path": "/assets/travel/kenya-luxury-8d/airkenya-plane-boarding.jpg",
+      "width": 1800,
+      "height": 1201
+    },
+    {
+      "file": "angama-walking-safari.jpg",
+      "url": "https://angama.com/wp-content/uploads/2024/02/SN-1V1A1503.jpg",
+      "source": "https://angama.com/experience/kimana-walking-safari/",
+      "use": "DAY2 Angama/Kimana 步行 Safari",
+      "path": "/assets/travel/kenya-luxury-8d/angama-walking-safari.jpg",
+      "width": 1919,
+      "height": 1280
+    },
+    {
+      "file": "basecamp-walking-safari.jpg",
+      "url": "https://atta.travel/static/ded42f66-25a9-4b48-98b2def1900d0484/1188x792_highestperformance__4a7c7e45a350/WalkingSafari-Copy.jpg",
+      "source": "https://atta.travel/resource/basecamp-explorer-kenya-launches-new-enriching-and-meaningful-safari.html",
+      "use": "DAY5 私保徒步 Safari",
+      "path": "/assets/travel/kenya-luxury-8d/basecamp-walking-safari.jpg",
+      "width": 1188,
+      "height": 792
+    }
+  ]
+}

@@ -1,0 +1,433 @@
+{
+  "title": "肯尼亚8天7晚顶奢Safari定制游",
+  "subtitle": "以私家定制的从容节奏，串联安博塞利雪山象群、马赛马拉迁徙蹲守与 Naboisho 私人保护区，把草原飞机、顶奢营地和内罗毕城市收束安排成一段深入东非荒野的定制旅程。",
+  "destination": "肯尼亚 · 安博塞利 · 马赛马拉 · 内罗毕",
+  "travelers": 2,
+  "adults": 2,
+  "children": 0,
+  "startDate": null,
+  "endDate": null,
+  "dayCount": 8,
+  "heroImage": "/assets/travel/kenya-luxury-8d/angama-amboseli-elephants-kilimanjaro.jpg",
+  "travelStyle": "顶奢私享 · Safari 深度游猎",
+  "serviceMode": "2人定制顶奢精品团 · 1台游猎越野车",
+  "tripRhythm": "雪山象群、迁徙蹲守、私保夜巡、草原飞机与内罗毕城市收束",
+  "hotelReplacementPolicy": "所列酒店为参考酒店，最终以正式确认单为准；如遇满房、房型调整或季节性运营变化，将安排同等级或更高标准住宿，并由定制师提前沟通。",
+  "transportDisclaimer": "园区内安排1台7座4x4可开顶式游猎越野车，市区安排1台商务车；图片用于说明交通类别与舒适度，不承诺具体车辆品牌或型号。草原飞机以承运方、天气及运营安排最终确认为准。",
+  "sourcePosterHighlights": [
+    "顶奢连住 | 国际品牌+私保营地",
+    "C位蹲守 | 独赏天国之渡",
+    "私人保护区游猎 | 徒步夜巡双绝",
+    "草原飞机接驳 | 拒绝长途拉车"
+  ],
+  "highlights": [
+    "私享定制：一家一团，定制师全程跟进，游猎、休息、摄影与餐食节奏都按客人偏好微调",
+    "奢游严选：以目的地经验筛选酒店、营地与体验，把预算用在真正影响旅行质感的位置",
+    "顶奢连住：国际品牌与私人保护区营地串联，Angama、丽思卡尔顿、Saruni 与 JW 万豪各司其职",
+    "C位蹲守：国庆窗口重点追踪角马迁徙，在马拉河区域守候天国之渡与无遮挡前排视角",
+    "私保游猎：转入 Naboisho 私人保护区，避开常规车流，夜巡、热成像追踪与徒步 Safari 双线深入",
+    "草原飞接：两段草原小飞机替代漫长陆路，拒绝长途拉车，把更多时间留给荒野和休整"
+  ],
+  "hotels": [
+    {
+      "id": "angama-amboseli",
+      "officialName": "ANGAMA AMBOSELI",
+      "shortName": "Angama Amboseli",
+      "region": "安博塞利 · 乞力马扎罗雪山视野",
+      "nights": 2,
+      "editorialCopy": "Angama Amboseli 让旅程从肯尼亚最具辨识度的画面开始：安博塞利象群、开阔草原与乞力马扎罗雪山同框。连住两晚，清晨可把最好的光线留给象群，傍晚则回到营地观景平台，在日落中完成初抵东非的节奏切换。",
+      "proofPoints": ["雪山观景", "象群近场", "开场两晚"],
+      "images": [{ "src": "/assets/travel/kenya-luxury-8d/angama-amboseli-mnara-viewpoint.jpg", "focus": "50% 42%" }]
+    },
+    {
+      "id": "ritz-carlton-masai-mara",
+      "officialName": "THE RITZ-CARLTON, MASAI MARA SAFARI CAMP",
+      "shortName": "丽思卡尔顿马赛马拉营地",
+      "region": "马赛马拉国家保护区",
+      "nights": 2,
+      "editorialCopy": "丽思卡尔顿把国际奢华酒店的服务语言带入马赛马拉：从帐篷空间、私人酒窖到落日酒会与星空晚宴，每一次回营都不是简单休息，而是把白天的游猎震撼转化为更完整的营地仪式。",
+      "proofPoints": ["奢华营地", "马拉近场", "餐饮仪式"],
+      "images": [{ "src": "/assets/travel/kenya-luxury-8d/ritz-masai-mara-villa-exterior.jpg", "focus": "50% 50%" }]
+    },
+    {
+      "id": "saruni-leopard-hill",
+      "officialName": "SARUNI LEOPARD HILL",
+      "shortName": "Saruni Leopard Hill",
+      "region": "Naboisho 私人保护区",
+      "nights": 2,
+      "editorialCopy": "Saruni Leopard Hill 的价值在于“住进私保深处”。Naboisho 私人保护区车流更少、观察更安静，夜间游猎、徒步 Safari 与星空床把体验从白天延伸到夜晚，让马拉的荒野层次变得更立体。",
+      "proofPoints": ["私人保护区", "夜间游猎", "星空床"],
+      "images": [{ "src": "/assets/travel/kenya-luxury-8d/saruni-leopard-hill-exterior.jpg", "focus": "50% 54%" }]
+    },
+    {
+      "id": "jw-marriott-nairobi",
+      "officialName": "JW MARRIOTT HOTEL NAIROBI",
+      "shortName": "内罗毕 JW 万豪酒店",
+      "region": "内罗毕 · Westlands 商圈",
+      "nights": 1,
+      "editorialCopy": "最后一晚回到内罗毕 Westlands 商圈，用 JW 万豪完成草原到城市的舒适过渡。它的意义不是单纯住宿，而是为长颈鹿中心、凯伦博物馆、购物与特色晚餐之后，提供一个稳定、安静、好整理行李的收束点。",
+      "proofPoints": ["Westlands 商圈", "国际品牌", "城市休整"],
+      "images": [{ "src": "/assets/travel/kenya-luxury-8d/jw-marriott-nairobi-exterior.jpg", "focus": "50% 48%" }]
+    }
+  ],
+  "diningSectionTitle": "特色餐饮",
+  "diningIntroTitle": "把 Safari 的高光，延伸到每一次餐桌",
+  "diningIntroCopy": "这段旅程的餐饮重点不是普通早午晚餐，而是营地酒窖、落日酒会、星空晚宴、丛林早餐与内罗毕特色烤肉共同组成的记忆点。",
+  "diningPolicy": "特色餐饮与营地体验以酒店/营地当日运营及正式确认为准；高档酒水、自费项目与未列明消费按实际安排另行确认。",
+  "diningExperiences": [
+    {
+      "id": "private-wine-cellar",
+      "location": "丽思卡尔顿马赛马拉营地",
+      "title": "私人酒窖品酒",
+      "officialName": "The Ritz-Carlton, Masai Mara Safari Camp",
+      "editorialCopy": "抵达马拉后，可在营地私人酒窖品尝美酒，让第一晚从游猎的野性切入更精致的营地时光。高档酒水按酒店规定额外收费。",
+      "image": { "src": "/assets/travel/kenya-luxury-8d/ritz-wine-cellar.jpg", "focus": "50% 50%" }
+    },
+    {
+      "id": "bush-sundowner",
+      "location": "马赛马拉",
+      "title": "Bush Sundowner 落日酒会",
+      "officialName": "Masai Mara Sundowner",
+      "editorialCopy": "黄昏回到营地或野外酒会点，草原被夕阳染成金色，酒杯、火光与远处兽群一起构成 Safari 最经典的日落仪式。",
+      "image": { "src": "/assets/travel/kenya-luxury-8d/mara-sundowner-picnic.jpg", "focus": "50% 50%" }
+    },
+    {
+      "id": "sky-deck-dinner",
+      "layout": "wide",
+      "location": "马赛马拉",
+      "title": "天际甲板星空晚宴",
+      "officialName": "Sky Deck Dinner / boma Evening",
+      "editorialCopy": "在天际甲板或草原星空下用餐，让白昼与夜晚的过渡成为一场完整仪式。若营地当日安排 boma 歌舞，马赛勇士的歌声与篝火会把夜晚推向高潮。",
+      "image": { "src": "/assets/travel/kenya-luxury-8d/ritz-boma-starry-dinner.jpg", "focus": "50% 50%" }
+    },
+    {
+      "id": "bush-breakfast",
+      "location": "马赛马拉核心区",
+      "title": "游猎后的丛林早餐",
+      "officialName": "Bush Breakfast",
+      "editorialCopy": "清晨游猎结束后，把早餐桌直接摆进旷野。热咖啡、晨光与草原风共同出现，让一天从真正的荒野深处开始。",
+      "image": { "src": "/assets/travel/kenya-luxury-8d/jw-mara-bush-breakfast.jpg", "focus": "50% 50%" }
+    },
+    {
+      "id": "carnivore",
+      "location": "内罗毕",
+      "title": "The Carnivore 特色烤肉晚餐",
+      "officialName": "The Carnivore Nairobi",
+      "editorialCopy": "回到内罗毕后，以当地知名烤肉餐厅为旅程收尾。热烈的餐桌与城市夜晚，让草原几日的震撼在味觉里慢慢落定。",
+      "image": { "src": "/assets/travel/kenya-luxury-8d/carnivore-tableside-meat.jpg", "focus": "50% 50%" }
+    }
+  ],
+  "transportSummary": [
+    {
+      "id": "city-transfer",
+      "layout": "wide",
+      "category": "城市与机场商务用车",
+      "serviceLevel": "市区商务车",
+      "usageSegments": ["内罗毕接机", "安博塞利衔接", "内罗毕城市游览", "送机"],
+      "editorialCopy": "城市段使用商务用车，承接机场、酒店与内罗毕城市体验，预留行李空间与航班衔接时间。",
+      "features": ["按人数与行李量安排", "航班节点预留缓冲", "城市段舒适转场"],
+      "images": [{ "src": "/assets/travel/kenya-luxury-8d/mercedes-vclass-business-van.jpg", "focus": "50% 50%", "fit": "contain" }]
+    },
+    {
+      "id": "safari-vehicle",
+      "category": "7座4x4可开顶式游猎越野车",
+      "serviceLevel": "园区与保护区游猎车辆",
+      "seatCount": 7,
+      "usageSegments": ["安博塞利", "马赛马拉", "Naboisho 私人保护区"],
+      "editorialCopy": "2人独享1台游猎车，开顶结构便于观察、摄影与临时停留，把每一次动物踪迹都交给更灵活的节奏。",
+      "features": ["1台车服务2人", "开顶便于观察与摄影", "按兽群动态灵活调整路线"],
+      "images": [{ "src": "/assets/travel/kenya-luxury-8d/mara-night-drive.jpg", "focus": "50% 50%" }]
+    },
+    {
+      "id": "bush-flight",
+      "category": "草原小飞机",
+      "serviceLevel": "肯尼亚境内轻型航空衔接",
+      "usageSegments": ["安博塞利至马赛马拉", "马赛马拉至内罗毕"],
+      "editorialCopy": "用两段草原飞机替代漫长陆路，把时间留给游猎、休息与风景，也让东非大裂谷和草原地貌成为空中视角的一部分。",
+      "features": ["内陆段2程机票已包含", "缩短长距离移动", "通常采用软包行李并受重量限制"],
+      "images": [{ "src": "/assets/travel/kenya-luxury-8d/airkenya-plane-boarding.jpg", "focus": "50% 50%" }]
+    }
+  ],
+  "days": [
+    {
+      "date": null,
+      "theme": "抵达内罗毕，驶向安博塞利雪山象群",
+      "routeNodes": ["乔莫·肯雅塔国际机场", "内罗毕", "安博塞利国家公园", "Angama Amboseli"],
+      "city": "抵达内罗毕 · 内罗毕至安博塞利",
+      "estimatedTravelTime": "车程约4.5至5小时",
+      "activityLevel": "适中",
+      "restStops": "抵达后以营地入住与傍晚轻游猎为主",
+      "meals": "酒店晚餐",
+      "mealPlan": { "dinner": "酒店晚餐" },
+      "hotel": "Angama Amboseli",
+      "hotelId": "angama-amboseli",
+      "hotelShortName": "Angama Amboseli",
+      "hotelOfficialName": "ANGAMA AMBOSELI",
+      "vehicle": "商务用车 + 四驱敞篷越野车",
+      "description": "抵达乔莫·肯雅塔国际机场，专人接机后直接驱车前往安博塞利国家公园。沿途欣赏东非大草原壮丽风光，抵达后入住 Angama Amboseli 营地，傍晚可在营地周边游猎，追踪非洲最壮观象群。特别体验为 Angama 专属观景台与乞力马扎罗雪山观景点，日落时分守候金光洒满非洲之巅。",
+      "dayNotices": [{ "type": "tip", "text": "雪山能见度受天气影响，清晨与日落前后通常更适合观察和拍摄。" }],
+      "spots": [
+        { "name": "Angama 专属观景台", "description": "在营地观景视角等待乞力马扎罗雪山露出轮廓，雪峰、草原与营地空间一起构成顶奢 Safari 的第一眼。", "image": "/assets/travel/kenya-luxury-8d/angama-veranda-view.jpg", "status": "天气允许" },
+        { "name": "安博塞利象群", "description": "傍晚跟随向导寻找象群踪迹，初见大象从草原中缓缓经过，把肯尼亚的野性与壮阔正式带入旅程。", "image": "/assets/travel/kenya-luxury-8d/amboseli-elephants-alt.jpg", "status": "自然观察" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "全天游猎，拍摄“大象+雪山”经典大片",
+      "routeNodes": ["Angama Amboseli", "安博塞利核心区", "Observation Hill", "夜间游猎"],
+      "city": "安博塞利全天游猎",
+      "estimatedTravelTime": "园区内游猎",
+      "activityLevel": "充实",
+      "meals": "酒店早餐 / 午餐盒 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "午餐盒", "dinner": "酒店晚餐" },
+      "hotel": "Angama Amboseli",
+      "hotelId": "angama-amboseli",
+      "hotelShortName": "Angama Amboseli",
+      "hotelOfficialName": "ANGAMA AMBOSELI",
+      "vehicle": "四驱敞篷越野车",
+      "description": "清晨进入公园核心区，追踪早起饮水的象群，拍摄“大象+雪山”经典画面。午后登 Observation Hill 俯瞰整个安博塞利湿地。特别体验为常规景区不对外开放的步行 Safari 与夜间游猎，专业向导带队追踪花豹、鬣狗等夜行动物，感受草原最原始的野性心跳。",
+      "dayNotices": [{ "type": "tip", "text": "步行 Safari 与夜间游猎须以营地当日运营、安全评估和向导安排为准。" }],
+      "spots": [
+        { "name": "大象与雪山同框", "description": "清晨在湿地和草原间等待象群经过，远处乞力马扎罗若隐若现，是安博塞利最不可复制的画面。", "image": "/assets/travel/kenya-luxury-8d/amboseli-elephants-clouds.jpg", "status": "天气与动物活动允许" },
+        { "name": "Observation Hill", "description": "登高俯瞰安博塞利湿地、水源与草原层次，从地貌尺度理解象群为什么在这里聚集。", "image": "/assets/travel/kenya-luxury-8d/observation-hill-amboseli.jpg", "status": "已安排" },
+        { "name": "步行 Safari", "description": "在向导带领下离开车窗视角，近距离观察足迹、植物与动物活动痕迹，把 Safari 从观看变成亲身走入。", "image": "/assets/travel/kenya-luxury-8d/angama-walking-safari.jpg", "status": "营地运营允许时安排" },
+        { "name": "夜间游猎", "description": "夜色降临后进入另一种草原节奏，追踪花豹、鬣狗等夜行动物，感受多数游客体验不到的暗夜野趣。", "image": "/assets/travel/kenya-luxury-8d/night-safari-leopard-close.jpg", "status": "营地运营允许时安排" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "草原飞机飞入马赛马拉，抵达丽思卡尔顿营地",
+      "routeNodes": ["安博塞利", "草原小飞机", "马赛马拉", "丽思卡尔顿营地"],
+      "city": "安博塞利至马赛马拉",
+      "estimatedTravelTime": "飞行约1小时",
+      "activityLevel": "适中",
+      "meals": "酒店早餐 / 午餐盒 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "午餐盒", "dinner": "酒店晚餐", "special": "私人酒窖、Bush Sundowner、天际甲板星空晚宴或 boma 歌舞晚宴按营地安排" },
+      "hotel": "The Ritz-Carlton, Masai Mara Safari Camp",
+      "hotelId": "ritz-carlton-masai-mara",
+      "hotelShortName": "丽思卡尔顿马赛马拉营地",
+      "hotelOfficialName": "THE RITZ-CARLTON, MASAI MARA SAFARI CAMP",
+      "vehicle": "四驱敞篷越野车 + 草原飞机",
+      "description": "早餐后乘草原小飞机飞往马赛马拉国家保护区，沿途俯瞰东非大裂谷壮丽地貌。落地后开启马拉首场游猎，追踪狮群、花豹、猎豹等非洲五霸。抵达丽思卡尔顿营地后体验马赛传统欢迎仪式；可在私人酒窖品尝美酒，高档酒水额外收费。黄昏召唤仪式以号角声与火焰标志白昼转入夜晚，傍晚享受 Bush Sundowner 落日酒会，并在天际甲板享用星空晚宴，或围着篝火欣赏马赛勇士 boma 歌舞表演盛宴。",
+      "dayNotices": [{ "type": "tip", "text": "草原小飞机通常限制行李重量与尺寸，建议使用软包并按承运方通知整理。" }],
+      "spots": [
+        { "name": "草原小飞机接驳", "description": "以空中转场替代长距离拉车，让抵达马赛马拉的过程也成为一段俯瞰东非地貌的特别体验。", "image": "/assets/travel/kenya-luxury-8d/masai-mara-airstrip.jpg", "status": "已包含" },
+        { "name": "马拉首场游猎", "description": "落地即切入游猎节奏，在向导判断下寻找大型猫科动物与草原兽群，为后续迁徙追踪打开序幕。", "image": "/assets/travel/kenya-luxury-8d/masai-mara-cheetah-game-drive.jpg", "status": "自然观察" },
+        { "name": "黄昏召唤与 boma 歌舞", "description": "号角、火焰与马赛勇士歌舞把营地夜晚推向高潮，让文化体验自然嵌入 Safari 的第一晚。", "image": "/assets/travel/kenya-luxury-8d/ritz-masai-mara-cultural-evening.jpg", "status": "按营地安排" },
+        { "name": "Sundowner 与星空晚宴", "description": "在落日酒会和天际甲板晚宴之间，完整感受马拉从金色黄昏转入星空夜色的仪式感。", "image": "/assets/travel/kenya-luxury-8d/mara-bush-dinner.jpg", "status": "按营地安排" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "深入马拉核心区，C位守候天国之渡",
+      "routeNodes": ["丽思卡尔顿营地", "马拉核心区", "马拉河", "马赛村庄"],
+      "city": "马赛马拉全天游猎",
+      "estimatedTravelTime": "区域内游猎",
+      "activityLevel": "充实",
+      "meals": "酒店早餐 / 午餐盒 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "午餐盒", "dinner": "酒店晚餐", "special": "丛林早餐按营地安排；水疗为自费可选" },
+      "hotel": "The Ritz-Carlton, Masai Mara Safari Camp",
+      "hotelId": "ritz-carlton-masai-mara",
+      "hotelShortName": "丽思卡尔顿马赛马拉营地",
+      "hotelOfficialName": "THE RITZ-CARLTON, MASAI MARA SAFARI CAMP",
+      "vehicle": "四驱敞篷越野车",
+      "description": "每日两次游猎，与获得 KPSGA 认证的专家导游一同深入马拉核心区，驻场摄影师记录珍贵瞬间。国庆重点追踪角马大迁徙队伍，黄金 C 位寻找天国之渡名场面，坐拥无遮挡前排视角，沉浸式目睹百万角马横渡马拉河、鳄鱼伏击、激流翻涌，直面大自然的震撼生命力。亦可参观马赛村庄，了解民族遗产与工艺，参加由文化大使主持的串珠制作课程。特别体验为丛林早餐；游猎结束后，可自费前往低语树水疗中心，在私人恒温泳池旁放松身心。",
+      "dayNotices": [{ "type": "tip", "text": "角马渡河属于自然现象，无法保证发生；向导会根据兽群位置、水位和现场信息选择守候区域。" }],
+      "spots": [
+        { "name": "马拉河天国之渡", "description": "当兽群在河岸聚集，草原的等待本身就充满张力。若迁徙在此刻启动，便是此程最震撼的自然剧场。", "image": "/assets/travel/kenya-luxury-8d/mara-wildebeest-crossing.jpg", "status": "季节性自然奇观" },
+        { "name": "KPSGA 专家导游游猎", "description": "由专业导游结合兽群、地形与光线判断追踪路线，并有驻场摄影师记录珍贵瞬间。", "image": "/assets/travel/kenya-luxury-8d/naboisho-lion-game-drive.jpg", "status": "自然观察" },
+        { "name": "马赛村与串珠课程", "description": "走进马赛文化场景，了解民族遗产与工艺，并在文化大使主持下体验串珠制作。", "image": "/assets/travel/kenya-luxury-8d/masai-beadwork.jpg", "status": "按当天安排" },
+        { "name": "低语树水疗与恒温泳池", "description": "游猎后的丛林早餐按营地安排；若想把午后节奏放慢，可自费前往低语树水疗中心，在私人恒温泳池旁放松。", "image": "/assets/travel/kenya-luxury-8d/ritz-whispering-tree-spa-pool.jpg", "status": "水疗自费可选" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "转入 Naboisho 私人保护区，追踪花豹与夜色",
+      "routeNodes": ["丽思卡尔顿营地", "Naboisho 私人保护区", "Saruni Leopard Hill"],
+      "city": "马赛马拉全天游猎",
+      "estimatedTravelTime": "车程约1至1.5小时",
+      "activityLevel": "充实",
+      "meals": "酒店早餐 / 午餐盒 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "午餐盒", "dinner": "酒店晚餐" },
+      "hotel": "Saruni Leopard Hill",
+      "hotelId": "saruni-leopard-hill",
+      "hotelShortName": "Saruni Leopard Hill",
+      "hotelOfficialName": "SARUNI LEOPARD HILL",
+      "vehicle": "四驱敞篷越野车",
+      "description": "早餐后由丽思卡尔顿营地转至 Naboisho 私人保护区中心地带的 Saruni Leopard Hill 营地，开启私保区域全新游猎体验。这里以丰富的野生动植物和壮丽自然景观闻名，是非洲豹子数量较多的栖息地之一。可跟随专属向导在独家游猎路线远离人群，近距离追踪花豹、狮群等顶级掠食者。特别体验为热成像夜间游猎；亦可在持枪向导保护下徒步游猎，亲身踏上草原，聆听向导讲解动植物知识。",
+      "dayNotices": [{ "type": "tip", "text": "夜间游猎、热成像追踪与徒步 Safari 均须以保护区规定、营地运营和安全评估为准。" }],
+      "spots": [
+        { "name": "Naboisho 私人保护区", "description": "离开常规车流，在更私密的游猎区域追踪花豹、狮群与其他顶级掠食者，停留和观察都更从容。", "image": "/assets/travel/kenya-luxury-8d/naboisho-leopard-walking.jpg", "status": "自然观察" },
+        { "name": "Saruni Leopard Hill", "description": "住进私人保护区中心地带，让白天游猎、夜巡与星空体验都从营地周边自然展开。", "image": "/assets/travel/kenya-luxury-8d/saruni-leopard-hill-aerial.jpg", "status": "臻选下榻" },
+        { "name": "热成像夜间游猎", "description": "跟随向导使用热成像设备观察草原暗处活动，感受白天看不到的黑夜呼吸。", "image": "/assets/travel/kenya-luxury-8d/night-safari-leopard-spotlight.jpg", "status": "营地运营允许时安排" },
+        { "name": "持枪向导徒步游猎", "description": "在持枪向导保护下亲身踏上草原，观察足迹、风向、植被与动物痕迹，进入更深入的 Safari 维度。", "image": "/assets/travel/kenya-luxury-8d/basecamp-walking-safari.jpg", "status": "营地运营允许时安排" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "热气球可选，Sundowner、星空晚餐与星空床收束草原夜晚",
+      "routeNodes": ["Saruni Leopard Hill", "可选热气球", "全天游猎", "星空床"],
+      "city": "马赛马拉全天游猎",
+      "estimatedTravelTime": "区域内游猎",
+      "activityLevel": "弹性可选",
+      "meals": "酒店早餐 / 午餐盒 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "午餐盒", "dinner": "酒店晚餐", "special": "热气球香槟早餐为自费可选；Sundowner、星空晚餐与星空床按营地安排" },
+      "hotel": "Saruni Leopard Hill",
+      "hotelId": "saruni-leopard-hill",
+      "hotelShortName": "Saruni Leopard Hill",
+      "hotelOfficialName": "SARUNI LEOPARD HILL",
+      "vehicle": "四驱敞篷越野车",
+      "description": "清晨伴随马赛文化地标双无花果树上的鸟鸣醒来，可自费参加热气球之旅，含香槟早餐，从上帝视角俯瞰大草原日出，追逐迁徙兽群的壮阔阵列。日间继续游猎，亦可参与丛林徒步。日落时分在野外享用 Sundowner 落日酒会与星空晚餐。入睡前可体验户外淋浴与星空床，只需按下按钮，狩猎帐篷屋顶便会打开，露出广阔的非洲夜空，满天繁星与远处兽鸣共同组成这一晚的记忆。",
+      "dayNotices": [{ "type": "tip", "text": "热气球为自费可选项目，需提前预约，并以天气和运营方最终安排为准。" }],
+      "spots": [
+        { "name": "日出热气球", "description": "从高空俯瞰马拉草原日出与迁徙路径，以另一种尺度理解这片辽阔土地；香槟早餐带来完整仪式感。", "image": "/assets/travel/kenya-luxury-8d/masai-mara-balloon.jpg", "status": "自费可选｜当前报价未包含" },
+        { "name": "日间游猎与丛林徒步", "description": "白天继续追踪草原动物，也可把节奏转为徒步观察，用脚步读取这片保护区的细节。", "image": "/assets/travel/kenya-luxury-8d/naboisho-lioness-cubs.jpg", "status": "按营地安排" },
+        { "name": "Sundowner 与星空晚餐", "description": "在野外享用落日酒会与星空晚餐，让黄昏、篝火、酒杯和草原夜色连成一段完整仪式。", "image": "/assets/travel/kenya-luxury-8d/masai-mara-sundowner.jpg", "status": "按营地安排" },
+        { "name": "户外淋浴与星空床", "description": "屋顶打开后，满天繁星成为帐篷的天花板，远处兽鸣与夜晚合唱陪伴入睡。", "image": "/assets/travel/kenya-luxury-8d/saruni-star-bed-experience.jpg", "status": "按营地安排" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "草原飞机返回内罗毕，城市经典体验收尾",
+      "routeNodes": ["马赛马拉", "内罗毕", "长颈鹿中心", "凯伦博物馆", "JW 万豪"],
+      "city": "马赛马拉至内罗毕",
+      "estimatedTravelTime": "飞行约1小时",
+      "activityLevel": "适中",
+      "meals": "酒店早餐 / The Carnivore 特色晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "dinner": "特色晚餐：非洲“百兽宴”The Carnivore" },
+      "hotel": "JW Marriott Hotel Nairobi",
+      "hotelId": "jw-marriott-nairobi",
+      "hotelShortName": "内罗毕 JW 万豪酒店",
+      "hotelOfficialName": "JW MARRIOTT HOTEL NAIROBI",
+      "vehicle": "商务用车 + 草原飞机",
+      "description": "清晨乘草原小飞机返回内罗毕，约1小时飞行后由专人接机送往 Westlands 商圈 JW 万豪酒店。前往长颈鹿中心，与罗特希尔德长颈鹿零距离互动；前往 Karen 区打卡《走出非洲》取景地凯伦·布里克森博物馆；在 Westgate 购物中心采购纪念品。晚餐品尝非洲“百兽宴”The Carnivore，体验特色烤肉餐厅。晚间回 JW 万豪酒店休整，为归程做准备。",
+      "dayNotices": [{ "type": "tip", "text": "城市游览顺序将结合航班落地时间、交通情况与景点开放安排动态调整。" }],
+      "spots": [
+        { "name": "草原飞机返回内罗毕", "description": "从马赛马拉乘草原小飞机返回城市，把长距离移动压缩为约1小时的空中衔接。", "image": "/assets/travel/kenya-luxury-8d/angama-mara-airstrip.jpg", "status": "已包含" },
+        { "name": "长颈鹿中心", "description": "与罗特希尔德长颈鹿近距离互动，在轻松的城市半日游中延续与肯尼亚野生动物的连接。", "image": "/assets/travel/kenya-luxury-8d/giraffe-centre-nairobi.jpg", "status": "已安排" },
+        { "name": "凯伦博物馆与 Westgate", "description": "前往 Karen 区打卡《走出非洲》取景地凯伦·布里克森博物馆，并在 Westgate 购物中心采购纪念品。", "image": "/assets/travel/kenya-luxury-8d/karen-blixen-museum.jpg", "status": "按当天安排" },
+        { "name": "The Carnivore 特色晚餐", "description": "以非洲特色烤肉餐厅为肯尼亚旅程收尾，桌边烤肉呈现与热烈餐桌，让几日草原的震撼在城市夜晚慢慢落定。", "image": "/assets/travel/kenya-luxury-8d/carnivore-skewer-clean.jpg", "focus": "52% 48%", "status": "已安排" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "内罗毕专车送机，从容告别肯尼亚",
+      "routeNodes": ["JW 万豪", "乔莫·肯雅塔国际机场", "送机离境"],
+      "city": "内罗毕送机离境",
+      "estimatedTravelTime": "按国际航班时间安排",
+      "activityLevel": "轻松",
+      "meals": "酒店早餐",
+      "mealPlan": { "breakfast": "酒店早餐" },
+      "hotel": "飞机上",
+      "hotelOfficialName": "—",
+      "vehicle": "商务用车",
+      "description": "酒店早餐后，根据国际航班时间专人送机，结束肯尼亚顶奢 Safari 之旅。定制师将提前协助核对送机时间、行李与航班信息，让返程保持从容。",
+      "dayNotices": [{ "type": "tip", "text": "请提前核对护照、eTA/入境许可、机票与行李限制；签证、黄本、疫苗、保险及入境健康要求以出发时官方规定为准。" }],
+      "spots": [
+        { "name": "JW 万豪城市休整", "description": "在国际品牌酒店完成最后一晚休整，把草原几日的奔赴切换为返程前的舒适节奏。", "image": "/assets/travel/kenya-luxury-8d/jw-marriott-nairobi-room.jpg", "status": "已安排" },
+        { "name": "专车送机", "description": "按国际航班时间倒排退房、交通与值机时间，以商务用车完成酒店至机场的最后一段衔接。", "image": "/assets/travel/kenya-luxury-8d/mercedes-vclass-interior.jpg", "status": "返程" }
+      ]
+    }
+  ],
+  "totalPrice": 83880,
+  "priceUnit": "元 / 人起",
+  "priceNotes": [
+    "基础报价适用于 2026.10.15-2026.10.30 出发；2026.08.01-2026.10.14 出发需补差价 15,000 元/人。",
+    "最终报价将由定制师根据实际出行日期、人数、房态、机位与客户定制需求确认。"
+  ],
+  "included": [
+    "签证｜肯尼亚电子签证费用（eTA，约35美金，以出发时官方要求为准）",
+    "机票｜内陆段2程草原小飞机机票（安博塞利至马赛马拉、马赛马拉至内罗毕）",
+    "门票｜行程所列景点首道门票费用",
+    "交通｜肯尼亚境内所有计划内车辆交通费用（草原与市区）",
+    "酒店｜全程酒店住宿及所列用餐费用（酒店指定酒水）",
+    "司导｜专业当地优秀英语司机1名",
+    "服务｜酒店税费及每人每天2瓶矿泉水"
+  ],
+  "excluded": [
+    "小费｜司机/向导小费，草原每天每台车不少于40美金",
+    "国际交通｜国际往返机票",
+    "二次消费｜景区内除首道景点门票外的其他收费",
+    "可选体验｜热气球 Safari（约500美金/人）、马赛村落参观（约50美金/车）及各类列明自费活动",
+    "个人消费｜洗衣、电话、酒水饮料及一切个人性质费用",
+    "保险与健康｜旅游保险（建议国内购买）及肯尼亚入境黄本费用",
+    "语言服务｜中文陪同向导",
+    "变更与不可抗力｜客人自行改变行程，或因交通延阻、事故、罢工、天气及其他不可控情况产生的额外费用"
+  ],
+  "cancellation": [],
+  "notes": [
+    {
+      "title": "行程节奏与运营",
+      "icon": "itinerary",
+      "tone": "gold",
+      "items": [
+        "草原航班、热气球、夜间游猎、徒步 Safari 与营地特色餐饮，可能受天气、季节和安全评估影响。",
+        "出发前定制师会统一复核开放时间和班次；旅途中也会结合路况、园区规则与动物活动灵活调整，让体验更顺。"
+      ]
+    },
+    {
+      "title": "气候、穿着与健康",
+      "icon": "warning",
+      "tone": "warning",
+      "items": [
+        "草原早晚体感偏凉，午间日晒较强，建议准备分层穿着、轻薄外套、舒适包脚鞋、防晒和防蚊用品。",
+        "如有常用药、个人健康材料或必要旅行保险，请随身备好；身体不适时及时告诉随行工作人员。"
+      ]
+    },
+    {
+      "title": "游猎与营地安全",
+      "icon": "security",
+      "tone": "gold",
+      "items": [
+        "国家公园、保护区和营地内，请听从向导与工作人员安排，不擅自下车、靠近、惊扰或投喂野生动物。",
+        "夜间在野奢营地移动时，建议联系工作人员陪同；这不是束缚，而是让荒野体验更安心。"
+      ]
+    },
+    {
+      "title": "自然现象与期待",
+      "icon": "warning",
+      "tone": "warning",
+      "items": [
+        "角马渡河、雪山能见度、捕猎和野生动物出现都属于自然现象，无法百分百保证发生。",
+        "向导会根据现场信息尽力选择更合适的观察区域；若当天没有等到某个瞬间，也请把它当作真实荒野的一部分。"
+      ]
+    },
+    {
+      "title": "证件、财物与行李",
+      "icon": "included",
+      "tone": "gold",
+      "items": [
+        "护照、签证/eTA、黄本、机票、现金和贵重物品建议随身保管，并留存电子备份。",
+        "草原小飞机通常建议使用软包行李，并会限制重量与尺寸，最终以承运方和行前通知为准。"
+      ]
+    },
+    {
+      "title": "儿童、长者与特殊需求",
+      "icon": "people",
+      "tone": "gold",
+      "items": [
+        "儿童、长者、孕妇、饮食禁忌、过敏、行动不便或床型偏好等需求，建议在最终确认前提前告知。",
+        "定制师会尽量在酒店、营地、车辆和餐饮安排中提前协调，让每位同行者都被照顾到。"
+      ]
+    }
+  ],
+  "showSecuritySection": true,
+  "showPaymentSection": true,
+  "payment": {
+    "accountTitle": "奢游国际指定收款账户",
+    "companyName": "卓越国际旅行社深圳东分公司",
+    "alipayAccount": "19928731347",
+    "accountName": "卓越国际旅行社有限公司深圳东分公司",
+    "bankAccount": "755964554910902",
+    "bankName": "招商银行深圳横岗支行",
+    "qrImage": "/assets/security/alipay-qr-original.png",
+    "notice": "请勿向任何个人账户转款"
+  },
+  "contact": { "consultant": "待补充", "phone": "400-000-2026", "wechat": "@奢游国际", "email": "service@example.com" },
+  "sourceNotes": [
+    "已按原始 Excel 逐行复核并重建客户数据；内部测算与公式字段未进入成品。",
+    "原资料未提供具体出发日期与定制师信息，成品中显示日期待定，并在定制师名片使用默认头像与“定制师名字 | 资深定制师”占位。",
+    "原始表格未附真实照片，本次按图片使用规范搜索可核验来源并下载至 public/assets/travel/kenya-luxury-8d，来源记录见 sources.json。",
+    "酒店和活动图片用于呈现体验与等级，正式商业发布前仍需做授权复核与必要署名。"
+  ]
+}

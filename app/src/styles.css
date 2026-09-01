@@ -1,0 +1,438 @@
+@font-face { font-family: "Source Han Sans CN"; src: url('/fonts/SourceHanSansCN/SourceHanSansCN-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Sans CN"; src: url('/fonts/SourceHanSansCN/SourceHanSansCN-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Sans CN"; src: url('/fonts/SourceHanSansCN/SourceHanSansCN-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Sans CN"; src: url('/fonts/SourceHanSansCN/SourceHanSansCN-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Sans CN"; src: url('/fonts/SourceHanSansCN/SourceHanSansCN-Heavy.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Serif CN"; src: url('/fonts/SourceHanSerifCN/SourceHanSerifCN-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Serif CN"; src: url('/fonts/SourceHanSerifCN/SourceHanSerifCN-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Serif CN"; src: url('/fonts/SourceHanSerifCN/SourceHanSerifCN-SemiBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Serif CN"; src: url('/fonts/SourceHanSerifCN/SourceHanSerifCN-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Serif CN"; src: url('/fonts/SourceHanSerifCN/SourceHanSerifCN-Heavy.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-Light.ttf') format('truetype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-Medium.ttf') format('truetype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-SemiBold.ttf') format('truetype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-ExtraBold.ttf') format('truetype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: "FangYa Song"; src: url('/fonts/FangYaSong/猫啃网风雅宋.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: block; }
+
+:root {
+  font-family: "Source Han Serif CN", "Microsoft YaHei", serif;
+  color: #4b4946;
+  background: #e9e4dc;
+  font-synthesis: none;
+  --sparkle: #d4ba9a;
+  --gold: #b28b33;
+  --gold-deep: #9a672a;
+  --warm-white: #fcf8f1;
+  --cream: #fffdf8;
+  --ink: #4b4946;
+  --muted: #77716b;
+  --warning: #f18a42;
+  --space-xs: 16px;
+  --space-sm: 24px;
+  --space-md: 36px;
+  --space-lg: 52px;
+  --space-xl: 72px;
+  --space-2xl: 96px;
+  --space-3xl: 140px;
+  --space-section: 180px;
+  --panel-shadow: 0 10px 30px rgba(90,65,35,.08), 0 2px 4px rgba(90,65,35,.05);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+img { display: block; max-width: 100%; }
+.icon { display: inline-block; flex: 0 0 auto; mask-size: contain; mask-repeat: no-repeat; mask-position: center; -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat; -webkit-mask-position: center; background: var(--gold); }
+.icon-light { background: #fffdf8; }
+.icon-warning { background: var(--warning); }
+.brand-logo { object-fit: contain; }
+
+.preview-toolbar { position: sticky; top: 0; z-index: 20; height: 72px; padding: 0 28px; display: flex; align-items: center; justify-content: space-between; color: #fff; background: rgba(49,44,39,.94); backdrop-filter: blur(18px); box-shadow: 0 10px 30px rgba(0,0,0,.18); }
+.preview-toolbar > div:first-child { display: flex; flex-direction: column; gap: 4px; }
+.preview-toolbar strong { font-family: "Source Han Sans CN", sans-serif; font-size: 16px; }
+.preview-toolbar span { color: #cfc8c0; font-family: "Source Han Sans CN", sans-serif; font-size: 12px; }
+.toolbar-actions { display: flex; gap: 10px; }
+.toolbar-actions a { color: #f8ead0; text-decoration: none; border: 1px solid #7f725e; padding: 9px 14px; border-radius: 999px; font-family: "Source Han Sans CN", sans-serif; font-size: 13px; }
+.preview-stage { width: 100%; padding: 44px 0 100px; overflow: auto; }
+.preview-stage .export-frame { margin: 0 auto; zoom: .46; }
+.export-mode { margin: 0; padding: 0; overflow: hidden; background: var(--warm-white); }
+.export-frame { position: relative; }
+.itinerary-canvas { width: 2000px; transform-origin: top left; overflow: hidden; color: var(--ink); background-color: var(--warm-white); background-image: url('/assets/backgrounds/seamless-long-background.png'); background-repeat: repeat-y; background-position: top center; background-size: 2000px auto; }
+
+.cover { position: relative; padding: var(--space-2xl) 0 var(--space-section); background: url('/assets/backgrounds/cover-center-spread-v3.png') top center / 100% 1300px no-repeat; }
+.brand-logo-cover { width: 560px; height: 210px; margin: 0 auto; }
+.cover-copy { width: 1800px; max-width: calc(100% - 160px); margin: var(--space-lg) auto var(--space-xl); text-align: center; }
+.eyebrow { display: block; color: var(--gold); font: 500 32px/1.3 Poppins, sans-serif; letter-spacing: .23em; }
+.cover-copy h1 { max-width: 100%; margin: var(--space-md) auto var(--space-sm); color: var(--gold-deep); font-family: "Source Han Serif CN", serif; font-size: 112px; font-weight: 900; line-height: 1.14; letter-spacing: 0; overflow-wrap: anywhere; }
+.cover-copy p { margin: 0 auto; max-width: 1540px; color: #5f5953; font-size: 46px; font-weight: 300; line-height: 1.55; }
+.slogan-lockup { position: relative; z-index: 4; height: 118px; display: flex; align-items: center; justify-content: center; margin: 0 0 -58px; }
+.slogan-lockup::before, .slogan-lockup::after { content: ""; width: 660px; height: 14px; border-top: 3px solid rgba(178,139,51,.75); border-bottom: 2px solid rgba(212,186,154,.8); }
+.slogan-lockup span { flex: 0 0 auto; min-width: 700px; padding: 20px 54px 24px; text-align: center; color: var(--gold-deep); border: 2px solid rgba(178,139,51,.55); border-radius: 999px; background: #f7e7ce url('/assets/backgrounds/day-silk.png') center / cover; box-shadow: 0 7px 22px rgba(90,65,35,.08); font-family: "FangYa Song", "Source Han Serif CN", serif; font-size: 54px; line-height: 1.2; }
+.hero-frame { position: relative; width: 2000px; height: 2420px; overflow: hidden; border-top: 5px solid rgba(178,139,51,.62); border-bottom: 5px solid rgba(178,139,51,.34); }
+.hero-frame img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 50%; }
+.missing-image-state { width: 100%; min-height: 280px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 36px; color: #8a765f; background: linear-gradient(145deg, rgba(255,253,248,.96), rgba(240,226,205,.78)); text-align: center; font-family: "Source Han Sans CN", sans-serif; font-size: 30px; line-height: 1.45; }
+.missing-image-state-compact { min-height: 150px; gap: 12px; padding: 24px; font-size: 24px; }
+.hero-frame > .missing-image-state { height: 100%; min-height: 100%; font-size: 36px; }
+.hero-overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(255,249,239,.13), transparent 40%, rgba(75,48,23,.18)); }
+
+.designer-card { position: relative; z-index: 3; width: 1900px; min-height: 560px; margin: -220px auto 0; padding: 98px 78px 72px; text-align: center; border: 2px solid rgba(178,139,51,.22); border-radius: 58px; background-color: #fffdf8; background-image: url('/assets/textures/light-gold-flow-lines.png'), url('/assets/backgrounds/designer-performance-gradient-v3.png'); background-position: left bottom, center; background-repeat: no-repeat; background-size: 1250px auto, cover; box-shadow: var(--panel-shadow); }
+.designer-card > img { position: absolute; top: -165px; left: 50%; width: 330px; height: 330px; object-fit: cover; border-radius: 50%; border: 16px solid var(--cream); box-shadow: 0 15px 40px rgba(90,65,35,.15); transform: translateX(-50%); }
+.designer-heading { padding-top: 112px; }
+.designer-heading strong { color: var(--gold-deep); font-family: "Source Han Serif CN", serif; font-size: 88px; font-weight: 600; line-height: 1.18; }
+.designer-heading > span { margin-left: 34px; padding-left: 34px; color: var(--gold-deep); border-left: 2px solid rgba(178,139,51,.55); font-family: "Source Han Serif CN", serif; font-size: 46px; font-weight: 600; }
+.designer-heading p .designer-bio-line { display: block; margin: 0; padding: 0; border: 0; color: inherit; font: inherit; line-height: inherit; }
+.designer-heading p { margin: 30px auto 0; max-width: 1480px; color: #655f59; font-family: "Source Han Serif CN", serif; font-size: 40px; font-weight: 300; line-height: 1.68; }
+.designer-metrics { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: var(--space-lg); border-top: 2px solid rgba(178,139,51,.18); }
+.designer-metrics div { min-height: 190px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; border-right: 2px dotted rgba(154,103,42,.45); }
+.designer-metrics div:last-child { border-right: 0; }
+.designer-metrics span { color: var(--gold-deep); font-family: "Source Han Serif CN", serif; font-size: 40px; font-weight: 600; }
+.designer-metrics strong { color: var(--gold-deep); font-family: "Source Han Serif CN", serif; font-size: 72px; font-weight: 600; line-height: 1.15; }
+.designer-card-has-metrics { min-height: 720px; padding-bottom: 76px; }
+.designer-card-no-metrics { min-height: 500px; padding-bottom: 70px; }
+.designer-card-placeholder { padding-top: 94px; }
+.designer-card-placeholder > img { padding: 68px; object-fit: contain; background: linear-gradient(145deg, #fffdf8, #ead1a9); filter: sepia(.2); }
+.designer-card-placeholder .designer-heading { padding-top: 70px; }
+.designer-placeholder-note { margin: 44px auto 0; padding-top: 28px; max-width: 1420px; border-top: 2px solid rgba(178,139,51,.17); color: #8a7767; font-size: 30px; font-weight: 300; }
+.cover-meta { width: 1760px; margin: var(--space-2xl) auto 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 56px; }
+.info-pill { display: flex; flex-direction: column; align-items: stretch; gap: 24px; text-align: center; }
+.info-pill .meta-label { color: var(--gold-deep); font-family: "Source Han Serif CN", serif; font-size: 42px; font-weight: 700; }
+.info-pill-card { min-height: 286px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; overflow: hidden; border: 2px solid rgba(178,139,51,.2); border-radius: 48px; background-color: #fffdf8; background-image: url('/assets/backgrounds/profile-meta-reverse-v2.png'); background-position: center; background-size: cover; box-shadow: 0 10px 22px rgba(90,65,35,.09), 0 4px 0 rgba(154,103,42,.11); }
+.info-pill-card > strong { color: var(--gold-deep); font: 500 44px/1.35 Poppins, "Source Han Serif CN", serif; }
+
+.page-content { width: 1910px; margin: 0 auto; }
+.intro-content { padding-bottom: 0; }
+.intro-content .section-title { height: 410px; margin-bottom: 0; }
+.content-section { margin-bottom: var(--space-section); }
+.card-panel { position: relative; overflow: hidden; padding: 100px 110px 112px; border: 2px solid rgba(178,139,51,.22); border-radius: 62px; background-color: #f6e1c2; background-image: url('/assets/textures/light-gold-flow-lines.png'), url('/assets/backgrounds/fee-card-proof-a.png'); background-position: right top, center; background-repeat: no-repeat; background-size: 1180px auto, cover; box-shadow: var(--panel-shadow); }
+.panel-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: var(--space-xl); }
+.panel-heading h2 { margin: 0; color: var(--gold-deep); font-family: "Source Han Serif CN", serif; font-size: 116px; font-weight: 900; line-height: 1.14; }
+.panel-heading > span { color: rgba(154,103,42,.8); font: 500 35px/1.1 Poppins, serif; text-align: right; letter-spacing: .02em; }
+.highlight-list { display: grid; gap: var(--space-md); }
+.highlight-item { min-height: 150px; display: grid; grid-template-columns: 104px 1fr; align-items: center; gap: var(--space-md); padding: 24px 48px 24px 22px; border-radius: 999px; background: rgba(255,253,248,.96); box-shadow: 0 4px 18px rgba(90,65,35,.05); }
+.crown-disc { width: 96px; height: 96px; display: grid; place-items: center; border-radius: 50%; background: linear-gradient(145deg, #d4ba9a, #a87529); }
+.highlight-item p { margin: 0; color: var(--ink); font-size: 42px; font-weight: 300; line-height: 1.5; }
+.highlight-item p strong { color: #3f3a35; font-weight: 700; }
+.overview-list { display: grid; gap: var(--space-sm); }
+.overview-row { display: grid; grid-template-columns: 250px 1fr; align-items: center; min-height: 100px; }
+.overview-row strong { justify-self: start; padding: 14px 26px 16px; border-radius: 999px; background: rgba(255,253,248,.95); color: #4c4741; font-family: "Source Han Sans CN", sans-serif; font-size: 42px; font-weight: 700; }
+.overview-row p { margin: 0; color: var(--ink); font-size: 44px; font-weight: 300; line-height: 1.5; }
+
+.section-title { position: relative; height: 500px; display: flex; align-items: center; justify-content: center; margin: var(--space-3xl) 0; background: url('/assets/backgrounds/section-title-glow.png') center / 100% 100% no-repeat; }
+.section-title-en { position: absolute; top: 48px; color: rgba(212,186,154,.33); background: url('/assets/backgrounds/section-title-text-gradient-v1.png') center / 100% 100%; background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; font: 300 148px/1 Poppins, sans-serif; letter-spacing: .035em; }
+.section-title h2 { position: relative; z-index: 1; margin: 76px 0 0; padding: 24px 82px 28px; border-radius: 999px; color: #fffdf8; background: var(--gold); font-family: "Source Han Serif CN", serif; font-size: 98px; font-weight: 700; line-height: 1.1; }
+.section-title h2::after { content: ""; position: absolute; left: 50%; bottom: -25px; border-left: 24px solid transparent; border-right: 24px solid transparent; border-top: 28px solid var(--gold); transform: translateX(-50%); }
+
+.days-wrap { width: 2000px; }
+.day-section { padding-bottom: var(--space-section); background-image: url('/assets/textures/light-gold-flow-lines.png'); background-repeat: no-repeat; background-position: center 650px; background-size: 2000px 1100px; }
+.day-header { min-height: 430px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: var(--space-md); padding: 58px 130px; border-top: 2px solid rgba(178,139,51,.62); border-bottom: 2px solid rgba(178,139,51,.62); background-color: #f6e7d1; background-image: url('/assets/backgrounds/day-champagne-linefree-v4.png'); background-position: center; background-size: cover; }
+.day-date { display: flex; align-items: baseline; gap: 34px; color: var(--gold-deep); font-family: Poppins, "Source Han Serif CN", serif; }
+.day-date strong { font-size: 108px; font-weight: 600; line-height: 1.05; }
+.day-date span { font-size: 74px; font-weight: 300; }
+.day-date time { font-size: 74px; font-weight: 500; }
+.service-tags { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
+.service-tags > span { min-height: 70px; display: flex; align-items: center; gap: 14px; padding: 8px 28px 10px; color: #fffdf8; border-radius: 999px; background: linear-gradient(180deg, #c5a15b, #9a672a); font-family: "Source Han Sans CN", sans-serif; font-size: 36px; font-weight: 500; line-height: 1.25; }
+.day-body { width: 1740px; min-height: 1360px; margin: 0 auto; padding: 115px 0 0; }
+.day-facts { display: grid; gap: 92px; }
+.day-fact { display: grid; grid-template-columns: 130px 1fr; align-items: flex-start; gap: 52px; }
+.fact-icon { width: 124px; height: 124px; display: grid; place-items: center; border-radius: 50%; background: linear-gradient(145deg, #e0c297, #b58238); box-shadow: inset 0 0 0 2px rgba(255,255,255,.45); }
+.day-fact > div { padding-top: 5px; }
+.day-fact > div > span { display: block; margin-bottom: var(--space-xs); color: var(--gold-deep); font-family: "Source Han Sans CN", sans-serif; font-size: 66px; font-weight: 700; line-height: 1.15; }
+.day-fact strong, .day-fact p { display: block; margin: 0; color: var(--ink); font-size: 52px; font-weight: 300; line-height: 1.55; }
+.day-fact strong { font-family: "Source Han Sans CN", sans-serif; font-weight: 400; }
+.day-fact p { font-family: "Source Han Serif CN", serif; }
+.spot-galleries { display: grid; gap: var(--space-xl); margin: 100px 0 0 182px; }
+.spot-gallery { display: grid; gap: 62px 42px; }
+.spot-count-1 { grid-template-columns: 1fr; }
+.spot-count-2, .spot-count-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.spot-count-3 { grid-template-columns: 1.14fr .86fr; grid-template-rows: repeat(2, minmax(0, 1fr)); }
+.spot-count-3 .spot-card:first-child { grid-row: 1 / 3; }
+.spot-card { min-width: 0; overflow: hidden; border-radius: 34px; background: var(--cream); box-shadow: var(--panel-shadow); }
+.spot-card img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; }
+.spot-count-1 .spot-card img { aspect-ratio: 16 / 9; }
+.spot-count-3 .spot-card:first-child img { aspect-ratio: 4 / 3; height: 750px; }
+.spot-copy { min-height: 250px; padding: 30px 34px 38px; }
+.spot-copy h4 { margin: 0 0 12px; color: #3f3a35; font-family: "Source Han Sans CN", sans-serif; font-size: 42px; font-weight: 700; line-height: 1.3; }
+.spot-copy p { margin: 0; color: var(--muted); font-size: 32px; font-weight: 300; line-height: 1.48; }
+
+.closing-content { width: 2000px; padding-top: 20px; }
+.closing-content .section-title { height: 410px; margin-bottom: 0; }
+.expense-section, .booking-section, .security-section, .notes-section { margin-bottom: 220px; }
+.expense-section, .booking-section, .notes-section { width: 1910px; margin-left: auto; margin-right: auto; }
+.total-price { margin: -25px auto 85px; text-align: center; color: var(--gold-deep); }
+.total-price strong { font: 600 146px/1.15 Poppins, "Source Han Serif CN", serif; }
+.total-price em { margin-left: 24px; font-style: normal; font-size: 48px; }
+.price-notes {
+  max-width: 1500px;
+  margin: -40px auto 88px;
+  padding: 44px 58px 48px;
+  border: 1px solid rgba(178,139,51,.22);
+  border-radius: 34px;
+  background: linear-gradient(135deg, rgba(255,253,248,.92), rgba(248,235,213,.58));
+  box-shadow: 0 10px 26px rgba(90,65,35,.07);
+  color: var(--text);
+}
+.price-notes h3 {
+  margin: 0 0 18px;
+  color: var(--gold-deep);
+  font-family: "Source Han Sans CN", sans-serif;
+  font-size: 42px;
+  font-weight: 700;
+}
+.price-notes p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 32px;
+  line-height: 1.65;
+}
+.expense-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-xl); }
+.list-card { position: relative; overflow: hidden; min-height: 520px; padding: 72px 84px 82px; border: 2px solid rgba(178,139,51,.22); border-radius: 54px; background-color: #f6e1c2; background-image: url('/assets/textures/light-gold-flow-lines.png'), url('/assets/backgrounds/fee-card-proof-a.png'); background-position: right top, center; background-repeat: no-repeat; background-size: 1100px auto, cover; box-shadow: var(--panel-shadow); }
+.list-card header { display: flex; align-items: center; gap: var(--space-sm); }
+.list-card h3 { margin: 0; color: var(--gold-deep); font-family: "Source Han Serif CN", serif; font-size: 84px; font-weight: 700; }
+.list-card ul { margin: var(--space-lg) 0 0; padding: 0; list-style: none; }
+.list-card li { position: relative; margin: 22px 0; padding-left: 42px; color: var(--ink); font-size: 42px; font-weight: 300; line-height: 1.58; }
+.list-card li::before { content: ""; position: absolute; top: .66em; left: 0; width: 16px; height: 16px; border-radius: 50%; background: var(--gold); }
+.list-keyword { margin-right: 12px; color: var(--gold-deep); font-family: "Source Han Sans CN", sans-serif; font-weight: 700; white-space: nowrap; }
+.list-card-warning li::before { width: 26px; height: 26px; border-radius: 0; background: var(--warning); mask: url('/assets/icons/warning.svg') center / contain no-repeat; -webkit-mask: url('/assets/icons/warning.svg') center / contain no-repeat; }
+
+/* 旅程决策层：主题总览、住宿、交通与逐日扫读。 */
+.overview-list { gap: 28px; }
+.overview-day-card { display: grid; grid-template-columns: 145px 1fr; gap: 34px; align-items: stretch; padding: 32px 42px; border: 2px solid rgba(178,139,51,.15); border-radius: 36px; background: rgba(255,253,248,.91); box-shadow: 0 7px 18px rgba(90,65,35,.045); }
+.overview-day-index { display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 2px solid rgba(178,139,51,.2); color: var(--gold-deep); font-family: Poppins, sans-serif; }
+.overview-day-index span { font-size: 24px; letter-spacing: .18em; }
+.overview-day-index strong { font-size: 56px; font-weight: 600; line-height: 1.05; }
+.overview-day-main { min-width: 0; }
+.overview-day-main h3 { margin: 0 0 8px; color: #3f3a35; font-family: "Source Han Serif CN", serif; font-size: 43px; font-weight: 800; line-height: 1.28; }
+.overview-day-main > p { margin: 0; color: var(--gold-deep); font-size: 30px; font-weight: 400; line-height: 1.45; }
+.overview-day-meta { display: flex; flex-wrap: wrap; gap: 12px 26px; margin-top: 20px; }
+.overview-day-meta span { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); font-size: 27px; line-height: 1.35; }
+.overview-day-meta .icon { background-color: var(--gold-deep); }
+
+.journey-feature-section { margin-bottom: 170px; }
+.journey-feature-section .section-title { height: 390px; margin: 0; }
+.feature-intro { margin: -10px auto 64px; text-align: center; }
+.feature-intro span { color: var(--gold-deep); font-family: "Source Han Serif CN", serif; font-size: 52px; font-weight: 700; }
+.feature-intro p { max-width: 1420px; margin: 20px auto 0; color: var(--muted); font-size: 32px; font-weight: 300; line-height: 1.65; }
+.hotel-grid, .transport-grid, .dining-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 48px; }
+.hotel-card, .transport-card, .dining-card { min-width: 0; overflow: hidden; border: 2px solid rgba(178,139,51,.2); border-radius: 46px; background-color: #fffdf8; background-image: url('/assets/backgrounds/fee-card-proof-a.png'); background-position: center; background-size: cover; box-shadow: var(--panel-shadow); }
+.hotel-card-wide, .dining-card-wide, .transport-card-wide { grid-column: 1 / -1; }
+.hotel-grid-odd:not(.hotel-grid-featured) .hotel-card:last-child,
+.dining-grid-odd:not(.dining-grid-featured) .dining-card:last-child,
+.transport-grid-odd:not(.transport-grid-featured) .transport-card:last-child {
+  grid-column: 1 / -1;
+  width: calc((100% - 48px) / 2);
+  justify-self: center;
+}
+.hotel-image, .transport-image, .dining-image, .spot-image { position: relative; overflow: hidden; }
+.hotel-image img { width: 100%; height: 570px; display: block; object-fit: cover; }
+.hotel-card-wide {
+  display: grid;
+  grid-template-columns: 1.18fr .82fr;
+  align-items: stretch;
+}
+.hotel-card-wide .hotel-image img { height: 100%; min-height: 620px; }
+.hotel-card-wide .hotel-copy { display: flex; min-height: 620px; flex-direction: column; justify-content: center; }
+.hotel-card-wide.hotel-card-no-image { display: block; }
+.hotel-card-wide.hotel-card-no-image .hotel-copy { min-height: 0; }
+.hotel-image .missing-image-state { height: 570px; }
+.card-missing-image { border-bottom: 1px solid rgba(178,139,51,.14); }
+.transport-image { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); height: 470px; }
+.transport-image-count-1 { grid-template-columns: 1fr; }
+.transport-image img { width: 100%; height: 470px; display: block; object-fit: cover; }
+.transport-image-count-2 img { height: 470px; }
+.dining-image { display: grid; grid-template-columns: 1fr; }
+.dining-image-count-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.dining-image img { width: 100%; height: 520px; display: block; object-fit: cover; }
+.dining-card-wide {
+  display: grid;
+  grid-template-columns: 1.12fr .88fr;
+  align-items: stretch;
+}
+.dining-card-wide .dining-image img {
+  height: 100%;
+  min-height: 570px;
+}
+.dining-card-wide .dining-copy {
+  display: flex;
+  min-height: 570px;
+  flex-direction: column;
+  justify-content: center;
+}
+.transport-card-wide {
+  display: grid;
+  grid-template-columns: 1.18fr .82fr;
+  align-items: stretch;
+}
+.transport-card-wide .transport-image {
+  height: 640px;
+  background: #fffaf2;
+}
+.transport-card-wide .transport-image img {
+  height: 640px;
+}
+.transport-card-wide .transport-copy {
+  display: flex;
+  min-height: 640px;
+  flex-direction: column;
+  justify-content: center;
+}
+.transport-card-wide .transport-heading small {
+  max-width: 600px;
+}
+.transport-card-wide .transport-editorial {
+  font-size: 32px;
+}
+.transport-card-wide .transport-copy li {
+  font-size: 31px;
+}
+.hotel-copy, .transport-copy { padding: 42px 48px 50px; }
+.hotel-kicker { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 18px; }
+.hotel-kicker span, .hotel-kicker em { padding: 8px 17px 10px; border-radius: 999px; color: var(--gold-deep); background: rgba(212,186,154,.2); font-size: 25px; font-style: normal; font-weight: 500; line-height: 1; }
+.hotel-copy h3, .transport-copy h3 { margin: 0; color: #3f3a35; font-family: "Source Han Serif CN", serif; font-size: 48px; font-weight: 700; line-height: 1.28; }
+.hotel-official-name { margin: 8px 0 0; color: var(--muted); font: 400 24px/1.45 Poppins, "Source Han Sans CN", sans-serif; }
+.hotel-facts { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
+.hotel-facts span, .transport-specs span { padding: 10px 18px 12px; border-radius: 14px; color: var(--gold-deep); background: rgba(212,186,154,.17); font-size: 26px; line-height: 1.2; }
+.hotel-editorial, .transport-editorial { margin: 24px 0 0; color: var(--ink); font-family: "Source Han Serif CN", serif; font-size: 30px; font-weight: 400; line-height: 1.65; }
+.hotel-proof-points { display: flex; flex-wrap: wrap; gap: 0; margin-top: 26px; color: var(--gold-deep); font-size: 25px; font-weight: 600; }
+.hotel-proof-points span { display: inline-flex; align-items: center; }
+.hotel-proof-points span:not(:last-child)::after { content: "·"; margin: 0 14px; color: rgba(178,139,51,.55); }
+.feature-footnote { max-width: 1540px; margin: 52px auto 0; padding: 26px 34px; border-top: 1px solid rgba(178,139,51,.28); border-bottom: 1px solid rgba(178,139,51,.18); color: var(--muted); text-align: center; font-size: 24px; font-weight: 300; line-height: 1.7; }
+.transport-heading { display: flex; align-items: center; gap: 24px; }
+.transport-heading small { display: block; margin-bottom: 6px; color: var(--gold-deep); font-size: 24px; line-height: 1.3; }
+.transport-icon { flex: 0 0 auto; width: 78px; height: 78px; display: grid; place-items: center; border-radius: 50%; background: linear-gradient(145deg, #d7b47c, #9a672a); }
+.transport-specs { display: flex; flex-wrap: wrap; gap: 12px; margin: 26px 0; }
+.transport-copy ul { margin: 0; padding: 0; list-style: none; }
+.transport-copy li { position: relative; margin: 12px 0; padding-left: 27px; color: var(--ink); font-size: 29px; font-weight: 300; line-height: 1.5; }
+.transport-copy li::before { content: ""; position: absolute; top: .65em; left: 0; width: 9px; height: 9px; border-radius: 50%; background: var(--gold); }
+.dining-copy { padding: 42px 48px 50px; }
+.dining-copy > small { display: block; margin-bottom: 9px; color: var(--gold-deep); font-size: 25px; font-weight: 600; letter-spacing: .04em; }
+.dining-copy h3 { margin: 0; color: #3f3a35; font-family: "Source Han Serif CN", serif; font-size: 48px; font-weight: 700; line-height: 1.28; }
+.dining-official-name { margin: 8px 0 0 !important; color: var(--muted) !important; font: 400 24px/1.45 Poppins, "Source Han Sans CN", sans-serif !important; }
+.dining-copy > p { margin: 24px 0 0; color: var(--ink); font-family: "Source Han Serif CN", serif; font-size: 30px; font-weight: 400; line-height: 1.65; }
+.experience-status { display: inline-flex; margin: 14px 0 18px; padding: 8px 16px 10px; border-left: 5px solid var(--gold); color: #7a552a; background: rgba(212,186,154,.16); font-size: 24px; font-weight: 600; line-height: 1.35; }
+
+.day-header h2 { margin: -5px 0 0; color: #8f5f26; font-family: "Source Han Serif CN", serif; font-size: 54px; font-weight: 700; line-height: 1.3; }
+.route-preview { display: grid; grid-template-columns: 130px 1fr; gap: 52px; align-items: flex-start; }
+.route-preview > div { min-width: 0; padding-top: 5px; }
+.route-preview small { display: block; margin-bottom: 22px; color: var(--gold-deep); font-family: "Source Han Sans CN", sans-serif; font-size: 66px; font-weight: 700; line-height: 1.15; }
+.route-nodes { display: flex; flex-wrap: wrap; align-items: center; gap: 13px 18px; }
+.route-nodes > span { display: inline-flex; align-items: center; gap: 18px; }
+.route-nodes strong { padding: 12px 24px 15px; border: 2px solid rgba(178,139,51,.22); border-radius: 999px; color: var(--ink); background: rgba(255,253,248,.86); font-size: 37px; font-weight: 500; line-height: 1.25; }
+.route-nodes i { color: var(--gold); font: 400 38px/1 Poppins, sans-serif; }
+.day-rhythm .rhythm-chips { display: flex; flex-wrap: wrap; gap: 16px; }
+.rhythm-chips b { padding: 12px 24px 15px; border-radius: 999px; color: var(--gold-deep); background: rgba(212,186,154,.2); font-size: 31px; font-weight: 500; line-height: 1.25; }
+.meal-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.meal-grid p { margin: 0; padding: 18px 22px 22px; border-radius: 24px; background: rgba(255,253,248,.84); }
+.meal-grid small { display: block; margin-bottom: 6px; color: var(--gold-deep); font-size: 26px; }
+.meal-grid strong { font-size: 31px; line-height: 1.35; }
+.special-meal { display: flex; align-items: center; gap: 18px; margin-top: 20px; }
+.special-meal em { padding: 9px 17px 11px; border-radius: 999px; color: #fffdf8; background: var(--gold); font-size: 24px; font-style: normal; }
+.special-meal b { color: var(--ink); font-size: 31px; font-weight: 500; }
+.day-hotel-official { display: block; margin-top: 10px; color: var(--muted); font: 400 28px/1.45 Poppins, "Source Han Sans CN", sans-serif; }
+.day-notices { display: grid; gap: 18px; margin-left: 182px; }
+.day-notice { display: flex; align-items: flex-start; gap: 20px; padding: 26px 32px; border: 2px solid rgba(178,139,51,.18); border-radius: 26px; background: rgba(255,253,248,.88); }
+.day-notice > div { min-width: 0; }
+.day-notice strong { display: block; margin-bottom: 5px; color: var(--gold-deep); font-family: "Source Han Sans CN", sans-serif; font-size: 27px; font-weight: 700; }
+.day-notice p { margin: 0; color: #745f4e; font-size: 28px; line-height: 1.55; }
+.day-notice-important { border-color: rgba(217,130,69,.28); background: rgba(255,247,235,.91); }
+.day-notice-important strong { color: #a7602e; }
+.day-notice-safety { border-color: rgba(146,65,55,.28); background: rgba(252,242,237,.92); }
+.day-notice-safety strong, .day-notice-safety p { color: #7d463f; }
+.spot-image { display: grid; grid-template-columns: 1fr; }
+.spot-image-count-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.spot-image img { width: 100%; display: block; }
+.spot-copy small { display: block; margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(178,139,51,.16); color: #87634a; font-size: 25px; line-height: 1.45; }
+.spot-copy .experience-status { margin-top: 0; }
+.notes-grid { display: grid; gap: var(--space-xl); }
+.notes-section-compact { margin-bottom: 220px; }
+.notes-panel { overflow: hidden; margin-top: 0; padding: 74px 82px 78px; border: 2px solid rgba(178,139,51,.2); border-radius: 48px; background-color: #fff8ec; background-image: url('/assets/textures/light-gold-flow-lines.png'), linear-gradient(145deg, rgba(255,253,248,.94), rgba(247,229,199,.62)); background-position: right top, center; background-repeat: no-repeat; background-size: 1250px auto, cover; box-shadow: 0 10px 28px rgba(90,65,35,.07), 0 2px 6px rgba(90,65,35,.04); }
+.notes-lead { margin: 0 0 42px; color: #776c60; font-family: "Source Han Serif CN", serif; font-size: 40px; font-weight: 300; line-height: 1.55; text-align: center; }
+.notes-compact-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 64px; row-gap: 34px; }
+.notes-compact-grid:not(.notes-count-3) .notes-compact-item:nth-child(odd):last-child {
+  grid-column: 1 / -1;
+}
+.notes-count-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 42px;
+}
+.notes-count-3 .notes-compact-item:nth-child(odd):last-child {
+  grid-column: auto;
+}
+.notes-compact-item { padding: 0 0 28px; border-bottom: 1px solid rgba(178,139,51,.16); }
+.notes-compact-item header { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
+.notes-compact-item h3 { margin: 0; color: var(--gold-deep); font-family: "Source Han Serif CN", serif; font-size: 40px; font-weight: 700; line-height: 1.28; }
+.notes-compact-item ul { display: grid; gap: 8px; margin: 0; padding-left: 1.15em; color: #5f5952; font-size: 32px; font-weight: 300; line-height: 1.56; }
+.notes-compact-item li { padding-left: .18em; }
+.notes-compact-warning h3 { color: #9b6230; }
+
+/* A版局部材质验证：不影响常规长图输出。 */
+.style-proof-a { width: 2000px; min-height: 1740px; padding: 0 0 150px; color: var(--ink); background: var(--warm-white) url('/assets/backgrounds/seamless-long-background.png') top center / 2000px auto repeat-y; }
+.cover-gradient-proof { min-height: 900px; margin-bottom: 120px; display: flex; flex-direction: column; justify-content: center; }
+.style-proof-a .cover { margin-bottom: 0; }
+.style-proof-a .intro-content { padding-top: 0; }
+.style-proof-a .day-header { position: relative; min-height: 430px; overflow: hidden; border-top-color: rgba(178,139,51,.72); border-bottom-color: rgba(178,139,51,.72); background-color: #f6e7d1; background-image: url('/assets/backgrounds/day-champagne-linefree-v4.png'); background-position: center; background-size: cover; box-shadow: none; }
+.style-proof-a .day-date { color: #8f5f26; text-shadow: 0 2px 0 rgba(255,253,248,.48); }
+.style-proof-a .service-tags > span { background: #ad7b2f url('/assets/backgrounds/fee-card.png') center / cover; background-blend-mode: multiply; box-shadow: inset 0 2px 0 rgba(255,255,255,.34), 0 5px 12px rgba(90,65,35,.09); }
+.style-proof-card { width: 1910px; margin: 150px auto 0; }
+.style-proof-a .list-card { min-height: 700px; background-color: var(--cream); background-image: url('/assets/textures/light-gold-flow-lines.png'), url('/assets/backgrounds/fee-card-proof-a.png'); background-position: right top, center; background-repeat: no-repeat; background-size: 1250px auto, cover; border-color: rgba(178,139,51,.24); box-shadow: 0 12px 34px rgba(90,65,35,.09), 0 2px 5px rgba(90,65,35,.05); }
+
+.booking-section .section-title { height: 370px; }
+.booking-flow { position: relative; height: 1940px; display: flex; flex-direction: column; justify-content: space-between; padding: 106px 84px; overflow: hidden; border: 2px solid rgba(178,139,51,.24); border-radius: 60px; background-color: #f2ddbd; background-image: url('/assets/backgrounds/booking-champagne-silk-v8.png'); background-position: center; background-repeat: no-repeat; background-size: cover; box-shadow: 0 14px 38px rgba(90,65,35,.09), 0 3px 7px rgba(90,65,35,.05); }
+.booking-flow::before { content: ""; position: absolute; top: 110px; bottom: 110px; left: 50%; width: 5px; background: rgba(178,139,51,.7); transform: translateX(-50%); }
+.booking-step { position: relative; flex: 0 0 288px; min-height: 0; display: grid; grid-template-columns: 1fr 140px 1fr; align-items: center; }
+.booking-step > strong { grid-column: 2; z-index: 2; width: 134px; height: 134px; display: grid; place-items: center; color: #fffdf8; border: 5px solid rgba(255,250,241,.92); border-radius: 50%; background: var(--gold); box-shadow: 0 5px 13px rgba(90,65,35,.08); font: 600 50px/1 Poppins, sans-serif; }
+.booking-copy { position: relative; width: 100%; }
+.booking-copy::before { content: ""; position: absolute; z-index: 2; top: 58%; width: 44px; height: 44px; border-radius: 50%; background: var(--warning); box-shadow: 0 0 0 6px rgba(241,138,66,.12); transform: translateY(-50%); }
+.booking-step-left .booking-copy::before { left: 0; }
+.booking-step-right .booking-copy::before { right: 0; }
+.booking-step-left .booking-copy { grid-column: 1; grid-row: 1; padding-right: 58px; text-align: right; }
+.booking-step-right .booking-copy { grid-column: 3; grid-row: 1; padding-left: 58px; text-align: left; }
+.booking-copy::after { content: ""; position: absolute; z-index: 0; top: 58%; width: 100%; height: 5px; background: rgba(178,139,51,.66); transform: translateY(-50%); }
+.booking-step-left .booking-copy::after { right: 0; }
+.booking-step-right .booking-copy::after { left: 0; }
+.booking-copy h3 { display: flex; align-items: center; gap: 16px; margin: 0 0 28px; color: var(--gold-deep); font-family: "Source Han Serif CN", serif; font-size: 68px; font-weight: 700; line-height: 1.18; }
+.booking-copy h3, .booking-copy p { position: relative; z-index: 1; width: max-content; max-width: calc(100% - 50px); background: transparent; }
+.booking-step-left h3, .booking-step-left p { margin-left: auto; }
+.booking-step-right h3, .booking-step-right p { margin-right: auto; }
+.booking-step-left h3 { justify-content: flex-end; }
+.booking-copy p { margin-top: 0; margin-bottom: 0; color: #70675f; font-family: "Source Han Sans CN", sans-serif; font-size: 33px; font-weight: 400; line-height: 1.5; }
+
+.brand-footer-fixed { width: 2000px; margin: 0; padding: 0; isolation: isolate; background: var(--warm-white); }
+.brand-footer-fixed img { width: 1440px; height: auto; margin: 0 auto; object-fit: contain; mix-blend-mode: darken; }
+
+.security-section { width: 2000px; margin-left: 0; }
+.security-title-area { padding-bottom: 82px; background: var(--warm-white) url('/assets/textures/light-gold-flow-lines.png') center 74% / 2000px auto no-repeat; }
+.security-banner { padding: 0 100px; text-align: center; }
+.security-banner p { margin: 0; color: #4c4741; font-family: "Source Han Serif CN", serif; font-size: 44px; font-weight: 400; line-height: 1.55; }
+.payment-visual { position: relative; min-height: 2380px; display: flex; flex-direction: column; align-items: center; overflow: hidden; padding: 140px 120px 70px; color: #fffaf1; text-align: center; background: #8a5e31 url('/assets/security/desert-background-clean.png') center / cover no-repeat; }
+.payment-visual::before, .payment-visual::after { content: ""; position: absolute; inset: 0; pointer-events: none; }
+.payment-visual::before { background: linear-gradient(180deg, rgba(255,253,248,.92) 0%, rgba(255,251,243,.76) 13%, rgba(255,248,236,.38) 30%, rgba(255,248,236,0) 48%); }
+.payment-visual::after { background: linear-gradient(180deg, rgba(53,32,16,0) 40%, rgba(53,32,16,.18) 70%, rgba(42,24,12,.5) 100%); }
+.payment-heading, .payment-qr-group, .payment-account-lines, .payment-notice { position: relative; z-index: 1; }
+.payment-heading > span { color: #b47f32; font-family: "Source Han Serif CN", serif; font-size: 96px; font-weight: 700; line-height: 1.25; text-shadow: 0 3px 14px rgba(255,251,242,.7); }
+.payment-heading h3 { margin: 28px 0 0; color: #70533a; font-family: "Source Han Serif CN", serif; font-size: 52px; font-weight: 400; line-height: 1.45; text-shadow: 0 3px 14px rgba(255,251,242,.72); }
+.payment-qr-group { width: 900px; display: flex; flex-direction: column; align-items: center; margin-top: 100px; padding: 36px 50px 44px; border: 2px solid rgba(180,127,50,.12); border-radius: 12px; background: rgba(255,250,240,.76); box-shadow: 0 24px 62px rgba(78,48,22,.14); }
+.payment-qr { width: 760px; height: auto; object-fit: contain; border-radius: 18px; box-shadow: 0 24px 60px rgba(42,24,12,.24); }
+.payment-qr-group strong { margin-top: 38px; color: #b47f32; font-family: "Source Han Serif CN", serif; font-size: 88px; font-weight: 700; line-height: 1.2; text-shadow: none; }
+.payment-account-lines { margin-top: 95px; color: #fffaf1; font-family: "Source Han Serif CN", serif; font-size: 56px; font-weight: 400; line-height: 1.58; text-shadow: 0 3px 14px rgba(48,29,14,.6); }
+.payment-account-lines p { margin: 0; }
+.payment-notice { margin: 50px 0 0; color: #f6d59a; font-family: "Source Han Serif CN", serif; font-size: 46px; font-weight: 600; letter-spacing: .04em; text-shadow: 0 3px 12px rgba(48,29,14,.55); }
+
+.brand-footer { min-height: 2800px; padding: 160px 100px 180px; text-align: center; background: #fff; }
+.advantage-title strong { display: inline-block; padding: 16px 46px 20px; color: #fffdf8; border-radius: 999px; background: var(--gold); font-family: "Source Han Sans CN", sans-serif; font-size: 64px; font-weight: 700; letter-spacing: .08em; }
+.advantage-title span { display: block; margin-top: var(--space-sm); color: var(--gold); font: 500 56px/1.3 Poppins, "Source Han Serif CN", serif; letter-spacing: .08em; }
+.advantages { width: 1700px; margin: 110px auto; display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-md); }
+.advantages > div { min-height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-md); border-bottom: 4px solid rgba(178,139,51,.18); }
+.advantage-icon { width: 132px; height: 132px; display: grid; place-items: center; border-radius: 50%; background: var(--gold); }
+.advantages strong { font-family: "Source Han Sans CN", sans-serif; font-size: 42px; font-weight: 700; }
+.credentials { margin: 100px 0; }
+.credentials p { margin: var(--space-md) 0; color: #56514c; font-size: 38px; font-weight: 500; }
+.contact-arrow { display: block; color: #57524d; font-size: 34px; }
+.contact-title { margin: var(--space-md) 0; font-size: 46px; font-weight: 400; }
+.brand-logo-footer { width: 620px; height: 230px; margin: 90px auto var(--space-lg); }
+.contact-line { display: flex; justify-content: center; flex-wrap: wrap; gap: 24px 72px; color: var(--gold-deep); font-family: "Source Han Sans CN", sans-serif; font-size: 34px; font-weight: 500; }
+.footer-rule { width: 720px; height: 2px; margin: 100px auto 54px; background: #8f8983; }
+.footer-small { color: var(--muted); font-size: 30px; letter-spacing: .08em; }
+
+@media (max-width: 1100px) { .preview-stage .export-frame { transform: scale(.38); margin-bottom: -62%; } }
+@media print { .preview-toolbar { display: none; } .preview-stage { padding: 0; } .preview-stage .export-frame { transform: none; margin: 0; } }

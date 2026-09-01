@@ -1,0 +1,8 @@
+node_modules/
+dist/
+output/generated/
+output/image-assets/
+output/image-ledgers/
+.jobs/
+.env.local
+.env.image-search.local

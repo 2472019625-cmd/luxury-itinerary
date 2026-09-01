@@ -1,0 +1,504 @@
+{
+  "title": "坦桑尼亚 · 桑给巴尔私享之旅",
+  "subtitle": "雪山、草原、动物迁徙与印度洋海岛的十日探索",
+  "destination": "坦桑尼亚 · 桑给巴尔",
+  "travelers": 2,
+  "adults": 2,
+  "children": 0,
+  "startDate": null,
+  "endDate": null,
+  "dayCount": 10,
+  "heroImage": "/assets/travel/africa/source-day01-kilimanjaro-giraffes.jpg",
+  "travelStyle": "顶奢私享 · Safari + 海岛",
+  "serviceMode": "私家团 · 一家一团",
+  "tripRhythm": "草原游猎、火山口探索与印度洋海岛度假",
+  "hotelReplacementPolicy": "所列酒店及房型以正式确认单为准；如遇满房或酒店运营调整，将安排同等级或更高标准替代，并由定制师提前沟通。",
+  "transportDisclaimer": "用车以约定的车辆等级与座位数为履约标准；图片用于说明出行类别与舒适度，具体品牌及型号以当地实际调度为准。草原航班与出海安排以承运方、天气及海况的最终确认为准。",
+  "hotels": [
+    {
+      "id": "gran-melia-arusha",
+      "officialName": "GRAN MELIA ARUSHA",
+      "shortName": "阿鲁沙美利亚度假酒店",
+      "region": "阿鲁沙 · 梅鲁山麓",
+      "nights": 1,
+      "roomType": "市景房",
+      "mealPlan": "早餐与所列晚餐",
+      "editorialCopy": "让长途飞行后的第一夜从容落地。酒店隐于梅鲁山麓绿意之中，以宽阔花园、现代度假空间与舒缓节奏，开启这场终生难忘的东非之旅。",
+      "proofPoints": ["梅鲁山麓", "城市绿洲", "舒缓过渡"],
+      "images": [{ "src": "/assets/travel/africa/hotels/gran-melia-arusha-room.png", "focus": "50% 50%" }]
+    },
+    {
+      "id": "tarangire-elephant-spring",
+      "officialName": "TARANGIRE ELEPHANT SPRING CAMP",
+      "shortName": "塔兰吉雷象泉野奢营地",
+      "region": "塔兰吉雷国家公园",
+      "nights": 1,
+      "roomType": "基础房型",
+      "mealPlan": "全餐安排",
+      "editorialCopy": "住进塔兰吉雷动物王国腹地，让象群与千年猴面包树成为窗外风景。游猎归来，仍可在泳池与营地露台守候旷野的下一次惊喜。",
+      "proofPoints": ["园内营地", "象群活跃区", "泳池观景"],
+      "images": [{ "src": "/assets/travel/africa/hotels/tarangire-elephant-springs-pool.jpg", "focus": "50% 55%" }]
+    },
+    {
+      "id": "ngorongoro-serena",
+      "officialName": "NGORONGORO SERENA SAFARI LODGE",
+      "shortName": "恩戈罗恩戈罗火山口景观酒店",
+      "region": "恩戈罗恩戈罗火山口",
+      "nights": 1,
+      "roomType": "基础景观房型",
+      "mealPlan": "全餐安排",
+      "editorialCopy": "沿世界自然奇观恩戈罗恩戈罗火山口边缘而居，推窗便是恢宏地貌与流动云海。清晨无需长途折返，即可率先下到火山口腹地，把动物最活跃的黄金时段留给游猎。",
+      "proofPoints": ["火山口边缘", "晨雾景观", "游猎近场"],
+      "images": [{ "src": "/assets/travel/africa/hotels/ngorongoro-serena-aerial.jpg", "focus": "50% 52%" }]
+    },
+    {
+      "id": "serengeti-four-seasons",
+      "officialName": "FOUR SEASONS SAFARI LODGE SERENGETI",
+      "shortName": "塞伦盖蒂四季野奢酒店",
+      "region": "塞伦盖蒂中部",
+      "nights": 1,
+      "roomType": "Savanna 房型",
+      "mealPlan": "全餐安排",
+      "editorialCopy": "把四季传奇服务带进塞伦盖蒂腹地。天然水塘就在酒店近旁，游猎归来仍可在无边泳池与观景平台守候象群，让旷野奇遇从清晨延续到日暮。",
+      "proofPoints": ["园内腹地", "水塘观兽", "无边泳池"],
+      "images": [{ "src": "/assets/travel/africa/hotels/four-seasons-serengeti-pool.jpg", "focus": "50% 52%" }]
+    },
+    {
+      "id": "taasa-migration-camp",
+      "officialName": "SERENGETI TAASA MIGRATION CAMP - KOGATENDE",
+      "shortName": "TAASA 马拉河迁徙营地",
+      "region": "塞伦盖蒂北部 · 马拉河",
+      "nights": 2,
+      "roomType": "野奢帐篷基础房型",
+      "mealPlan": "全餐安排",
+      "editorialCopy": "追随迁徙节律而移动的野奢营地，旱季驻扎 Kogatende，靠近马拉河迁徙区域。两晚连住，把清晨与黄昏的黄金时段留给追踪，也把星空下的宁静留给自己。",
+      "proofPoints": ["12顶帐篷", "迁徙带驻扎", "星空晚餐"],
+      "images": [{ "src": "/assets/travel/africa/hotels/taasa-migration-camp-interior.jpg", "focus": "50% 50%" }]
+    },
+    {
+      "id": "mora-zanzibar",
+      "officialName": "THE MORA ZANZIBAR",
+      "shortName": "MORA 桑给巴尔海岛度假村",
+      "region": "桑给巴尔岛",
+      "nights": 3,
+      "roomType": "基础度假房型",
+      "mealPlan": "按行程所列酒店餐食",
+      "editorialCopy": "从无垠草原飞向印度洋，三晚连住 Muyuni 海滩。白沙、泳池、全日餐饮与 Mnemba 海域共同承接游猎后的松弛，让旅程在海风中优雅收束。",
+      "proofPoints": ["Muyuni海滩", "Mnemba海域", "三晚连住"],
+      "images": [{ "src": "/assets/travel/africa/hotels/the-mora-zanzibar-pool.jpg", "focus": "50% 55%" }]
+    }
+  ],
+  "diningPolicy": "普通三餐以每日行程所列为准；特色餐饮、户外用餐及餐厅预约由酒店和营地结合当日运营安排。",
+  "diningExperiences": [
+    {
+      "id": "ngorongoro-view-dining",
+      "location": "恩戈罗恩戈罗火山口",
+      "title": "火山口边缘的景观餐桌",
+      "officialName": "Ngorongoro Serena Safari Lodge",
+      "editorialCopy": "在火山口边缘用餐，让云雾、山壁与辽阔盆地成为餐桌之外的风景。这里的珍贵不只在味道，更在于用一顿饭的时间，慢慢读懂非洲动物伊甸园的恢宏尺度。",
+      "image": { "src": "/assets/travel/africa/dining/ngorongoro-serena-dining.jpg", "focus": "50% 54%" }
+    },
+    {
+      "id": "taasa-bush-breakfast",
+      "location": "塞伦盖蒂迁徙带",
+      "title": "旷野深处的早餐时光",
+      "officialName": "TAASA Migration Camp",
+      "editorialCopy": "清晨游猎之后，让餐桌直接铺展在塞伦盖蒂的风与光里。热咖啡、早餐与远处草原共同构成一种只有住进旷野深处才能拥有的从容。",
+      "image": { "src": "/assets/travel/africa/dining/taasa-bush-breakfast.jpg", "focus": "50% 50%" }
+    },
+    {
+      "id": "taasa-boma-dinner",
+      "location": "塞伦盖蒂迁徙带",
+      "title": "星河之下的 Boma 晚宴",
+      "officialName": "TAASA Migration Camp",
+      "editorialCopy": "当篝火亮起、草原归于深蓝，围坐星空下享用晚餐，听风声与远处兽鸣交替出现。旷野的夜晚由此不再是行程空白，而成为终生难忘的一幕。",
+      "image": { "src": "/assets/travel/africa/dining/taasa-boma-dinner.jpg", "focus": "50% 48%" }
+    },
+    {
+      "id": "mora-culinary-freedom",
+      "location": "桑给巴尔 · Muyuni 海滩",
+      "title": "海风里的自由餐饮",
+      "officialName": "The Mora Zanzibar",
+      "editorialCopy": "从海边餐桌到开放式火焰料理，度假村以多餐厅与全日餐饮承接不同口味。无需被固定时刻表催促，把每一餐交给当天的海风与心情。",
+      "image": { "src": "/assets/travel/africa/dining/mora-muyuni-beach-club.webp", "focus": "50% 60%" }
+    }
+  ],
+  "transportSummary": [
+    {
+      "id": "city-transfer",
+      "category": "城市与机场接送",
+      "serviceLevel": "商务车型等级",
+      "seatCount": 7,
+      "usageSegments": ["机场接送", "阿鲁沙市区", "桑给巴尔送机"],
+      "editorialCopy": "从落地接机到海岛送机，以宽裕座舱承接行李与长途飞行后的休息需求。",
+      "features": ["根据人数与行李量匹配座位", "重要航班节点预留衔接时间"],
+      "images": [{ "src": "/assets/travel/africa/transport/city-mpv-exterior.jpg", "focus": "50% 50%" }, { "src": "/assets/travel/africa/transport/business-mpv-interior.jpg", "focus": "50% 50%" }]
+    },
+    {
+      "id": "safari-vehicle",
+      "category": "四驱开顶式游猎车",
+      "serviceLevel": "国家公园游猎车辆",
+      "seatCount": 7,
+      "usageSegments": ["塔兰吉雷", "恩戈罗恩戈罗", "塞伦盖蒂"],
+      "editorialCopy": "一家一车深入三大生态核心，开顶结构让观察、摄影与临时停留更从容。",
+      "features": ["开顶结构便于观察与摄影", "按行程跨区游猎与营地衔接"],
+      "images": [{ "src": "/assets/travel/africa/source-day03-safari-vehicle.jpg", "focus": "50% 50%" }, { "src": "/assets/travel/africa/transport/safari-land-cruiser-exterior.jpg", "focus": "50% 48%" }]
+    },
+    {
+      "id": "bush-flight",
+      "category": "草原小飞机",
+      "serviceLevel": "境内段轻型航空衔接",
+      "usageSegments": ["马拉河区域", "桑给巴尔岛"],
+      "editorialCopy": "以草原航班跨越漫长陆路，从马拉河迁徙带直接切换至印度洋海岛。",
+      "features": ["替代部分长距离陆路移动", "通常采用软包行李并受重量限制"],
+      "images": [{ "src": "/assets/travel/africa/transport/bush-flight-airstrip.jpg", "focus": "58% 50%" }]
+    },
+    {
+      "id": "island-boat",
+      "category": "海岛出海船只",
+      "serviceLevel": "浮潜活动用船",
+      "usageSegments": ["桑给巴尔", "Mnemba 海域"],
+      "editorialCopy": "沿桑给巴尔传统海上脉络前往 Mnemba 海域，把交通本身也变成一段海岛体验。",
+      "features": ["根据海况安排出海时段", "按活动要求配备基础安全装备"],
+      "images": [{ "src": "/assets/travel/africa/transport/mnemba-dhow.jpg", "focus": "50% 50%" }]
+    }
+  ],
+  "highlights": [
+    "一程纵贯旷野与海岛：从非洲动物王国深入印度洋秘境，让草原的野性与海岛的松弛在十日旅程中自然交替",
+    "人生必见的自然剧场：深入塔兰吉雷、恩戈罗恩戈罗与塞伦盖蒂，追踪非洲五霸，守候最壮观、最惊心动魄的迁徙奇观",
+    "臻选下榻，住进风景深处：优先园内、火山口边缘与迁徙带住宿，把清晨与黄昏的黄金时段留给游猎",
+    "私家小团，专属节奏：一家一团，定制师1V1全程跟进，行程可按现场情况灵活调整",
+    "专属交通，无缝衔接：全程专属车辆、不拼车，并以草原小飞机缩短长距离移动",
+    "特别体验，成就终生难忘：迁徙季追踪、日出热气球与 Mnemba 海域浮潜，让每一段高光都发生在最合适的地方"
+  ],
+  "days": [
+    {
+      "date": null,
+      "theme": "初抵东非，在雪山余晖中放慢节奏",
+      "routeNodes": ["乞力马扎罗国际机场", "阿鲁沙"],
+      "city": "乞力马扎罗国际机场—阿鲁沙",
+      "estimatedTravelTime": "车程约1.5小时",
+      "activityLevel": "轻松",
+      "restStops": "抵达后以休整为主",
+      "meals": "酒店晚餐",
+      "mealPlan": { "dinner": "酒店晚餐" },
+      "hotel": "GRAN MELIA ARUSHA 阿鲁沙美利亚度假酒店5星级（市景房）",
+      "hotelId": "gran-melia-arusha",
+      "hotelShortName": "阿鲁沙美利亚度假酒店",
+      "hotelOfficialName": "GRAN MELIÁ ARUSHA",
+      "vehicle": "商务用车",
+      "description": "抵达乞力马扎罗国际机场，专车迎接并驶往被誉为“非洲小瑞士”的阿鲁沙。天气眷顾时，乞力马扎罗雪峰会在云层间显露真容；晚间住进梅鲁山麓的城市绿洲，让长途飞行后的第一夜从容落地。若航班抵达较早，还可提前预约私人保护区游猎，以一场轻盈却足够惊艳的 Safari 揭开东非序幕。",
+      "dayNotices": [
+        { "type": "tip", "text": "若希望安排抵达日私人保护区游猎，建议在航班确认后尽早预订；该体验当前报价未包含。" }
+      ],
+      "spots": [
+        { "name": "初见乞力马扎罗", "description": "以东非草原与长颈鹿为前景，守候非洲之巅从云层间现身。那一刻，雪峰、旷野与生命同框，足以成为旅程最震撼的开场。", "image": "/assets/travel/africa/source-day01-kilimanjaro-giraffes.jpg", "status": "天气允许", "reminder": "清晨或雨后空气更通透时，更有机会看见完整雪峰。" },
+        { "name": "私人保护区初探", "description": "若抵达时间充裕，可乘游猎车进入私人保护区，在人迹更少的旷野寻找斑马、长颈鹿与羚羊，让第一次与非洲动物相遇来得更早。", "image": "/assets/travel/africa/source-day01-safari-drive.jpg", "status": "可选体验｜当前报价未包含" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "象群与猴面包树，正式开启草原游猎",
+      "routeNodes": ["阿鲁沙", "塔兰吉雷国家公园", "野奢营地"],
+      "city": "阿鲁沙—塔兰吉雷国家公园",
+      "estimatedTravelTime": "车程约2.5小时",
+      "activityLevel": "适中",
+      "meals": "酒店早餐 / 午餐盒 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "游猎午餐盒", "dinner": "酒店晚餐" },
+      "hotel": "TARANGIRE ELEPHANT SPRING CAMP 塔兰吉雷野奢5星级游猎酒店",
+      "hotelId": "tarangire-elephant-spring",
+      "hotelShortName": "塔兰吉雷象泉野奢营地",
+      "hotelOfficialName": "TARANGIRE ELEPHANT SPRING CAMP",
+      "vehicle": "四驱动力开顶式越野车",
+      "description": "早餐后驶向塔兰吉雷国家公园，正式开启这场深入动物王国的旅程。这里以庞大象群与千年猴面包树闻名：四驱开顶游猎车穿行旷野，向导循着足迹、水源与兽群动向寻找最佳观察窗口，在第一座国家公园便感受非洲荒野扑面而来的生命力。",
+      "dayNotices": [
+        { "type": "tip", "text": "建议准备望远镜、防晒用品与薄外套，清晨和傍晚的游猎光线也更适合摄影。" }
+      ],
+      "spots": [
+        { "name": "象群与猴面包树", "description": "跟随向导深入象群活跃地带，看巨象从古老猴面包树间缓缓走过。动物、水源与旱地植被共同构成塔兰吉雷最具辨识度的绝世景观。", "image": "/assets/travel/africa/source-day02-tarangire-elephants.jpg", "status": "已包含" },
+        { "name": "千年猴面包树之境", "description": "塔兰吉雷的猴面包树像巨大的守望者散落旷野，树龄可跨越数百年。穿行其间，抬头是奇异树冠，远处是象群与红土地，这是只属于这座国家公园的非洲轮廓。", "image": "/assets/travel/africa/web-day02-tarangire-baobab.jpg", "status": "已包含" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "深入火山口腹地，寻找黑犀牛踪迹",
+      "routeNodes": ["塔兰吉雷", "恩戈罗恩戈罗火山口", "火山口底部游猎", "景观酒店"],
+      "city": "塔兰吉雷—恩戈罗恩戈罗火山口",
+      "estimatedTravelTime": "车程约2至3小时",
+      "overviewNote": "车程约2至3小时",
+      "activityLevel": "充实",
+      "meals": "酒店早餐 / 午餐盒 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "游猎午餐盒", "dinner": "酒店晚餐" },
+      "hotel": "NGORONGORO SERENA LODGE 火山口景观度假酒店5星级",
+      "hotelId": "ngorongoro-serena",
+      "hotelShortName": "恩戈罗恩戈罗火山口景观酒店",
+      "hotelOfficialName": "NGORONGORO SERENA SAFARI LODGE",
+      "vehicle": "四驱动力开顶式越野车",
+      "description": "早餐后下探世界自然奇观恩戈罗恩戈罗火山口。绵延山壁围合出一座近乎与世隔绝的“动物伊甸园”，斑马、角马、狮群与象群在盆地中共生；向导将循迹寻找珍稀黑犀牛，让这一天成为整段旅程最令人屏息的生态课堂。日暮时分，入住火山口边缘景观酒店。",
+      "dayNotices": [
+        { "type": "tip", "text": "火山口海拔较高，清晨常有云雾流动，建议准备保暖外套并将望远镜放在随手可取的位置。" }
+      ],
+      "spots": [
+        { "name": "动物伊甸园", "description": "下降至火山口腹地，在相对集中的生态系统中看兽群铺展于盆地：食草动物迁移、掠食者潜伏，每一段地貌都可能上演自然纪录片般的场景。", "image": "/assets/travel/africa/source-day03-ngorongoro-herds.jpg", "status": "已包含" },
+        { "name": "追寻黑犀牛踪迹", "description": "乘四驱开顶游猎车深入火山口，由专业向导结合足迹、地形与动物活动信息寻找濒危黑犀牛。即使只是远处一瞥，也会成为难以复制的珍贵记忆。", "image": "/assets/travel/africa/source-day03-safari-vehicle.jpg", "status": "已包含" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "从火山口驶向塞伦盖蒂的辽阔地平线",
+      "routeNodes": ["恩戈罗恩戈罗", "塞伦盖蒂大草原", "中部游猎", "四季酒店"],
+      "city": "恩戈罗恩戈罗—塞伦盖蒂",
+      "estimatedTravelTime": "车程约2小时起",
+      "activityLevel": "适中",
+      "meals": "酒店早餐 / 午餐盒 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "游猎午餐盒", "dinner": "酒店晚餐" },
+      "hotel": "塞伦盖蒂四季野奢5星级酒店（SAVANNA房型）",
+      "hotelId": "serengeti-four-seasons",
+      "hotelShortName": "塞伦盖蒂四季野奢酒店",
+      "hotelOfficialName": "FOUR SEASONS SAFARI LODGE SERENGETI",
+      "vehicle": "四驱动力开顶式越野车",
+      "description": "清晨在火山口边缘迎接日出，随后驶入被马赛语称作“无尽平原”的塞伦盖蒂。地平线在车窗外不断延展，狮群、猎豹与象群的踪迹随时可能出现；向导会根据季节、兽群位置与现场信息调整追踪路线，把一天最好的光线留给草原与非洲五霸。",
+      "dayNotices": [
+        { "type": "tip", "text": "今日跨区游猎时间较长，建议为相机准备备用电池与防尘袋；向导会循着当日兽群信息调整追踪路线。" }
+      ],
+      "spots": [
+        { "name": "寻找草原之王", "description": "在向导判断下追踪狮群与其他大型猫科动物。它们可能在树荫下休憩，也可能突然起身巡猎；真正的惊心动魄，往往发生在毫无预告的一瞬。", "image": "/assets/travel/africa/source-day04-serengeti-lions.jpg", "status": "自然观察" },
+        { "name": "无尽平原的地平线", "description": "穿行伞状金合欢与辽阔草原构成的经典画面，看天际线向远方铺展。这里不是匆匆打卡的景点，而是一段需要慢慢驶入的非洲尺度。", "image": "/assets/travel/africa/web-day04-serengeti-acacia.jpg", "status": "已包含" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "沿迁徙路线北上，驻守马拉河区域",
+      "routeNodes": ["塞伦盖蒂中部", "北部迁徙区域", "马拉河", "TAASA 营地"],
+      "city": "塞伦盖蒂马拉河区域",
+      "estimatedTravelTime": "跨区移动约3小时起",
+      "overviewNote": "跨区移动约3小时起",
+      "activityLevel": "充实",
+      "meals": "酒店早餐 / 午餐盒 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "游猎午餐盒", "dinner": "营地晚餐" },
+      "hotel": "SERENGETI TAASA MIGRATION CAMP—KOGATENDE 野奢营地5星级",
+      "hotelId": "taasa-migration-camp",
+      "hotelShortName": "TAASA 马拉河迁徙营地",
+      "hotelOfficialName": "SERENGETI TAASA MIGRATION CAMP - KOGATENDE",
+      "vehicle": "四驱动力开顶式越野车",
+      "description": "沿迁徙脉络一路北上，驶向马拉河与 Kogatende 区域。越接近北部，草原的等待越具有张力：向导会综合兽群位置、河流水位与现场车讯选择观察区域，守候被誉为“人生必见”的迁徙奇观。今晚住进随迁徙带而设的野奢营地，把黎明、黄昏与星空都留在旷野深处。",
+      "dayNotices": [
+        { "type": "tip", "text": "每年7月至9月，角马大军通常会在马拉河区域集结。向导将结合兽群位置与河流水位选择守候区域；若当日未能遇见渡河，也请理解这正是野生迁徙最真实的魅力。" }
+      ],
+      "spots": [
+        { "name": "守候马拉河天国之渡", "description": "当角马大军在河岸聚集，草原的等待本身便充满张力。若兽群在此刻启程，你将亲历迁徙季最壮观、最惊心动魄的“天国之渡”；这场由生命本能推动的远征，正是无数人一生向往的非洲画面。", "image": "/assets/travel/africa/source-day05-mara-crossing.jpg", "status": "季节性自然奇观" },
+        { "name": "住进迁徙带深处", "description": "TAASA 营地在旱季驻扎 Kogatende，以更近的距离承接北部追踪。游猎归来，在帐篷、篝火与星河之间感受非洲夜晚真正的寂静。", "image": "/assets/travel/africa/hotels/taasa-migration-camp.jpg", "status": "臻选下榻" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "以日出和高空视角感受草原尺度",
+      "routeNodes": ["马拉河区域", "可选热气球", "全天游猎", "营地观星"],
+      "city": "塞伦盖蒂马拉河区域",
+      "estimatedTravelTime": "区域内游猎",
+      "activityLevel": "弹性可选",
+      "meals": "酒店早餐 / 午餐盒 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "游猎午餐盒", "dinner": "营地晚餐", "special": "热气球草原早餐与香槟庆祝（自费可选）" },
+      "hotel": "SERENGETI TAASA MIGRATION CAMP—KOGATENDE 野奢营地5星级",
+      "hotelId": "taasa-migration-camp",
+      "hotelShortName": "TAASA 马拉河迁徙营地",
+      "hotelOfficialName": "SERENGETI TAASA MIGRATION CAMP - KOGATENDE",
+      "vehicle": "四驱动力开顶式越野车",
+      "description": "可提前预约清晨热气球，在第一束晨光里升上塞伦盖蒂，从高空俯瞰河流、兽群与无尽草原；落地后按运营方安排举杯庆祝并享用旷野早餐。随后回到专属游猎车，继续追踪迁徙兽群与非洲五霸。高空与地面两种视角交替，让这一天成为终生难忘的草原史诗。",
+      "dayNotices": [
+        { "type": "tip", "text": "热气球需提前预订，并以当日天气及运营方安排为准；如遇调整，定制师会协助衔接后续游猎。" }
+      ],
+      "spots": [
+        { "name": "日出热气球", "description": "清晨随风升空，从鸟瞰视角读懂塞伦盖蒂的河流与迁徙路径。落地后的香槟与草原早餐，为这场别样探险留下一段极具仪式感的收束。", "image": "/assets/travel/africa/source-day06-serengeti-balloon.jpg", "status": "自费可选｜当前报价未包含", "reminder": "受天气与运营条件影响，需提前预订。" },
+        { "name": "迁徙带全天游猎", "description": "回到地面，继续循着兽群踪迹深入北部草原。向导将根据当天信息寻找狮群、猎豹与迁徙主力，让每一次停车都保留未知的惊喜。", "image": "/assets/travel/africa/source-day04-serengeti-lions.jpg", "status": "已包含" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "从旷野飞向印度洋，切换海岛节奏",
+      "routeNodes": ["清晨游猎", "草原机场", "桑给巴尔岛", "MORA 度假村"],
+      "city": "马拉河—桑给巴尔岛",
+      "estimatedTravelTime": "草原飞机衔接",
+      "overviewNote": "草原飞机衔接",
+      "activityLevel": "适中",
+      "restStops": "抵达海岛后自由休息",
+      "meals": "酒店早餐 / 午餐盒 / 酒店晚餐",
+      "mealPlan": { "breakfast": "营地早餐", "lunch": "行程午餐盒", "dinner": "酒店晚餐" },
+      "hotel": "MORA海岛5星级高端度假村",
+      "hotelId": "mora-zanzibar",
+      "hotelShortName": "MORA 桑给巴尔海岛度假村",
+      "hotelOfficialName": "THE MORA ZANZIBAR",
+      "vehicle": "游猎车 + 草原飞机",
+      "description": "清晨完成最后一段草原游猎，从简朴的草原机场搭乘小飞机飞越东非大地。窗外景观由金色旷野渐变为印度洋蓝，抵达桑给巴尔后专车送往 MORA 度假村。白沙、海风与舒展的度假节奏，由此接住连日游猎后的身体与心情。",
+      "dayNotices": [
+        { "type": "tip", "text": "草原小飞机通常采用软包行李并限制重量与尺寸，请按定制师发送的承运标准提前整理行李。" }
+      ],
+      "spots": [
+        { "name": "草原小飞机", "description": "以轻型航班替代漫长陆路，从迁徙腹地直接飞向印度洋。低空航程本身就是一场俯瞰东非地貌的特别体验。", "image": "/assets/travel/africa/transport/bush-flight-airstrip.jpg", "status": "已包含" },
+        { "name": "初见桑给巴尔", "description": "从金色草原切换到白沙浅海，让旅程在同一天跨越两种世界。抵达后不再赶路，把傍晚完整交给印度洋海风。", "image": "/assets/travel/africa/source-day07-zanzibar-sandbar.jpg", "status": "海岛度假" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "潜入 Mnemba 的清澈海域",
+      "routeNodes": ["桑给巴尔酒店", "Mnemba 海域", "浮潜体验", "返回酒店"],
+      "city": "桑给巴尔岛—Mnemba海域",
+      "estimatedTravelTime": "车辆与出海船只衔接",
+      "overviewNote": "车辆与出海船只衔接",
+      "activityLevel": "适中",
+      "meals": "酒店早餐 / 酒店午餐 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "酒店午餐", "dinner": "酒店晚餐" },
+      "hotel": "MORA海岛5星级高端度假村",
+      "hotelId": "mora-zanzibar",
+      "hotelShortName": "MORA 桑给巴尔海岛度假村",
+      "hotelOfficialName": "THE MORA ZANZIBAR",
+      "vehicle": "出海船只",
+      "description": "上午乘船驶向 Mnemba 海域——桑给巴尔公认的浮潜圣地。清澈海水下，珊瑚花园与成群热带鱼近在眼前；这里也是此程唯一安排与野生海豚同游机会的海域，让印度洋最灵动的一面成为旅行高光。",
+      "dayNotices": [
+        { "type": "tip", "text": "出海与下水时段会结合潮汐和海况安排，建议准备防晒、水母衣及防水收纳袋。" }
+      ],
+      "spots": [
+        { "name": "Mnemba 浮潜圣地", "description": "戴上面镜潜入清澈浅海，珊瑚花园、热带鱼群与穿透水面的阳光近在咫尺。Mnemba Atoll 被誉为桑给巴尔最值得体验的浮潜海域之一，是从草原转入印度洋后最惊艳的蓝色章节。", "image": "/assets/travel/africa/source-day08-mnemba-snorkeling.jpg", "status": "已包含" },
+        { "name": "与野生海豚同游", "description": "在 Mnemba 周边海域寻找野生海豚踪迹；若海况与海豚活动合适，将有机会下水与它们共享一段清澈海域。作为此程唯一安排的海豚同游体验，这一刻足以成为海岛段最灵动的记忆。", "image": "/assets/travel/africa/web-day08-wild-dolphins.jpg", "status": "已包含" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "留白一天，把时间交给海风与自己",
+      "routeNodes": ["酒店早餐", "海滩与泳池", "自由体验", "印度洋日落"],
+      "city": "桑给巴尔岛",
+      "estimatedTravelTime": "无需固定用车",
+      "activityLevel": "轻松",
+      "meals": "酒店早餐 / 酒店午餐 / 酒店晚餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "酒店午餐", "dinner": "酒店晚餐" },
+      "hotel": "MORA海岛5星级高端度假村",
+      "hotelId": "mora-zanzibar",
+      "hotelShortName": "MORA 桑给巴尔海岛度假村",
+      "hotelOfficialName": "THE MORA ZANZIBAR",
+      "vehicle": "无需用车",
+      "description": "特意留白一整天，不以更多景点填满假期。可以在 Muyuni 海滩散步、在泳池边阅读，也可以循着当日心情选择水疗或其他海岛体验。真正的奢享并非不断赶路，而是终于拥有一段完全属于自己的印度洋时光。",
+      "dayNotices": [
+        { "type": "tip", "text": "如计划 SPA、海上项目或特色餐厅，建议提前请定制师协助预约。" }
+      ],
+      "spots": [
+        { "name": "把时间交给印度洋", "description": "细白沙滩、清透海水与舒缓海风围合出一天的自由。无需计算下一个集合时间，只需选择此刻最想停留的位置。", "image": "/assets/travel/africa/source-day09-zanzibar-beach.jpg", "status": "自由活动" },
+        { "name": "海岛 SPA 与身心疗愈", "description": "把一段午后交给舒缓按摩或身体护理，让连日游猎后的疲惫在香气与安静中慢慢退场。若希望体验 The Pause Spa，可由定制师提前协助预约。", "image": "/assets/travel/africa/hotels/the-mora-zanzibar-spa.jpg", "status": "自费可选｜当前报价未包含" }
+      ]
+    },
+    {
+      "date": null,
+      "theme": "从容告别海岛，专车衔接返程",
+      "routeNodes": ["酒店退房", "专车送机", "桑给巴尔国际机场", "返程"],
+      "city": "桑给巴尔岛—返程",
+      "estimatedTravelTime": "按国际航班时间安排",
+      "activityLevel": "轻松",
+      "meals": "酒店早餐 / 酒店午餐",
+      "mealPlan": { "breakfast": "酒店早餐", "lunch": "视航班时间安排" },
+      "hotel": "飞机上",
+      "hotelOfficialName": "—",
+      "vehicle": "商务用车",
+      "description": "根据国际航班时间从容安排早餐、退房与专车送机。车窗外最后掠过的海岸与棕榈树，将草原的辽阔、迁徙的震撼和印度洋的松弛重新串联起来。抵达阿贝德·阿曼尼·卡鲁姆国际机场，这场十日东非私享之旅暂告一段落，而真正终生难忘的画面，才刚刚开始被反复回想。",
+      "dayNotices": [
+        { "type": "tip", "text": "定制师将根据国际航班时间倒排送机与退房安排，请提前核对护照、机票与行李。" }
+      ],
+      "spots": [
+        { "name": "专车送机", "description": "根据航班起飞时间预留充足的退房、交通与值机时间，以专车完成酒店至机场的最后一段衔接。", "image": "/assets/travel/africa/transport/city-mpv-exterior.jpg", "status": "已安排" },
+        { "name": "阿贝德·阿曼尼·卡鲁姆国际机场", "description": "抵达桑给巴尔国际机场，办理返程手续。请再次核对证件与行李，让告别从容而有序。", "image": "/assets/travel/africa/web-day10-zanzibar-airport.jpg", "status": "返程" }
+      ]
+    }
+  ],
+  "totalPrice": 16522,
+  "priceUnit": "美元 / 2人",
+  "included": [
+    "交通｜园区内1台7座4×4开顶越野车，市区1台商务用车",
+    "机票｜境内段2程机票（马拉河—桑给巴尔）",
+    "景点｜行程所列景点首道门票",
+    "用车｜坦桑境内行程所列车辆交通费用",
+    "司导｜1名当地优秀英文司机兼向导",
+    "酒店｜全程酒店住宿及所列用餐（酒水以酒店规定为准）",
+    "服务｜每人每天2瓶矿泉水及行程所列海岛活动"
+  ],
+  "excluded": [
+    "国际交通｜往返坦桑尼亚的国际机票及相关税费",
+    "签证与保险｜坦桑尼亚签证、旅行保险及医疗救援升级",
+    "司导小费｜当地司机、向导、营地及酒店服务人员小费",
+    "可选体验｜第1天私人保护区游猎、第6天热气球飞行及落地庆祝早餐，以及行程中未注明已包含的升级体验",
+    "个人消费｜酒水、洗衣、SPA、客房服务、超重行李、通讯及其他个人性质消费",
+    "语言服务｜中文导游或中文陪同服务（如需可另行报价）",
+    "变更与不可抗力｜因客人临时变更或天气、交通、政策等不可抗力产生的额外费用"
+  ],
+  "cancellation": [],
+  "notes": [
+    {
+      "title": "行程与运营安排",
+      "icon": "security",
+      "tone": "gold",
+      "items": [
+        "国家公园、草原航班、热气球、出海与酒店设施可能受季节、天气和运营安排影响，出发前将统一核验最终开放及班次信息。",
+        "每年7月至9月通常是马拉河区域的重要观赏期；如当日未能遇见渡河，还请理解。"
+      ]
+    },
+    {
+      "title": "气候、穿着与健康",
+      "icon": "warning",
+      "tone": "warning",
+      "items": [
+        "草原与火山口早晚体感偏凉，午间日晒较强，建议准备分层穿着、轻薄外套、舒适包脚鞋、防晒与防蚊用品。",
+        "请结合个人健康情况备妥常用药、个人健康材料及必要旅行保险。"
+      ]
+    },
+    {
+      "title": "游猎与营地安全",
+      "icon": "warning",
+      "tone": "warning",
+      "items": [
+        "国家公园及营地内请听从向导和工作人员安排，未经允许不得擅自下车、靠近或投喂野生动物。",
+        "夜间在野奢营地移动时，请联系工作人员陪同。"
+      ]
+    },
+    {
+      "title": "海上活动与水上安全",
+      "icon": "warning",
+      "tone": "warning",
+      "items": [
+        "出海、浮潜及其他水上项目须听从船员与向导安排，并按要求穿戴救生及浮潜装备。",
+        "如不熟悉水性、身体不适或有特殊健康情况，请提前告知定制师。"
+      ]
+    },
+    {
+      "title": "证件、财物与行李",
+      "icon": "included",
+      "tone": "gold",
+      "items": [
+        "护照、签证、机票、现金及贵重物品请随身保管，并留存电子备份。",
+        "草原小飞机通常采用软包行李并限制重量与尺寸，请以承运方最终通知为准。"
+      ]
+    },
+    {
+      "title": "儿童、长者与特殊需求",
+      "icon": "security",
+      "tone": "gold",
+      "items": [
+        "儿童、长者、孕妇、饮食禁忌、过敏、行动不便或床型偏好等需求，建议在最终确认前统一告知定制师。"
+      ]
+    }
+  ],
+  "showSecuritySection": true,
+  "showPaymentSection": true,
+  "payment": {
+    "accountTitle": "奢游国际指定收款账户",
+    "companyName": "卓越国际旅行社深圳东分公司",
+    "alipayAccount": "19928731347",
+    "accountName": "卓越国际旅行社有限公司深圳东分公司",
+    "bankAccount": "755964554910902",
+    "bankName": "招商银行深圳横岗支行",
+    "qrImage": "/assets/security/alipay-qr-original.png",
+    "notice": "请勿向任何个人账户转款"
+  },
+  "contact": { "consultant": "待补充", "phone": "400-000-2026", "wechat": "@奢游国际", "email": "service@example.com" },
+  "sourceNotes": [
+    "原资料未提供具体出发日期与定制师信息，成品中显示待补充或日期待定。",
+    "原资料底部平均气温为约-2℃至+3℃，与坦桑尼亚及桑给巴尔行程明显矛盾，未写入成品。",
+    "原报价尾部的5.6W含义不清，成品仅采用明确可读的8261美元/人、2人合计16522美元。"
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "sourceDocument": "用户提供的坦桑尼亚与桑给巴尔原始行程及旧版定制 PDF",
+  "policy": "原始资料照片优先；缺图时依次使用酒店、营地及运营方官方媒体图片和经地点核验的开放授权图片。酒店与交通图片用于呈现体验和等级，不等同于最终房号、餐厅、车辆品牌或具体型号；正式商业发布前应完成授权复核与必要署名。",
+  "originalPhotos": [
+    "source-day01-kilimanjaro-giraffes.jpg",
+    "source-day01-safari-drive.jpg",
+    "source-day02-tarangire-elephants.jpg",
+    "source-day03-ngorongoro-herds.jpg",
+    "source-day03-safari-vehicle.jpg",
+    "source-day04-serengeti-lions.jpg",
+    "source-day05-mara-crossing.jpg",
+    "source-day06-serengeti-balloon.jpg",
+    "source-day07-zanzibar-sandbar.jpg",
+    "source-day08-mnemba-snorkeling.jpg",
+    "source-day09-zanzibar-beach.jpg"
+  ],
+  "webPhotos": [
+    { "file": "web-day02-tarangire-baobab.jpg", "verifiedLocation": "Tarangire National Park, Tanzania", "source": "https://commons.wikimedia.org/wiki/File:Baobab_(Adansonia_digitata),_parque_nacional_de_Tarangire,_Tanzania,_2024-05-24,_DD_78.jpg" },
+    { "file": "web-day04-serengeti-acacia.jpg", "verifiedLocation": "Serengeti National Park, Tanzania", "source": "https://commons.wikimedia.org/wiki/File:Acacia_(Vachellia_tortilis),_parque_nacional_Serengueti,_Tanzania,_2024-05-26,_DD_26.jpg" },
+    { "file": "web-day05-mara-crossing.jpg", "verifiedLocation": "Mara River", "source": "https://commons.wikimedia.org/wiki/File:Wildebeest_Jumping_Into_the_Mara_River.jpg" },
+    { "file": "web-day06-serengeti-balloon.jpg", "verifiedLocation": "Serengeti National Park, Tanzania", "source": "https://commons.wikimedia.org/wiki/File:Serengeti_Balloon.jpg" },
+    { "file": "web-day07-zanzibar-sunset.jpg", "verifiedLocation": "Zanzibar, Tanzania", "source": "https://commons.wikimedia.org/wiki/File:Sunset_on_zanzibar.jpg" },
+    { "file": "web-day08-mnemba-island.jpg", "verifiedLocation": "Mnemba Island, Zanzibar", "source": "https://commons.wikimedia.org/wiki/File:Mnemba_Island_-_Zanzibar_-_Flickr_-_Jorge_Lascar.jpg" },
+    { "file": "web-day08-wild-dolphins.jpg", "verifiedLocation": "Wild dolphins in open sea", "source": "https://commons.wikimedia.org/wiki/File:A_pod_of_spinner_dolphins_in_the_Red_Sea.jpg", "license": "CC BY-SA 3.0" },
+    { "file": "web-day09-zanzibar-sunset.jpg", "verifiedLocation": "Zanzibar, Tanzania", "source": "https://commons.wikimedia.org/wiki/File:Sunset_Zanzibar.jpg" },
+    { "file": "web-day10-zanzibar-airport.jpg", "verifiedLocation": "Abeid Amani Karume International Airport", "source": "https://commons.wikimedia.org/wiki/File:Abeid_Amani_Karume_International_Airport.jpg" },
+    { "file": "web-day10-zanzibar-airport-aerial.jpg", "verifiedLocation": "Abeid Amani Karume International Airport", "source": "https://commons.wikimedia.org/wiki/File:Aerial_view_of_Zanzibar_airport.jpg" }
+  ],
+  "hotelOfficialPhotos": [
+    { "file": "hotels/gran-melia-arusha-room.png", "property": "Gran Meliá Arusha", "source": "https://www.melia.com/en/hotels/tanzania/arusha/gran-melia-arusha/" },
+    { "file": "hotels/tarangire-elephant-springs-pool.jpg", "property": "Elephant Springs", "source": "https://karibucamps.com/elephant-springs/" },
+    { "file": "hotels/ngorongoro-serena-aerial.jpg", "property": "Ngorongoro Serena Safari Lodge", "source": "https://www.serenahotels.com/ngorongoro/accommodation" },
+    { "file": "hotels/four-seasons-serengeti-pool.jpg", "property": "Four Seasons Safari Lodge Serengeti", "source": "https://www.fourseasons.com/serengeti/" },
+    { "file": "hotels/taasa-migration-camp-interior.jpg", "property": "TAASA Migration Camp", "source": "https://taasa.com/gallery" },
+    { "file": "hotels/taasa-migration-camp.jpg", "property": "TAASA Migration Camp", "source": "https://taasa.com/taasamigration" },
+    { "file": "hotels/the-mora-zanzibar-pool.jpg", "property": "The Mora Zanzibar", "source": "https://www.themora.com/zanzibar/" }
+  ],
+  "diningOfficialPhotos": [
+    { "file": "dining/ngorongoro-serena-dining.jpg", "property": "Ngorongoro Serena Safari Lodge", "source": "https://www.serenahotels.com/ngorongoro/dining" },
+    { "file": "dining/taasa-bush-breakfast.jpg", "property": "TAASA Migration Camp", "source": "https://taasa.com/taasa-moments" },
+    { "file": "dining/taasa-boma-dinner.jpg", "property": "TAASA Migration Camp", "source": "https://taasa.com/taasa-moments" },
+    { "file": "dining/mora-muyuni-beach-club.webp", "property": "The Mora Zanzibar", "source": "https://www.themora.com/zanzibar/" },
+    { "file": "dining/mora-jikan.png", "property": "The Mora Zanzibar", "source": "https://www.themora.com/zanzibar/" },
+    { "file": "dining/mora-jua-grill.png", "property": "The Mora Zanzibar", "source": "https://www.themora.com/zanzibar/" }
+  ],
+  "wellnessReferencePhotos": [
+    { "file": "hotels/the-mora-zanzibar-spa.jpg", "category": "SPA and wellness atmosphere reference", "source": "https://www.pexels.com/photo/white-massage-table-in-the-room-4170175/" }
+  ],
+  "transportReferencePhotos": [
+    { "file": "transport/city-mpv-exterior.jpg", "category": "商务车型外观参考", "source": "https://commons.wikimedia.org/wiki/File:2024_Mercedes_V_Class.jpg" },
+    { "file": "transport/business-mpv-interior.jpg", "category": "商务车型内舱", "source": "https://www.agoda.com/" },
+    { "file": "transport/safari-land-cruiser-exterior.jpg", "category": "四驱开顶式游猎车内舱与观景视野", "source": "https://www.repubblica.it/motori/2024/02/19/news/lincredibile_safari_in_tanzania_con_la_toyota_land_cruiser_quante_sorprese_nel_parco_piu_bello_del_mondo-422163906/" },
+    { "file": "transport/bush-flight-airstrip.jpg", "category": "草原小飞机", "source": "https://unsplash.com/photos/1634840068738" },
+    { "file": "transport/mnemba-dhow.jpg", "category": "海岛传统帆船", "source": "https://www.audleytravel.com/" }
+  ]
+}

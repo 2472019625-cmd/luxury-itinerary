@@ -1,0 +1,20 @@
+{
+  "source": "【行程内容】坦桑尼亚10日顶奢（11.4W起）：Singita+罗莱夏朵+Melia+Nimali.xlsx",
+  "sheet": "Sheet1!A1:I49",
+  "reconciled": {
+    "days": 10,
+    "nights": 9,
+    "hotels": { "Gran Melia Arusha": 1, "Nimali Tarangire": 1, "Ngorongoro Lodge member of Melia Collection": 2, "Singita Mara River Tented Camp": 2, "Zanzibar White Sand Luxury Villas & Spa": 3 },
+    "meals": "逐日核对，保留酒店餐、午餐盒、自理餐及可选体验边界",
+    "transport": "商务车、7座4x4可开顶游猎车、两段草原小飞机、桑岛海上活动",
+    "pricing": "仅展示10月基础起价113880元/人起；隐藏成本、利润、人数测算与供应商字段"
+  },
+  "coverage": [
+    { "sourceRows": "1-4", "mappedTo": ["封面标题", "副标题", "产品亮点"], "status": "complete" },
+    { "sourceRows": "5-16", "mappedTo": ["DAY 1-10", "住宿", "餐食", "交通", "可选项目"], "status": "complete" },
+    { "sourceRows": "20-25", "mappedTo": ["客户版报价说明", "车辆说明", "酒店替换规则", "行前提示"], "status": "translated_not_copied" },
+    { "sourceRows": "27-36", "mappedTo": ["费用包含", "费用不含", "注意事项"], "status": "customer_safe_summary" },
+    { "sourceRows": "internal pricing columns", "mappedTo": [], "status": "strictly_excluded" }
+  ],
+  "manualChecks": ["10天顺序完整", "9晚住宿相加一致", "逐日餐食均已映射", "所有可选项目明确标注", "全图路径不重复", "无内部成本利润字段"]
+}

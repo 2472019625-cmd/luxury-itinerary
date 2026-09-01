@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://luxury-travel.local/itinerary-schema.json",
+  "title": "奢游国际行程数据",
+  "type": "object",
+  "required": ["title", "destination", "travelers", "startDate", "endDate", "days"],
+  "properties": {
+    "title": { "type": "string", "title": "行程名称" },
+    "subtitle": { "type": "string", "title": "行程副标题" },
+    "destination": { "type": "string", "title": "目的地" },
+    "travelers": { "type": "integer", "minimum": 1, "title": "出行人数" },
+    "adults": { "type": "integer", "minimum": 0, "title": "成人数" },
+    "children": { "type": "integer", "minimum": 0, "title": "儿童数" },
+    "startDate": { "type": ["string", "null"], "format": "date", "title": "出发日期" },
+    "endDate": { "type": ["string", "null"], "format": "date", "title": "返回日期" },
+    "dayCount": { "type": "integer", "minimum": 1, "title": "行程天数" },
+    "heroImage": { "type": "string", "title": "目的地主视觉图" },
+    "travelStyle": { "type": "string", "title": "旅行风格／产品等级" },
+    "serviceMode": { "type": "string", "title": "服务方式" },
+    "tripRhythm": { "type": "string", "title": "整体旅行节奏" },
+    "designer": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "title": "定制师姓名" },
+        "avatar": { "type": "string", "title": "定制师头像" },
+        "role": { "type": "string", "title": "定制师身份", "default": "资深定制师" },
+        "bio": { "type": "string", "title": "定制师信息" }
+      }
+    },
+    "sourcePosterHighlights": { "type": "array", "items": { "type": "string" }, "title": "原始海报亮点" },
+    "highlights": { "type": "array", "items": { "type": "string" }, "title": "产品亮点" },
+    "hotelReplacementPolicy": { "type": "string", "title": "住宿统一说明" },
+    "transportDisclaimer": { "type": "string", "title": "交通统一说明" },
+    "diningSectionTitle": { "type": "string", "const": "特色餐饮", "title": "特色餐饮板块标题" },
+    "diningIntroTitle": { "type": "string", "title": "特色餐饮引导标题" },
+    "diningIntroCopy": { "type": "string", "title": "特色餐饮引导文案" },
+    "diningPolicy": { "type": "string", "title": "餐食图片与履约说明" },
+    "hotels": {
+      "type": "array",
+      "title": "精选住宿",
+      "items": {
+        "type": "object",
+        "required": ["id", "officialName"],
+        "properties": {
+          "id": { "type": "string", "title": "酒店唯一标识" },
+          "officialName": { "type": "string", "title": "酒店正式名称" },
+          "shortName": { "type": "string", "title": "客户展示简称" },
+          "region": { "type": "string", "title": "住宿区域" },
+          "nights": { "type": "integer", "minimum": 1, "title": "入住晚数" },
+          "roomType": { "type": "string", "title": "确认房型" },
+          "status": { "enum": ["已确认", "拟入住", "参考酒店", "同级备选"], "title": "确认状态" },
+          "mealPlan": { "type": "string", "title": "酒店餐食计划" },
+          "selectionReason": { "type": "string", "title": "选择理由" },
+          "signatureExperience": { "type": "string", "title": "代表性体验" },
+          "replacementPolicy": { "type": "string", "title": "替换规则" },
+          "editorialCopy": { "type": "string", "title": "酒店价值叙事" },
+          "proofPoints": { "type": "array", "items": { "type": "string" }, "title": "酒店体验锚点" },
+          "images": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "object",
+              "required": ["src"],
+              "properties": {
+                "src": { "type": "string" },
+                "label": { "type": "string" },
+                "focus": { "type": "string", "default": "50% 50%" },
+                "fit": { "enum": ["cover", "contain"], "default": "cover" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "diningExperiences": {
+      "type": "array",
+      "title": "奢享餐叙",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "editorialCopy"],
+        "anyOf": [
+          { "required": ["image"] },
+          { "required": ["images"] }
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "layout": { "enum": ["standard", "wide"], "default": "standard", "title": "视觉版式" },
+          "location": { "type": "string", "title": "所在区域" },
+          "title": { "type": "string", "title": "餐饮体验标题" },
+          "officialName": { "type": "string", "title": "酒店或餐厅官方英文名" },
+          "editorialCopy": { "type": "string", "title": "餐饮价值叙事" },
+          "image": {
+            "type": "object",
+            "required": ["src"],
+            "properties": {
+              "src": { "type": "string" },
+              "focus": { "type": "string", "default": "50% 50%" },
+              "fit": { "enum": ["cover", "contain"], "default": "cover" }
+            }
+          },
+          "images": { "type": "array", "minItems": 1, "maxItems": 2, "items": { "type": "object", "required": ["src", "label"], "properties": { "src": { "type": "string" }, "label": { "type": "string", "title": "对应子体验" }, "focus": { "type": "string", "default": "50% 50%" }, "fit": { "enum": ["cover", "contain"], "default": "cover" } } } }
+        }
+      }
+    },
+    "transportSummary": {
+      "type": "array",
+      "title": "全程交通安排",
+      "items": {
+        "type": "object",
+        "required": ["id", "category", "serviceLevel"],
+        "properties": {
+          "id": { "type": "string" },
+          "layout": { "enum": ["standard", "wide"], "default": "standard", "title": "视觉版式" },
+          "category": { "type": "string", "title": "交通类别" },
+          "serviceLevel": { "type": "string", "title": "承诺等级" },
+          "seatCount": { "type": "integer", "minimum": 1 },
+          "model": { "type": "string", "title": "车型或机型" },
+          "modelGuaranteed": { "type": "boolean", "default": false },
+          "usageSegments": { "type": "array", "items": { "type": "string" } },
+          "features": { "type": "array", "items": { "type": "string" } },
+          "editorialCopy": { "type": "string", "title": "交通价值叙事" },
+          "disclaimer": { "type": "string" },
+          "images": { "type": "array", "maxItems": 2, "items": { "type": "object", "required": ["src"], "properties": { "src": { "type": "string" }, "label": { "type": "string" }, "focus": { "type": "string" }, "fit": { "enum": ["cover", "contain"], "default": "cover" } } } }
+        }
+      }
+    },
+    "days": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["date", "city", "description"],
+        "properties": {
+          "date": { "type": ["string", "null"], "format": "date", "title": "每日日期" },
+          "theme": { "type": "string", "title": "每日旅行主题" },
+          "routeNodes": { "type": "array", "minItems": 1, "maxItems": 6, "items": { "type": "string" }, "title": "每日路线节点" },
+          "city": { "type": "string", "title": "每日城市" },
+          "meals": { "type": "string", "title": "每日餐食" },
+          "mealPlan": {
+            "type": "object",
+            "title": "结构化餐食",
+            "properties": {
+              "breakfast": { "type": "string" },
+              "lunch": { "type": "string" },
+              "dinner": { "type": "string" },
+              "special": { "type": "string", "title": "特色餐饮" },
+              "specialImage": { "type": "string", "title": "特色餐饮图片" }
+            }
+          },
+          "hotel": { "type": "string", "title": "每日酒店" },
+          "hotelId": { "type": "string", "title": "关联酒店标识" },
+          "hotelShortName": { "type": "string", "title": "每日酒店简称" },
+          "hotelOfficialName": { "type": "string", "title": "每日酒店官方英文名" },
+          "vehicle": { "type": "string", "title": "每日用车" },
+          "estimatedTravelTime": { "type": "string", "title": "预计移动时间" },
+          "overviewNote": { "type": "string", "title": "总览重点交通提示" },
+          "activityLevel": { "type": "string", "title": "活动强度" },
+          "restStops": { "type": "string", "title": "途中休息安排" },
+          "driver": { "type": "string", "title": "每日司机" },
+          "guide": { "type": "string", "title": "每日导游" },
+          "description": { "type": "string", "title": "每日行程描述" },
+          "dayNotes": { "type": "array", "items": { "type": "string" }, "title": "旧版当日提醒" },
+          "dayNotices": {
+            "type": "array",
+            "title": "当日贴士",
+            "maxItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["type", "text"],
+              "properties": {
+                "type": { "enum": ["tip"] },
+                "text": { "type": "string" }
+              }
+            }
+          },
+          "spots": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": "object",
+              "required": ["name", "description"],
+              "anyOf": [
+                { "required": ["image"] },
+                { "required": ["images"] }
+              ],
+              "properties": {
+                "name": { "type": "string", "title": "景点名称" },
+                "description": { "type": "string", "title": "景点介绍" },
+                "experience": { "type": "string", "title": "最值得体验的内容" },
+                "status": { "type": "string", "title": "包含／可选／条件状态" },
+                "reminder": { "type": "string", "title": "体验提醒" },
+                "image": { "type": "string", "title": "景点图片" },
+                "images": { "type": "array", "minItems": 1, "maxItems": 2, "title": "复合体验图片", "items": { "type": "object", "required": ["src", "label"], "properties": { "src": { "type": "string" }, "label": { "type": "string", "title": "对应子体验" }, "focus": { "type": "string", "default": "50% 50%" }, "fit": { "enum": ["cover", "contain"], "default": "cover" } } } },
+                "focus": { "type": "string", "default": "50% 50%", "title": "图片主体位置" },
+                "fit": { "enum": ["cover", "contain"], "default": "cover", "title": "图片适配" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "totalPrice": { "type": ["number", "null"], "title": "行程总价" },
+    "priceUnit": { "type": "string", "default": "元/团" },
+    "priceNotes": { "type": "array", "items": { "type": "string" }, "title": "客户版报价说明" },
+    "included": { "type": "array", "items": { "type": "string" }, "title": "费用包含" },
+    "excluded": { "type": "array", "items": { "type": "string" }, "title": "费用不含" },
+    "cancellation": { "type": "array", "items": { "type": "string" }, "title": "退改政策" },
+    "notes": {
+      "type": "array",
+      "title": "注意事项",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["title", "items"],
+            "properties": {
+              "title": { "type": "string" },
+              "icon": { "type": "string" },
+              "tone": { "enum": ["gold", "warning"] },
+              "items": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        ]
+      }
+    },
+    "payment": { "type": "object", "title": "收款信息" },
+    "contact": { "type": "object", "title": "联系方式" }
+  }
+}

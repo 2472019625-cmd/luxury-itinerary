@@ -1,0 +1,13 @@
+{
+  "generatedFor": "tanzania-luxury-10d",
+  "policy": "成品使用本地缓存文件；正式商业发布前仍需复核图片授权、品牌媒体条款与必要署名。",
+  "sources": [
+    { "files": ["hotel-gran-melia-hero.jpg"], "subject": "Gran Melia Arusha", "source": "https://www.melia.com/en/hotels/tanzania/arusha/gran-melia-arusha", "type": "official hotel" },
+    { "files": ["hotel-nimali-hero.webp", "nimali-taste.webp"], "subject": "Nimali Tarangire", "source": "https://www.nimaliafrica.com/tarangire", "type": "official hotel" },
+    { "files": ["hotel-ngorongoro-c.jpg", "hotel-ngorongoro-g.jpg"], "subject": "Ngorongoro Lodge, member of Melia Collection", "source": "https://feelthebeat.melia.com/collection/ngorongoro/index.htm", "type": "official hotel" },
+    { "files": ["singita-migration.jpg", "singita-pool.jpg", "singita-breakfast.jpg", "singita-dinner.jpg", "singita-landscape.jpg", "singita-game-drive.jpg"], "subject": "Singita Mara River Tented Camp", "source": "https://singita.com/lodge/singita-mara-river-tented-camp/gallery/", "type": "official hotel" },
+    { "files": ["white-sand-villa.jpg", "white-sand-beach-dinner.jpg", "white-sand-sunset.jpg"], "subject": "Zanzibar White Sand Luxury Villas & Spa", "source": "https://www.whitesandvillas.com/en", "type": "official hotel" },
+    { "files": ["ngorongoro-black-rhino.jpg"], "subject": "Black rhinoceros in Ngorongoro Crater", "source": "https://commons.wikimedia.org/wiki/File:Ngorongoro_Spitzmaulnashorn_edit1crop.jpg", "type": "Wikimedia Commons" },
+    { "files": ["../africa/source-day01-kilimanjaro-giraffes.jpg", "../africa/hotels/gran-melia-arusha-room.png", "../africa/source-day02-tarangire-elephants.jpg", "../africa/web-day02-tarangire-baobab.jpg", "../africa/source-day03-ngorongoro-herds.jpg", "../africa/source-day03-safari-vehicle.jpg", "../africa/web-day05-mara-crossing.jpg", "../africa/web-day06-serengeti-balloon.jpg", "../africa/source-day07-zanzibar-sandbar.jpg", "../africa/web-day07-zanzibar-sunset.jpg", "../africa/source-day08-mnemba-snorkeling.jpg", "../africa/web-day08-wild-dolphins.jpg", "../africa/source-day09-zanzibar-beach.jpg", "../africa/web-day10-zanzibar-airport-aerial.jpg", "../africa/web-day10-zanzibar-airport.jpg", "../africa/transport/city-mpv-exterior.jpg", "../africa/transport/business-mpv-interior.jpg", "../africa/transport/safari-land-cruiser-exterior.jpg", "../africa/transport/safari-land-cruiser.webp", "../africa/transport/bush-flight-airstrip.jpg"], "subject": "Tanzania route and transport references", "source": "../africa/sources.json", "type": "existing verified source registry" }
+  ]
+}

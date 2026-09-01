@@ -1,0 +1,39 @@
+{
+  "name": "prototype",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "app": "npm run build && node server/app.mjs",
+    "serve": "node server/app.mjs",
+    "build": "vite build && node scripts/prepare-sites-build.mjs",
+    "preview": "vite preview",
+    "test:sites": "node --test tests/sites-worker.test.mjs",
+    "test:dynamic": "node renderer/test-dynamic.mjs",
+    "test:africa": "node renderer/test-africa-import.mjs",
+    "test:import": "node --test tests/itinerary-import.test.mjs",
+    "test:images": "node --test tests/image-pipeline.test.mjs tests/image-security.test.mjs",
+    "test:rules": "node --test tests/itinerary-rules.test.mjs tests/itinerary-refinement.test.mjs tests/content-quality.test.mjs tests/copy-rule-runtime.test.mjs tests/copy-repair.test.mjs tests/notes-schema.test.mjs tests/workflow-gates.test.mjs tests/storage-safety.test.mjs tests/final-output-qa.test.mjs",
+    "test:rule-coverage": "node --test tests/rule-coverage.test.mjs",
+    "test:model": "node --test tests/deepseek-client.test.mjs",
+    "test:copy-generation": "node --test tests/deepseek-client.test.mjs tests/copy-generation.test.mjs",
+    "assets": "python renderer/build-assets.py && node renderer/trace-logo.mjs",
+    "fonts": "python renderer/install-fonts.py",
+    "render": "npm run render:2000",
+    "render:2000": "node renderer/render.mjs --width=2000",
+    "render:1080": "node renderer/render.mjs --width=1080"
+  },
+  "dependencies": {
+    "@tabler/icons": "^3.46.0",
+    "@vitejs/plugin-react": "5.0.4",
+    "cheerio": "^1.2.0",
+    "potrace": "^2.1.8",
+    "puppeteer-core": "^25.8.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "sharp": "^0.35.4",
+    "vite": "6.4.2",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}

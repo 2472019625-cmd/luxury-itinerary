@@ -1,0 +1,45 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+app/.env.local
+app/.env.image-search.local
+
+# Dependencies and build output
+node_modules/
+app/node_modules/
+dist/
+app/dist/
+
+# Local runtime data
+workspace/*
+!workspace/README.md
+app/output/
+app/.jobs/
+
+# Windows convenience junction; canonical tests live in app/tests.
+/tests/
+
+# Generated public downloads
+app/public/downloads/
+
+# Local raw audit evidence may contain real project data. Keep written task,
+# issue and acceptance records in Git, but keep raw evidence local.
+audit/evidence/
+
+# Real payment asset stays local and must be provisioned separately.
+assets/security/alipay-qr-original.png
+app/public/assets/security/alipay-qr-original.png
+
+# Logs and operating-system files
+*.log
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor-local files
+.vscode/
+.idea/
+*.swp
+*.tmp

@@ -1,0 +1,71 @@
+{
+  "title": "金秋北疆 · 阿勒泰轻奢环游",
+  "subtitle": "雪山、湖泊、森林与草原的八日私享之旅",
+  "destination": "新疆 · 阿勒泰",
+  "travelers": 4,
+  "adults": 4,
+  "children": 0,
+  "startDate": "2026-09-12",
+  "endDate": "2026-09-19",
+  "dayCount": 8,
+  "heroImage": "/assets/travel/xinjiang-hero.png",
+  "designer": {
+    "name": "Sunny",
+    "avatar": "/assets/placeholders/avatar.png",
+    "bio": "奢游国际资深定制师 · 专注高端小团与目的地私享体验",
+    "experience": "12年",
+    "orders": "5000单/年",
+    "praise": "4980人"
+  },
+  "highlights": [
+    "专属司导全程陪同，节奏松弛，随时响应临时调整",
+    "甄选景观型精品住宿，核心景区减少折返与排队",
+    "喀纳斯轻徒步、禾木晨雾与白哈巴日落一次收录",
+    "每日图片数量不同，用于验证无图至四图动态版式"
+  ],
+  "days": [
+    { "date": "2026-09-12", "city": "乌鲁木齐", "meals": "晚餐", "hotel": "乌鲁木齐景观酒店", "vehicle": "7座商务车", "driver": "专属司机", "guide": "中文向导", "description": "抵达后专车接机，入住酒店休息。傍晚由定制师安排欢迎晚餐并完成后续行程说明。", "spots": [] },
+    { "date": "2026-09-13", "city": "乌鲁木齐—布尔津", "meals": "早 / 午 / 晚", "hotel": "布尔津河畔酒店", "vehicle": "7座商务车", "driver": "专属司机", "description": "沿准噶尔盆地北上，途中安排两次舒展休息，傍晚抵达布尔津。", "spots": [
+      { "name": "五彩滩", "description": "在额尔齐斯河畔欣赏雅丹地貌与河谷林交织的落日层次。预留黄金时段拍摄，让赭红岩层、碧蓝河水与金色林带在暮色中自然衔接。", "image": "/assets/travel/wucaitan-sunset.png", "focus": "50% 48%" }
+    ] },
+    { "date": "2026-09-14", "city": "布尔津—喀纳斯", "meals": "早 / 午 / 晚", "hotel": "喀纳斯景区精品住宿", "vehicle": "商务车 + 景区交通", "driver": "专属司机", "guide": "中文向导", "description": "进入喀纳斯核心区域，按天气与客流动态调整观景顺序。", "spots": [
+      { "name": "喀纳斯湖", "description": "乘船或沿湖栈道漫步，感受高山湖泊由蓝到绿的层次变化。湖岸金色白桦与远处雪峰相互映照，游览节奏保持从容。", "image": "/assets/travel/kanas-lake.png" },
+      { "name": "观鱼台", "description": "登高俯瞰喀纳斯湖湾、森林与雪山的完整层次。根据光线和云量安排停留，保留充足拍摄时间。", "image": "/assets/travel/fish-viewing-pavilion.png" }
+    ] },
+    { "date": "2026-09-15", "city": "喀纳斯—白哈巴", "meals": "早 / 午 / 晚", "hotel": "白哈巴木屋", "vehicle": "景区交通", "guide": "中文向导", "description": "上午游览三湾，下午前往白哈巴村，在村落边缘等待日落。", "spots": [
+      { "name": "神仙湾", "description": "清晨水面薄雾与森林倒影形成柔和层次。沿河岸缓慢行走，在光线变化中寻找最安静的秋日画面。", "image": "/assets/travel/shenxian-bay.png" },
+      { "name": "月亮湾", "description": "从高处俯瞰青绿色河湾穿过金色森林的经典视角。安排轻量徒步并根据体力灵活选择观景点。", "image": "/assets/travel/moon-bay.png" },
+      { "name": "白哈巴村", "description": "木屋、牧场、白桦林与远山构成安静的边境村落景观。傍晚在村落边缘等待暖金色日落。", "image": "/assets/travel/baihaba-village.png" }
+    ] },
+    { "date": "2026-09-16", "city": "白哈巴—禾木", "meals": "早 / 午 / 晚", "hotel": "禾木景观木屋", "vehicle": "景区交通", "driver": "专属司机", "description": "穿越阿勒泰山谷前往禾木，入住后自由散步，傍晚拍摄村落炊烟。", "spots": [
+      { "name": "禾木村", "description": "在观景台俯瞰木屋村落、白桦林与河谷。晨雾未散时层次最柔和，保留自由取景和慢步体验。", "image": "/assets/travel/hemu-village.png" },
+      { "name": "禾木河", "description": "沿清澈河流与木桥漫步，观察金色白桦和远山在水面的倒影。路线平缓，适合放慢节奏。", "image": "/assets/travel/hemu-river.png" },
+      { "name": "白桦林", "description": "进入金色白桦林进行低强度散步与人像拍摄。选择自然光线柔和的林间区域，避免匆忙赶路。", "image": "/assets/travel/birch-forest.png" },
+      { "name": "落日观景台", "description": "在高处等待村落、炊烟与群山被夕阳染成暖金色。预留完整黄金时段，以天气情况灵活调整。", "image": "/assets/travel/hemu-sunset.png" }
+    ] },
+    { "date": "2026-09-17", "city": "禾木", "meals": "早 / 午 / 晚", "hotel": "禾木景观木屋", "description": "全天慢游。清晨根据雾况决定观景台或河谷路线，午后安排咖啡与自由活动。", "spots": [] },
+    { "date": "2026-09-18", "city": "禾木—克拉玛依", "meals": "早 / 午 / 晚", "hotel": "克拉玛依精选酒店", "vehicle": "7座商务车", "driver": "专属司机", "description": "离开阿勒泰返回城市区域，沿途穿越荒漠与戈壁，适时停车休息。", "spots": [
+      { "name": "乌尔禾魔鬼城", "description": "在傍晚光线下观察壮阔的风蚀地貌，让岩壁纹理在低角度阳光中更具层次。使用景区交通降低步行负担。", "image": "/assets/travel/devil-city.png" }
+    ] },
+    { "date": "2026-09-19", "city": "克拉玛依—乌鲁木齐", "meals": "早餐", "vehicle": "7座商务车", "driver": "专属司机", "description": "根据航班时间安排返程，专车送往机场，结束八日北疆私享旅程。", "spots": [] }
+  ],
+  "totalPrice": 68800,
+  "priceUnit": "元/团",
+  "included": ["交通｜全程7座商务用车及司机服务", "酒店｜行程所列7晚住宿及每日早餐", "景点｜景区首道门票与计划内区间交通", "服务｜中文向导服务与旅行管家支持", "保险｜旅行意外险与定制服务费"],
+  "excluded": ["交通｜各地往返乌鲁木齐的大交通", "餐饮｜未列明的正餐、酒水与个人消费", "其他｜因天气、交通或不可抗力产生的额外费用"],
+  "cancellation": ["出发前30日及以上：按实际已发生费用结算", "出发前15—29日：收取合同金额20%", "出发前7—14日：收取合同金额40%", "出发前7日内：按供应商不可退费用据实结算"],
+  "notes": ["山区昼夜温差较大，请准备保暖、防风与防晒用品。", "景区交通和游览顺序可能因天气与客流动态调整。", "涉及边境区域时，请按要求携带有效身份证件。"],
+  "showSecuritySection": true,
+  "showPaymentSection": true,
+  "payment": {
+    "accountTitle": "奢游国际指定收款账户",
+    "companyName": "卓越国际旅行社深圳东分公司",
+    "alipayAccount": "19928731347",
+    "accountName": "卓越国际旅行社有限公司深圳东分公司",
+    "bankAccount": "755964554910902",
+    "bankName": "招商银行深圳横岗支行",
+    "qrImage": "/assets/security/alipay-qr-original.png",
+    "notice": "请勿向任何个人账户转款"
+  },
+  "contact": { "consultant": "Sunny", "phone": "400-000-2026", "wechat": "@奢游国际", "email": "service@example.com" }
+}
