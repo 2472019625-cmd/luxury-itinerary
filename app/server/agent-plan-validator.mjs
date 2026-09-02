@@ -78,6 +78,14 @@ export function validateAgentPlan(plan, context) {
   if (!nonEmpty(plan.promptVersion)) errors.push(error("schema_invalid", "promptVersion", "缺少提示词版本"));
   if (plan.inputFingerprint !== context.inputFingerprint) errors.push(error("fact_conflict", "inputFingerprint", "计划输入指纹与当前资料不一致"));
   if (!sameJson(plan.factBasis, context.factBasis)) errors.push(error("fact_conflict", "factBasis", "计划改写了确定性行程事实"));
+  if (![plan.summary?.contentTheme, plan.summary?.visualTheme, plan.summary?.planningRationale].every(nonEmpty)) errors.push(error("schema_invalid", "summary", "轻量规划缺少内容主线、视觉主线或规划说明"));
+  if (JSON.stringify(plan.summary || {}).length > 1500) errors.push(error("schema_invalid", "summary", "规划摘要过长，疑似提前生成客户成品"));
+  if (plan.copyPlan?.compiledBy !== "program") errors.push(error("capability_unauthorized", "copyPlan", "技术文案任务必须由程序编译"));
+  for (const [index, module] of asArray(plan.modules).entries()) {
+    if (!['show','hide'].includes(module?.decision) || !['preserve','optimize','generate','hide'].includes(module?.contentAction)) errors.push(error("schema_invalid", `modules.${index}`, "模块必须包含合法的显示决定和内容处理动作"));
+    if (String(module?.reason || '').length > 240) errors.push(error("schema_invalid", `modules.${index}.reason`, "模块说明过长，疑似混入最终文案"));
+  }
+  for (const [index, role] of asArray(plan.dayRoles).entries()) if (JSON.stringify(role).length > 800) errors.push(error("schema_invalid", `dayRoles.${index}`, "DAY角色过长，规划阶段不得提前写完整每日成稿"));
   const serialized = JSON.stringify(plan);
   if (forbiddenRuntimeValue.test(serialized)) errors.push(error("capability_unauthorized", "$", "计划引用了固定流程端口、98%或缺图留空旧口径"));
 

@@ -10,7 +10,7 @@ function safeName(value) {
   return String(value || "unit").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80);
 }
 
-export function createCopyUnitStore(projectRoot, jobId) {
+export function createCopyUnitStore(projectRoot, jobId, { writeRecord = (file, contents) => writeFileSync(file, contents, "utf8") } = {}) {
   const jobsDirectory = path.join(projectRoot, "workspace", "jobs");
   const directory = path.join(jobsDirectory, safeName(jobId), "copy-units");
   mkdirSync(directory, { recursive: true });
@@ -58,7 +58,14 @@ export function createCopyUnitStore(projectRoot, jobId) {
         error: result.error ? String(result.error).slice(0, 500) : null,
       };
       const file = path.join(directory, `${safeName(unit.id)}.json`);
-      writeFileSync(file, JSON.stringify(record, null, 2), "utf8");
+      try {
+        writeRecord(file, JSON.stringify(record, null, 2));
+      } catch (cause) {
+        const error = new Error(`文案断点写入失败：${cause?.message || String(cause)}`, { cause });
+        error.code = "storage_write_failed";
+        error.file = file;
+        throw error;
+      }
       return file;
     },
   };

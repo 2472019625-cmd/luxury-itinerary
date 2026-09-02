@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,7 @@ import { reviewCustomerContent } from "./content-quality.mjs";
 import { buildCopyTargetContext, planCopyRepairs } from "./copy-repair.mjs";
 import { copyUnitRuleCards } from "./agent-rule-cards.mjs";
 import { copyTaskQueue } from "./copy-task-queue.mjs";
+import { createCopyUnitStore } from "./copy-unit-store.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const promptCache = new Map();
@@ -18,8 +20,15 @@ const promptText = (file) => {
   return promptCache.get(file);
 };
 
+export function normalizeCustomerCopyPath(value) {
+  let path = String(value || "").trim().replace(/^\$\./, "");
+  for (const prefix of ["firstDraft.", "customerCopy.", "currentDraft.", "data."]) if (path.startsWith(prefix)) path = path.slice(prefix.length);
+  return path;
+}
+
 const normalizeIssue = (item = {}, unresolved = false) => ({
   ...item,
+  path: normalizeCustomerCopyPath(item.path),
   ruleIds: item.ruleIds || (item.ruleId ? [item.ruleId] : ["COPY-001"]),
   severity: item.severity || (unresolved ? "fact" : "quality"),
   action: item.action || (unresolved ? "block" : "targeted_rewrite"),
@@ -34,20 +43,63 @@ function uniqueIssues(items = []) {
   return [...unique.values()];
 }
 
-function selectCustomerCopy(data = {}) {
+function selectCustomerCopy(data = {}, hiddenModules = []) {
+  const hidden = new Set(hiddenModules);
   return {
     title: data.title,
     subtitle: data.subtitle,
     highlights: data.highlights,
-    hotels: data.hotels,
-    diningExperiences: data.diningExperiences,
-    transportSummary: data.transportSummary,
+    hotels: hidden.has("hotels") ? [] : data.hotels,
+    diningExperiences: hidden.has("dining") ? [] : data.diningExperiences,
+    transportSummary: hidden.has("transport") ? [] : data.transportSummary,
     days: data.days,
     notes: data.notes,
-    includedCustomer: data.includedCustomer,
-    excludedCustomer: data.excludedCustomer,
-    cancellationCustomer: data.cancellationCustomer,
+    includedCustomer: hidden.has("expenses") ? [] : data.includedCustomer,
+    excludedCustomer: hidden.has("expenses") ? [] : data.excludedCustomer,
+    cancellationCustomer: hidden.has("expenses") ? [] : data.cancellationCustomer,
   };
+}
+
+function repairBatchKey(target = {}) {
+  if (target.kind === "day") return "days";
+  if (target.kind === "hotel") return "hotels";
+  if (target.kind === "dining") return "dining";
+  if (target.kind === "transport") return "transport";
+  if (["notes", "expenses"].includes(target.kind)) return "closing";
+  return "global";
+}
+
+export function groupRepairTargets(targets = []) {
+  const groups = new Map();
+  for (const target of targets) {
+    const key = repairBatchKey(target);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(target);
+  }
+  return [...groups.entries()].map(([key, batchTargets]) => ({ key, targets: batchTargets }));
+}
+
+function applyHiddenModuleDecisions(data, hiddenModules = []) {
+  const hidden = new Set(hiddenModules);
+  const next = { ...data };
+  if (hidden.has("hotels")) next.hotels = [];
+  if (hidden.has("dining")) next.diningExperiences = [];
+  if (hidden.has("transport")) next.transportSummary = [];
+  if (hidden.has("expenses")) Object.assign(next, { showExpenseSection: false, includedCustomer: [], excludedCustomer: [], cancellationCustomer: [] });
+  return next;
+}
+
+async function requestStructuredTwice(requestModel, promptFile, input, options, validate, label) {
+  let lastReason = "结构不符合要求";
+  for (let technicalAttempt = 1; technicalAttempt <= 2; technicalAttempt += 1) {
+    const payload = technicalAttempt === 1 ? input : { ...input, technicalCorrection: { reason: lastReason, instruction: "只修正JSON结构、字段路径和缺失数组，不新增业务判断，也不重新审查其他内容。" } };
+    const response = await requestModel(promptFile, payload, options);
+    lastReason = validate(response.json);
+    if (!lastReason) return { ...response, technicalAttemptCount: technicalAttempt };
+  }
+  const failure = new Error(`${label}连续两次返回非法结构：${lastReason}`);
+  failure.code = "invalid_model_output";
+  throw failure;
 }
 
 function pathCovered(issuePath, patchPath) {
@@ -56,8 +108,14 @@ function pathCovered(issuePath, patchPath) {
   return left === right || left.startsWith(`${right}.`) || right.startsWith(`${left}.`) || (left === "expenses" && /^(includedCustomer|excludedCustomer|cancellationCustomer)/.test(right));
 }
 
-export function createAgentCopyModelRequester({ apiKey, baseUrl, model, requestJson = requestDeepSeekJson, signal, onStatus }) {
-  return async (promptFile, payload, options = {}) => copyTaskQueue.add(() => requestJson({
+export function createAgentCopyModelRequester({ apiKey, baseUrl, model, requestJson = requestDeepSeekJson, signal, onStatus, onCapabilityCall }) {
+  return async (promptFile, payload, options = {}) => copyTaskQueue.add(async () => {
+    const callId = randomUUID();
+    const capabilityId = options.capabilityId || "copy_writer";
+    const started = Date.now();
+    onCapabilityCall?.({ phase: "started", callId, capabilityId, taskId: options.taskId || promptFile, stage: capabilityId === "brand_reviewer" ? "brand_review" : "copy", target: options.taskId || promptFile });
+    try {
+      const response = await requestJson({
       apiKey,
       baseUrl,
       model,
@@ -70,17 +128,25 @@ export function createAgentCopyModelRequester({ apiKey, baseUrl, model, requestJ
         if (status?.reason === "http_429") copyTaskQueue.throttle();
         (options.onStatus || onStatus)?.(status);
       },
-    }), {
+      });
+      onCapabilityCall?.({ phase: "finished", callId, capabilityId, taskId: options.taskId || promptFile, stage: capabilityId === "brand_reviewer" ? "brand_review" : "copy", target: options.taskId || promptFile, durationMs: Date.now() - started, usage: response.usage || null, attemptCount: response.attemptUsages?.length || response.usage?.attempt_count || 1 });
+      return response;
+    } catch (error) {
+      onCapabilityCall?.({ phase: "finished", callId, capabilityId, taskId: options.taskId || promptFile, stage: capabilityId === "brand_reviewer" ? "brand_review" : "copy", target: options.taskId || promptFile, durationMs: Date.now() - started, failed: error?.name !== "AbortError", cancelled: error?.name === "AbortError", attemptCount: error?.attemptUsages?.length || 1, reason: error?.message });
+      throw error;
+    }
+  }, {
       taskId: options.taskId || promptFile,
       onQueueStatus: (queue) => (options.onStatus || onStatus)?.({ streamPhase: queue.state === "queued" ? "queued" : undefined, queue }),
     });
 }
 
-export async function runAgentCopyPipeline({ sourceData, projectRoot, executionRunId, modelConfig, requestJson = requestDeepSeekJson, signal, onStage = () => {}, hiddenModules = [] }) {
+export async function runAgentCopyPipeline({ sourceData, businessPlan = {}, projectRoot, executionRunId, modelConfig, requestJson = requestDeepSeekJson, signal, onStage = () => {}, onCapabilityCall, hiddenModules = [] }) {
   const sourceFacts = compactForModel(sourceData);
-  const requestModel = createAgentCopyModelRequester({ ...modelConfig, requestJson, signal });
+  const requestModel = createAgentCopyModelRequester({ ...modelConfig, requestJson, signal, onCapabilityCall });
   const modular = await generateModularCopy({
     sourceFacts,
+    businessPlan,
     projectRoot,
     jobId: executionRunId,
     requestModel: (promptFile, payload, options = {}) => requestModel(promptFile, payload, { ...options, reasoningEffort: "high" }),
@@ -103,19 +169,24 @@ export async function runAgentCopyPipeline({ sourceData, projectRoot, executionR
     failure.details = [...(merged.dailyRefinement.errors || []), ...mergeWarnings];
     throw failure;
   }
-  let currentData = merged.data;
-  if (expensesHidden) currentData = { ...currentData, showExpenseSection: false, includedCustomer: [], excludedCustomer: [], cancellationCustomer: [] };
+  let currentData = applyHiddenModuleDecisions(merged.data, hiddenModules);
   const initialDeterministic = reviewCustomerContent(currentData, { sourceData });
   onStage({ phase: "brand_review", currentAction: "正在进行每份成品唯一一次品牌审查", completedUnits: 0, totalUnits: 1 });
   const reviewStarted = Date.now();
-  const brandResponse = await requestModel("customer-itinerary-brand-reviewer-v1.md", {
+  const checkpointStore = createCopyUnitStore(projectRoot, executionRunId);
+  const checkpointRuleVersion = COPY_RULE_RUNTIME[0]?.version || "copy-rules";
+  const brandInput = {
     mode: "full",
     sourceFacts,
-    firstDraft: selectCustomerCopy(currentData),
+    hiddenModules,
+    firstDraft: selectCustomerCopy(currentData, hiddenModules),
     deterministicIssues: initialDeterministic.issues,
     copyRules: copyUnitRuleCards("brand_review"),
-  }, { reasoningEffort: "high", maxTokens: 18_000 });
-  if (!Array.isArray(brandResponse.json?.reviewIssues) || !Array.isArray(brandResponse.json?.unresolvedIssues)) throw new Error("品牌审查返回结构无效");
+  };
+  const brandUnit = { id: "brand-review", type: "brand_review", ruleVersion: checkpointRuleVersion };
+  const reusableBrand = checkpointStore.loadReusable(brandUnit, brandInput);
+  const brandResponse = reusableBrand ? { json: reusableBrand.record.output, usage: null, model: reusableBrand.record.model, reused: true } : await requestStructuredTwice(requestModel, "customer-itinerary-brand-reviewer-v1.md", brandInput, { capabilityId: "brand_reviewer", taskId: `${executionRunId}:brand-review`, reasoningEffort: "high", maxTokens: 18_000 }, (value) => !Array.isArray(value?.reviewIssues) || !Array.isArray(value?.unresolvedIssues) ? "缺少reviewIssues或unresolvedIssues数组" : null, "品牌审查");
+  checkpointStore.save(brandUnit, brandInput, { status: "complete", attempts: reusableBrand ? 0 : 1, startedAt: new Date(reviewStarted).toISOString(), completedAt: new Date().toISOString(), model: brandResponse.model, usage: brandResponse.usage, recovery: reusableBrand ? { reason: "reused_completed_brand_review" } : null, recoveredFrom: reusableBrand?.file, output: brandResponse.json });
   const brandIssues = [
     ...brandResponse.json.reviewIssues.map((item) => normalizeIssue(item)),
     ...brandResponse.json.unresolvedIssues.map((item) => normalizeIssue(item, true)),
@@ -123,21 +194,27 @@ export async function runAgentCopyPipeline({ sourceData, projectRoot, executionR
   const allIssues = uniqueIssues([...initialDeterministic.issues.map((item) => normalizeIssue(item)), ...brandIssues]);
   const repairPlan = planCopyRepairs(allIssues);
   const targetRuns = [];
-  for (const target of repairPlan.targets) {
+  const repairBatches = groupRepairTargets(repairPlan.targets);
+  for (const batch of repairBatches) {
     if (signal?.aborted) throw new DOMException("生成已取消", "AbortError");
-    const targetContext = buildCopyTargetContext(sourceFacts, selectCustomerCopy(currentData), modular.mainline, target);
-    onStage({ phase: "copy_target_regeneration", currentAction: `正在重新生成 ${target.key}`, currentUnit: target.key, completedUnits: targetRuns.length, totalUnits: repairPlan.targets.length });
+    const targetContexts = batch.targets.map((target) => buildCopyTargetContext(sourceFacts, selectCustomerCopy(currentData, hiddenModules), modular.mainline, target));
+    onStage({ phase: "copy_target_regeneration", currentAction: `正在批量重新生成 ${batch.key} 模块`, currentUnit: batch.key, completedUnits: targetRuns.length, totalUnits: repairBatches.length });
     const started = Date.now();
-    const response = await requestModel("agent-copy-target-regenerate-v1.md", { targetContext }, { reasoningEffort: target.firstReasoning === "high" ? "high" : "medium", maxTokens: 9_000 });
+    const repairInput = { batchKey: batch.key, targetContexts };
+    const repairUnit = { id: `repair-${batch.key}`, type: "target_regeneration", ruleVersion: checkpointRuleVersion };
+    const reusableRepair = checkpointStore.loadReusable(repairUnit, repairInput);
+    const response = reusableRepair ? { json: reusableRepair.record.output, usage: null, model: reusableRepair.record.model, reused: true } : await requestStructuredTwice(requestModel, "agent-copy-target-regenerate-v1.md", repairInput, { capabilityId: "copy_writer", taskId: `${executionRunId}:repair-${batch.key}`, reasoningEffort: batch.targets.some((target) => target.firstReasoning === "high") ? "high" : "medium", maxTokens: 14_000 }, (value) => !Array.isArray(value?.patches) || !Array.isArray(value?.unresolvedIssues) ? "缺少patches或unresolvedIssues数组" : null, `${batch.key}模块批量重新生成`);
     const payload = response.json;
-    if (!Array.isArray(payload?.patches) || !Array.isArray(payload?.unresolvedIssues)) throw new Error(`目标 ${target.key} 重新生成结构无效`);
-    const applied = applyTargetedRevisions(currentData, { reviewIssues: target.issues, patches: payload.patches });
+    const patches = payload.patches.map((item) => ({ ...item, path: normalizeCustomerCopyPath(item.path) }));
+    const batchIssues = batch.targets.flatMap((target) => target.issues);
+    checkpointStore.save(repairUnit, repairInput, { status: "complete", attempts: reusableRepair ? 0 : 1, startedAt: new Date(started).toISOString(), completedAt: new Date().toISOString(), model: response.model, usage: response.usage, recovery: reusableRepair ? { reason: "reused_completed_repair_batch" } : null, recoveredFrom: reusableRepair?.file, output: { ...payload, patches } });
+    const applied = applyTargetedRevisions(currentData, { reviewIssues: batchIssues, patches });
     const factComparison = compareDeterministicFacts(sourceData, applied.data);
-    if (!factComparison.preserved) throw new Error(`目标 ${target.key} 重新生成改变了确定性事实`);
-    const unhandled = target.issues.filter((issue) => !payload.patches.some((patch) => pathCovered(issue.path, patch.path)));
+    if (!factComparison.preserved) throw new Error(`${batch.key} 模块重新生成改变了确定性事实`);
+    const unhandled = batchIssues.filter((issue) => !patches.some((patch) => pathCovered(issue.path, patch.path)));
     const unresolvedIssues = uniqueIssues([...payload.unresolvedIssues.map((item) => normalizeIssue(item, true)), ...unhandled]);
     currentData = applied.data;
-    targetRuns.push({ target: { key: target.key, path: target.path }, capabilityId: "copy_writer", attempts: 1, durationMs: Date.now() - started, usage: response.usage || null, changedPaths: applied.changedPaths, unresolvedIssues });
+    targetRuns.push({ batchKey: batch.key, targets: batch.targets.map((target) => ({ key: target.key, path: target.path })), target: { key: `module:${batch.key}`, path: batch.key }, capabilityId: "copy_writer", attempts: reusableRepair ? 0 : 1, reused: Boolean(reusableRepair), durationMs: Date.now() - started, usage: response.usage || null, changedPaths: applied.changedPaths, unresolvedIssues });
   }
   const finalFactComparison = compareDeterministicFacts(sourceData, currentData);
   const finalDeterministic = reviewCustomerContent(currentData, { sourceData });
@@ -152,7 +229,8 @@ export async function runAgentCopyPipeline({ sourceData, projectRoot, executionR
   return {
     data: currentData,
     mainline: modular.mainline,
-    contentQuality: { passed, factsPreserved: finalFactComparison.preserved, initialDeterministic, brandReview: brandResponse.json, brandReviewCallCount: 1, brandReviewDurationMs: Date.now() - reviewStarted, targetRuns, finalDeterministic, remainingIssues, ruleVersion: COPY_RULE_RUNTIME[0]?.version || null },
+    contentPlacement: modular.placement,
+    contentQuality: { passed, factsPreserved: finalFactComparison.preserved, initialDeterministic, brandReview: brandResponse.json, brandReviewCallCount: 1, brandReviewReused: Boolean(reusableBrand), brandReviewDurationMs: Date.now() - reviewStarted, targetRuns, repairBatchCount: repairBatches.length, repairTargetCount: repairPlan.targets.length, finalDeterministic, remainingIssues, ruleVersion: COPY_RULE_RUNTIME[0]?.version || null },
     usage: { modules: modular.usages, brandReview: brandResponse.usage || null, targetRegeneration: targetRuns.map((item) => item.usage) },
     model: brandResponse.model,
   };

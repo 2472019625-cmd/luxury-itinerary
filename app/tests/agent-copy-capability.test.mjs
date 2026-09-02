@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { generateModularCopy } from "../server/modular-copy-generator.mjs";
+import { buildSourceContentPlacement, generateModularCopy, splitDayBatches } from "../server/modular-copy-generator.mjs";
 import { copyUnitRuleCards, fullRuleCardsFor } from "../server/agent-rule-cards.mjs";
-import { createAgentCopyModelRequester } from "../server/agent-copy-engine.mjs";
+import { createAgentCopyModelRequester, groupRepairTargets, normalizeCustomerCopyPath } from "../server/agent-copy-engine.mjs";
 
 test("正式规则卡同时包含规则表原文、运行细则和版本", () => {
   const [card] = fullRuleCardsFor(["COPY-010"]);
@@ -24,7 +24,6 @@ test("每个模块调用都收到适用的完整正式规则卡", async () => {
   };
   const requestModel = async (_promptFile, payload, options) => {
     seen.push({ taskKind: options.taskKind, cards: payload.applicableRuleCards || [] });
-    if (options.taskKind === "mainline") return { json: { journeyPromise: "草原初见", narrativeArc: [], moduleGoals: {}, dayRoles: [], visualRoles: [], sourceEvidence: [] }, model: "test" };
     if (payload.unitType === "global") return { json: { title: "肯尼亚1天0晚深度游", subtitle: "从草原初见展开旅程", highlights: ["草原初见：进入保护区"] }, model: "test" };
     if (payload.unitType === "hospitality") return { json: { hotels: [], diningExperiences: [], transportSummary: [], evidenceMap: {} }, model: "test" };
     if (payload.unitType === "days") return { json: { days: [{ index: 0, theme: "草原初见", description: "进入保护区，建立对草原的第一印象。", spots: [], dayNotices: [] }], evidenceMap: {} }, model: "test" };
@@ -32,7 +31,8 @@ test("每个模块调用都收到适用的完整正式规则卡", async () => {
   };
   const result = await generateModularCopy({ sourceFacts, requestModel, projectRoot: mkdtempSync(path.join(tmpdir(), "agent-copy-")), jobId: "run-1", reuseCompleted: false, ruleCardsFor: copyUnitRuleCards });
   assert.equal(result.errors.length, 0);
-  assert.equal(seen.length, 5);
+  assert.equal(seen.length, 3);
+  assert.equal(seen.some((item) => item.taskKind === "mainline"), false);
   assert.ok(seen.every((item) => item.cards.length > 0));
   assert.ok(seen.flatMap((item) => item.cards).every((card) => card.tableRule && card.ruleProfileVersion));
 });
@@ -65,4 +65,40 @@ test("智能体文案模块共享限流队列，避免长行程同时压满文�
   });
   await Promise.all(Array.from({ length: 6 }, (_, index) => request("customer-itinerary-module-v1.md", { index }, { taskId: `agent-copy-${index}` })));
   assert.ok(peak <= 2);
+});
+
+test("标准10日DAY一次成批，超过稳定上限才在发送前拆组", () => {
+  const days = Array.from({ length: 11 }, (_, index) => ({ index, description: `DAY ${index + 1}` }));
+  assert.equal(splitDayBatches(days.slice(0, 10)).length, 1);
+  const first = splitDayBatches(days);
+  const second = splitDayBatches(structuredClone(days));
+  assert.equal(first.length, 2);
+  assert.deepEqual(first.map((item) => item.days.map((day) => day.index)), second.map((item) => item.days.map((day) => day.index)));
+  assert.ok(first.every((item) => item.splitReason));
+});
+
+test("原始内容先确定性归位再决定保留或生成", () => {
+  const placement = buildSourceContentPlacement({ title: "标题", days: [{ index: 0, routeNodes: ["A", "B"], estimatedTravelTime: "2小时", hotel: "H", description: "当天正文", spots: [] }], hotels: [{ officialName: "H" }], transportSummary: [{ category: "专车" }], included: ["住宿"], excluded: [], cancellation: [] }, { modules: [{ moduleId: "days", contentAction: "preserve" }, { moduleId: "transport", contentAction: "optimize" }, { moduleId: "hotels", contentAction: "preserve" }, { moduleId: "expenses", contentAction: "preserve" }] });
+  assert.ok(placement.entries.some((item) => item.sourceRef === "days.0.estimatedTravelTime" && item.targetModule === "transport"));
+  assert.ok(placement.entries.some((item) => item.sourceRef === "days.0.description" && item.targetModule === "days" && item.action === "preserve"));
+});
+
+test("直接保留模块不调用模型且轻量规划不再二次生成整程主线", async () => {
+  let calls = 0;
+  const sourceFacts = { title: "坦桑尼亚1天0晚深度游", subtitle: "原文", currentHighlights: ["原文亮点"], destination: "坦桑尼亚", dayCount: 1, days: [{ index: 0, theme: "抵达", description: "原文正文", spots: [] }], hotels: [], diningExperiences: [], transportSummary: [], included: [], excluded: [], cancellation: [], notes: [] };
+  const businessPlan = { summary: { contentTheme: "轻量主线" }, modules: ["global", "days", "notes", "expenses"].map((moduleId) => ({ moduleId, decision: "show", contentAction: "preserve" })) };
+  const result = await generateModularCopy({ sourceFacts, businessPlan, requestModel: async () => { calls += 1; throw new Error("不应调用"); }, projectRoot: mkdtempSync(path.join(tmpdir(), "agent-preserve-")), jobId: "run-preserve", reuseCompleted: false, ruleCardsFor: copyUnitRuleCards });
+  assert.equal(calls, 0);
+  assert.equal(result.mainline.generatedBy, "trip_planner");
+  assert.equal(result.draft.days[0].description, "原文正文");
+});
+
+test("品牌目标路径会先归一且同模块问题合并为一次重生成批次", () => {
+  assert.equal(normalizeCustomerCopyPath("firstDraft.subtitle"), "subtitle");
+  assert.equal(normalizeCustomerCopyPath("customerCopy.days.2.description"), "days.2.description");
+  const batches = groupRepairTargets([
+    { key: "day:0", kind: "day" }, { key: "day:1", kind: "day" }, { key: "hotel:0", kind: "hotel" }, { key: "field:subtitle", kind: "field" },
+  ]);
+  assert.equal(batches.length, 3);
+  assert.equal(batches.find((item) => item.key === "days").targets.length, 2);
 });

@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { AGENT_STAGE_BUDGETS } from "../config/agent-stage-budgets.mjs";
 import { runAgentCopyPipeline } from "./agent-copy-engine.mjs";
 import { materializeAgentImageBlueprint, evaluateAgentImageCompletion } from "./agent-image-plan.mjs";
 import { runWebFactSearch } from "./agent-web-fact-search.mjs";
 import { resolveItineraryImages } from "./image-pipeline.mjs";
 import { reviewFinalLayout } from "./final-layout-review.mjs";
 import { reviewFinalOutputData } from "./final-output-qa.mjs";
-import { cancelExecutionRun, recordCapabilityCall, transitionExecutionTask } from "./agent-execution-scheduler.mjs";
+import { beginCapabilityCall, cancelExecutionRun, finishCapabilityCall, recordCapabilityCall, transitionExecutionTask } from "./agent-execution-scheduler.mjs";
 
 const PLANNING_TYPES = ["project_setup", "source_intake", "fact_review", "confirmation", "journey_strategy", "module_strategy"];
 const COPY_GENERATION_TYPES = ["copy_global", "copy_hotel_transport", "copy_day_group", "copy_closing"];
@@ -16,6 +17,32 @@ const terminalTaskStates = new Set(["succeeded", "user_resolved", "user_accepted
 
 const taskIdsFor = (plan, taskTypes) => plan.tasks.filter((task) => taskTypes.includes(task.taskType)).map((task) => task.taskId);
 const needsWork = (plan, run, taskTypes) => taskIdsFor(plan, taskTypes).some((taskId) => !terminalTaskStates.has(run.taskRuns.find((item) => item.taskId === taskId)?.status));
+
+export async function runWithinStageBudget(stageId, work, { signal, onTargetExceeded = () => {}, budgetOverride } = {}) {
+  const budget = budgetOverride || AGENT_STAGE_BUDGETS[stageId];
+  if (!budget) return work(signal);
+  const controller = new AbortController();
+  let stoppedByBudget = false;
+  const forwardAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) forwardAbort(); else signal?.addEventListener("abort", forwardAbort, { once: true });
+  const targetTimer = setTimeout(onTargetExceeded, budget.targetMs);
+  const stopTimer = setTimeout(() => { stoppedByBudget = true; controller.abort(new Error(`${stageId} 阶段超过停止线`)); }, budget.stopMs);
+  try {
+    return await work(controller.signal);
+  } catch (error) {
+    if (stoppedByBudget) {
+      const timeout = new Error(`${stageId} 阶段超过 ${Math.round(budget.stopMs / 60_000)} 分钟停止线，已保存检查点并中断`);
+      timeout.code = "stage_timeout";
+      timeout.stage = stageId;
+      throw timeout;
+    }
+    throw error;
+  } finally {
+    clearTimeout(targetTimer);
+    clearTimeout(stopTimer);
+    signal?.removeEventListener("abort", forwardAbort);
+  }
+}
 
 function makeRuntimeConfirmation({ category, question, reason, source, affectedTaskIds, choices }) {
   return { confirmationId: randomUUID(), category, status: "pending", question, reason, source, affectedTaskIds, affectedTaskTypes: [], affectedPaths: [], choices };
@@ -55,6 +82,14 @@ export class AgentExecutionEngine {
     return this.persistRun(plan, recordCapabilityCall(plan, run, capabilityId, details));
   }
 
+  beginCall(plan, run, capabilityId, details) {
+    return this.persistRun(plan, beginCapabilityCall(plan, run, capabilityId, details));
+  }
+
+  finishCall(plan, run, capabilityId, details) {
+    return this.persistRun(plan, finishCapabilityCall(plan, run, capabilityId, details));
+  }
+
   updateStage(projectId, currentStage, status = "running") {
     this.store.updateProject(projectId, { currentStage, status });
   }
@@ -72,6 +107,10 @@ export class AgentExecutionEngine {
     let sourceData = this.store.getSourceData(projectId)?.facts;
     if (!sourceData) throw new Error("项目缺少不可变原始资料快照");
     let next = run;
+    const applyCapabilityEvent = (event, taskId) => {
+      const details = { ...event, taskId, message: event.phase === "started" ? `${event.target} 调用开始` : event.failed ? `${event.target} 调用失败` : `${event.target} 调用完成` };
+      next = event.phase === "started" ? this.beginCall(plan, next, event.capabilityId, details) : this.finishCall(plan, next, event.capabilityId, details);
+    };
     try {
       this.updateStage(projectId, "正在应用已验证的整程规划");
       next = this.transitionTypes(plan, next, PLANNING_TYPES, "running", { message: "正在应用规划与已确认事实" });
@@ -82,12 +121,14 @@ export class AgentExecutionEngine {
         this.updateStage(projectId, "正在联网核验已有事实");
         next = this.transitionTypes(plan, next, ["web_verification"], "running", { message: "正在检索官方与权威公开来源" });
         const started = Date.now();
+        const webCallId = randomUUID();
+        next = this.beginCall(plan, next, "web_fact_search", { callId: webCallId, taskId: verificationTaskIds[0], stage: "verification", target: "web-verification", message: "联网事实核验调用开始" });
         let verification;
         try {
-          verification = await this.adapters.runWebFactSearch({ ...this.searchModelConfig, factBasis: plan.factBasis, verificationItems: plan.webVerification || [], signal });
-          next = this.recordCall(plan, next, "web_fact_search", { taskId: verificationTaskIds[0], stage: "verification", durationMs: verification.durationMs || Date.now() - started, usage: verification.usage, message: "联网事实核验完成" });
+          verification = await runWithinStageBudget("verification", (stageSignal) => this.adapters.runWebFactSearch({ ...this.searchModelConfig, factBasis: plan.factBasis, verificationItems: plan.webVerification || [], signal: stageSignal }), { signal, onTargetExceeded: () => this.updateStage(projectId, "事实核验已超过目标时间，正在处理当前核验项") });
+          next = this.finishCall(plan, next, "web_fact_search", { callId: webCallId, taskId: verificationTaskIds[0], stage: "verification", durationMs: verification.durationMs || Date.now() - started, usage: verification.usage, attemptCount: verification.attemptCount || 1, message: "联网事实核验完成" });
         } catch (error) {
-          next = this.recordCall(plan, next, "web_fact_search", { taskId: verificationTaskIds[0], stage: "verification", durationMs: Date.now() - started, failed: true, message: "联网事实核验失败" });
+          next = this.finishCall(plan, next, "web_fact_search", { callId: webCallId, taskId: verificationTaskIds[0], stage: "verification", durationMs: Date.now() - started, failed: error?.name !== "AbortError", cancelled: error?.name === "AbortError", reason: error.message, message: "联网事实核验失败" });
           throw error;
         }
         const evidenceRef = this.store.saveEvidence(projectId, run.executionRunId, "web-fact-search", verification);
@@ -111,18 +152,25 @@ export class AgentExecutionEngine {
         this.updateStage(projectId, "正在生成模块文案");
         next = this.transitionTypes(plan, next, COPY_GENERATION_TYPES, "running", { message: "正在按模块并行生成客户文案" });
         next = this.transitionTypes(plan, next, COPY_REVIEW_TYPES, "running", { message: "文案完成后将执行唯一一次品牌审查" });
+        const copyCallsBefore = next.capabilityCallStats.find((item) => item.capabilityId === "copy_writer")?.actualCalls || 0;
+        const brandCallsBefore = next.capabilityCallStats.find((item) => item.capabilityId === "brand_reviewer")?.actualCalls || 0;
         let copy;
         try {
-          copy = await this.adapters.runAgentCopyPipeline({ sourceData, projectRoot: this.root, executionRunId: run.executionRunId, modelConfig: this.textModelConfig, signal, hiddenModules, onStage: (event) => this.updateStage(projectId, event.currentAction || "正在生成客户文案") });
+          copy = await runWithinStageBudget("copy", (stageSignal) => this.adapters.runAgentCopyPipeline({ sourceData, businessPlan: plan, projectRoot: this.root, executionRunId: run.executionRunId, modelConfig: this.textModelConfig, signal: stageSignal, hiddenModules, onStage: (event) => this.updateStage(projectId, event.currentAction || "正在生成客户文案"), onCapabilityCall: (event) => {
+            const details = { ...event, message: event.phase === "started" ? `${event.target} 调用开始` : event.failed ? `${event.target} 调用失败` : `${event.target} 调用完成` };
+            next = event.phase === "started" ? this.beginCall(plan, next, event.capabilityId, details) : this.finishCall(plan, next, event.capabilityId, details);
+          } }), { signal, onTargetExceeded: () => this.updateStage(projectId, "文案阶段已超过目标时间，正在处理当前批次") });
         } catch (error) {
           if (error.details?.length) this.store.saveEvidence(projectId, run.executionRunId, "copy-pipeline-failure", { code: error.code || "copy_failed", message: error.message, details: error.details, preservedCompletedUnits: true, failedAt: new Date().toISOString() });
           throw error;
         }
         const copyRef = this.store.saveTaskResult(projectId, run.executionRunId, "copy-pipeline", copy);
         const moduleCalls = copy.usage?.modules?.length || 0;
-        for (let index = 0; index < moduleCalls; index += 1) next = this.recordCall(plan, next, "copy_writer", { taskId: copyTaskIds[0], stage: "copy", usage: copy.usage.modules[index]?.usage || null, message: "文案模块调用完成" });
-        next = this.recordCall(plan, next, "brand_reviewer", { taskId: taskIdsFor(plan, COPY_REVIEW_TYPES)[0], stage: "brand_review", durationMs: copy.contentQuality.brandReviewDurationMs, usage: copy.usage?.brandReview, message: "唯一一次品牌审查完成" });
-        for (const target of copy.contentQuality.targetRuns || []) next = this.recordCall(plan, next, "copy_writer", { taskId: taskIdsFor(plan, COPY_REPAIR_TYPES)[0] || copyTaskIds[0], stage: "copy", durationMs: target.durationMs, usage: target.usage, message: `目标模块 ${target.target.key} 已由同一文案能力重新生成一次` });
+        if ((next.capabilityCallStats.find((item) => item.capabilityId === "copy_writer")?.actualCalls || 0) === copyCallsBefore) {
+          for (let index = 0; index < moduleCalls; index += 1) next = this.recordCall(plan, next, "copy_writer", { taskId: copyTaskIds[0], stage: "copy", usage: copy.usage.modules[index]?.usage || null, message: "文案模块调用完成" });
+          for (const target of copy.contentQuality.targetRuns || []) if (!target.reused) next = this.recordCall(plan, next, "copy_writer", { taskId: taskIdsFor(plan, COPY_REPAIR_TYPES)[0] || copyTaskIds[0], stage: "copy", durationMs: target.durationMs, usage: target.usage, message: `目标模块 ${target.target.key} 已由同一文案能力重新生成一次` });
+        }
+        if ((next.capabilityCallStats.find((item) => item.capabilityId === "brand_reviewer")?.actualCalls || 0) === brandCallsBefore && !copy.contentQuality.brandReviewReused) next = this.recordCall(plan, next, "brand_reviewer", { taskId: taskIdsFor(plan, COPY_REVIEW_TYPES)[0], stage: "brand_review", durationMs: copy.contentQuality.brandReviewDurationMs, usage: copy.usage?.brandReview, message: "唯一一次品牌审查完成" });
         if (copy.contentQuality.brandReviewCallCount !== 1) throw new Error("品牌审查调用次数违反每份成品一次的约束");
         if (!copy.contentQuality.passed) {
           next = this.transitionTypes(plan, next, COPY_GENERATION_TYPES, "succeeded", { message: "文案模块生成完成", resultRef: copyRef });
@@ -141,12 +189,14 @@ export class AgentExecutionEngine {
         this.updateStage(projectId, "正在搜索并审核真实图片");
         next = this.transitionTypes(plan, next, IMAGE_TYPES, "running", { message: "正在搜索、下载、审核并放置真实图片" });
         workingData = { ...workingData, contentVisualMainline: workingData.contentVisualMainline || null, imageBlueprint: materializeAgentImageBlueprint(workingData, plan.imagePlan, { planId: plan.planId }) };
-        const images = await this.adapters.resolveItineraryImages(workingData, { root: this.root, apiKey: this.visionModelConfig.apiKey, baseUrl: this.visionModelConfig.baseUrl, model: this.visionModelConfig.model, searchApiKey: this.searchModelConfig.apiKey, searchBaseUrl: this.searchModelConfig.baseUrl, searchModel: this.searchModelConfig.imageSearchModel || this.searchModelConfig.model, disableCache: true, signal, onProgress: (event) => this.updateStage(projectId, event.currentAction || "正在处理图片") });
+        const searchCallsBefore = next.capabilityCallStats.find((item) => item.capabilityId === "image_search")?.actualCalls || 0;
+        const visualCallsBefore = next.capabilityCallStats.find((item) => item.capabilityId === "visual_auditor")?.actualCalls || 0;
+        const images = await runWithinStageBudget("images", (stageSignal) => this.adapters.resolveItineraryImages(workingData, { root: this.root, apiKey: this.visionModelConfig.apiKey, baseUrl: this.visionModelConfig.baseUrl, model: this.visionModelConfig.model, searchApiKey: this.searchModelConfig.apiKey, searchBaseUrl: this.searchModelConfig.baseUrl, searchModel: this.searchModelConfig.imageSearchModel || this.searchModelConfig.model, disableCache: true, signal: stageSignal, onProgress: (event) => this.updateStage(projectId, event.currentAction || "正在处理图片"), onCapabilityCall: (event) => applyCapabilityEvent(event, event.capabilityId === "image_search" ? taskIdsFor(plan, ["image_search_plan"])[0] : taskIdsFor(plan, ["visual_review"])[0]) }), { signal, onTargetExceeded: () => this.updateStage(projectId, "图片阶段已超过目标时间，正在处理当前图片位") });
         workingData = images.data;
         const imageRef = this.store.saveTaskResult(projectId, run.executionRunId, "image-pipeline", { summary: images.summary, ledgerFile: images.ledgerFile, data: workingData });
-        for (let index = 0; index < Number(images.summary?.stats?.searchAttempts || 0); index += 1) next = this.recordCall(plan, next, "image_search", { taskId: taskIdsFor(plan, ["image_search_plan"])[0], stage: "images", message: "真实图片搜索与下载完成" });
+        if ((next.capabilityCallStats.find((item) => item.capabilityId === "image_search")?.actualCalls || 0) === searchCallsBefore) for (let index = 0; index < Number(images.summary?.stats?.searchAttempts || 0); index += 1) next = this.recordCall(plan, next, "image_search", { taskId: taskIdsFor(plan, ["image_search_plan"])[0], stage: "images", message: "真实图片搜索与下载完成" });
         const auditCalls = Number(images.summary?.stats?.initialAuditCalls || 0) + Number(images.summary?.stats?.terminalAuditCalls || 0);
-        for (let index = 0; index < auditCalls; index += 1) next = this.recordCall(plan, next, "visual_auditor", { taskId: taskIdsFor(plan, ["visual_review"])[0], stage: "images", message: "视觉候选审核完成" });
+        if ((next.capabilityCallStats.find((item) => item.capabilityId === "visual_auditor")?.actualCalls || 0) === visualCallsBefore) for (let index = 0; index < auditCalls; index += 1) next = this.recordCall(plan, next, "visual_auditor", { taskId: taskIdsFor(plan, ["visual_review"])[0], stage: "images", message: "视觉候选审核完成" });
         next = this.transitionTypes(plan, next, IMAGE_TYPES, "succeeded", { message: "图片搜索、视觉审核与放置完成", resultRef: imageRef });
         const imageGate = evaluateAgentImageCompletion(workingData);
         if (!imageGate.passed) {
@@ -162,9 +212,10 @@ export class AgentExecutionEngine {
 
       this.updateStage(projectId, "正在生成实际 2000px 成品并检查");
       next = this.transitionTypes(plan, next, ["layout_render"], "running", { message: "正在渲染实际 2000px 长图" });
-      const layout = await this.adapters.reviewFinalLayout(workingData, { root: this.root, origin: this.origin, apiKey: this.visionModelConfig.apiKey, baseUrl: this.visionModelConfig.baseUrl, model: this.visionModelConfig.model, signal, onProgress: (event) => this.updateStage(projectId, event.currentAction || "正在检查实际长图") });
+      const layoutVisualCallsBefore = next.capabilityCallStats.find((item) => item.capabilityId === "visual_auditor")?.actualCalls || 0;
+      const layout = await runWithinStageBudget("render", (stageSignal) => this.adapters.reviewFinalLayout(workingData, { root: this.root, origin: this.origin, apiKey: this.visionModelConfig.apiKey, baseUrl: this.visionModelConfig.baseUrl, model: this.visionModelConfig.model, signal: stageSignal, onProgress: (event) => this.updateStage(projectId, event.currentAction || "正在检查实际长图"), onCapabilityCall: (event) => applyCapabilityEvent(event, taskIdsFor(plan, ["layout_render"])[0]) }), { signal, onTargetExceeded: () => this.updateStage(projectId, "渲染检查已超过目标时间，正在保存当前版面证据") });
       const layoutRef = this.store.saveEvidence(projectId, run.executionRunId, "final-layout-review", layout);
-      if (layout.modelReviewed) next = this.recordCall(plan, next, "visual_auditor", { taskId: taskIdsFor(plan, ["layout_render"])[0], stage: "render", message: "实际 2000px 长图视觉检查完成" });
+      if (layout.modelReviewed && (next.capabilityCallStats.find((item) => item.capabilityId === "visual_auditor")?.actualCalls || 0) === layoutVisualCallsBefore) next = this.recordCall(plan, next, "visual_auditor", { taskId: taskIdsFor(plan, ["layout_render"])[0], stage: "render", message: "实际 2000px 长图视觉检查完成" });
       if (layout.failedSlotIds?.length) {
         next = this.transitionTypes(plan, next, ["layout_render"], "failed", { message: "实际长图仍有图片放置问题", evidenceRefs: [layoutRef], error: { code: "layout_image_failed", failedSlotIds: layout.failedSlotIds } });
         throw new Error(`实际 2000px 长图有 ${layout.failedSlotIds.length} 个图片位未通过`);

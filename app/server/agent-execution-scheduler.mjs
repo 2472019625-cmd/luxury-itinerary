@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { AGENT_CAPABILITY_BY_ID, AGENT_CAPABILITY_VERSION } from "../config/agent-capabilities.mjs";
 import { AGENT_RULE_PROFILE_VERSION } from "../config/agent-rule-profile.mjs";
 
-export const EXECUTION_CONFIG_VERSION = "agent-execution-v2";
+export const EXECUTION_CONFIG_VERSION = "agent-execution-v3-checkpointed-calls";
 export const EXECUTION_ENABLED = true;
 
 export const EXECUTION_STAGES = Object.freeze([
@@ -57,7 +57,7 @@ export function createExecutionRun(project, plan, now = new Date().toISOString()
     authorization: { scope: "active_plan", planId: plan.planId, authorizedAt: now },
     status: "pending", createdAt: now, updatedAt: now, startedAt: null, endedAt: null, error: null,
     taskRuns: plan.tasks.map((task) => ({ taskId: task.taskId, taskType: task.taskType, stage: stageForTaskType(task.taskType), status: "pending", capabilityIds: [...task.capabilityIds], startedAt: null, endedAt: null, resultRef: null, evidenceRefs: [], retryCount: 0, error: null })),
-    capabilityCallStats: [...new Set(plan.tasks.flatMap((task) => task.capabilityIds))].map((capabilityId) => ({ capabilityId, actualCalls: Number(plan.capabilityCallStats?.find((item) => item.capabilityId === capabilityId)?.actualCalls || 0), retries: 0, failures: 0, durationMs: 0, usage: null, estimatedCost: null })),
+    capabilityCallStats: [...new Set(plan.tasks.flatMap((task) => task.capabilityIds))].map((capabilityId) => ({ capabilityId, actualCalls: Number(plan.capabilityCallStats?.find((item) => item.capabilityId === capabilityId)?.actualCalls || 0), activeCalls: 0, completedCalls: 0, retries: 0, failures: 0, cancelled: 0, durationMs: 0, usage: null, estimatedCost: null })),
     progress: null, events: [],
   };
   const initialized = appendExecutionEvent(run, { type: "run_created", stage: "planning", status: "pending", message: "执行运行已获授权，等待开始" }, now);
@@ -97,6 +97,32 @@ export function transitionExecutionTask(plan, run, taskId, status, details = {},
 export function recordCapabilityCall(plan, run, capabilityId, details = {}, now = new Date().toISOString()) {
   const capabilityCallStats = run.capabilityCallStats.map((item) => item.capabilityId === capabilityId ? { ...item, actualCalls: item.actualCalls + 1, retries: item.retries + (details.retry ? 1 : 0), failures: item.failures + (details.failed ? 1 : 0), durationMs: item.durationMs + Math.max(0, Number(details.durationMs) || 0), usage: details.usage || item.usage, estimatedCost: details.estimatedCost ?? item.estimatedCost } : item);
   const updated = appendExecutionEvent({ ...run, capabilityCallStats }, { type: "capability_call", taskId: details.taskId, stage: details.stage, status: details.failed ? "failed" : "complete", message: details.message || `${capabilityId} 调用完成`, metrics: { capabilityId, durationMs: details.durationMs || 0, usage: details.usage || null, retry: Boolean(details.retry) } }, now);
+  return { ...updated, progress: taskProgress(plan, updated) };
+}
+
+export function beginCapabilityCall(plan, run, capabilityId, details = {}, now = new Date().toISOString()) {
+  const callId = details.callId || randomUUID();
+  const capabilityCallStats = run.capabilityCallStats.map((item) => item.capabilityId === capabilityId ? { ...item, actualCalls: item.actualCalls + 1, activeCalls: (item.activeCalls || 0) + 1 } : item);
+  const updated = appendExecutionEvent({ ...run, capabilityCallStats }, { type: "capability_call_started", taskId: details.taskId, stage: details.stage, status: "running", message: details.message || `${capabilityId} 调用开始`, metrics: { capabilityId, callId, target: details.target || null, attempt: details.attempt || 1 } }, now);
+  return { ...updated, progress: taskProgress(plan, updated) };
+}
+
+export function finishCapabilityCall(plan, run, capabilityId, details = {}, now = new Date().toISOString()) {
+  const extraAttempts = Math.max(0, Number(details.attemptCount || 1) - 1);
+  const capabilityCallStats = run.capabilityCallStats.map((item) => item.capabilityId === capabilityId ? {
+    ...item,
+    actualCalls: item.actualCalls + extraAttempts,
+    activeCalls: Math.max(0, (item.activeCalls || 0) - 1),
+    completedCalls: (item.completedCalls || 0) + (details.failed || details.cancelled ? 0 : 1),
+    retries: item.retries + extraAttempts,
+    failures: item.failures + (details.failed ? 1 : 0),
+    cancelled: (item.cancelled || 0) + (details.cancelled ? 1 : 0),
+    durationMs: item.durationMs + Math.max(0, Number(details.durationMs) || 0),
+    usage: details.usage || item.usage,
+    estimatedCost: details.estimatedCost ?? item.estimatedCost,
+  } : item);
+  const status = details.cancelled ? "cancelled" : details.failed ? "failed" : "complete";
+  const updated = appendExecutionEvent({ ...run, capabilityCallStats }, { type: "capability_call_finished", taskId: details.taskId, stage: details.stage, status, message: details.message || `${capabilityId} 调用${details.failed ? "失败" : details.cancelled ? "取消" : "完成"}`, metrics: { capabilityId, callId: details.callId || null, target: details.target || null, durationMs: details.durationMs || 0, usage: details.usage || null, attemptCount: details.attemptCount || 1, reason: details.reason || null } }, now);
   return { ...updated, progress: taskProgress(plan, updated) };
 }
 

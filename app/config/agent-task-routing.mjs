@@ -9,7 +9,7 @@ export const AGENT_TASK_ROUTES = Object.freeze({
   module_strategy: route(["trip_planner"], ["COPY-002", "DATA-009", "DATA-010"], ["plan.modules"], ["T07"]),
   web_verification: route(["web_fact_search", "fact_validator"], ["DATA-001", "DATA-016", "COPY-007", "COPY-013", "COPY-015"], ["verificationEvidence"], ["T08"]),
   copy_global: route(["copy_writer"], ["DATA-001", "DATA-011", "DATA-012", "COPY-001", "COPY-002", "COPY-005", "COPY-006"], ["customerCopy.global"], ["T09"]),
-  copy_hotel_transport: route(["copy_writer"], ["DATA-001", "DATA-011", "DATA-012", "COPY-001", "COPY-010", "COPY-015"], ["customerCopy.hotels", "customerCopy.transport"], ["T09"]),
+  copy_hotel_transport: route(["copy_writer"], ["DATA-001", "DATA-011", "DATA-012", "COPY-001", "COPY-007", "COPY-008", "COPY-009", "COPY-010", "COPY-015"], ["customerCopy.hotels", "customerCopy.dining", "customerCopy.transport"], ["T09"]),
   copy_day_group: route(["copy_writer"], ["DATA-001", "DATA-011", "DATA-012", "COPY-001", "COPY-010", "COPY-011", "COPY-012", "COPY-015"], ["customerCopy.days"], ["T09"]),
   copy_closing: route(["copy_writer"], ["DATA-001", "DATA-011", "DATA-012", "COPY-003", "COPY-016", "COPY-017"], ["customerCopy.closing"], ["T09"]),
   copy_review: route(["fact_validator", "brand_reviewer"], ["DATA-001", "DATA-011", "DATA-012", "DATA-014", ...Array.from({ length: 17 }, (_, i) => `COPY-${String(i + 1).padStart(3, "0")}`)], ["copyReview"], ["T10"]),

@@ -39,6 +39,7 @@ export function compactForModel(data = {}, context = {}) {
     currentCustomerExpenseCopy: {
       included: data.includedCustomer || [], excluded: data.excludedCustomer || [], cancellation: data.cancellationCustomer || [],
     },
+    notes: normalizeLegacyNotesForDisplay(data.notes),
     hotels: (data.hotels || []).map(compactHotel),
     diningExperiences: data.diningExperiences || [],
     transportSummary: (data.transportSummary || []).map(compactTransport),

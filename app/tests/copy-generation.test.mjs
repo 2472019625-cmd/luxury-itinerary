@@ -13,7 +13,8 @@ import { modelTaskProfile, MODEL_TASK_PROFILES } from "../config/model-task-rout
 test("all copy work shares a queue whose initial concurrency is exactly two", async () => {
   assert.equal(COPY_GENERATION_CONFIG.initialConcurrency, 2);
   assert.equal(COPY_GENERATION_CONFIG.maximumConcurrency, 3);
-  assert.equal(COPY_GENERATION_CONFIG.dayGroupSize, 3);
+  assert.equal(COPY_GENERATION_CONFIG.standardDayBatchSize, 10);
+  assert.equal(COPY_GENERATION_CONFIG.maxDayInputChars, 60_000);
   const queue = new CopyTaskQueue();
   let active = 0;
   let peak = 0;
@@ -78,36 +79,35 @@ test("parallel image results are adopted only after deterministic facts pass the
   assert.equal(rejected.report.invalidatedSlotIds.length, 2);
 });
 
-test("modular generation groups DAYs by three, preserves completed units, and saves sanitized results", async () => {
+test("modular generation keeps a standard trip in one DAY batch, preserves completed units, and saves sanitized results", async () => {
   const projectRoot = mkdtempSync(path.join(tmpdir(), "lux-copy-"));
   const sourceFacts = {
     destination: "测试目的地", dayCount: 7, days: Array.from({ length: 7 }, (_, index) => ({ index, date: `2026-09-${String(index + 1).padStart(2, "0")}`, routeNodes: [`地点${index}`], theme: `原主题${index}`, description: `原文${index}`, spots: [{ id: `spot-${index}`, name: `体验${index}`, description: `体验原文${index}` }] })),
     hotels: [], diningExperiences: [], transportSummary: [], included: ["住宿"], excluded: ["机票"], cancellation: [], sourcePosterHighlights: [], currentHighlights: [], authoritativeFacts: [], importPendingConfirmations: [],
   };
   const calls = [];
+  let failDays = true;
   const requestModel = async (prompt, payload, options) => {
     calls.push({ prompt, unitType: payload.unitType, dayIndexes: payload.facts?.days?.map((day) => day.index), taskId: options.taskId, taskKind: options.taskKind });
-    if (prompt.includes("mainline")) return { json: { journeyPromise: "真实主线", narrativeArc: [], moduleGoals: {}, dayRoles: [], visualRoles: [], sourceEvidence: [] } };
-    if (payload.unitType === "days" && payload.facts.days[0].index === 3) throw new Error("DAY组模拟失败");
+    if (payload.unitType === "days" && failDays) { failDays = false; throw new Error("DAY批次模拟失败"); }
     if (payload.unitType === "days") return { json: { days: payload.facts.days.map((day) => ({ index: day.index, theme: `意义${day.index}`, description: `客户文案${day.index}`, spots: day.spots.map((spot) => ({ id: spot.id, description: spot.description })), dayNotices: [] })), evidenceMap: {} } };
     if (payload.unitType === "global") return { json: { title: "测试目的地7天6晚定制游", subtitle: "真实路线", highlights: ["从容衔接：按真实路线安排"] } };
     if (payload.unitType === "closing") return { json: { notes: [], expenseCopy: { included: [{ index: 0, text: "住宿安排" }], excluded: [{ index: 0, text: "国际机票" }], cancellation: [] } } };
     return { json: {} };
   };
   const result = await generateModularCopy({ sourceFacts, requestModel, projectRoot, jobId: "job-test", onMainlineReady: async () => { calls.push({ prompt: "parallel-images-started" }); return { ok: true }; } });
-  assert.equal(calls[1].prompt, "parallel-images-started");
-  assert.equal(calls.find((call) => call.prompt.includes("mainline")).taskKind, "mainline");
+  assert.equal(calls[0].prompt, "parallel-images-started");
   assert.equal(calls.find((call) => call.unitType === "global").taskKind, "copyModule");
   const dayCalls = calls.filter((call) => call.unitType === "days");
-  assert.deepEqual(dayCalls.map((call) => call.dayIndexes), [[0, 1, 2], [3, 4, 5], [6]]);
+  assert.deepEqual(dayCalls.map((call) => call.dayIndexes), [[0, 1, 2, 3, 4, 5, 6]]);
   assert.equal(result.draft.days.length, 7);
-  assert.equal(result.draft.days[0].description, "客户文案0");
+  assert.equal(result.draft.days[0].description, "原文0");
   assert.equal(result.draft.days[3].description, "原文3");
   assert.equal(result.unitSummary.fallback, 1);
   const files = readdirSync(result.storeDirectory).filter((name) => name.endsWith(".json"));
-  assert.equal(files.length, 14);
+  assert.equal(files.length, 5);
   const saved = files.map((name) => JSON.parse(readFileSync(path.join(result.storeDirectory, name), "utf8")));
-  assert.equal(saved.filter((record) => record.type === "day").length, 7);
+  assert.equal(saved.filter((record) => record.type === "days").length, 1);
   assert.equal(saved.some((record) => JSON.stringify(record).includes("API Key")), false);
   assert.equal(saved.some((record) => "reasoning_content" in record), false);
 
@@ -116,11 +116,15 @@ test("modular generation groups DAYs by three, preserves completed units, and sa
     sourceFacts,
     projectRoot,
     jobId: "job-recovered",
-    requestModel: async () => { unexpectedCalls += 1; throw new Error("仅未完成单元允许再次尝试"); },
+    requestModel: async (_prompt, payload) => {
+      unexpectedCalls += 1;
+      assert.equal(payload.unitType, "days");
+      return { json: { days: payload.facts.days.map((day) => ({ index: day.index, theme: `意义${day.index}`, description: `客户文案${day.index}`, spots: day.spots.map((spot) => ({ id: spot.id, description: spot.description })), dayNotices: [] })), evidenceMap: {} } };
+    },
   });
   assert.equal(unexpectedCalls, 1);
   assert.equal(recovered.draft.days[0].description, "客户文案0");
-  assert.equal(recovered.draft.days[3].description, "原文3");
+  assert.equal(recovered.draft.days[3].description, "客户文案3");
   const recoveredMainline = JSON.parse(readFileSync(path.join(projectRoot, "workspace", "jobs", "job-recovered", "copy-units", "mainline.json"), "utf8"));
-  assert.equal(recoveredMainline.recovery.reason, "reused_completed_unit");
+  assert.equal(recoveredMainline.recovery.reason, "compiled_from_trip_planner");
 });

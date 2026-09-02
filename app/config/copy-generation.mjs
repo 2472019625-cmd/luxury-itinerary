@@ -1,8 +1,9 @@
 export const COPY_GENERATION_CONFIG = Object.freeze({
   initialConcurrency: 2,
   maximumConcurrency: 3,
-  dayGroupSize: 3,
-  maxRequestAttempts: 3,
-  maxBrandPasses: 2,
-  version: "copy-modules-v3-tiered-reasoning",
+  standardDayBatchSize: 10,
+  maxDayInputChars: 60_000,
+  maxRequestAttempts: 2,
+  maxBrandPasses: 1,
+  version: "copy-modules-v4-light-plan-batches",
 });

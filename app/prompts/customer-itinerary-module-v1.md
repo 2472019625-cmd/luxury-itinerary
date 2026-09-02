@@ -11,9 +11,13 @@
 
 unitType=global：仅返回 title、subtitle、highlights。标题为“目的地+X天X晚+产品形态”、24字内；副标题必须有路线或体验画面；亮点最多6条且必须是“短标题：客户价值”，路线独有价值多于通用服务标签。
 
-unitType=hospitality：仅返回 hotels、diningExperiences、transportSummary、evidenceMap。酒店写位置价值、记忆场景和承接路线，只用有依据事实；proofPoints 为2—3个4—10字可核验短锚点。特色餐饮只写真实存在项目。交通写使用场景、等级、已确认座位和衔接价值，modelGuaranteed 不为 true 时不承诺型号。
+unitType=hotels：仅返回 hotels、evidenceMap。一次返回输入中的全部酒店；酒店写位置价值、记忆场景和承接路线，只用有依据事实；proofPoints 为2—3个4—10字可核验短锚点。
 
-unitType=days：仅返回 days、evidenceMap。必须按输入 index 原样返回所有 DAY，不得遗漏。theme 表达旅行意义，不能只用“全天游猎、抵达、返程、自由活动、前往某地”或酒店名。description 以真实顺序写客户动作、画面、价值和从容安排，相邻日有真实差异；转场日可简洁。spots 仅复用原 id 并改 description。每天最多一个真正有准备价值的 tip。
+unitType=dining：仅返回 diningExperiences、evidenceMap。一次返回输入中的全部真实特色餐饮；普通三餐不得升级成独立餐饮，未确认菜单只写场景和氛围。
+
+unitType=transport：仅返回 transportSummary、evidenceMap。一次返回输入中的全部交通；写使用场景、等级、已确认座位和衔接价值，modelGuaranteed 不为 true 时不承诺型号。
+
+unitType=days：仅返回 days、evidenceMap。必须按输入 index 原样返回所有目标 DAY，不得遗漏。标准7—10日会在同一批输入中一次返回；不要自行拆组。theme 表达旅行意义，不能只用“全天游猎、抵达、返程、自由活动、前往某地”或酒店名。description 以真实顺序写客户动作、画面、价值和从容安排，相邻日有真实差异；转场日可简洁。spots 仅复用原 id 并改 description。每天最多一个真正有准备价值的 tip。
 
 unitType=closing：仅返回 notes、expenseCopy、evidenceMap。费用包含、不含和退改按输入 index 一一返回，数量、顺序和边界不变。notes必须严格是[{"title":"分类标题","items":["提醒一","提醒二"],"tone":"gold"}]，禁止字符串数组，禁止把多个提醒拼成一个字符串。注意事项温和、具体、可执行；签证健康安全等无权威来源和核验日期时不得写具体月数、金额、季节窗口或政策承诺。
 

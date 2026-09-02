@@ -51,6 +51,22 @@ test("完整执行只有全部门禁通过才到100%并进入编辑器", async (
   assert.equal(complete.capabilityCallStats.find((item) => item.capabilityId === "brand_reviewer").actualCalls, 1);
 });
 
+test("图片搜索与视觉审核从请求开始逐次记账，不等待整段结束", async () => {
+  const { project, run, engine } = fixture({
+    resolveItineraryImages: async (data, { onCapabilityCall }) => {
+      onCapabilityCall({ phase: "started", capabilityId: "image_search", callId: "search-1", stage: "images", target: "cover" });
+      onCapabilityCall({ phase: "finished", capabilityId: "image_search", callId: "search-1", stage: "images", target: "cover", durationMs: 12, attemptCount: 1 });
+      onCapabilityCall({ phase: "started", capabilityId: "visual_auditor", callId: "audit-1", stage: "images", target: "cover:initial" });
+      onCapabilityCall({ phase: "finished", capabilityId: "visual_auditor", callId: "audit-1", stage: "images", target: "cover:initial", durationMs: 15, attemptCount: 1 });
+      return { data: { ...data, heroImage: "/image-assets/cover.webp", days: [{ ...data.days[0], spots: [{ ...data.days[0].spots[0], images: [{ src: "/image-assets/day.webp" }] }] }], imageReview: { slots: data.imageBlueprint.meta.requiredSlotIds.map((slotId) => ({ slotId, status: "auto_selected" })) } }, summary: { stats: { searchAttempts: 1, initialAuditCalls: 1, terminalAuditCalls: 0 } }, ledgerFile: "ledger.json" };
+    },
+  });
+  const complete = await engine.execute(project.projectId, run);
+  assert.equal(complete.capabilityCallStats.find((item) => item.capabilityId === "image_search").actualCalls, 1);
+  assert.equal(complete.capabilityCallStats.find((item) => item.capabilityId === "visual_auditor").actualCalls, 1);
+  assert.ok(complete.events.some((item) => item.type === "capability_call_started" && item.metrics?.capabilityId === "image_search"));
+});
+
 test("联网来源冲突停在确认状态且不会继续生成文案", async () => {
   let copyCalled = false;
   const { store, project, run, engine } = fixture({

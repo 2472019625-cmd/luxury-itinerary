@@ -182,12 +182,19 @@ export async function requestDeepSeekJson({
       }
     } catch (error) {
       if (!attemptUsages.some((item) => item.attempt === attempt)) attemptUsages.push({ attempt, usage: null, finishReason: null, receivedContentChars: 0, reasoningChars: 0, outcome: error?.status ? `http_${error.status}` : error?.name === "AbortError" ? "timeout" : "stream_interrupted", reasoningEffort, thinkingType: attempt === 1 ? thinkingType : "disabled" });
+      error.attemptUsages = [...attemptUsages];
+      if (signal?.aborted) throw error;
       if (error?.name === "AbortError" && attempt < attempts) {
         emitStatus(onStatus, { providerResponded: false, streamPhase: "retrying", attempt, nextAttempt: attempt + 1, receivedContentChars: 0, reasoningChars: 0, reason: "timeout" });
         await sleepImpl(Math.min(1000 * attempt, 3000));
         continue;
       }
-      if (error?.name === "AbortError") throw new Error("DeepSeek 文字生成超过5分钟，请重试");
+      if (error?.name === "AbortError") {
+        const timeoutError = new Error(`DeepSeek 文字生成超过 ${Math.max(1, Math.round(timeoutMs / 60_000))} 分钟，请重试`);
+        timeoutError.code = "model_timeout";
+        timeoutError.attemptUsages = [...attemptUsages];
+        throw timeoutError;
+      }
       if (attempt < attempts && (error?.status === 429 || error?.status >= 500)) {
         emitStatus(onStatus, { providerResponded: false, streamPhase: "retrying", attempt, nextAttempt: attempt + 1, receivedContentChars: 0, reasoningChars: 0, reason: `http_${error.status}` });
         await sleepImpl(Math.min(1000 * attempt, 3000));
@@ -198,6 +205,7 @@ export async function requestDeepSeekJson({
         await sleepImpl(Math.min(1000 * attempt, 3000));
         continue;
       }
+      error.attemptUsages = [...attemptUsages];
       throw error;
     } finally {
       clearTimeout(timer);

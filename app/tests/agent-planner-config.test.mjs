@@ -45,9 +45,10 @@ test("执行schema只接受计划级授权的真实运行", () => {
   assert.ok(schema.required.includes("events"));
 });
 
-test("规划提示词把路由作为白名单并要求动态DAY目标", () => {
+test("规划提示词只要求轻量业务判断并禁止模型编排技术任务", () => {
   const prompt = readFileSync(new URL("../prompts/agent-trip-planner-v1.md", import.meta.url), "utf8");
-  assert.match(prompt, /不是每次必须逐条实例化的固定任务模板/);
-  assert.match(prompt, /customerCopy\.days\.day1_to_day3/);
-  assert.match(prompt, /不能固定为路由数量/);
+  assert.match(prompt, /不写最终客户成品/);
+  assert.match(prompt, /任务ID、依赖、并发、规则、预算、超时、重试、进度和完成门禁全部由程序确定性编译/);
+  assert.match(prompt, /preserve\/optimize\/generate\/hide/);
+  assert.match(prompt, /禁止返回 `factBasis\/tasks\/copyPlan/);
 });

@@ -119,7 +119,7 @@ async function candidatesForSlotRound(slot, round, options) {
   const searchKey = cacheKey(options.searchModel, query, slot.location, slot.subject);
   let pages = options.disableCache ? null : options.cache.get("search", searchKey);
   if (!pages) {
-    pages = await searchWeb({ query, apiKey: options.searchApiKey, baseUrl: options.searchBaseUrl, model: options.searchModel, count: config.sourcePages, signal: options.signal });
+    pages = await options.trackCapabilityCall("image_search", `${slot.key}:round:${round}`, () => searchWeb({ query, apiKey: options.searchApiKey, baseUrl: options.searchBaseUrl, model: options.searchModel, count: config.sourcePages, signal: options.signal }));
     if (!options.disableCache) await options.cache.set("search", searchKey, pages);
   }
   const pageGroups = await settledMap(pages.slice(0, config.sourcePages), 3, async (page) => {
@@ -185,7 +185,7 @@ function imageRecord(candidate, audit) {
   };
 }
 
-export async function resolveItineraryImages(data, { root, apiKey, baseUrl, model, searchApiKey, searchBaseUrl, searchModel, onlySlotIds = [], disableCache = false, onProgress = () => {}, signal } = {}) {
+export async function resolveItineraryImages(data, { root, apiKey, baseUrl, model, searchApiKey, searchBaseUrl, searchModel, onlySlotIds = [], disableCache = false, onProgress = () => {}, onCapabilityCall = () => {}, signal } = {}) {
   if (process.env.IMAGE_PIPELINE_ENABLED === "off") return { data, summary: { enabled: false } };
   const config = resolvedImagePipelineConfig();
   const runId = randomUUID();
@@ -217,6 +217,20 @@ export async function resolveItineraryImages(data, { root, apiKey, baseUrl, mode
     onProgress({ stage: effectiveStage, label, currentAction, current: stats.resolvedSlots, total: slots.length, stats: { ...stats, manualReview: stats.manualReviewSlots } });
   };
 
+  async function trackedCall(capabilityId, target, worker) {
+    const callId = randomUUID();
+    const startedAt = Date.now();
+    onCapabilityCall({ phase: "started", capabilityId, callId, stage: "images", target });
+    try {
+      const result = await worker();
+      onCapabilityCall({ phase: "finished", capabilityId, callId, stage: "images", target, durationMs: Date.now() - startedAt, attemptCount: 1 });
+      return result;
+    } catch (error) {
+      onCapabilityCall({ phase: "finished", capabilityId, callId, stage: "images", target, durationMs: Date.now() - startedAt, attemptCount: 1, failed: true, cancelled: error?.name === "AbortError" || signal?.aborted, reason: error?.message || String(error) });
+      throw error;
+    }
+  }
+
   function ledgerItemFor(state, candidate) {
     return candidatesLedger.find((item) => item.candidateId === candidateRecordId(state.slot.key, state.attempts, candidate.sha256));
   }
@@ -246,7 +260,9 @@ export async function resolveItineraryImages(data, { root, apiKey, baseUrl, mode
     try {
       stats.initialAuditCalls += 1;
       const before = Date.now();
-      ranking = await runTimedStage(state, "initial_audit", config.initialAuditTimeoutMs, (signal) => auditCandidates({ slot: state.slot, candidates, apiKey, baseUrl, model, signal }));
+      ranking = await runTimedStage(state, "initial_audit", config.initialAuditTimeoutMs, (signal) => apiKey && process.env.IMAGE_VISUAL_AUDIT !== "off"
+        ? trackedCall("visual_auditor", `${state.slot.key}:initial`, () => auditCandidates({ slot: state.slot, candidates, apiKey, baseUrl, model, signal }))
+        : auditCandidates({ slot: state.slot, candidates, apiKey, baseUrl, model, signal }));
       stats.initialAuditMs += Date.now() - before;
     } catch (error) {
       return markAuditFailure(state, candidates, error);
@@ -277,7 +293,9 @@ export async function resolveItineraryImages(data, { root, apiKey, baseUrl, mode
         const auditKey = cacheKey(candidate.sha256, model, state.slot.module, state.slot.mustHave || [], state.slot.forbid || []);
         validation = disableCache ? null : cache.get("terminal-audit", auditKey);
         if (!validation) {
-          validation = await runTimedStage(state, "terminal_audit", config.terminalAuditTimeoutMs, (signal) => validateCandidate({ slot: state.slot, candidate, apiKey, baseUrl, model, signal }));
+          validation = await runTimedStage(state, "terminal_audit", config.terminalAuditTimeoutMs, (signal) => apiKey && process.env.IMAGE_VISUAL_AUDIT !== "off"
+            ? trackedCall("visual_auditor", `${state.slot.key}:terminal:${index + 1}`, () => validateCandidate({ slot: state.slot, candidate, apiKey, baseUrl, model, signal }))
+            : validateCandidate({ slot: state.slot, candidate, apiKey, baseUrl, model, signal }));
           if (!disableCache) await cache.set("terminal-audit", auditKey, validation);
         }
         stats.terminalAuditMs += Date.now() - before;
@@ -346,7 +364,7 @@ export async function resolveItineraryImages(data, { root, apiKey, baseUrl, mode
       try {
         attempt = await searchQueue.add(async () => {
           const before = Date.now();
-          try { return await runTimedStage(state, "search_download", config.searchDownloadTimeoutMs, (signal) => candidatesForSlotRound(state.slot, round, { searchApiKey, searchBaseUrl, searchModel, assetDirectory, publicPrefix, cache, disableCache, signal, config })); }
+          try { return await runTimedStage(state, "search_download", config.searchDownloadTimeoutMs, (signal) => candidatesForSlotRound(state.slot, round, { searchApiKey, searchBaseUrl, searchModel, assetDirectory, publicPrefix, cache, disableCache, signal, config, trackCapabilityCall: trackedCall })); }
           finally { stats.searchDownloadMs += Date.now() - before; }
         });
         stats.searchAttempts += 1;
