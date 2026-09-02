@@ -16,6 +16,9 @@ export class AgentPlanStore {
   attemptFile(projectId, attemptId) { return path.join(this.projectDir(projectId), "attempts", `${attemptId}.json`); }
   confirmationFile(projectId, confirmationId) { return path.join(this.projectDir(projectId), "confirmations", `${confirmationId}.json`); }
   executionRunFile(projectId, executionRunId) { return path.join(this.projectDir(projectId), "execution-runs", `${executionRunId}.json`); }
+  sourceDataFile(projectId) { return path.join(this.projectDir(projectId), "inputs", "source-data.json"); }
+  taskResultFile(projectId, executionRunId, taskId) { return path.join(this.projectDir(projectId), "execution-runs", executionRunId, "results", `${taskId}.json`); }
+  evidenceFile(projectId, executionRunId, evidenceId) { return path.join(this.projectDir(projectId), "execution-runs", executionRunId, "evidence", `${evidenceId}.json`); }
   createProject(project) {
     if (existsSync(this.projectFile(project.projectId))) throw new Error("项目已存在");
     atomicJson(this.projectFile(project.projectId), project);
@@ -26,6 +29,16 @@ export class AgentPlanStore {
     return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
   }
   saveAttempt(projectId, attempt) { atomicJson(this.attemptFile(projectId, attempt.attemptId), attempt); }
+  saveSourceData(projectId, sourceData) {
+    if (!this.getProject(projectId)) throw new Error("项目不存在");
+    if (existsSync(this.sourceDataFile(projectId))) throw new Error("原始资料快照不可覆盖");
+    atomicJson(this.sourceDataFile(projectId), sourceData);
+    return sourceData;
+  }
+  getSourceData(projectId) {
+    const file = this.sourceDataFile(projectId);
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+  }
   activatePlan(projectId, plan) {
     const project = this.getProject(projectId);
     if (!project) throw new Error("项目不存在");
@@ -38,7 +51,7 @@ export class AgentPlanStore {
   updateProject(projectId, patch) {
     const current = this.getProject(projectId);
     if (!current) throw new Error("项目不存在");
-    const next = { ...current, ...patch, projectId: current.projectId, flowKind: "agent_v1", executionEnabled: false, updatedAt: new Date().toISOString() };
+    const next = { ...current, ...patch, projectId: current.projectId, flowKind: "agent_v1", updatedAt: new Date().toISOString() };
     atomicJson(this.projectFile(projectId), next);
     return next;
   }
@@ -67,6 +80,26 @@ export class AgentPlanStore {
   getExecutionRun(projectId, executionRunId) {
     const file = this.executionRunFile(projectId, executionRunId);
     return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+  }
+  updateExecutionRun(projectId, run) {
+    const current = this.getExecutionRun(projectId, run.executionRunId);
+    if (!current) throw new Error("执行运行不存在");
+    if (current.projectId !== run.projectId || current.planId !== run.planId || current.inputFingerprint !== run.inputFingerprint) throw new Error("执行运行身份字段不可改变");
+    atomicJson(this.executionRunFile(projectId, run.executionRunId), run);
+    this.updateProject(projectId, { executionEnabled: run.executionEnabled, status: run.status, progress: run.progress, activeExecutionRunId: run.executionRunId });
+    return run;
+  }
+  saveTaskResult(projectId, executionRunId, taskId, result) {
+    atomicJson(this.taskResultFile(projectId, executionRunId, taskId), result);
+    return path.relative(this.projectDir(projectId), this.taskResultFile(projectId, executionRunId, taskId)).replaceAll("\\", "/");
+  }
+  getTaskResult(projectId, executionRunId, taskId) {
+    const file = this.taskResultFile(projectId, executionRunId, taskId);
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+  }
+  saveEvidence(projectId, executionRunId, evidenceId, evidence) {
+    atomicJson(this.evidenceFile(projectId, executionRunId, evidenceId), evidence);
+    return path.relative(this.projectDir(projectId), this.evidenceFile(projectId, executionRunId, evidenceId)).replaceAll("\\", "/");
   }
   getActiveExecutionRun(projectId) {
     const project = this.getProject(projectId);

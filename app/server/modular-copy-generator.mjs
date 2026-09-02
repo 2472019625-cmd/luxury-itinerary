@@ -28,15 +28,15 @@ function fallbackMainline(sourceFacts) {
   };
 }
 
-function unitPayload(type, sourceFacts, mainline, days = []) {
+function unitPayload(type, sourceFacts, mainline, days = [], applicableRuleCards = []) {
   const common = { destination: sourceFacts.destination, startDate: sourceFacts.startDate, endDate: sourceFacts.endDate, dayCount: sourceFacts.dayCount, adults: sourceFacts.adults, children: sourceFacts.children, travelers: sourceFacts.travelers };
-  if (type === "global") return { unitType: type, facts: { ...common, sourcePosterHighlights: sourceFacts.sourcePosterHighlights, currentHighlights: sourceFacts.currentHighlights, days: sourceFacts.days.map(({ index, date, city, routeNodes, theme, spots }) => ({ index, date, city, routeNodes, theme, spots })) }, mainline, expectedShape: { title: "", subtitle: "", highlights: [""] } };
-  if (type === "hospitality") return { unitType: type, facts: { ...common, hotels: sourceFacts.hotels, diningExperiences: sourceFacts.diningExperiences, transportSummary: sourceFacts.transportSummary, days: sourceFacts.days.map(({ index, date, city, routeNodes, hotel, vehicle, estimatedTravelTime }) => ({ index, date, city, routeNodes, hotel, vehicle, estimatedTravelTime })) }, mainline, expectedShape: { hotels: [], diningExperiences: [], transportSummary: [], evidenceMap: {} } };
-  if (type === "closing") return { unitType: type, facts: { ...common, included: sourceFacts.included, excluded: sourceFacts.excluded, cancellation: sourceFacts.cancellation, authoritativeFacts: sourceFacts.authoritativeFacts, importPendingConfirmations: sourceFacts.importPendingConfirmations }, mainline, expectedShape: { notes: [{ title: "分类标题", items: ["逐条提醒"], tone: "gold" }], expenseCopy: { included: [{ index: 0, text: "客户表达" }], excluded: [{ index: 0, text: "客户表达" }], cancellation: [{ index: 0, text: "客户表达" }] }, evidenceMap: {} } };
-  return { unitType: "days", facts: { ...common, days }, mainline: { journeyPromise: mainline.journeyPromise, narrativeArc: mainline.narrativeArc, dayRoles: mainline.dayRoles, visualRoles: mainline.visualRoles }, expectedShape: { days: days.map((day) => ({ index: day.index, theme: "", description: "", spots: (day.spots || []).map((spot) => ({ id: spot.id, description: "" })), dayNotices: [] })), evidenceMap: {} } };
+  if (type === "global") return { unitType: type, applicableRuleCards, facts: { ...common, sourcePosterHighlights: sourceFacts.sourcePosterHighlights, currentHighlights: sourceFacts.currentHighlights, days: sourceFacts.days.map(({ index, date, city, routeNodes, theme, spots }) => ({ index, date, city, routeNodes, theme, spots })) }, mainline, expectedShape: { title: "", subtitle: "", highlights: [""] } };
+  if (type === "hospitality") return { unitType: type, applicableRuleCards, facts: { ...common, hotels: sourceFacts.hotels, diningExperiences: sourceFacts.diningExperiences, transportSummary: sourceFacts.transportSummary, days: sourceFacts.days.map(({ index, date, city, routeNodes, hotel, vehicle, estimatedTravelTime }) => ({ index, date, city, routeNodes, hotel, vehicle, estimatedTravelTime })) }, mainline, expectedShape: { hotels: [], diningExperiences: [], transportSummary: [], evidenceMap: {} } };
+  if (type === "closing") return { unitType: type, applicableRuleCards, facts: { ...common, included: sourceFacts.included, excluded: sourceFacts.excluded, cancellation: sourceFacts.cancellation, authoritativeFacts: sourceFacts.authoritativeFacts, importPendingConfirmations: sourceFacts.importPendingConfirmations }, mainline, expectedShape: { notes: [{ title: "分类标题", items: ["逐条提醒"], tone: "gold" }], expenseCopy: { included: [{ index: 0, text: "客户表达" }], excluded: [{ index: 0, text: "客户表达" }], cancellation: [{ index: 0, text: "客户表达" }] }, evidenceMap: {} } };
+  return { unitType: "days", applicableRuleCards, facts: { ...common, days }, mainline: { journeyPromise: mainline.journeyPromise, narrativeArc: mainline.narrativeArc, dayRoles: mainline.dayRoles, visualRoles: mainline.visualRoles }, expectedShape: { days: days.map((day) => ({ index: day.index, theme: "", description: "", spots: (day.spots || []).map((spot) => ({ id: spot.id, description: "" })), dayNotices: [] })), evidenceMap: {} } };
 }
 
-export async function generateModularCopy({ sourceFacts, requestModel, projectRoot, jobId, onStage = () => {}, onMainlineReady, reuseCompleted = true }) {
+export async function generateModularCopy({ sourceFacts, requestModel, projectRoot, jobId, onStage = () => {}, onMainlineReady, reuseCompleted = true, ruleCardsFor = () => [] }) {
   const store = createCopyUnitStore(projectRoot, jobId);
   const errors = [];
   const usages = [];
@@ -44,7 +44,7 @@ export async function generateModularCopy({ sourceFacts, requestModel, projectRo
   onStage({ phase: "copy_mainline", currentAction: "正在建立整程内容与视觉主线", completedUnits: 0, totalUnits: 1 });
   let mainline = fallbackMainline(sourceFacts);
   const mainlineUnit = { id: "mainline", type: "mainline", ruleVersion: COPY_GENERATION_CONFIG.version };
-  const mainlineInput = { sourceFacts };
+  const mainlineInput = { sourceFacts, applicableRuleCards: ruleCardsFor("mainline") };
   const reusableMainline = reuseCompleted ? store.loadReusable(mainlineUnit, mainlineInput) : null;
   try {
     if (reusableMainline) {
@@ -73,7 +73,7 @@ export async function generateModularCopy({ sourceFacts, requestModel, projectRo
   let completedUnits = 0;
   onStage({ phase: "copy_modules", currentAction: `正在生成文案模块 0/${specs.length}`, completedUnits, totalUnits: specs.length, mainline });
   const results = await Promise.all(specs.map(async (unit) => {
-    const input = unitPayload(unit.type, sourceFacts, mainline, unit.days);
+    const input = unitPayload(unit.type, sourceFacts, mainline, unit.days, ruleCardsFor(unit.type));
     const unitStartedAt = new Date().toISOString();
     const persistedUnit = { ...unit, ruleVersion: COPY_GENERATION_CONFIG.version };
     try {

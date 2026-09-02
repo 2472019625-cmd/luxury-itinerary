@@ -29,7 +29,7 @@ export function analyzeAgentPreflight(factBasis) {
       source: `${factBasis.sourceCoverage.workbookName || "主Excel"} · 每日住宿`,
       reason: "住宿名称会影响酒店文案、图片和履约承诺。",
       affectedPaths: pendingHotels.map((day) => `facts.days.${day.day}.hotel`),
-      affectedTaskTypes: ["copy_hotel_transport", "image_slot_plan", "completion_gate"],
+      affectedTaskTypes: ["copy_hotel_transport", "journey_strategy", "completion_gate"],
       choices: [
         { choiceId: "keep_pending_block_tasks", label: "保持待定并阻止相关任务", recommended: true, reason: "不猜酒店，其他无关任务仍可规划。" },
         { choiceId: "wait_for_hotel_source", label: "等待补充酒店资料", recommended: false, reason: "项目保持等待，取得确认后继续。" },
@@ -50,4 +50,3 @@ export function resolvePreflightConfirmations(confirmations, decisions, decidedA
     return { ...confirmation, status: canContinue ? "resolved" : "pending", selectedChoiceId: choice.choiceId, selectedLabel: choice.label, note: asText(decision.note), decidedAt: canContinue ? decidedAt : null };
   });
 }
-

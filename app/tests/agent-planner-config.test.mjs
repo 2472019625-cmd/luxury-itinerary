@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { AGENT_CAPABILITIES, ACTUAL_INVOCATION_ALLOWLIST } from "../config/agent-capabilities.mjs";
+import { AGENT_CAPABILITIES, PROFESSIONAL_CAPABILITIES } from "../config/agent-capabilities.mjs";
 import { AGENT_RULE_IDS, CHECKPOINT_IDS, RULE_GROUP_COUNTS } from "../config/agent-rule-profile.mjs";
 import { AGENT_TASK_ROUTES } from "../config/agent-task-routing.mjs";
 
@@ -11,9 +11,10 @@ test("正式规则配置覆盖92条规则且分组数量正确", () => {
   assert.equal(new Set(AGENT_RULE_IDS).size, 92);
 });
 
-test("15项能力完整且真实调用白名单只有解析与规划", () => {
-  assert.equal(AGENT_CAPABILITIES.length, 15);
-  assert.deepEqual(ACTUAL_INVOCATION_ALLOWLIST, ["source_parser", "trip_planner"]);
+test("新版能力目录只有六项专业能力且不再含独立图片蓝图和目标修复模型", () => {
+  assert.equal(AGENT_CAPABILITIES.length, 13);
+  assert.deepEqual(PROFESSIONAL_CAPABILITIES.map((item) => item.id), ["trip_planner", "web_fact_search", "copy_writer", "brand_reviewer", "image_search", "visual_auditor"]);
+  assert.ok(!AGENT_CAPABILITIES.some((item) => ["target_patcher", "image_blueprint"].includes(item.id)));
   for (const item of AGENT_CAPABILITIES) {
     for (const key of ["allowedInputSchemas", "allowedOutputSchemas", "mutablePaths", "forbiddenPaths", "reasoningPolicy", "budgetKey", "failureTypes", "retryLimit", "evidenceSchema", "userStateMap"]) assert.notEqual(item[key], undefined, `${item.id}.${key}`);
   }
@@ -23,6 +24,8 @@ test("任务路由覆盖全部安全检查点但不把检查点当展示任务",
   const covered = new Set(Object.values(AGENT_TASK_ROUTES).flatMap((route) => route.checkpoints));
   assert.deepEqual([...covered].sort(), [...CHECKPOINT_IDS].sort());
   assert.ok(!Object.keys(AGENT_TASK_ROUTES).some((key) => /^T\d{2}$/.test(key)));
+  assert.ok(!Object.keys(AGENT_TASK_ROUTES).some((key) => ["image_strategy", "image_slot_plan"].includes(key)));
+  assert.ok(AGENT_TASK_ROUTES.journey_strategy.checkpoints.includes("T12"));
 });
 
 test("计划schema是正式版本化结构", () => {

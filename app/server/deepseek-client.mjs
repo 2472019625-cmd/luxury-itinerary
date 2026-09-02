@@ -89,6 +89,7 @@ export async function requestDeepSeekJson({
   fetchImpl = fetch,
   sleepImpl = wait,
   onStatus,
+  signal,
 }) {
   if (!apiKey) throw new Error("尚未配置 DeepSeek 文字模型 API Key");
   const attempts = Math.max(1, Number(emptyContentRetries) + 1);
@@ -99,11 +100,12 @@ export async function requestDeepSeekJson({
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       emitStatus(onStatus, { providerResponded: false, streamPhase: "waiting", attempt, receivedContentChars: 0, reasoningChars: 0 });
+      const combinedSignal = signal && typeof AbortSignal.any === "function" ? AbortSignal.any([signal, controller.signal]) : controller.signal;
       const response = await fetchImpl(`${String(baseUrl).replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
         body: JSON.stringify(buildDeepSeekRequest({ model, messages, reasoningEffort, maxTokens, thinkingType: attempt === 1 ? thinkingType : "disabled" })),
-        signal: controller.signal,
+        signal: combinedSignal,
       });
       if (!response.ok) {
         const payload = await response.json?.().catch(() => ({})) || {};

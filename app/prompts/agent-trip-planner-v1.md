@@ -11,6 +11,9 @@
 - 同一并行组内的任务不得写入相同或互为父子的目标路径；存在写入依赖时必须声明依赖关系并串行；
 - `control` 使用 `currentProject.control`，`persistence` 使用 `currentProject.evidence`；若两者仍有先后关系，必须让持久化依赖控制任务并放入不同并行组。不要让两个无依赖任务同时写裸路径 `currentProject`；
 - 联网核验、人工确认、目标修复、缺图分流等条件任务只在当前事实或明确后续风险触发时建立；
+- `journey_strategy` 必须同时输出完整行程策略和 `imagePlan`，并同时覆盖 T06 与 T12；不得创建 `image_strategy`、`image_slot_plan`，不得调用独立 `image_blueprint`；
+- `targeted_copy_repair` 只能使用同一个 `copy_writer` 和确定性 `fact_validator`，且每个不合格目标最多重新生成一次；不得调用独立 `target_patcher`，也不得再次调用 `brand_reviewer`；
+- `web_fact_search` 固定使用 `gemini-3.7-flash-search`，每条采用事实必须保留真实来源；搜索新发现的体验只能进入内部建议，不能自动增加客户行程、费用、图片位或每日安排；
 - 相同行程的任务数量可以因酒店数、DAY分组、核验项和确认点变化，不能固定为路由数量；
 - 每个任务字段用一句短语表达，不重复整份事实或大段规则，以保证结构紧凑。
 
@@ -22,7 +25,7 @@
 - `tasks`: 动态任务数组。每项必须含 `taskId`（稳定、不可用T01等检查点命名）、`taskType/title/objective/targetPath/requiredContext/expectedResult/capabilityIds/requiredRuleIds/checkpointIds/dependsOn/parallelGroup/invocationMode/status/failurePolicy/reasoningLevel/budgetKey/retryLimit/rationale`。`invocationMode` 固定 `plan_only`，`status` 固定 `planned`。
 - `copyPlan`: 含 `groups`，说明全局、酒店交通、连续2—3日DAY单元、收尾的拆分与差异重点。
 - `webVerification`: 只针对已有实体列出未来核验项；每项含 `subject/field/reason/preferredSource/blockingTaskIds`。当前不联网。
-- `imagePlan`: 含 `visualStory` 和 `slots`。封面、每个显示酒店、每个DAY都必须各有一个 `required:true` 主图，role 分别为 `cover`、`hotel:1`、`day:1` 等；每项含 `slotId/role/label/required/visualDuty/differentiation/searchIntent/removable`。必需位不可移除，补充位才可移除。
+- `imagePlan`: 由 `trip_planner` 在整程规划时一次完成，含 `visualStory` 和 `slots`。封面、每个显示酒店、每个DAY都必须各有一个 `required:true` 主图，role 分别为 `cover`、`hotel:1`、`day:1` 等；每项含 `slotId/role/label/required/visualDuty/differentiation/searchIntent/removable`。必需位不可移除，补充位才可移除。
 - `confirmations`: 只放事实、费用、履约、安全问题；含 `confirmationId/category/question/reason/affectedTaskIds/status`，status 固定 `anticipated`。资料完整时返回空数组。
 - `adjustments`: 首次输出为空数组；修正时逐条说明校验问题和具体修正，不得披露内部推理。
 

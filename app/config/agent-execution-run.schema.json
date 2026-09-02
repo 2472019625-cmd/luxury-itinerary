@@ -1,17 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "agent-execution-run-v1",
+  "$id": "agent-execution-run-v2",
   "title": "智能体执行运行记录",
   "type": "object",
-  "required": ["executionRunId", "projectId", "planId", "inputFingerprint", "executionEnabled", "status", "taskRuns", "capabilityCallStats"],
+  "required": ["executionRunId", "projectId", "planId", "inputFingerprint", "executionEnabled", "authorization", "status", "taskRuns", "capabilityCallStats", "progress", "events"],
   "properties": {
     "executionRunId": { "type": "string", "minLength": 1 },
     "projectId": { "type": "string", "minLength": 1 },
     "planId": { "type": "string", "minLength": 1 },
     "inputFingerprint": { "type": "string", "minLength": 1 },
-    "executionEnabled": { "const": false },
-    "status": { "enum": ["execution_disabled", "pending", "running", "waiting_confirmation", "failed", "cancelled", "complete"] },
-    "taskRuns": { "type": "array", "items": { "type": "object", "required": ["taskId", "status", "capabilityIds", "evidenceRefs"] } },
-    "capabilityCallStats": { "type": "array", "items": { "type": "object", "required": ["capabilityId", "actualCalls"], "properties": { "actualCalls": { "const": 0 } } } }
+    "executionEnabled": { "const": true },
+    "authorization": { "type": "object", "required": ["scope", "planId", "authorizedAt"], "properties": { "scope": { "const": "active_plan" } } },
+    "status": { "enum": ["pending", "running", "waiting_confirmation", "failed", "cancelled", "complete"] },
+    "taskRuns": { "type": "array", "items": { "type": "object", "required": ["taskId", "taskType", "stage", "status", "capabilityIds", "evidenceRefs"], "properties": { "status": { "enum": ["pending", "running", "waiting_confirmation", "succeeded", "user_resolved", "user_accepted_suggestion", "not_applicable", "removed_optional", "failed", "cancelled"] } } },
+    "capabilityCallStats": { "type": "array", "items": { "type": "object", "required": ["capabilityId", "actualCalls", "retries", "failures", "durationMs"], "properties": { "actualCalls": { "type": "integer", "minimum": 0 } } } },
+    "progress": { "type": "object", "required": ["percent", "completedTasks", "totalTasks", "stages"], "properties": { "percent": { "type": "integer", "minimum": 0, "maximum": 100 } } },
+    "events": { "type": "array", "items": { "type": "object", "required": ["eventId", "seq", "at", "type", "status", "message"] } }
   }
 }

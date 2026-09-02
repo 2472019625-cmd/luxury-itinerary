@@ -94,6 +94,7 @@ export function validateAgentPlan(plan, context) {
     if (!nonEmpty(task.taskId) || taskIds.has(task.taskId)) errors.push(error("schema_invalid", `${path}.taskId`, "任务 ID 缺失或重复"));
     taskIds.add(task.taskId);
     const route = AGENT_TASK_ROUTES[task.taskType];
+    if (["image_strategy", "image_slot_plan"].includes(task.taskType)) errors.push(error("capability_unauthorized", `${path}.taskType`, "图片规划必须由 trip_planner 在整程规划时完成"));
     if (!route) { errors.push(error("capability_unauthorized", `${path}.taskType`, `未发布任务类型 ${task.taskType || "(空)"}`)); continue; }
     if (!nonEmpty(task.title) || !nonEmpty(task.objective) || !nonEmpty(task.expectedResult)) errors.push(error("schema_invalid", path, "任务缺少标题、目标或预期结果"));
     if (!nonEmpty(task.targetPath) || !targetAllowed(task.targetPath, route.allowedTargets)) errors.push(error("capability_unauthorized", `${path}.targetPath`, `目标路径不在 ${task.taskType} 白名单`));
@@ -104,6 +105,7 @@ export function validateAgentPlan(plan, context) {
     const capabilities = asArray(task.capabilityIds);
     if (!capabilities.length) errors.push(error("capability_unauthorized", `${path}.capabilityIds`, "任务缺少能力"));
     for (const id of capabilities) {
+      if (["target_patcher", "image_blueprint"].includes(id)) errors.push(error("capability_unauthorized", `${path}.capabilityIds`, `${id} 已从智能体能力目录移除`));
       const config = AGENT_CAPABILITY_BY_ID.get(id);
       if (!config || !route.capabilityIds.includes(id) || !config.taskTypes.includes(task.taskType)) errors.push(error("capability_unauthorized", `${path}.capabilityIds`, `${id} 未授权给 ${task.taskType}`));
     }
