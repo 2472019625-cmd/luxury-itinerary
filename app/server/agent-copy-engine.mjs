@@ -11,6 +11,7 @@ import { buildCopyTargetContext, planCopyRepairs } from "./copy-repair.mjs";
 import { copyUnitRuleCards } from "./agent-rule-cards.mjs";
 import { copyTaskQueue } from "./copy-task-queue.mjs";
 import { createCopyUnitStore } from "./copy-unit-store.mjs";
+import { applySafeCopyCorrections } from "./fact-provenance.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const promptCache = new Map();
@@ -29,6 +30,7 @@ export function normalizeCustomerCopyPath(value) {
 const HARD_SEVERITIES = new Set(["fact", "safety", "structure"]);
 const SOFT_ONLY_CODES = new Set(["day_overlong", "day_fact_dump", "day_thin", "day_no_value", "day_no_progression", "day_no_scene", "day_no_action_scene", "day_near_duplicate", "hotel_thin", "hotel_route_value", "hotel_scene", "hotel_facility_dump", "subtitle_generic", "subtitle_too_long", "highlight_incomplete", "notes_item_overlong"]);
 const NON_REPAIRABLE_HARD_CODES = new Set(["fee_included_count_mismatch", "fee_excluded_count_mismatch", "fee_source_coverage_mismatch", "source_coverage_missing", "source_transport_coverage_missing", "transport_module_missing", "days_missing", "experience_status_missing", "deterministic_fact_changed"]);
+const DETERMINISTIC_SAFE_CORRECTION_CODES = new Set(["factual_sentence_without_evidence", "time_sensitive_specific_without_authority"]);
 const HARD_REASON = /事实(?:错误|冲突|无依据)|无依据(?:承诺|保证)|费用(?:错误|冲突)|履约|状态错误|内部信息|内部术语|结构缺失|无法阅读|版面溢出|安全风险|确定性事实/;
 
 function issueRuleIds(item = {}) {
@@ -141,6 +143,11 @@ export function planAgentHardRepairs(hardIssues = []) {
   }
   const planned = planCopyRepairs(repairable);
   return { blockers: uniqueIssues([...blockers, ...planned.blockers]), targets: planned.targets };
+}
+
+export function applyAgentDeterministicHardCorrections(data = {}, sourceData = {}, hardIssues = []) {
+  const paths = [...new Set(hardIssues.filter((item) => DETERMINISTIC_SAFE_CORRECTION_CODES.has(item.code)).map((item) => item.path).filter(Boolean))];
+  return paths.length ? applySafeCopyCorrections(data, sourceData, { paths }) : { data, corrections: [], provenance: null };
 }
 
 function brandReviewStructureError(value) {
@@ -267,8 +274,14 @@ export async function runAgentCopyPipeline({ sourceData, businessPlan = {}, proj
     ...brandResponse.json.unresolvedIssues.map((item) => normalizeIssue(item, true)),
   ];
   const initialPartition = partitionAgentBrandIssues(initialDeterministic.issues, preservedTargets);
+  const deterministicCorrection = applyAgentDeterministicHardCorrections(currentData, sourceData, initialPartition.hardIssues);
+  currentData = deterministicCorrection.data;
+  const postCorrectionDeterministic = deterministicCorrection.corrections.length ? reviewCustomerContent(currentData, { sourceData }) : initialDeterministic;
+  const postCorrectionPartition = partitionAgentBrandIssues(postCorrectionDeterministic.issues, preservedTargets);
   const brandPartition = partitionAgentBrandIssues(brandIssues, preservedTargets);
-  const repairPlan = planAgentHardRepairs(uniqueIssues([...initialPartition.hardIssues, ...brandPartition.hardIssues]));
+  const correctedPaths = deterministicCorrection.corrections.map((item) => item.path);
+  const remainingBrandHard = brandPartition.hardIssues.filter((item) => !DETERMINISTIC_SAFE_CORRECTION_CODES.has(item.code) || !correctedPaths.some((path) => pathCovered(item.path, path)) || postCorrectionPartition.hardIssues.some((remaining) => pathCovered(item.path, remaining.path)));
+  const repairPlan = planAgentHardRepairs(uniqueIssues([...postCorrectionPartition.hardIssues, ...remainingBrandHard]));
   const targetRuns = [];
   const repairBatches = groupRepairTargets(repairPlan.targets);
   for (const batch of repairBatches) {
@@ -300,7 +313,7 @@ export async function runAgentCopyPipeline({ sourceData, businessPlan = {}, proj
     ...targetRuns.flatMap((item) => item.unresolvedIssues),
     ...finalPartition.hardIssues,
   ]);
-  const optimizationSuggestions = uniqueIssues([...initialPartition.optimizationSuggestions, ...brandPartition.optimizationSuggestions, ...finalPartition.optimizationSuggestions]);
+  const optimizationSuggestions = uniqueIssues([...initialPartition.optimizationSuggestions, ...postCorrectionPartition.optimizationSuggestions, ...brandPartition.optimizationSuggestions, ...finalPartition.optimizationSuggestions]);
   const passed = finalFactComparison.preserved && remainingIssues.length === 0;
   currentData.copySourceFacts = sourceFacts;
   currentData.copyQuality = { version: "agent-copy-v2-hard-vs-suggestion", passed, status: passed ? optimizationSuggestions.length ? "passed_with_suggestions" : "passed" : "blocked_generation", hardIssueCount: remainingIssues.length, suggestionCount: optimizationSuggestions.length, remainingIssueCount: remainingIssues.length, allIssues: remainingIssues, optimizationSuggestions, checkedAt: new Date().toISOString() };
@@ -308,7 +321,7 @@ export async function runAgentCopyPipeline({ sourceData, businessPlan = {}, proj
     data: currentData,
     mainline: modular.mainline,
     contentPlacement: modular.placement,
-    contentQuality: { passed, factsPreserved: finalFactComparison.preserved, preservedTargets, initialDeterministic, brandReview: brandResponse.json, brandReviewCallCount: 1, brandReviewReused: Boolean(reusableBrand), brandReviewDurationMs: Date.now() - reviewStarted, targetRuns, repairBatchCount: repairBatches.length, repairTargetCount: repairPlan.targets.length, finalDeterministic, remainingIssues, optimizationSuggestions, ruleVersion: COPY_RULE_RUNTIME[0]?.version || null },
+    contentQuality: { passed, factsPreserved: finalFactComparison.preserved, preservedTargets, initialDeterministic, deterministicCorrections: deterministicCorrection.corrections, postCorrectionDeterministic, brandReview: brandResponse.json, brandReviewCallCount: 1, brandReviewReused: Boolean(reusableBrand), brandReviewDurationMs: Date.now() - reviewStarted, targetRuns, repairBatchCount: repairBatches.length, repairTargetCount: repairPlan.targets.length, finalDeterministic, remainingIssues, optimizationSuggestions, ruleVersion: COPY_RULE_RUNTIME[0]?.version || null },
     usage: { modules: modular.usages, brandReview: brandResponse.usage || null, targetRegeneration: targetRuns.map((item) => item.usage) },
     model: brandResponse.model,
   };

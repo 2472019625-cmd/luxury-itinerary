@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildSourceContentPlacement, generateModularCopy, splitDayBatches } from "../server/modular-copy-generator.mjs";
 import { copyUnitRuleCards, fullRuleCardsFor } from "../server/agent-rule-cards.mjs";
-import { createAgentCopyModelRequester, groupRepairTargets, isHardBrandIssue, normalizeCustomerCopyPath, partitionAgentBrandIssues, planAgentHardRepairs } from "../server/agent-copy-engine.mjs";
+import { applyAgentDeterministicHardCorrections, createAgentCopyModelRequester, groupRepairTargets, isHardBrandIssue, normalizeCustomerCopyPath, partitionAgentBrandIssues, planAgentHardRepairs } from "../server/agent-copy-engine.mjs";
 
 test("正式规则卡同时包含规则表原文、运行细则和版本", () => {
   const [card] = fullRuleCardsFor(["COPY-010"]);
@@ -136,4 +136,20 @@ test("软建议不会触发重生成，直接保留内容只有硬问题才能�
   const repairs = planAgentHardRepairs(partition.hardIssues);
   assert.equal(repairs.blockers.length, 0);
   assert.equal(repairs.targets.length, 1);
+});
+
+test("无依据细节先由程序做最小安全修正，不再消耗整模块重生成", () => {
+  const sourceData = {
+    hotels: [{ officialName: "Nimali Tarangire", shortName: "Nimali Tarangire", proofPoints: ["塔兰吉雷国家公园行程"], sourceEvidence: ["入住 Nimali Tarangire"] }],
+    days: [], transportSummary: [], diningExperiences: [], included: [], excluded: [], cancellation: [], notes: [],
+  };
+  const data = { ...sourceData, hotels: [{ ...sourceData.hotels[0], editorialCopy: "入住 Nimali Tarangire 营地。", proofPoints: ["塔兰吉雷国家公园行程", "营地星空"] }] };
+  const issues = [
+    { code: "factual_sentence_without_evidence", issueLevel: "hard", path: "hotels.0.editorialCopy" },
+    { code: "factual_sentence_without_evidence", issueLevel: "hard", path: "hotels.0.proofPoints" },
+  ];
+  const corrected = applyAgentDeterministicHardCorrections(data, sourceData, issues);
+  assert.equal(corrected.data.hotels[0].editorialCopy.includes("营地"), false);
+  assert.deepEqual(corrected.data.hotels[0].proofPoints, ["塔兰吉雷国家公园行程"]);
+  assert.equal(corrected.corrections.length, 2);
 });

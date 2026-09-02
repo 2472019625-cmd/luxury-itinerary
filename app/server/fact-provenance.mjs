@@ -252,6 +252,16 @@ export function applySafeCopyCorrections(data = {}, sourceData = {}, options = {
   for (const [path, unsupported] of byPath) {
     if (!pathInScope(path, scopePaths)) continue;
     const raw = getAtPath(corrected, path);
+    if (Array.isArray(raw)) {
+      const rejected = new Set(unsupported.map((entry) => canonical(entry.sentence)));
+      const before = raw.map(text).filter(Boolean);
+      const after = before.filter((item) => !rejected.has(canonical(item)));
+      if (after.length !== before.length) {
+        setAtPath(corrected, path, after);
+        corrections.push({ path, code: 'unsupported_generated_fact_removed', before, after, missingClaims: unique(unsupported.flatMap((entry) => entry.missingClaims)), reason: '客户文案数组中的具体断言缺少对应来源，已只删除无依据条目' });
+      }
+      continue;
+    }
     if (typeof raw !== 'string') continue;
     const before = text(raw);
     if (!before) continue;
