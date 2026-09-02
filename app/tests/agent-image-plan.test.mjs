@@ -58,3 +58,10 @@ test("封面重搜不复用规划里未经证实的具体地名", () => {
   assert.doesNotMatch(next.imageBlueprint.slots[0].searchQueries[0].query, /埃托沙/);
   assert.match(next.imageBlueprint.slots[0].mustHave[0], /塔兰吉雷国家公园游猎/);
 });
+
+test("每日首选场景缺失时只搜索当天已确认酒店作为人工备选", () => {
+  const source = { destination: "坦桑尼亚", days: [{ id: "day-1", hotel: "Gran Melia Arusha", spots: [] }], imageBlueprint: { slots: [{ slotId: "day:day-1:spot:s1:primary", subject: "DAY1阿鲁沙", location: "坦桑尼亚", visualGoal: "雪山或庄园外景", searchQueries: [{ query: "阿鲁沙雪山" }] }] } };
+  const next = prepareTargetedImageRetry(source, ["day:day-1:spot:s1:primary"]);
+  assert.match(next.imageBlueprint.slots[0].searchQueries[0].query, /^Gran Melia Arusha official gallery/);
+  assert.match(next.imageBlueprint.slots[0].mustHave[0], /当天确认入住酒店Gran Melia Arusha.*人工确认备选/);
+});

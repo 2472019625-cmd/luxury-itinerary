@@ -82,6 +82,8 @@ export function prepareTargetedImageRetry(data, slotIds = []) {
     ...(next.imageBlueprint || {}),
     slots: list(next.imageBlueprint?.slots).map((slot) => {
       if (!requested.has(slot.slotId)) return slot;
+      const relatedDay = list(next.days).find((day) => String(slot.slotId).startsWith(`day:${day.id}:`));
+      const confirmedDayHotel = clean(relatedDay?.hotel);
       const subject = clean(slot.subject);
       const location = clean(slot.location || next.destination);
       const brand = clean(slot.brand);
@@ -91,7 +93,7 @@ export function prepareTargetedImageRetry(data, slotIds = []) {
         ? `${location} ${coverAnchors.join(" ")} luxury safari landscape wildlife sunrise`
         : slot.slotId.startsWith("hotel:")
           ? `${subject} ${location} official gallery exterior view`
-          : brand ? `${brand} ${location} official gallery` : `${location} ${subject} ${visualGoal} travel photography`;
+          : confirmedDayHotel ? `${confirmedDayHotel} official gallery exterior landscape` : brand ? `${brand} ${location} official gallery` : `${location} ${subject} ${visualGoal} travel photography`;
       const secondary = slot.slotId === "cover:hero" ? `${location} destination panorama nature official tourism` : `${location} ${visualGoal} official tourism high resolution`;
       const refined = [
         primary,
@@ -101,7 +103,7 @@ export function prepareTargetedImageRetry(data, slotIds = []) {
       const unique = [...new Set(refined)];
       const mustHave = slot.slotId === "cover:hero"
         ? [`画面必须对应本行程核心场景之一：${coverAnchors.join("、") || location}`]
-        : slot.slotId.startsWith("hotel:") ? [`画面必须是${subject}本体或其可核验官方景观`] : [visualGoal || subject].filter(Boolean);
+        : slot.slotId.startsWith("hotel:") ? [`画面必须是${subject}本体或其可核验官方景观`] : confirmedDayHotel ? [`画面应匹配${visualGoal || subject}；首选场景缺失时，只允许以当天确认入住酒店${confirmedDayHotel}的官方图作为人工确认备选`] : [visualGoal || subject].filter(Boolean);
       return { ...slot, mustHave, searchQueries: unique.slice(0, 3).map((query) => ({ query })), retryReason: "previous_candidates_mismatched_or_unverified" };
     }),
   };

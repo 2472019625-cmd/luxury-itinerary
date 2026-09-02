@@ -253,6 +253,28 @@ export function createAgentPlannerServer(options = {}) {
       } catch (failure) { return json(response, 400, { error: failure.message || "无法启动图片定向重搜" }); }
       return;
     }
+    const imageDeferMatch = url.pathname.match(/^\/api\/agent\/projects\/([^/]+)\/image-defer-validation$/);
+    if (request.method === "POST" && imageDeferMatch) {
+      try {
+        const payload = await requestBody(request);
+        if (payload.validationOnly !== true) return json(response, 400, { error: "暂缓图片只能用于继续验证后续环节" });
+        const project = store.getProject(imageDeferMatch[1]);
+        const activeRun = project ? store.getActiveExecutionRun(project.projectId) : null;
+        if (!project || !activeRun) return json(response, 404, { error: "智能体项目或执行记录不存在" });
+        if (activeRun.status !== "waiting_confirmation") return json(response, 409, { error: "当前项目不在图片等待阶段" });
+        const savedImages = store.getTaskResult(project.projectId, activeRun.executionRunId, "image-pipeline");
+        const imageGate = evaluateAgentImageCompletion(savedImages?.data || {});
+        if (imageGate.passed) return json(response, 409, { error: "必需图片已经完成，无需暂缓" });
+        const plan = store.getPlan(project.projectId, activeRun.planId);
+        const confirmations = store.getConfirmations(project.projectId).map((item) => item.status === "pending" && item.category === "图片" ? { ...item, status: "resolved", selectedChoiceId: "defer_image_for_downstream_validation", resolvedAt: new Date().toISOString() } : item);
+        store.saveConfirmations(project.projectId, confirmations);
+        const evidenceRef = store.saveEvidence(project.projectId, activeRun.executionRunId, "image-gap-deferred-for-validation", { validationOnly: true, requestedAt: new Date().toISOString(), missingRequired: imageGate.missingRequired, rule: "不得计为图片通过，不得绕过最终完成门禁" });
+        let resumed = activeRun;
+        for (const taskRun of resumed.taskRuns.filter((item) => item.status === "waiting_confirmation")) resumed = transitionExecutionTask(plan, resumed, taskRun.taskId, "user_accepted_suggestion", { message: "用户要求暂缓图片搜索，仅继续验证渲染与最终检查", evidenceRefs: [evidenceRef] });
+        store.updateExecutionRun(project.projectId, resumed);
+        return json(response, 202, resumeExecution(store.getProject(project.projectId), resumed, "图片缺口已保留，正在验证后续环节"));
+      } catch (failure) { return json(response, 400, { error: failure.message || "无法暂缓图片并继续验证" }); }
+    }
     const replanMatch = url.pathname.match(/^\/api\/agent\/projects\/([^/]+)\/replan$/);
     if (request.method === "POST" && replanMatch) {
       const project = store.getProject(replanMatch[1]);
