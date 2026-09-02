@@ -8,6 +8,8 @@ import { createProductionDefaultData, normalizeItineraryFacts, validateItinerary
 
 const source = path.resolve(process.argv.find((value) => value.startsWith("--input="))?.slice(8) || "");
 const origin = process.argv.find((value) => value.startsWith("--origin="))?.slice(9) || "http://127.0.0.1:4174";
+const PLANNING_TARGET_MS = 3 * 60 * 1000;
+const FULL_FLOW_TARGET_MS = 20 * 60 * 1000;
 if (!existsSync(source)) throw new Error("必须通过 --input= 提供一份存在的真实供应商 Excel");
 
 const appRoot = path.resolve(import.meta.dirname, "..");
@@ -53,6 +55,8 @@ await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 });
 const snapshots = [];
 const runtimeDecisions = [];
 let projectId = null;
+let generationStartedMs = null;
+let planningCompletedMs = null;
 
 async function fetchProject() {
   let lastError;
@@ -93,6 +97,20 @@ async function resolveRuntimeConfirmations(snapshot) {
   return true;
 }
 
+async function stopOverlongPlanning(snapshot, planningDurationMs) {
+  const response = await fetch(`${origin}/api/agent/projects/${projectId}/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
+  const cancelled = await response.json().catch(() => null);
+  writeFileSync(path.join(evidenceDir, "09-失败现场.json"), `${JSON.stringify({
+    code: "planning_target_exceeded",
+    message: "标准10日项目规划超过3分钟，按任务书停止后续昂贵流程",
+    planningDurationMs,
+    planningTargetMs: PLANNING_TARGET_MS,
+    snapshot,
+    cancellation: { ok: response.ok, value: cancelled },
+  }, null, 2)}\n`);
+  throw new Error(`规划耗时 ${Math.round(planningDurationMs / 1000)} 秒，超过3分钟目标，已保存现场并停止后续流程`);
+}
+
 try {
   await page.goto(`${origin}/agent`, { waitUntil: "networkidle0", timeout: 120_000 });
   await page.evaluate(() => localStorage.clear());
@@ -116,6 +134,7 @@ try {
     return button && !button.disabled;
   }, { timeout: 120_000 });
   await saveProgressScreenshot("03-真实资料确认与生成前门禁.png");
+  generationStartedMs = Date.now();
   await page.click(".flow-footer .ws-button-primary");
   await page.waitForSelector(".agent-workspace-generation", { timeout: 120_000 });
 
@@ -125,12 +144,19 @@ try {
   });
   if (!projectId) throw new Error("前端未保存智能体项目标识");
 
-  const started = Date.now();
+  const started = generationStartedMs;
   let lastKey = "";
   let complete = null;
   let capturedMidRun = false;
   while (Date.now() - started < 90 * 60 * 1000) {
     const snapshot = await fetchProject();
+    if (!planningCompletedMs && snapshot.executionRun) {
+      planningCompletedMs = Date.now();
+      const planningDurationMs = planningCompletedMs - generationStartedMs;
+      if (planningDurationMs > PLANNING_TARGET_MS) await stopOverlongPlanning(snapshot, planningDurationMs);
+    } else if (!snapshot.executionRun && Date.now() - generationStartedMs > PLANNING_TARGET_MS) {
+      await stopOverlongPlanning(snapshot, Date.now() - generationStartedMs);
+    }
     const key = JSON.stringify({ status: snapshot.project.status, stage: snapshot.project.currentStage, percent: snapshot.executionRun?.progress?.percent, taskStatuses: snapshot.executionRun?.taskRuns?.map((item) => item.status) });
     if (key !== lastKey) {
       snapshots.push({ at: new Date().toISOString(), status: snapshot.project.status, currentStage: snapshot.project.currentStage, progress: snapshot.executionRun?.progress, latestEvent: snapshot.executionRun?.events?.at(-1) || null });
@@ -175,11 +201,21 @@ try {
   });
 
   const run = complete.executionRun;
+  const completedMs = Date.now();
+  const timing = {
+    generationStartedAt: new Date(generationStartedMs).toISOString(),
+    planningCompletedAt: planningCompletedMs ? new Date(planningCompletedMs).toISOString() : null,
+    completedAt: new Date(completedMs).toISOString(),
+    planningDurationMs: planningCompletedMs ? planningCompletedMs - generationStartedMs : null,
+    totalDurationMs: completedMs - generationStartedMs,
+    planningWithin3MinuteTarget: Boolean(planningCompletedMs && planningCompletedMs - generationStartedMs <= PLANNING_TARGET_MS),
+    fullFlowWithin20MinuteTarget: completedMs - generationStartedMs <= FULL_FLOW_TARGET_MS,
+  };
   const stats = Object.fromEntries((run.capabilityCallStats || []).map((item) => [item.capabilityId, item]));
   const assertions = {
     projectReadyForEditor: complete.project.status === "ready_for_editor",
     progressExactly100: run.progress?.percent === 100,
-    allStagesComplete: run.progress?.stages?.every((item) => item.state === "complete"),
+    allStagesComplete: run.progress?.stages?.every((item) => item.status === "complete"),
     brandReviewerExactlyOnce: stats.brand_reviewer?.actualCalls === 1,
     factSearchActuallyCalled: (stats.web_fact_search?.actualCalls || 0) >= 1,
     imageSearchActuallyCalled: (stats.image_search?.actualCalls || 0) >= 1,
@@ -198,7 +234,7 @@ try {
   assertions.finalOutputDownloadable = outputResponse.ok && String(outputResponse.headers.get("content-type") || "").includes("image/png");
   if (outputResponse.ok) writeFileSync(path.join(evidenceDir, "11-真实项目最终成品-2000px.png"), Buffer.from(await outputResponse.arrayBuffer()));
   const passed = Object.values(assertions).every(Boolean);
-  const result = { createdAt: new Date().toISOString(), passed, projectId, source, assertions, ui, runSummary: { executionRunId: run.executionRunId, planId: run.planId, status: run.status, progress: run.progress, capabilityCallStats: run.capabilityCallStats, eventCount: run.events?.length || 0 }, output: { width: complete.result?.width, height: complete.result?.height, finalQa: complete.result?.finalQa, imageGate: complete.result?.imageGate } };
+  const result = { createdAt: new Date().toISOString(), passed, projectId, source, timing, assertions, ui, runSummary: { executionRunId: run.executionRunId, planId: run.planId, status: run.status, progress: run.progress, capabilityCallStats: run.capabilityCallStats, eventCount: run.events?.length || 0 }, output: { width: complete.result?.width, height: complete.result?.height, finalQa: complete.result?.finalQa, imageGate: complete.result?.imageGate } };
   writeFileSync(path.join(evidenceDir, "12-真实项目全链路回归结论.json"), `${JSON.stringify(result, null, 2)}\n`);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (!passed) throw new Error("真实项目已生成，但全链路断言未全部通过");
