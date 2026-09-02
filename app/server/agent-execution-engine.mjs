@@ -113,6 +113,7 @@ export class AgentExecutionEngine {
       const taskId = event.capabilityId === "image_search" ? taskIdsFor(plan, ["image_search_plan"])[0] : taskIdsFor(plan, ["visual_review"])[0];
       const details = { ...event, taskId, message: event.phase === "started" ? `${event.target} 定向重搜开始` : event.failed ? `${event.target} 定向重搜失败` : `${event.target} 定向重搜完成` };
       next = event.phase === "started" ? this.beginCall(plan, next, event.capabilityId, details) : this.finishCall(plan, next, event.capabilityId, details);
+      this.store.updateProject(projectId, { status: "running" });
     };
     const retryData = prepareTargetedImageRetry(savedImages.data, requested);
     const images = await runWithinStageBudget("images", (stageSignal) => this.adapters.resolveItineraryImages(retryData, {

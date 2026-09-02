@@ -84,7 +84,7 @@ test("定向图片重搜复用当前检查点且只调用指定图片位", async
   store.saveTaskResult(project.projectId, run.executionRunId, "image-pipeline", { data: checkpoint, summary: {} });
   const retried = await engine.retryImageSlots(project.projectId, run, ["cover:hero"]);
   assert.deepEqual(receivedSlotIds, ["cover:hero"]);
-  assert.match(retried.data.imageBlueprint.slots[0].searchQueries[0].query, /^肯尼亚 landscape wildlife/);
+  assert.match(retried.data.imageBlueprint.slots[0].searchQueries[0].query, /^肯尼亚 草原游猎/);
   assert.equal(retried.data.imageBlueprint.slots[1].searchQueries[0].query, "保留搜索");
   assert.equal(retried.imageGate.passed, true);
   assert.equal(retried.run.capabilityCallStats.find((item) => item.capabilityId === "image_search").actualCalls, 1);

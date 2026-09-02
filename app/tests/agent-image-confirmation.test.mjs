@@ -11,7 +11,7 @@ const candidate = {
   localPreviewUrl: "/image-assets/run/cover.webp",
   sourcePage: "https://example.com/source",
   reason: "无硬伤，封面代表性需要人工确认",
-  terminalAudit: { relevance: 76 },
+  terminalAudit: { subjectMatch: true, placeMatch: true, relevance: 76 },
 };
 
 test("必需图片确认会展示真实候选预览与来源，而不是只有等待选项", () => {
@@ -48,5 +48,11 @@ test("人工采用候选后锁定对应版位并留下选择记录", () => {
 test("旧检查点里已经明确主体或地点不符的图片不会继续展示为可采用候选", () => {
   const wrong = { ...candidate, candidateId: "wrong", terminalAudit: { subjectMatch: false, placeMatch: true, relevance: 90 } };
   const choices = imageConfirmationChoices({ imageCandidates: [wrong] }, "cover:hero");
+  assert.deepEqual(choices.map((item) => item.choiceId), ["wait_for_image:cover:hero"]);
+});
+
+test("只通过拼版初审但没有逐图终审的候选不会交给用户采用", () => {
+  const unreviewed = { ...candidate, candidateId: "unreviewed", terminalAudit: null, reason: "已通过初审但未完成终审" };
+  const choices = imageConfirmationChoices({ imageCandidates: [unreviewed] }, "cover:hero");
   assert.deepEqual(choices.map((item) => item.choiceId), ["wait_for_image:cover:hero"]);
 });

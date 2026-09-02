@@ -52,8 +52,9 @@ test("定向重搜只改指定图片位并把画面要求带进新搜索词", ()
 });
 
 test("封面重搜不复用规划里未经证实的具体地名", () => {
-  const source = { destination: "坦桑尼亚", imageBlueprint: { slots: [{ slotId: "cover:hero", subject: "封面", location: "坦桑尼亚", visualGoal: "可叠加埃托沙母狮", searchQueries: [{ query: "坦桑尼亚草原" }] }] } };
+  const source = { destination: "坦桑尼亚", days: [{ spots: [{ name: "塔兰吉雷国家公园游猎" }, { name: "马拉河大迁徙" }] }], imageBlueprint: { slots: [{ slotId: "cover:hero", subject: "封面", location: "坦桑尼亚", visualGoal: "可叠加埃托沙母狮", searchQueries: [{ query: "坦桑尼亚草原" }] }] } };
   const next = prepareTargetedImageRetry(source, ["cover:hero"]);
-  assert.match(next.imageBlueprint.slots[0].searchQueries[0].query, /^坦桑尼亚 landscape wildlife/);
+  assert.match(next.imageBlueprint.slots[0].searchQueries[0].query, /^坦桑尼亚 塔兰吉雷国家公园游猎 马拉河大迁徙/);
   assert.doesNotMatch(next.imageBlueprint.slots[0].searchQueries[0].query, /埃托沙/);
+  assert.match(next.imageBlueprint.slots[0].mustHave[0], /塔兰吉雷国家公园游猎/);
 });

@@ -22,7 +22,8 @@ export function classifyImageCandidate({ slot = {}, candidate = {}, audit = {}, 
   const officialHotelIdentity = slot.module === "hotel" && candidate.officialHint && audit.subjectMatch !== false;
   const hardPlaceMismatch = audit.placeMatch === false && !officialHotelIdentity;
   const hardSubjectMismatch = audit.subjectMatch === false;
-  const hard = duplicate || technicalFailure || audit.watermark === true || ["broken", "low_resolution", "low_quality", "forbid"].includes(code) || hardPlaceMismatch || hardSubjectMismatch;
+  const clearlyIrrelevant = Number.isFinite(Number(audit.relevance)) && Number(audit.relevance) < 50;
+  const hard = duplicate || technicalFailure || audit.watermark === true || ["broken", "low_resolution", "low_quality", "forbid"].includes(code) || hardPlaceMismatch || hardSubjectMismatch || clearlyIrrelevant;
   if (hard) return { state: IMAGE_REVIEW_STATE.HARD_REJECTED, adoptable: false, reason: technicalFailure || audit.reason || `命中硬拒绝：${code}`, hardRejectCode: HARD_CODES.has(code) ? code : "forbid" };
 
   const placeSupported = audit.placeMatch === true || officialHotelIdentity || audit.sourceSupportsIdentity === true;

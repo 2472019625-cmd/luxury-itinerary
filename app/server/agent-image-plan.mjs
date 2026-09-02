@@ -77,6 +77,7 @@ export function evaluateAgentImageCompletion(data) {
 export function prepareTargetedImageRetry(data, slotIds = []) {
   const requested = new Set(slotIds);
   const next = structuredClone(data);
+  const coverAnchors = [...new Set(list(next.days).flatMap((day) => list(day.spots).map((spot) => clean(spot?.name))).filter((name) => name && !/抵达|返程|回国|阿鲁沙/.test(name)))].slice(0, 4);
   next.imageBlueprint = {
     ...(next.imageBlueprint || {}),
     slots: list(next.imageBlueprint?.slots).map((slot) => {
@@ -87,7 +88,7 @@ export function prepareTargetedImageRetry(data, slotIds = []) {
       const visualGoal = clean(slot.visualGoal);
       const existing = list(slot.searchQueries).map((item) => clean(typeof item === "string" ? item : item?.query)).filter(Boolean);
       const primary = slot.slotId === "cover:hero"
-        ? `${location} landscape wildlife scenery sunrise official tourism high resolution`
+        ? `${location} ${coverAnchors.join(" ")} luxury safari landscape wildlife sunrise`
         : slot.slotId.startsWith("hotel:")
           ? `${subject} ${location} official gallery exterior view`
           : brand ? `${brand} ${location} official gallery` : `${location} ${subject} ${visualGoal} travel photography`;
@@ -98,7 +99,10 @@ export function prepareTargetedImageRetry(data, slotIds = []) {
         ...existing,
       ].map((query) => query.replace(/\s+/g, " ").trim().slice(0, 180)).filter(Boolean);
       const unique = [...new Set(refined)];
-      return { ...slot, searchQueries: unique.slice(0, 3).map((query) => ({ query })), retryReason: "previous_candidates_mismatched_or_unverified" };
+      const mustHave = slot.slotId === "cover:hero"
+        ? [`画面必须对应本行程核心场景之一：${coverAnchors.join("、") || location}`]
+        : slot.slotId.startsWith("hotel:") ? [`画面必须是${subject}本体或其可核验官方景观`] : [visualGoal || subject].filter(Boolean);
+      return { ...slot, mustHave, searchQueries: unique.slice(0, 3).map((query) => ({ query })), retryReason: "previous_candidates_mismatched_or_unverified" };
     }),
   };
   return next;

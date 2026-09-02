@@ -213,6 +213,12 @@ test("hard rejects explicit subject or place mismatch even when the model forget
   }
 });
 
+test("hard rejects a candidate whose visual relevance is clearly below the slot", () => {
+  const result = classifyImageCandidate({ slot: { module: "day" }, candidate: {}, audit: { subjectMatch: true, placeMatch: true, relevance: 35, hardRejectCode: "none", reason: "与当天主题不匹配" } });
+  assert.equal(result.state, IMAGE_REVIEW_STATE.HARD_REJECTED);
+  assert.equal(result.adoptable, false);
+});
+
 test("official hotel identity is not hard rejected for a non-preferred scene", () => {
   const result = classifyImageCandidate({ slot: { module: "hotel" }, candidate: { officialHint: true }, audit: { pass: false, subjectMatch: true, placeMatch: false, sourceSupportsIdentity: true, hardRejectCode: "place_mismatch", reason: "官方酒店大堂，但不是首选外观" } });
   assert.equal(result.state, IMAGE_REVIEW_STATE.MANUAL_REVIEW);

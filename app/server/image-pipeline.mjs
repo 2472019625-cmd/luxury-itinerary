@@ -342,9 +342,11 @@ export async function resolveItineraryImages(data, { root, apiKey, baseUrl, mode
     }
     const unreviewedRanked = ranking.slice(config.terminalAuditCandidates).map((audit) => candidates[audit.index]).filter(Boolean);
     if (unreviewedRanked.length) {
-      for (const candidate of unreviewedRanked) markManual(state, candidate, "已通过初审但未完成终审，保留供人工确认");
-      state.stopReason = "manual_candidate_after_terminal_limit";
-      return { selected: false, manualAvailable: true, allCandidatesHardRejected: false };
+      for (const candidate of unreviewedRanked) {
+        const item = ledgerItemFor(state, candidate);
+        if (item) Object.assign(item, { status: IMAGE_REVIEW_STATE.MANUAL_REVIEW, adoptable: false, libraryEligible: false, requiresDecision: false, stage: "initial_audit", reason: "已通过初审但尚未完成逐图终审，不进入可采用清单" });
+      }
+      state.stopReason = "terminal_audit_limit_reached";
     }
     state.lastStage = "audit";
     state.lastReason = "候选图片均有明确硬错误";
