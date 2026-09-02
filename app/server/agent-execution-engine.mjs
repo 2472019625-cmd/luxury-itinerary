@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AGENT_STAGE_BUDGETS } from "../config/agent-stage-budgets.mjs";
 import { runAgentCopyPipeline } from "./agent-copy-engine.mjs";
-import { materializeAgentImageBlueprint, evaluateAgentImageCompletion } from "./agent-image-plan.mjs";
+import { materializeAgentImageBlueprint, evaluateAgentImageCompletion, prepareTargetedImageRetry } from "./agent-image-plan.mjs";
 import { runWebFactSearch } from "./agent-web-fact-search.mjs";
 import { resolveItineraryImages } from "./image-pipeline.mjs";
 import { reviewFinalLayout } from "./final-layout-review.mjs";
@@ -98,6 +98,43 @@ export class AgentExecutionEngine {
   saveRuntimeConfirmations(projectId, confirmations) {
     const all = [...this.store.getConfirmations(projectId).filter((item) => item.status === "pending" || item.selectedChoiceId), ...confirmations];
     this.store.saveConfirmations(projectId, all);
+  }
+
+  async retryImageSlots(projectId, run, slotIds, { signal, onProgress = () => {} } = {}) {
+    const active = this.store.getActive(projectId);
+    if (!active?.plan || active.plan.planId !== run.planId) throw new Error("执行计划已不是项目当前计划");
+    const savedImages = this.store.getTaskResult(projectId, run.executionRunId, "image-pipeline");
+    if (!savedImages?.data) throw new Error("当前项目没有可续跑的图片检查点");
+    const requested = [...new Set(slotIds)].filter(Boolean);
+    if (!requested.length) throw new Error("没有指定需要重新搜索的图片位");
+    const { plan } = active;
+    let next = this.store.getExecutionRun(projectId, run.executionRunId) || run;
+    const applyCapabilityEvent = (event) => {
+      const taskId = event.capabilityId === "image_search" ? taskIdsFor(plan, ["image_search_plan"])[0] : taskIdsFor(plan, ["visual_review"])[0];
+      const details = { ...event, taskId, message: event.phase === "started" ? `${event.target} 定向重搜开始` : event.failed ? `${event.target} 定向重搜失败` : `${event.target} 定向重搜完成` };
+      next = event.phase === "started" ? this.beginCall(plan, next, event.capabilityId, details) : this.finishCall(plan, next, event.capabilityId, details);
+    };
+    const retryData = prepareTargetedImageRetry(savedImages.data, requested);
+    const images = await runWithinStageBudget("images", (stageSignal) => this.adapters.resolveItineraryImages(retryData, {
+      root: this.root,
+      apiKey: this.visionModelConfig.apiKey,
+      baseUrl: this.visionModelConfig.baseUrl,
+      model: this.visionModelConfig.model,
+      searchApiKey: this.searchModelConfig.apiKey,
+      searchBaseUrl: this.searchModelConfig.baseUrl,
+      searchModel: this.searchModelConfig.imageSearchModel || this.searchModelConfig.model,
+      onlySlotIds: requested,
+      disableCache: true,
+      signal: stageSignal,
+      onProgress: (event) => {
+        this.updateStage(projectId, event.currentAction || "正在定向重搜图片");
+        onProgress(event);
+      },
+      onCapabilityCall: applyCapabilityEvent,
+    }), { signal, onTargetExceeded: () => this.updateStage(projectId, "图片定向重搜已超过目标时间，正在处理当前图片位") });
+    const saved = { summary: images.summary, ledgerFile: images.ledgerFile, data: images.data, targetedRetry: { slotIds: requested, completedAt: new Date().toISOString() } };
+    this.store.saveTaskResult(projectId, run.executionRunId, "image-pipeline", saved);
+    return { ...saved, run: next, imageGate: evaluateAgentImageCompletion(images.data) };
   }
 
   async execute(projectId, run, { signal } = {}) {

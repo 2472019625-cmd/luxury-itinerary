@@ -210,10 +210,10 @@ function UploadStep({ project, onFiles, onContinue }) {
   </section></main>;
 }
 
-function AgentConfirmationPanel({ confirmations = [], decisions, onDecision }) {
+function AgentConfirmationPanel({ confirmations = [], decisions, onDecision, onRetryImage }) {
   const pending = confirmations.filter((item) => item.status === "pending");
   if (!pending.length) return <div className="agent-inline-clear"><UiIcon name="included" /><div><strong>没有需要额外确认的关键问题</strong><p>系统会使用已识别事实自动继续制定计划。</p></div></div>;
-  return <section className="agent-inline-confirm"><header><small>智能体生成前检查</small><h2>这些关键问题需要一次确认</h2><p>只询问事实、费用、履约、安全或必需图片问题；选择会保存为本项目约束。</p></header>{pending.map((item) => <article key={item.confirmationId}><span>{item.category}</span><h3>{item.question}</h3><p>{item.reason}</p>{item.choices.map((choice) => <label key={choice.choiceId} className={choice.previewUrl ? "agent-image-choice" : ""}>{choice.previewUrl && <img src={choice.previewUrl} alt={choice.label} />}<input type="radio" name={item.confirmationId} checked={decisions[item.confirmationId] === choice.choiceId} onChange={() => onDecision(item.confirmationId, choice.choiceId)} /><b>{choice.label}</b>{choice.recommended && <em>建议</em>}<small>{choice.reason}</small>{choice.sourcePage && <a href={choice.sourcePage} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>查看图片来源</a>}</label>)}</article>)}</section>;
+  return <section className="agent-inline-confirm"><header><small>智能体生成前检查</small><h2>这些关键问题需要一次确认</h2><p>只询问事实、费用、履约、安全或必需图片问题；选择会保存为本项目约束。</p></header>{pending.map((item) => <article key={item.confirmationId}><span>{item.category}</span><h3>{item.question}</h3><p>{item.reason}</p>{item.choices.map((choice) => <label key={choice.choiceId} className={choice.previewUrl ? "agent-image-choice" : ""}>{choice.previewUrl && <img src={choice.previewUrl} alt={choice.label} />}<input type="radio" name={item.confirmationId} checked={decisions[item.confirmationId] === choice.choiceId} onChange={() => onDecision(item.confirmationId, choice.choiceId)} /><b>{choice.label}</b>{choice.recommended && <em>建议</em>}<small>{choice.reason}</small>{choice.sourcePage && <a href={choice.sourcePage} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>查看图片来源</a>}</label>)}{item.category === "图片" && item.imageSlotId && onRetryImage && <div className="agent-image-retry"><Button onClick={() => onRetryImage(item.imageSlotId)}>重新搜索这一位置</Button><small>只重跑这个图片位，已完成的文案、核验和其他图片不受影响。</small></div>}</article>)}</section>;
 }
 
 function ConfirmStep({ project, onChange, onContinue, onBack, agentMode = false, agentSnapshot, agentDecisions = {}, onAgentDecision }) {
@@ -320,7 +320,7 @@ function AgentProgressOverview({ snapshot, taskCount, executed, elapsed, action 
   return <aside className="agent-progress-overview"><header><small>REAL-TIME PROGRESS</small><h2>实时进度总览</h2></header><div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress.percent} aria-label="智能体真实总进度"><strong>{progress.percent}<sup>%</sup></strong><div><span style={{ width: `${progress.percent}%` }} /></div><p>{action}</p></div><ol>{progress.stages.map((stage) => <li className={`agent-progress-${stage.state}`} key={stage.key}><i /> <span>{stage.label}</span><em>{labels[stage.state]}</em></li>)}</ol>{waitingReason && <p className="agent-progress-wait">{waitingReason}</p>}<footer><div><strong>{executed}/{taskCount}</strong><span>完成任务</span></div><div><strong>{Math.floor(elapsed / 60)}分{elapsed % 60}秒</strong><span>实际用时</span></div></footer></aside>;
 }
 
-function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, onEdit, decisions, onDecision, onConfirm }) {
+function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, onEdit, decisions, onDecision, onConfirm, onRetryImage }) {
   const agentProject = snapshot?.project;
   const plan = snapshot?.plan;
   const run = snapshot?.executionRun;
@@ -340,7 +340,7 @@ function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, onE
   const latestResult = ready ? "文案、事实、图片、实际2000px渲染和最终检查均已通过，可以进入原编辑器。" : plan ? `智能规划已完成并通过检查，已建立 ${taskCount} 个执行任务。` : intakeFinished ? "资料检查已经完成，正在建立本次唯一任务计划。" : "正在读取并检查本次上传资料。";
   return <main className="flow-page"><StepRail active={2} /><section className="generation-page agent-workspace-generation">
     <div className="generation-main"><header><small>STEP 03 · AGENT GENERATION</small><h1>{activeTitle}</h1><p>{waiting ? "保存选择后会从受影响的当前任务继续，不会整份重跑。" : failed ? agentProject?.lastError || "当前阶段没有通过安全检查。" : cancelled ? "项目、计划和已经形成的证据都已保留。" : latestResult}</p></header>
-      {waiting && <div className="agent-runtime-confirm"><AgentConfirmationPanel confirmations={snapshot?.confirmations || []} decisions={decisions} onDecision={onDecision} /><Button tone="primary" onClick={onConfirm}>保存选择并从当前任务继续</Button></div>}
+      {waiting && <div className="agent-runtime-confirm"><AgentConfirmationPanel confirmations={snapshot?.confirmations || []} decisions={decisions} onDecision={onDecision} onRetryImage={onRetryImage} /><Button tone="primary" onClick={onConfirm}>保存选择并从当前任务继续</Button></div>}
       {error && <p className="generation-error"><UiIcon name="warning" />{error}</p>}
       {plan && <details className="agent-plan-details workspace-agent-plan"><summary><small>查看本次规划 / 技术详情</small></summary><section className="agent-technical-summary"><span>计划 {plan.planId.slice(0, 8)}</span><span>{taskCount} 个任务</span><span>{executed} 个完成</span><span>{run?.capabilityCallStats?.reduce((sum, item) => sum + item.actualCalls, 0) || 0} 次下游调用</span><span>版本 {plan.planVersion}</span></section><PlanView project={agentProject} plan={plan} embedded /></details>}
     </div>
@@ -763,7 +763,7 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     };
     refresh();
     return () => { stopped = true; clearTimeout(timer); };
-  }, [agentMode, currentProject?.agentProjectId, screen]);
+  }, [agentMode, currentProject?.agentProjectId, screen, agentSnapshot?.project?.activeJobId]);
   const commitProjects = (next) => { setProjects(next); try { writeStorage(storageKeys.projects, next); setSaveState('saved'); } catch (error) { setSaveState('error'); alert(error.message); } };
   const updateProject = (nextProject, immediate = false) => {
     const next = { ...nextProject, updatedAt: Date.now() };
@@ -797,6 +797,15 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
       if (latest.project?.status === "awaiting_confirmation") return;
     }
     setProgress(0); setGenerationError(""); setScreen("generate");
+  };
+  const retryAgentImage = async (slotId) => {
+    if (!currentProject?.agentProjectId || !slotId) return;
+    setGenerationError("");
+    const response = await fetch(`/api/agent/projects/${currentProject.agentProjectId}/image-retry`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slotIds: [slotId] }) });
+    const value = await response.json();
+    if (!response.ok) throw new Error(value.error || "无法重新搜索这个图片位");
+    const latestResponse = await fetch(`/api/agent/projects/${currentProject.agentProjectId}`);
+    if (latestResponse.ok) setAgentSnapshot(await latestResponse.json());
   };
   const cancelAgent = async () => {
     if (!currentProject?.agentProjectId || !window.confirm("确认取消当前智能体任务？项目、确认和计划记录会保留，已发生的调用无法撤销。")) return;
@@ -990,7 +999,7 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     {screen === "list" && <ProjectList user={user} projects={projects} onCreate={createProject} onOpen={openProject} onDelete={agentMode ? undefined : setDeleteProject} />}
     {screen === "upload" && currentProject && <UploadStep project={currentProject} onFiles={async (files, recognition, sourceSha256) => agentMode ? attachAgentProject(currentProject, files, recognition, sourceSha256) : updateProject({ ...currentProject, workflowStage: "uploaded", title: recognition.data.title || currentProject.title, data: { ...recognition.data, designer: currentProject.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type })) }, true)} onContinue={() => setScreen("confirm")} />}
     {screen === "confirm" && currentProject && <ConfirmStep project={currentProject} agentMode={agentMode} agentSnapshot={agentSnapshot} agentDecisions={agentDecisions} onAgentDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onChange={(data, metadata = {}) => updateProject({ ...currentProject, ...metadata, data })} onBack={() => setScreen("upload")} onContinue={() => agentMode ? continueAgent().catch((error) => setGenerationError(error?.message || "无法继续")) : (() => { setProgress(0); setGenerationError(""); setGenerationStatus({ phase: "queued", status: "idle", currentAction: "尚未开始", stats: {}, elapsedMs: 0 }); setScreen("generate"); })()} />}
-    {screen === "generate" && currentProject && (agentMode ? <AgentGenerationStep project={currentProject} snapshot={agentSnapshot} error={generationError} decisions={agentDecisions} onDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onConfirm={() => continueAgent().catch((error) => setGenerationError(error?.message || "无法保存确认"))} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onCancel={() => cancelAgent().catch((error) => setGenerationError(error?.message || "无法取消任务"))} /> : <GenerationStep project={currentProject} progress={progress} status={generationStatus} error={generationError} onStart={generateProject} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onRevision={() => { updateProject({ ...currentProject, revisionMode: true }, true); setScreen('editor'); }} />)}
+    {screen === "generate" && currentProject && (agentMode ? <AgentGenerationStep project={currentProject} snapshot={agentSnapshot} error={generationError} decisions={agentDecisions} onDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onConfirm={() => continueAgent().catch((error) => setGenerationError(error?.message || "无法保存确认"))} onRetryImage={(slotId) => retryAgentImage(slotId).catch((error) => setGenerationError(error?.message || "无法重新搜索图片"))} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onCancel={() => cancelAgent().catch((error) => setGenerationError(error?.message || "无法取消任务"))} /> : <GenerationStep project={currentProject} progress={progress} status={generationStatus} error={generationError} onStart={generateProject} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onRevision={() => { updateProject({ ...currentProject, revisionMode: true }, true); setScreen('editor'); }} />)}
     {screen === "editor" && currentProject && <Editor project={currentProject} ItineraryComponent={ItineraryComponent} onProject={updateProject} onResearchSlot={agentMode ? undefined : async (slotId) => { try { await researchImageSlot(slotId); } catch (error) { setGenerationError(error?.message || "当前位置搜索失败"); alert(error?.message || "当前位置搜索失败"); } }} onRepairCopy={agentMode ? undefined : repairCopy} onRecheckCopy={agentMode ? undefined : () => recheckCopy()} onReviewFacts={() => setScreen('confirm')} copyRepairState={copyRepairState} onVersions={() => setScreen('versions')} defaultDesigner={designerProfile(user)} />}
     {screen === "versions" && currentProject && <VersionsStep project={currentProject} exporting={exporting} exportError={exportError} existingOnly={agentMode} onExport={exportProject} onBack={() => setScreen("editor")} onReviewDecision={(key, checked) => updateProject({ ...currentProject, data: { ...currentProject.data, humanReview: recordHumanReview(currentProject.data.humanReview, key, checked, user.id) } }, true)} />}
     {adminOpen && <AdminPanel users={users} projects={projects} onClose={() => setAdminOpen(false)} onToggle={(target) => { const next = users.map((item) => item.id === target.id ? { ...item, active: item.active === false } : item); setUsers(next); writeStorage(storageKeys.users, next); }} onReset={(target) => { const next = users.map((item) => item.id === target.id ? { ...item, pin: "123456" } : item); setUsers(next); writeStorage(storageKeys.users, next); alert(`${target.name} 的PIN已重置为 123456`); }} />}

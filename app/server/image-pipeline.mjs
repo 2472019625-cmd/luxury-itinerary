@@ -273,9 +273,15 @@ export async function resolveItineraryImages(data, { root, apiKey, baseUrl, mode
       if (item && !rankedIndexes.has(index)) Object.assign(item, { status: IMAGE_REVIEW_STATE.MANUAL_REVIEW, adoptable: false, libraryEligible: false, requiresDecision: false, stage: "initial_audit", reason: "初审未进入终审名单，仅供查看" });
     });
     if (!ranking.length) {
-      for (const candidate of candidates) markManual(state, candidate, "初审未给出明确硬错误，保留供人工确认");
-      state.stopReason = "manual_candidate_after_initial_audit";
-      return { selected: false, manualAvailable: true, allCandidatesHardRejected: false };
+      for (const candidate of candidates) {
+        const item = ledgerItemFor(state, candidate);
+        if (item) Object.assign(item, { status: IMAGE_REVIEW_STATE.HARD_REJECTED, adoptable: false, libraryEligible: false, requiresDecision: false, stage: "initial_audit", reason: "视觉初审未保留该候选，不进入人工可采用清单", hardRejectCode: "forbid" });
+      }
+      stats.hardRejected += candidates.length;
+      state.lastStage = "audit";
+      state.lastReason = "视觉初审未保留任何候选";
+      state.stopReason = "initial_audit_rejected_all";
+      return { selected: false, manualAvailable: false, allCandidatesHardRejected: true };
     }
     let hardCount = 0;
     const terminal = ranking.slice(0, config.terminalAuditCandidates);

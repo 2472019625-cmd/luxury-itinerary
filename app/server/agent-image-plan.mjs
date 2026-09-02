@@ -73,3 +73,33 @@ export function evaluateAgentImageCompletion(data) {
   const emptyRequired = missingRequired.filter((item) => item.status !== "manual_review");
   return { passed: missingRequired.length === 0, requiredCount: required.length, completedRequiredCount: required.length - missingRequired.length, missingRequired, pendingRequired, emptyRequired, removedOptionalSlotIds: data.imageBlueprint?.meta?.removedOptionalSlotIds || [] };
 }
+
+export function prepareTargetedImageRetry(data, slotIds = []) {
+  const requested = new Set(slotIds);
+  const next = structuredClone(data);
+  next.imageBlueprint = {
+    ...(next.imageBlueprint || {}),
+    slots: list(next.imageBlueprint?.slots).map((slot) => {
+      if (!requested.has(slot.slotId)) return slot;
+      const subject = clean(slot.subject);
+      const location = clean(slot.location || next.destination);
+      const brand = clean(slot.brand);
+      const visualGoal = clean(slot.visualGoal);
+      const existing = list(slot.searchQueries).map((item) => clean(typeof item === "string" ? item : item?.query)).filter(Boolean);
+      const primary = slot.slotId === "cover:hero"
+        ? `${location} landscape wildlife scenery sunrise official tourism high resolution`
+        : slot.slotId.startsWith("hotel:")
+          ? `${subject} ${location} official gallery exterior view`
+          : brand ? `${brand} ${location} official gallery` : `${location} ${subject} ${visualGoal} travel photography`;
+      const secondary = slot.slotId === "cover:hero" ? `${location} destination panorama nature official tourism` : `${location} ${visualGoal} official tourism high resolution`;
+      const refined = [
+        primary,
+        secondary,
+        ...existing,
+      ].map((query) => query.replace(/\s+/g, " ").trim().slice(0, 180)).filter(Boolean);
+      const unique = [...new Set(refined)];
+      return { ...slot, searchQueries: unique.slice(0, 3).map((query) => ({ query })), retryReason: "previous_candidates_mismatched_or_unverified" };
+    }),
+  };
+  return next;
+}

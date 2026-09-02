@@ -444,6 +444,8 @@ body:has(.editor-page) { overflow: hidden; }
 .agent-inline-confirm .agent-image-choice { grid-template-columns: 180px auto auto auto 1fr; align-items: start; }
 .agent-inline-confirm .agent-image-choice img { grid-row: 1 / span 3; width: 180px; height: 112px; object-fit: cover; border-radius: 5px; background: #eee7dc; }
 .agent-inline-confirm .agent-image-choice a { grid-column: 2 / -1; color: var(--ws-gold-deep); font-size: 11px; text-decoration: underline; }
+.agent-image-retry { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.agent-image-retry small { color: var(--ws-muted); }
 .agent-runtime-confirm { margin: 18px 0; padding: 16px; border: 1px solid #dfcfb7; border-radius: 9px; background: #fffdf8; }
 .agent-runtime-confirm .agent-inline-confirm { margin: 0 0 14px; padding: 12px; border: 0; background: transparent; }
 .agent-workspace-generation { grid-template-columns: minmax(0,1fr) 340px; }

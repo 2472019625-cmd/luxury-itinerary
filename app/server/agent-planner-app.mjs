@@ -11,7 +11,7 @@ import { AGENT_PROMPT_VERSION, buildAgentFactBasis, fingerprintFacts, generateAg
 import { analyzeAgentPreflight, resolvePreflightConfirmations } from "./agent-preflight.mjs";
 import { cancelExecutionRun, createExecutionRun, EXECUTION_CONFIG_VERSION, EXECUTION_ENABLED, resumeFailedExecutionRun, transitionExecutionTask } from "./agent-execution-scheduler.mjs";
 import { AgentExecutionEngine } from "./agent-execution-engine.mjs";
-import { applyRuntimeImageConfirmations, enrichPendingImageConfirmations } from "./agent-image-confirmation.mjs";
+import { applyRuntimeImageConfirmations, enrichPendingImageConfirmations, imageConfirmationChoices } from "./agent-image-confirmation.mjs";
 import { evaluateAgentImageCompletion } from "./agent-image-plan.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -133,6 +133,17 @@ export function createAgentPlannerServer(options = {}) {
     return { ...active, confirmations, executionRun, result: executionRun?.status === "complete" ? store.getFinalResult(projectId, executionRun.executionRunId) : null, activeJob: active.project.activeJobId ? jobs.get(active.project.activeJobId) || null : null };
   };
 
+  const imageGapConfirmations = (plan, data) => {
+    const imageGate = evaluateAgentImageCompletion(data);
+    const gapTaskIds = plan.tasks.filter((task) => task.taskType === "image_gap_resolution").map((task) => task.taskId);
+    return imageGate.missingRequired.map((item) => ({
+      confirmationId: randomUUID(), category: "图片", status: "pending", imageSlotId: item.slotId,
+      question: `必需图片位 ${item.slotId} 尚未自动通过，请看图确认、定向重搜或继续等待。`,
+      reason: `当前状态：${item.status}。必需位不能留空进入成品。`, source: "图片搜索与视觉审核结果",
+      affectedTaskIds: gapTaskIds, affectedTaskTypes: [], affectedPaths: [], choices: imageConfirmationChoices(data, item.slotId),
+    }));
+  };
+
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${port}`);
     if (request.method === "GET" && url.pathname === "/api/agent/health") return json(response, 200, { ok: true, flowKind: "agent_v1", port, executionEnabled: EXECUTION_ENABLED, executionConfigVersion: EXECUTION_CONFIG_VERSION, plannerConfigured: Boolean(modelConfig.apiKey), factSearchConfigured: Boolean(searchModelConfig.apiKey), imageSearchConfigured: Boolean(searchModelConfig.apiKey), visualAuditConfigured: Boolean(visionModelConfig.apiKey) });
@@ -189,6 +200,58 @@ export function createAgentPlannerServer(options = {}) {
         }
         return json(response, 202, startPlanning(next, "确认已记录，正在制定计划"));
       } catch (failure) { return json(response, 400, { error: failure.message || "无法记录确认" }); }
+    }
+    const imageRetryMatch = url.pathname.match(/^\/api\/agent\/projects\/([^/]+)\/image-retry$/);
+    if (request.method === "POST" && imageRetryMatch) {
+      try {
+        const project = store.getProject(imageRetryMatch[1]);
+        const activeRun = project ? store.getActiveExecutionRun(project.projectId) : null;
+        if (!project || !activeRun) return json(response, 404, { error: "智能体项目或执行记录不存在" });
+        if (activeRun.status !== "waiting_confirmation") return json(response, 409, { error: "当前项目不在必需图片等待阶段" });
+        if (project.activeJobId) return json(response, 409, { error: "当前项目已有任务正在运行" });
+        const savedImages = store.getTaskResult(project.projectId, activeRun.executionRunId, "image-pipeline");
+        const gate = evaluateAgentImageCompletion(savedImages?.data || {});
+        const retryable = new Set(gate.missingRequired.map((item) => item.slotId));
+        const payload = await requestBody(request);
+        const requested = [...new Set(Array.isArray(payload.slotIds) ? payload.slotIds.map(String) : [])].filter((slotId) => retryable.has(slotId));
+        if (!requested.length) return json(response, 400, { error: "没有可定向重搜的必需图片位" });
+        const now = new Date().toISOString();
+        const job = { jobId: randomUUID(), projectId: project.projectId, kind: "image-targeted-retry", status: "running", message: `正在定向重搜 ${requested.length} 个图片位`, slotIds: requested, createdAt: now, updatedAt: now };
+        jobs.set(job.jobId, job);
+        const controller = new AbortController();
+        controllers.set(job.jobId, controller);
+        store.updateProject(project.projectId, { status: "running", currentStage: job.message, activeJobId: job.jobId, lastError: null });
+        json(response, 202, job);
+        setImmediate(async () => {
+          try {
+            const result = await executor.retryImageSlots(project.projectId, activeRun, requested, { signal: controller.signal, onProgress: (event) => { job.message = event.currentAction || "正在定向重搜图片"; job.stats = event.stats || {}; job.updatedAt = new Date().toISOString(); } });
+            const plan = store.getPlan(project.projectId, activeRun.planId);
+            const retained = store.getConfirmations(project.projectId).filter((item) => item.category !== "图片" || item.status === "resolved");
+            const confirmations = imageGapConfirmations(plan, result.data);
+            store.saveConfirmations(project.projectId, [...retained, ...confirmations]);
+            if (confirmations.length) {
+              job.status = "waiting_confirmation";
+              job.message = `定向重搜完成，仍有 ${confirmations.length} 个必需图片位需要处理`;
+              store.updateProject(project.projectId, { status: "awaiting_confirmation", currentStage: "等待处理必需图片位", activeJobId: null });
+            } else {
+              let resumed = result.run;
+              for (const taskRun of resumed.taskRuns.filter((item) => item.status === "waiting_confirmation")) resumed = transitionExecutionTask(plan, resumed, taskRun.taskId, "user_resolved", { message: "定向重搜已补齐必需图片位" });
+              store.updateExecutionRun(project.projectId, resumed);
+              const finalRun = await executor.execute(project.projectId, resumed, { signal: controller.signal });
+              job.status = finalRun.status === "complete" ? "complete" : finalRun.status;
+              job.message = finalRun.status === "complete" ? "定向重搜及后续检查已完成" : "定向重搜后已继续执行";
+            }
+          } catch (failure) {
+            job.status = "failed"; job.message = "定向重搜失败，已保留原检查点"; job.error = failure.message;
+            store.updateProject(project.projectId, { status: "awaiting_confirmation", currentStage: "图片定向重搜失败，可再次尝试", activeJobId: null, lastError: failure.message });
+          } finally {
+            job.updatedAt = new Date().toISOString(); controllers.delete(job.jobId);
+            const latest = store.getProject(project.projectId);
+            if (latest?.activeJobId === job.jobId) store.updateProject(project.projectId, { activeJobId: null });
+          }
+        });
+      } catch (failure) { return json(response, 400, { error: failure.message || "无法启动图片定向重搜" }); }
+      return;
     }
     const replanMatch = url.pathname.match(/^\/api\/agent\/projects\/([^/]+)\/replan$/);
     if (request.method === "POST" && replanMatch) {

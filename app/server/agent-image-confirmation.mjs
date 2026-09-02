@@ -5,7 +5,7 @@ const list = (value) => Array.isArray(value) ? value : [];
 
 export function imageConfirmationChoices(data = {}, slotId) {
   const candidates = list(data.imageCandidates)
-    .filter((item) => item.slotId === slotId && item.status === "manual_review" && item.adoptable === true && item.hardRejectCode !== "hard_rejected")
+    .filter((item) => item.slotId === slotId && item.status === "manual_review" && item.adoptable === true && item.hardRejectCode === "none" && item.terminalAudit?.subjectMatch !== false && item.terminalAudit?.placeMatch !== false)
     .sort((left, right) => Number(right.terminalAudit?.relevance || right.baseScore || 0) - Number(left.terminalAudit?.relevance || left.baseScore || 0))
     .slice(0, 3);
   return [

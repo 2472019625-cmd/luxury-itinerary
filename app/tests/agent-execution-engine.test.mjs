@@ -67,6 +67,29 @@ test("图片搜索与视觉审核从请求开始逐次记账，不等待整段�
   assert.ok(complete.events.some((item) => item.type === "capability_call_started" && item.metrics?.capabilityId === "image_search"));
 });
 
+test("定向图片重搜复用当前检查点且只调用指定图片位", async () => {
+  let receivedSlotIds = [];
+  const { store, project, run, engine } = fixture({
+    resolveItineraryImages: async (data, { onlySlotIds, onCapabilityCall }) => {
+      receivedSlotIds = onlySlotIds;
+      onCapabilityCall({ phase: "started", capabilityId: "image_search", callId: "retry-search", stage: "images", target: onlySlotIds[0] });
+      onCapabilityCall({ phase: "finished", capabilityId: "image_search", callId: "retry-search", stage: "images", target: onlySlotIds[0], durationMs: 8, attemptCount: 1 });
+      return { data: { ...data, imageReview: { slots: [{ slotId: "cover:hero", status: "auto_selected" }, { slotId: "day:d1:spot:s1:primary", status: "auto_selected" }] } }, summary: { stats: { searchAttempts: 1 } }, ledgerFile: "retry-ledger.json" };
+    },
+  });
+  const checkpoint = { ...sourceData, imageBlueprint: { slots: [
+    { slotId: "cover:hero", required: true, useImage: true, subject: "封面", location: "肯尼亚", visualGoal: "草原日出", searchQueries: [{ query: "旧搜索" }] },
+    { slotId: "day:d1:spot:s1:primary", required: true, useImage: true, subject: "草原游猎", location: "肯尼亚", visualGoal: "野生动物", searchQueries: [{ query: "保留搜索" }] },
+  ], meta: { requiredSlotIds: ["cover:hero", "day:d1:spot:s1:primary"] } }, imageReview: { slots: [{ slotId: "cover:hero", status: "manual_review" }, { slotId: "day:d1:spot:s1:primary", status: "auto_selected" }] } };
+  store.saveTaskResult(project.projectId, run.executionRunId, "image-pipeline", { data: checkpoint, summary: {} });
+  const retried = await engine.retryImageSlots(project.projectId, run, ["cover:hero"]);
+  assert.deepEqual(receivedSlotIds, ["cover:hero"]);
+  assert.match(retried.data.imageBlueprint.slots[0].searchQueries[0].query, /^肯尼亚 landscape wildlife/);
+  assert.equal(retried.data.imageBlueprint.slots[1].searchQueries[0].query, "保留搜索");
+  assert.equal(retried.imageGate.passed, true);
+  assert.equal(retried.run.capabilityCallStats.find((item) => item.capabilityId === "image_search").actualCalls, 1);
+});
+
 test("联网来源冲突停在确认状态且不会继续生成文案", async () => {
   let copyCalled = false;
   const { store, project, run, engine } = fixture({

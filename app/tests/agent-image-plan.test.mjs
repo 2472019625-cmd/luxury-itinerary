@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { evaluateAgentImageCompletion, materializeAgentImageBlueprint } from "../server/agent-image-plan.mjs";
+import { evaluateAgentImageCompletion, materializeAgentImageBlueprint, prepareTargetedImageRetry } from "../server/agent-image-plan.mjs";
 
 const data = {
   destination: "肯尼亚",
@@ -38,4 +38,22 @@ test("必需图片位只有自动通过或用户锁定才通过完成门禁", ()
   assert.equal(pending.pendingRequired.length, 1);
   const complete = evaluateAgentImageCompletion({ imageBlueprint, imageReview: { slots: required.map((slotId, index) => ({ slotId, status: index ? "auto_selected" : "user_locked" })) } });
   assert.equal(complete.passed, true);
+});
+
+test("定向重搜只改指定图片位并把画面要求带进新搜索词", () => {
+  const source = { destination: "坦桑尼亚", imageBlueprint: { slots: [
+    { slotId: "cover:hero", subject: "封面", location: "坦桑尼亚", visualGoal: "草原日出与动物", searchQueries: [{ query: "旧封面搜索" }] },
+    { slotId: "day:1", subject: "海岛", location: "桑给巴尔", visualGoal: "海豚浮潜", searchQueries: [{ query: "旧海岛搜索" }] },
+  ] } };
+  const next = prepareTargetedImageRetry(source, ["day:1"]);
+  assert.deepEqual(next.imageBlueprint.slots[0], source.imageBlueprint.slots[0]);
+  assert.match(next.imageBlueprint.slots[1].searchQueries[0].query, /桑给巴尔.*海豚浮潜/);
+  assert.equal(next.imageBlueprint.slots[1].retryReason, "previous_candidates_mismatched_or_unverified");
+});
+
+test("封面重搜不复用规划里未经证实的具体地名", () => {
+  const source = { destination: "坦桑尼亚", imageBlueprint: { slots: [{ slotId: "cover:hero", subject: "封面", location: "坦桑尼亚", visualGoal: "可叠加埃托沙母狮", searchQueries: [{ query: "坦桑尼亚草原" }] }] } };
+  const next = prepareTargetedImageRetry(source, ["cover:hero"]);
+  assert.match(next.imageBlueprint.slots[0].searchQueries[0].query, /^坦桑尼亚 landscape wildlife/);
+  assert.doesNotMatch(next.imageBlueprint.slots[0].searchQueries[0].query, /埃托沙/);
 });

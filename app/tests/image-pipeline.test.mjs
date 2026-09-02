@@ -202,6 +202,17 @@ test("hard rejects watermark, wrong subject, broken images and duplicates", () =
   }
 });
 
+test("hard rejects explicit subject or place mismatch even when the model forgets the reject code", () => {
+  for (const audit of [
+    { subjectMatch: false, placeMatch: true, hardRejectCode: "none" },
+    { subjectMatch: true, placeMatch: false, hardRejectCode: "none" },
+  ]) {
+    const result = classifyImageCandidate({ slot: { module: "day" }, candidate: {}, audit });
+    assert.equal(result.state, IMAGE_REVIEW_STATE.HARD_REJECTED);
+    assert.equal(result.adoptable, false);
+  }
+});
+
 test("official hotel identity is not hard rejected for a non-preferred scene", () => {
   const result = classifyImageCandidate({ slot: { module: "hotel" }, candidate: { officialHint: true }, audit: { pass: false, subjectMatch: true, placeMatch: false, sourceSupportsIdentity: true, hardRejectCode: "place_mismatch", reason: "官方酒店大堂，但不是首选外观" } });
   assert.equal(result.state, IMAGE_REVIEW_STATE.MANUAL_REVIEW);

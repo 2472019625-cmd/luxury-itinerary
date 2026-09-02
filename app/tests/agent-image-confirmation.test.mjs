@@ -44,3 +44,9 @@ test("人工采用候选后锁定对应版位并留下选择记录", () => {
   assert.equal(applied.data.imageReview.slots[0].status, "user_locked");
   assert.equal(applied.data.imageDecisions[0].action, "accept_manual_candidate");
 });
+
+test("旧检查点里已经明确主体或地点不符的图片不会继续展示为可采用候选", () => {
+  const wrong = { ...candidate, candidateId: "wrong", terminalAudit: { subjectMatch: false, placeMatch: true, relevance: 90 } };
+  const choices = imageConfirmationChoices({ imageCandidates: [wrong] }, "cover:hero");
+  assert.deepEqual(choices.map((item) => item.choiceId), ["wait_for_image:cover:hero"]);
+});

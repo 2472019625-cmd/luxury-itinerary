@@ -20,8 +20,8 @@ export function classifyImageCandidate({ slot = {}, candidate = {}, audit = {}, 
   const modulePolicy = IMAGE_MODULE_POLICY[slot.module] || IMAGE_MODULE_POLICY.day;
   const code = duplicate ? "duplicate" : technicalFailure ? "broken" : String(audit.hardRejectCode || "none");
   const officialHotelIdentity = slot.module === "hotel" && candidate.officialHint && audit.subjectMatch !== false;
-  const hardPlaceMismatch = code === "place_mismatch" && !officialHotelIdentity;
-  const hardSubjectMismatch = code === "subject_mismatch" && audit.subjectMatch === false;
+  const hardPlaceMismatch = audit.placeMatch === false && !officialHotelIdentity;
+  const hardSubjectMismatch = audit.subjectMatch === false;
   const hard = duplicate || technicalFailure || audit.watermark === true || ["broken", "low_resolution", "low_quality", "forbid"].includes(code) || hardPlaceMismatch || hardSubjectMismatch;
   if (hard) return { state: IMAGE_REVIEW_STATE.HARD_REJECTED, adoptable: false, reason: technicalFailure || audit.reason || `命中硬拒绝：${code}`, hardRejectCode: HARD_CODES.has(code) ? code : "forbid" };
 
