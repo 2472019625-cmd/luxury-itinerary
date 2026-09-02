@@ -37,6 +37,14 @@ test("计划schema是正式版本化结构", () => {
   assert.equal(schema.properties.tasks.items.properties.invocationMode.const, "plan_only");
 });
 
+test("执行schema只接受计划级授权的真实运行", () => {
+  const schema = JSON.parse(readFileSync(new URL("../config/agent-execution-run.schema.json", import.meta.url), "utf8"));
+  assert.equal(schema.$id, "agent-execution-run-v2");
+  assert.equal(schema.properties.executionEnabled.const, true);
+  assert.ok(schema.required.includes("authorization"));
+  assert.ok(schema.required.includes("events"));
+});
+
 test("规划提示词把路由作为白名单并要求动态DAY目标", () => {
   const prompt = readFileSync(new URL("../prompts/agent-trip-planner-v1.md", import.meta.url), "utf8");
   assert.match(prompt, /不是每次必须逐条实例化的固定任务模板/);

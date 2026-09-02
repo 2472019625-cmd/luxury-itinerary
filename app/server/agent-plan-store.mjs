@@ -19,6 +19,7 @@ export class AgentPlanStore {
   sourceDataFile(projectId) { return path.join(this.projectDir(projectId), "inputs", "source-data.json"); }
   taskResultFile(projectId, executionRunId, taskId) { return path.join(this.projectDir(projectId), "execution-runs", executionRunId, "results", `${taskId}.json`); }
   evidenceFile(projectId, executionRunId, evidenceId) { return path.join(this.projectDir(projectId), "execution-runs", executionRunId, "evidence", `${evidenceId}.json`); }
+  finalResultFile(projectId, executionRunId) { return path.join(this.projectDir(projectId), "execution-runs", executionRunId, "final-result.json"); }
   createProject(project) {
     if (existsSync(this.projectFile(project.projectId))) throw new Error("项目已存在");
     atomicJson(this.projectFile(project.projectId), project);
@@ -100,6 +101,14 @@ export class AgentPlanStore {
   saveEvidence(projectId, executionRunId, evidenceId, evidence) {
     atomicJson(this.evidenceFile(projectId, executionRunId, evidenceId), evidence);
     return path.relative(this.projectDir(projectId), this.evidenceFile(projectId, executionRunId, evidenceId)).replaceAll("\\", "/");
+  }
+  saveFinalResult(projectId, executionRunId, result) {
+    atomicJson(this.finalResultFile(projectId, executionRunId), result);
+    return path.relative(this.projectDir(projectId), this.finalResultFile(projectId, executionRunId)).replaceAll("\\", "/");
+  }
+  getFinalResult(projectId, executionRunId) {
+    const file = this.finalResultFile(projectId, executionRunId);
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
   }
   getActiveExecutionRun(projectId) {
     const project = this.getProject(projectId);

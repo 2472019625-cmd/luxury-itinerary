@@ -57,7 +57,7 @@ export function createExecutionRun(project, plan, now = new Date().toISOString()
     authorization: { scope: "active_plan", planId: plan.planId, authorizedAt: now },
     status: "pending", createdAt: now, updatedAt: now, startedAt: null, endedAt: null, error: null,
     taskRuns: plan.tasks.map((task) => ({ taskId: task.taskId, taskType: task.taskType, stage: stageForTaskType(task.taskType), status: "pending", capabilityIds: [...task.capabilityIds], startedAt: null, endedAt: null, resultRef: null, evidenceRefs: [], retryCount: 0, error: null })),
-    capabilityCallStats: [...new Set(plan.tasks.flatMap((task) => task.capabilityIds))].map((capabilityId) => ({ capabilityId, actualCalls: 0, retries: 0, failures: 0, durationMs: 0, usage: null, estimatedCost: null })),
+    capabilityCallStats: [...new Set(plan.tasks.flatMap((task) => task.capabilityIds))].map((capabilityId) => ({ capabilityId, actualCalls: Number(plan.capabilityCallStats?.find((item) => item.capabilityId === capabilityId)?.actualCalls || 0), retries: 0, failures: 0, durationMs: 0, usage: null, estimatedCost: null })),
     progress: null, events: [],
   };
   const initialized = appendExecutionEvent(run, { type: "run_created", stage: "planning", status: "pending", message: "执行运行已获授权，等待开始" }, now);

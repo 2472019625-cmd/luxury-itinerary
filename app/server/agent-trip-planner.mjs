@@ -100,7 +100,7 @@ function assemblePlan(raw, context, previousPlanId, callStats) {
   };
 }
 
-export async function generateAgentPlan({ project, apiKey, baseUrl, model, requestJson = requestDeepSeekJson, onStatus }) {
+export async function generateAgentPlan({ project, apiKey, baseUrl, model, requestJson = requestDeepSeekJson, onStatus, signal }) {
   const factBasis = project.factBasis;
   const context = { projectId: project.projectId, inputFingerprint: project.inputFingerprint, factBasis, previousPlanVersion: project.planIds?.length || 0 };
   const sharedInput = {
@@ -124,7 +124,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
     const messages = index === 0
       ? [{ role: "system", content: prompt }, { role: "user", content: JSON.stringify(sharedInput) }]
       : [{ role: "system", content: prompt }, { role: "user", content: JSON.stringify({ ...sharedInput, correctionRequest: { errors: compactValidationErrors(firstErrors), previousPlan: raw, instruction: "只修正列出的结构和安全问题；保留事实与仍然有效的动态规划。" } }) }];
-    const response = await requestJson({ apiKey, baseUrl, model, messages, reasoningEffort: "high", maxTokens: 30000, emptyContentRetries: 1, onStatus: (event) => onStatus?.({ status: "planning", message: "规划模型正在返回结构化计划", provider: { streamPhase: event.streamPhase, receivedContentChars: event.receivedContentChars } }) });
+    const response = await requestJson({ apiKey, baseUrl, model, messages, reasoningEffort: "high", maxTokens: 30000, emptyContentRetries: 1, signal, onStatus: (event) => onStatus?.({ status: "planning", message: "规划模型正在返回结构化计划", provider: { streamPhase: event.streamPhase, receivedContentChars: event.receivedContentChars } }) });
     raw = response.json;
     const plan = assemblePlan(raw, context, project.activePlanId, callStats);
     onStatus?.({ status: "checking", message: "正在检查规则、权限、依赖与图片位" });

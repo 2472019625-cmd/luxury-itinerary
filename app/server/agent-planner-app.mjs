@@ -9,7 +9,8 @@ import { AGENT_CAPABILITY_VERSION } from "../config/agent-capabilities.mjs";
 import { AGENT_RULE_PROFILE_VERSION } from "../config/agent-rule-profile.mjs";
 import { AGENT_PROMPT_VERSION, buildAgentFactBasis, fingerprintFacts, generateAgentPlan } from "./agent-trip-planner.mjs";
 import { analyzeAgentPreflight, resolvePreflightConfirmations } from "./agent-preflight.mjs";
-import { cancelExecutionRun, createExecutionRun, EXECUTION_CONFIG_VERSION } from "./agent-execution-scheduler.mjs";
+import { cancelExecutionRun, createExecutionRun, EXECUTION_CONFIG_VERSION, EXECUTION_ENABLED, transitionExecutionTask } from "./agent-execution-scheduler.mjs";
+import { AgentExecutionEngine } from "./agent-execution-engine.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const clientDir = path.join(root, "dist", "client");
@@ -52,22 +53,37 @@ export function createAgentPlannerServer(options = {}) {
   mkdirSync(workspaceRoot, { recursive: true });
   const store = options.store || new AgentPlanStore(workspaceRoot);
   const jobs = new Map();
+  const controllers = new Map();
   const planner = options.planner || generateAgentPlan;
   const modelConfig = options.modelConfig || { apiKey: process.env.TEXT_MODEL_API_KEY, baseUrl: (process.env.TEXT_MODEL_BASE_URL || "https://api.deepseek.com").replace(/\/$/, ""), model: process.env.TEXT_MODEL_NAME || "deepseek-v4-flash" };
+  const searchModelConfig = options.searchModelConfig || { apiKey: process.env.IMAGE_SEARCH_API_KEY, baseUrl: (process.env.IMAGE_SEARCH_BASE_URL || "https://api.vveai.com/v1").replace(/\/$/, ""), model: "gemini-3.7-flash-search", imageSearchModel: process.env.IMAGE_SEARCH_MODEL || "gemini-3.6-flash-search" };
+  const visionModelConfig = options.visionModelConfig || { apiKey: process.env.BIGMODEL_API_KEY, baseUrl: (process.env.BIGMODEL_BASE_URL || "https://open.bigmodel.cn/api/paas/v4").replace(/\/$/, ""), model: process.env.BIGMODEL_MODEL || "glm-5.3-flash" };
+  const executor = options.executor || new AgentExecutionEngine({ store, root, origin: `http://127.0.0.1:${port}`, textModelConfig: modelConfig, searchModelConfig, visionModelConfig });
 
   const run = async (job, project) => {
+    let phase = "planning";
     try {
-      const result = await planner({ project, ...modelConfig, onStatus: (state) => { if (!job.cancelRequested) Object.assign(job, state, { updatedAt: new Date().toISOString() }); } });
+      const controller = controllers.get(job.jobId);
+      const result = await planner({ project, ...modelConfig, signal: controller?.signal, onStatus: (state) => { if (!job.cancelRequested) Object.assign(job, state, { updatedAt: new Date().toISOString() }); } });
       for (const attempt of result.attempts || []) store.saveAttempt(project.projectId, attempt);
       if (job.cancelRequested) { Object.assign(job, { status: "cancelled", message: "已取消", updatedAt: new Date().toISOString() }); store.updateProject(project.projectId, { status: "cancelled" }); return; }
-      store.activatePlan(project.projectId, result.plan);
-      store.updateProject(project.projectId, { activeJobId: null, lastError: null });
-      Object.assign(job, { status: "complete", message: "规划已完成", planId: result.plan.planId, updatedAt: new Date().toISOString() });
+      const activated = store.activatePlan(project.projectId, result.plan);
+      const executionRun = createExecutionRun(activated, result.plan);
+      store.saveExecutionRun(project.projectId, executionRun);
+      phase = "execution";
+      Object.assign(job, { status: "running", message: "规划已完成，正在执行生成任务", planId: result.plan.planId, executionRunId: executionRun.executionRunId, updatedAt: new Date().toISOString() });
+      const finalRun = await executor.execute(project.projectId, executionRun, { signal: controller?.signal });
+      const status = finalRun.status === "complete" ? "complete" : finalRun.status === "cancelled" ? "cancelled" : finalRun.status === "waiting_confirmation" ? "waiting_confirmation" : "failed";
+      Object.assign(job, { status, message: status === "complete" ? "完整成品已通过全部检查" : status === "waiting_confirmation" ? "等待处理关键确认" : status === "cancelled" ? "已取消" : "执行失败", updatedAt: new Date().toISOString() });
+      store.updateProject(project.projectId, { activeJobId: null });
     } catch (failure) {
       for (const attempt of failure.attempts || []) store.saveAttempt(project.projectId, attempt);
       const status = job.cancelRequested ? "cancelled" : "failed";
-      Object.assign(job, { status, message: status === "cancelled" ? "已取消" : "规划失败", error: failure.message, validationErrors: failure.validationErrors || [], updatedAt: new Date().toISOString() });
-      store.updateProject(project.projectId, { status: status === "cancelled" ? "cancelled" : "planning_failed", currentStage: status === "cancelled" ? "已取消" : "生成中断", activeJobId: null, lastError: failure.message });
+      Object.assign(job, { status, message: status === "cancelled" ? "已取消" : phase === "planning" ? "规划失败" : "执行失败", error: failure.message, validationErrors: failure.validationErrors || [], updatedAt: new Date().toISOString() });
+      if (phase === "planning") store.updateProject(project.projectId, { status: status === "cancelled" ? "cancelled" : "planning_failed", currentStage: status === "cancelled" ? "已取消" : "生成中断", activeJobId: null, lastError: failure.message });
+      else store.updateProject(project.projectId, { activeJobId: null });
+    } finally {
+      controllers.delete(job.jobId);
     }
   };
 
@@ -75,20 +91,40 @@ export function createAgentPlannerServer(options = {}) {
     const now = new Date().toISOString();
     const job = { jobId: randomUUID(), projectId: project.projectId, status: "planning", message, createdAt: now, updatedAt: now, cancelRequested: false };
     jobs.set(job.jobId, job);
+    controllers.set(job.jobId, new AbortController());
     const next = store.updateProject(project.projectId, { status: "planning", currentStage: "正在制定计划", activeJobId: job.jobId, lastError: null });
     setImmediate(() => run(job, next));
+    return job;
+  };
+
+  const resumeExecution = (project, runRecord, message = "正在从确认位置继续") => {
+    const now = new Date().toISOString();
+    const job = { jobId: randomUUID(), projectId: project.projectId, status: "running", message, createdAt: now, updatedAt: now, cancelRequested: false, executionRunId: runRecord.executionRunId, planId: runRecord.planId };
+    jobs.set(job.jobId, job);
+    const controller = new AbortController();
+    controllers.set(job.jobId, controller);
+    store.updateProject(project.projectId, { status: "running", currentStage: message, activeJobId: job.jobId, lastError: null });
+    setImmediate(async () => {
+      try {
+        const finalRun = await executor.execute(project.projectId, runRecord, { signal: controller.signal });
+        job.status = finalRun.status === "complete" ? "complete" : finalRun.status;
+        job.message = finalRun.status === "complete" ? "完整成品已通过全部检查" : finalRun.status === "waiting_confirmation" ? "等待处理关键确认" : finalRun.status === "cancelled" ? "已取消" : "执行结束";
+      } catch (failure) { job.status = "failed"; job.message = "执行失败"; job.error = failure.message; }
+      finally { job.updatedAt = new Date().toISOString(); controllers.delete(job.jobId); store.updateProject(project.projectId, { activeJobId: null }); }
+    });
     return job;
   };
 
   const projectPayload = (projectId) => {
     const active = store.getActive(projectId);
     if (!active) return null;
-    return { ...active, confirmations: store.getConfirmations(projectId), executionRun: store.getActiveExecutionRun(projectId), activeJob: active.project.activeJobId ? jobs.get(active.project.activeJobId) || null : null };
+    const executionRun = store.getActiveExecutionRun(projectId);
+    return { ...active, confirmations: store.getConfirmations(projectId), executionRun, result: executionRun?.status === "complete" ? store.getFinalResult(projectId, executionRun.executionRunId) : null, activeJob: active.project.activeJobId ? jobs.get(active.project.activeJobId) || null : null };
   };
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${port}`);
-    if (request.method === "GET" && url.pathname === "/api/agent/health") return json(response, 200, { ok: true, flowKind: "agent_v1", port, executionEnabled: false, executionConfigVersion: EXECUTION_CONFIG_VERSION, plannerConfigured: Boolean(modelConfig.apiKey) });
+    if (request.method === "GET" && url.pathname === "/api/agent/health") return json(response, 200, { ok: true, flowKind: "agent_v1", port, executionEnabled: EXECUTION_ENABLED, executionConfigVersion: EXECUTION_CONFIG_VERSION, plannerConfigured: Boolean(modelConfig.apiKey), factSearchConfigured: Boolean(searchModelConfig.apiKey), imageSearchConfigured: Boolean(searchModelConfig.apiKey), visualAuditConfigured: Boolean(visionModelConfig.apiKey) });
     if (request.method === "POST" && url.pathname === "/api/agent/projects") {
       try {
         const payload = await requestBody(request);
@@ -97,6 +133,7 @@ export function createAgentPlannerServer(options = {}) {
         const inputFingerprint = fingerprintFacts({ factBasis, sourceSha256: payload.sourceSha256 || null });
         const now = new Date().toISOString();
         let project = store.createProject({ projectId: randomUUID(), flowKind: "agent_v1", executionEnabled: false, status: "preparing", currentStage: "正在准备", activePlanId: null, planIds: [], confirmationIds: [], executionRunIds: [], activeExecutionRunId: null, activeJobId: null, inputFingerprint, source: { name: String(payload.sourceName || payload.report?.workbookName || "行程资料.xlsx"), sha256: String(payload.sourceSha256 || ""), parser: "deterministic-itinerary-import-v1" }, factBasis, versions: { ruleProfileVersion: AGENT_RULE_PROFILE_VERSION, capabilityConfigVersion: AGENT_CAPABILITY_VERSION, promptVersion: AGENT_PROMPT_VERSION, executionConfigVersion: EXECUTION_CONFIG_VERSION }, createdAt: now, updatedAt: now });
+        store.saveSourceData(project.projectId, { facts: payload.facts, report: payload.report || {}, sourceName: payload.sourceName || null, sourceSha256: payload.sourceSha256 || null, inputFingerprint, savedAt: now });
         const confirmations = analyzeAgentPreflight(factBasis);
         if (confirmations.length) {
           project = store.saveConfirmations(project.projectId, confirmations);
@@ -121,6 +158,14 @@ export function createAgentPlannerServer(options = {}) {
           return json(response, 200, projectPayload(project.projectId));
         }
         const next = store.updateProject(project.projectId, { confirmationDecisions: resolved, status: "preparing", currentStage: "正在准备" });
+        const activeRun = store.getActiveExecutionRun(project.projectId);
+        if (activeRun?.status === "waiting_confirmation") {
+          const plan = store.getPlan(project.projectId, activeRun.planId);
+          let resumed = activeRun;
+          for (const taskRun of resumed.taskRuns.filter((item) => item.status === "waiting_confirmation")) resumed = transitionExecutionTask(plan, resumed, taskRun.taskId, "user_resolved", { message: "用户已保存关键确认" });
+          store.updateExecutionRun(project.projectId, resumed);
+          return json(response, 202, resumeExecution(store.getProject(project.projectId), resumed));
+        }
         return json(response, 202, startPlanning(next, "确认已记录，正在制定计划"));
       } catch (failure) { return json(response, 400, { error: failure.message || "无法记录确认" }); }
     }
@@ -137,9 +182,12 @@ export function createAgentPlannerServer(options = {}) {
       try {
         const active = store.getActive(executionMatch[1]);
         if (!active?.plan) return json(response, 409, { error: "当前项目还没有可用计划" });
+        const current = store.getActiveExecutionRun(active.project.projectId);
+        if (current && ["pending", "running", "waiting_confirmation"].includes(current.status)) return json(response, 200, { executionRun: current });
         const executionRun = createExecutionRun(active.project, active.plan);
         store.saveExecutionRun(active.project.projectId, executionRun);
-        return json(response, 403, { error: "执行能力尚未开放", executionRun });
+        const job = resumeExecution(store.getProject(active.project.projectId), executionRun, "正在执行当前计划");
+        return json(response, 202, { executionRun, job });
       } catch (failure) { return json(response, 409, { error: failure.message }); }
     }
     const executionCancelMatch = url.pathname.match(/^\/api\/agent\/projects\/([^/]+)\/execution-runs\/([^/]+)\/cancel$/);
@@ -148,7 +196,8 @@ export function createAgentPlannerServer(options = {}) {
       if (payload.confirmed !== true) return json(response, 400, { error: "取消需要明确确认" });
       const runRecord = store.getExecutionRun(executionCancelMatch[1], executionCancelMatch[2]);
       if (!runRecord) return json(response, 404, { error: "执行记录不存在" });
-      const cancelled = cancelExecutionRun(runRecord); store.saveExecutionRun(executionCancelMatch[1], cancelled);
+      const plan = store.getPlan(executionCancelMatch[1], runRecord.planId);
+      const cancelled = cancelExecutionRun(plan, runRecord); store.updateExecutionRun(executionCancelMatch[1], cancelled);
       return json(response, 200, cancelled);
     }
     const projectCancelMatch = url.pathname.match(/^\/api\/agent\/projects\/([^/]+)\/cancel$/);
@@ -157,7 +206,12 @@ export function createAgentPlannerServer(options = {}) {
       if (payload.confirmed !== true) return json(response, 400, { error: "取消需要明确确认" });
       const project = store.getProject(projectCancelMatch[1]);
       if (!project) return json(response, 404, { error: "智能体项目不存在" });
-      if (project.activeJobId && jobs.get(project.activeJobId)) jobs.get(project.activeJobId).cancelRequested = true;
+      if (project.activeJobId && jobs.get(project.activeJobId)) { jobs.get(project.activeJobId).cancelRequested = true; controllers.get(project.activeJobId)?.abort(); }
+      const activeRun = store.getActiveExecutionRun(project.projectId);
+      if (activeRun && !["cancelled", "complete"].includes(activeRun.status)) {
+        const plan = store.getPlan(project.projectId, activeRun.planId);
+        store.updateExecutionRun(project.projectId, cancelExecutionRun(plan, activeRun));
+      }
       store.updateProject(project.projectId, { status: "cancelled", currentStage: "已取消" });
       return json(response, 200, projectPayload(project.projectId));
     }
@@ -165,7 +219,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "POST" && cancelMatch) {
       const job = jobs.get(cancelMatch[1]);
       if (!job) return json(response, 404, { error: "规划任务不存在" });
-      job.cancelRequested = true; job.message = "正在取消"; job.updatedAt = new Date().toISOString();
+      job.cancelRequested = true; job.message = "正在取消"; job.updatedAt = new Date().toISOString(); controllers.get(job.jobId)?.abort();
       return json(response, 202, job);
     }
     const jobMatch = url.pathname.match(/^\/api\/agent\/jobs\/([^/]+)$/);
@@ -186,11 +240,12 @@ export function createAgentPlannerServer(options = {}) {
     if (!existsSync(file)) { response.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end("请先运行 npm run build"); return; }
     streamFile(response, file);
   });
-  return { server, port, store, jobs };
+  return { server, port, store, jobs, controllers, executor };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   loadEnvFile(".env.local");
+  loadEnvFile(".env.image-search.local");
   const { server, port } = createAgentPlannerServer();
   server.listen(port, "127.0.0.1", () => console.log(`行程成品生成智能体：http://127.0.0.1:${port}/agent`));
 }
