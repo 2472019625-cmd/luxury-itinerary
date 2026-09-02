@@ -20,17 +20,19 @@ test("智能体浏览器存储使用独立命名空间且首批项目不显示�
   assert.match(workspace, /onDelete=\{agentMode \? undefined : setDeleteProject\}/);
 });
 
-test("生成步骤预留真实事件总览并把计划技术信息默认折叠", () => {
+test("生成步骤直接消费真实执行事件并把计划技术信息默认折叠", () => {
   const generation = workspace.slice(workspace.indexOf("function AgentGenerationStep"), workspace.indexOf("function CandidatePreview"));
   assert.match(generation, /PlanView project=\{agentProject\} plan=\{plan\}/);
-  assert.match(workspace, /资料检查[\s\S]+智能规划[\s\S]+事实核验[\s\S]+文案生成[\s\S]+图片准备[\s\S]+审核排版[\s\S]+成品检查/);
-  assert.match(workspace, /runByTaskId/);
+  assert.match(workspace, /整程规划[\s\S]+事实核验[\s\S]+文案生成[\s\S]+品牌审查[\s\S]+图片处理[\s\S]+成品渲染[\s\S]+最终检查/);
+  assert.match(workspace, /run\.progress\.stages/);
+  assert.match(workspace, /run\?\.events\?\.at\(-1\)/);
   assert.match(workspace, /aria-valuenow=\{progress\.percent\}/);
   assert.match(generation, /查看本次规划 \/ 技术详情/);
   assert.match(generation, /次下游调用/);
   assert.doesNotMatch(generation, /mini-itinerary|当前项目/);
-  assert.match(workspace, /!agentMode && screen === "editor"/);
-  assert.match(workspace, /!agentMode && screen === "versions"/);
+  assert.match(workspace, /screen === "editor" && currentProject/);
+  assert.match(workspace, /existingOnly=\{agentMode\}/);
+  assert.match(workspace, /ready_for_editor/);
 });
 
 test("等待确认保留在生成页并从当前任务继续", () => {

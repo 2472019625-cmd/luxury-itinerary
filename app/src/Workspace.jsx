@@ -275,46 +275,36 @@ function GenerationStep({ project, progress, status, error, onStart, onEdit, onR
 }
 
 const AGENT_PROGRESS_STAGES = [
-  { key: "intake", label: "资料检查" },
-  { key: "planning", label: "智能规划" },
-  { key: "facts", label: "事实核验", taskTypes: ["web_verification"] },
-  { key: "copy", label: "文案生成", taskTypes: ["copy_global", "copy_hotel_transport", "copy_day_group", "copy_closing"] },
-  { key: "images", label: "图片准备", taskTypes: ["image_search_plan"] },
-  { key: "review", label: "审核排版", taskTypes: ["copy_review", "targeted_copy_repair", "visual_review", "image_placement", "image_gap_resolution", "layout_render"] },
-  { key: "final", label: "成品检查", taskTypes: ["final_qa", "completion_gate", "persistence"] },
+  { key: "planning", label: "整程规划" },
+  { key: "verification", label: "事实核验" },
+  { key: "copy", label: "文案生成" },
+  { key: "brand_review", label: "品牌审查" },
+  { key: "images", label: "图片处理" },
+  { key: "render", label: "成品渲染" },
+  { key: "final_checks", label: "最终检查" },
 ];
-const AGENT_TASK_SUCCESS = new Set(["succeeded", "user_resolved", "user_accepted_suggestion", "not_applicable", "removed_optional"]);
-
-function taskStageState(tasks, runByTaskId) {
-  if (!tasks.length) return { state: "pending", progress: 0 };
-  const states = tasks.map((task) => runByTaskId.get(task.taskId)?.status || "pending");
-  if (states.some((state) => ["failed", "blocked"].includes(state))) return { state: "failed", progress: 0 };
-  if (states.some((state) => ["waiting_confirmation", "waiting_user"].includes(state))) return { state: "waiting", progress: states.filter((state) => AGENT_TASK_SUCCESS.has(state)).length / states.length };
-  if (states.some((state) => ["running", "retrying", "queued"].includes(state))) return { state: "active", progress: states.filter((state) => AGENT_TASK_SUCCESS.has(state)).length / states.length };
-  const completed = states.filter((state) => AGENT_TASK_SUCCESS.has(state)).length;
-  return { state: completed === states.length ? "complete" : "pending", progress: completed / states.length };
-}
-
 function buildAgentProgress(snapshot) {
   const project = snapshot?.project;
   const plan = snapshot?.plan;
   const run = snapshot?.executionRun;
-  const runByTaskId = new Map((run?.taskRuns || []).map((item) => [item.taskId, item]));
   const planActive = Boolean(plan?.validation?.passed && project?.activePlanId === plan?.planId);
-  const intakeComplete = Boolean(project && !["preparing", "awaiting_confirmation"].includes(project.status));
+  if (run?.progress?.stages?.length) {
+    const backend = new Map(run.progress.stages.map((stage) => [stage.id, stage]));
+    const states = { complete: "complete", running: "active", waiting_confirmation: "waiting", failed: "failed", pending: "pending" };
+    const stages = AGENT_PROGRESS_STAGES.map((definition) => {
+      const actual = backend.get(definition.key);
+      return { ...definition, state: states[actual?.status] || "pending", progress: actual?.totalTasks ? actual.completedTasks / actual.totalTasks : actual?.status === "complete" ? 1 : 0 };
+    });
+    if (project?.status === "cancelled") stages.forEach((stage) => { if (!["complete", "failed"].includes(stage.state)) stage.state = "cancelled"; });
+    return { stages, percent: Number(run.progress.percent || 0), planActive };
+  }
   const stages = AGENT_PROGRESS_STAGES.map((definition) => {
-    if (definition.key === "intake") {
-      if (project?.status === "awaiting_confirmation") return { ...definition, state: "waiting", progress: 0 };
-      if (intakeComplete) return { ...definition, state: "complete", progress: 1 };
-      return { ...definition, state: project ? "active" : "pending", progress: 0 };
-    }
     if (definition.key === "planning") {
       if (planActive) return { ...definition, state: "complete", progress: 1 };
       if (project?.status === "planning_failed") return { ...definition, state: "failed", progress: 0 };
       return { ...definition, state: project?.status === "planning" ? "active" : "pending", progress: 0 };
     }
-    const tasks = (plan?.tasks || []).filter((task) => definition.taskTypes.includes(task.taskType));
-    return { ...definition, ...taskStageState(tasks, runByTaskId) };
+    return { ...definition, state: "pending", progress: 0 };
   });
   if (project?.status === "cancelled") stages.forEach((stage) => { if (!["complete", "failed"].includes(stage.state)) stage.state = "cancelled"; });
   const formallyComplete = ["completed", "ready_for_editor"].includes(project?.status) && stages.every((stage) => stage.state === "complete");
@@ -325,11 +315,12 @@ function buildAgentProgress(snapshot) {
 function AgentProgressOverview({ snapshot, taskCount, executed, elapsed, action }) {
   const progress = buildAgentProgress(snapshot);
   const labels = { complete: "已完成", active: "进行中", waiting: "等待确认", failed: "已中断", cancelled: "已取消", pending: "未开始" };
-  const waitingReason = snapshot?.project?.status === "awaiting_confirmation" ? "等待：需要你确认关键业务问题" : snapshot?.executionRun?.status === "execution_disabled" ? "等待：真实执行能力尚未开放" : "";
+  const latestEvent = snapshot?.executionRun?.events?.at(-1);
+  const waitingReason = latestEvent?.waitingReason ? `等待：${latestEvent.waitingReason}` : snapshot?.project?.status === "awaiting_confirmation" ? "等待：需要你确认关键业务问题" : "";
   return <aside className="agent-progress-overview"><header><small>REAL-TIME PROGRESS</small><h2>实时进度总览</h2></header><div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress.percent} aria-label="智能体真实总进度"><strong>{progress.percent}<sup>%</sup></strong><div><span style={{ width: `${progress.percent}%` }} /></div><p>{action}</p></div><ol>{progress.stages.map((stage) => <li className={`agent-progress-${stage.state}`} key={stage.key}><i /> <span>{stage.label}</span><em>{labels[stage.state]}</em></li>)}</ol>{waitingReason && <p className="agent-progress-wait">{waitingReason}</p>}<footer><div><strong>{executed}/{taskCount}</strong><span>完成任务</span></div><div><strong>{Math.floor(elapsed / 60)}分{elapsed % 60}秒</strong><span>实际用时</span></div></footer></aside>;
 }
 
-function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, decisions, onDecision, onConfirm }) {
+function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, onEdit, decisions, onDecision, onConfirm }) {
   const agentProject = snapshot?.project;
   const plan = snapshot?.plan;
   const run = snapshot?.executionRun;
@@ -339,13 +330,14 @@ function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, dec
   const taskCount = plan?.tasks?.length || 0;
   const elapsed = agentProject?.createdAt ? Math.max(0, Math.floor((Date.now() - new Date(agentProject.createdAt).getTime()) / 1000)) : 0;
   const waiting = agentProject?.status === "awaiting_confirmation";
-  const failed = agentProject?.status === "planning_failed";
+  const failed = ["planning_failed", "execution_failed"].includes(agentProject?.status);
   const cancelled = agentProject?.status === "cancelled";
-  const ready = agentProject?.status === "ready_for_execution";
+  const ready = agentProject?.status === "ready_for_editor";
   const intakeFinished = Boolean(agentProject && !["preparing", "awaiting_confirmation"].includes(agentProject.status));
-  const activeTitle = waiting ? "需要你的确认" : failed ? "生成任务已中断" : cancelled ? "生成任务已取消" : "正在生成行程成品";
-  const action = waiting ? "等待你确认关键业务问题" : ready && run?.status === "execution_disabled" ? "等待真实执行能力开放" : activeJob?.message || agentProject?.currentStage || "正在读取智能体项目";
-  const latestResult = plan ? `智能规划已完成并通过检查，已建立 ${taskCount} 个执行任务。` : intakeFinished ? "资料检查已经完成，正在建立本次唯一任务计划。" : "正在读取并检查本次上传资料。";
+  const activeTitle = ready ? "行程成品已完成" : waiting ? "需要你的确认" : failed ? "生成任务已中断" : cancelled ? "生成任务已取消" : "正在生成行程成品";
+  const latestEvent = run?.events?.at(-1);
+  const action = waiting ? "等待你确认关键业务问题" : latestEvent?.message || activeJob?.message || agentProject?.currentStage || "正在读取智能体项目";
+  const latestResult = ready ? "文案、事实、图片、实际2000px渲染和最终检查均已通过，可以进入原编辑器。" : plan ? `智能规划已完成并通过检查，已建立 ${taskCount} 个执行任务。` : intakeFinished ? "资料检查已经完成，正在建立本次唯一任务计划。" : "正在读取并检查本次上传资料。";
   return <main className="flow-page"><StepRail active={2} /><section className="generation-page agent-workspace-generation">
     <div className="generation-main"><header><small>STEP 03 · AGENT GENERATION</small><h1>{activeTitle}</h1><p>{waiting ? "保存选择后会从受影响的当前任务继续，不会整份重跑。" : failed ? agentProject?.lastError || "当前阶段没有通过安全检查。" : cancelled ? "项目、计划和已经形成的证据都已保留。" : latestResult}</p></header>
       {waiting && <div className="agent-runtime-confirm"><AgentConfirmationPanel confirmations={snapshot?.confirmations || []} decisions={decisions} onDecision={onDecision} /><Button tone="primary" onClick={onConfirm}>保存选择并从当前任务继续</Button></div>}
@@ -353,7 +345,7 @@ function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, dec
       {plan && <details className="agent-plan-details workspace-agent-plan"><summary><small>查看本次规划 / 技术详情</small></summary><section className="agent-technical-summary"><span>计划 {plan.planId.slice(0, 8)}</span><span>{taskCount} 个任务</span><span>{executed} 个完成</span><span>{run?.capabilityCallStats?.reduce((sum, item) => sum + item.actualCalls, 0) || 0} 次下游调用</span><span>版本 {plan.planVersion}</span></section><PlanView project={agentProject} plan={plan} embedded /></details>}
     </div>
     <AgentProgressOverview snapshot={snapshot} taskCount={taskCount} executed={executed} elapsed={elapsed} action={action} />
-    <footer className="generation-footer">{!waiting && <Button onClick={onReview}>查看确认信息</Button>}{!["cancelled"].includes(agentProject?.status) && <Button onClick={onCancel}>取消任务</Button>}</footer>
+    <footer className="generation-footer">{!waiting && !ready && <Button onClick={onReview}>查看确认信息</Button>}{ready && <Button tone="primary" onClick={onEdit}>进入原编辑器</Button>}{!["cancelled", "ready_for_editor"].includes(agentProject?.status) && <Button onClick={onCancel}>取消任务</Button>}</footer>
   </section></main>;
 }
 
@@ -688,13 +680,13 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
   </div>{pickerOpen && currentSlot && <ImagePickerModal data={project.data} targetSlot={currentSlot} onClose={() => setPickerOpen(false)} onChoose={chooseLibraryImage} onResearch={() => onResearchSlot?.(currentSlot.slotId)} onUpload={(file) => { uploadLocalImage(file); setPickerOpen(false); }} />}</main>;
 }
 
-function VersionsStep({ project, exporting, exportError, onExport, onBack, onReviewDecision }) {
+function VersionsStep({ project, exporting, exportError, onExport, onBack, onReviewDecision, existingOnly = false }) {
   const humanReview = project.data.humanReview || {};
   const ready = humanReviewReady(humanReview);
   const exportEligibility = copyExportEligibility(project);
   const warningAccepted = !exportEligibility.requiresWarningAcknowledgement || humanReview.exportWithCopyWarningsConfirmed === true;
   return <main className="flow-page"><StepRail active={4} onStep={(step) => step === 3 && onBack()} /><section className="flow-content versions-content"><header className="flow-heading"><small>STEP 05</small><h1>正式版本</h1><p>每次生成都会冻结当时内容，之后仍可返回草稿继续修改。</p></header>
-    <div className="export-hero"><div><UiIcon name="included" size={32} /><h2>{exporting > 0 && exporting < 100 ? "正在生成高清成品" : "生成新的正式版本"}</h2><p>{exporting > 0 && exporting < 100 ? "正在排版并检查超长页尾，请保持此页面打开。" : "输出一张供客户查看的2000px高清长图。"}</p>{exportEligibility.hardBlocked && <p className="export-error">当前仍有事实、费用、安全或结构问题，必须先处理后才能正式导出。</p>}{exportEligibility.hasWarnings && <label><input type="checkbox" checked={humanReview.exportWithCopyWarningsConfirmed === true} onChange={(event) => onReviewDecision('exportWithCopyWarningsConfirmed', event.target.checked)} /> 我已查看全部文案待修项，仍确认按当前内容生成正式版本</label>}<label><input type="checkbox" checked={humanReview.aestheticConfirmed === true} onChange={(event) => onReviewDecision('aestheticConfirmed', event.target.checked)} /> 我已查看完整预览，确认整体审美、层级和客户可读性</label><label><input type="checkbox" checked={humanReview.licenseReviewed === true} onChange={(event) => onReviewDecision('licenseReviewed', event.target.checked)} /> 我已核对最终图片来源和使用权；授权不明素材会在正式发布前替换</label>{!ready && <p className="export-error">人工复核不会阻止进入编辑器，但生成正式客户版本前必须留下确认记录。</p>}{exporting > 0 && exporting < 100 && <div className="export-progress"><span style={{ width: `${exporting}%` }} /><strong>{exporting}%</strong></div>}{exportError && <p className="export-error">{exportError}</p>}</div><Button tone="primary" disabled={!exportEligibility.allowed || !warningAccepted || !ready || (exporting > 0 && exporting < 100)} onClick={onExport}>生成版本</Button></div>
+    {!existingOnly && <div className="export-hero"><div><UiIcon name="included" size={32} /><h2>{exporting > 0 && exporting < 100 ? "正在生成高清成品" : "生成新的正式版本"}</h2><p>{exporting > 0 && exporting < 100 ? "正在排版并检查超长页尾，请保持此页面打开。" : "输出一张供客户查看的2000px高清长图。"}</p>{exportEligibility.hardBlocked && <p className="export-error">当前仍有事实、费用、安全或结构问题，必须先处理后才能正式导出。</p>}{exportEligibility.hasWarnings && <label><input type="checkbox" checked={humanReview.exportWithCopyWarningsConfirmed === true} onChange={(event) => onReviewDecision('exportWithCopyWarningsConfirmed', event.target.checked)} /> 我已查看全部文案待修项，仍确认按当前内容生成正式版本</label>}<label><input type="checkbox" checked={humanReview.aestheticConfirmed === true} onChange={(event) => onReviewDecision('aestheticConfirmed', event.target.checked)} /> 我已查看完整预览，确认整体审美、层级和客户可读性</label><label><input type="checkbox" checked={humanReview.licenseReviewed === true} onChange={(event) => onReviewDecision('licenseReviewed', event.target.checked)} /> 我已核对最终图片来源和使用权；授权不明素材会在正式发布前替换</label>{!ready && <p className="export-error">人工复核不会阻止进入编辑器，但生成正式客户版本前必须留下确认记录。</p>}{exporting > 0 && exporting < 100 && <div className="export-progress"><span style={{ width: `${exporting}%` }} /><strong>{exporting}%</strong></div>}{exportError && <p className="export-error">{exportError}</p>}</div><Button tone="primary" disabled={!exportEligibility.allowed || !warningAccepted || !ready || (exporting > 0 && exporting < 100)} onClick={onExport}>生成版本</Button></div>}
     <div className="version-list"><header><h2>版本历史</h2><span>{project.versions?.length || 0} 个版本</span></header>{project.versions?.length ? project.versions.slice().reverse().map((version, index) => <article key={version.id}><div className="version-index">V{String(project.versions.length - index).padStart(2, "0")}</div><div><strong>{version.name}</strong><span>{formatTime(version.createdAt)} · 2000px</span></div><div className="version-downloads">{version.downloadUrl ? <a href={version.downloadUrl} download>下载高清长图</a> : <span>旧版未生成文件</span>}</div></article>) : <div className="empty-versions">还没有正式版本，点击上方按钮生成。</div>}</div>
   </section></main>;
 }
@@ -749,7 +741,23 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
         if (stopped) return;
         setAgentSnapshot(value);
         setAgentDecisions((existing) => ({ ...Object.fromEntries((value.confirmations || []).filter((item) => item.status === "pending").map((item) => [item.confirmationId, item.choices.find((choice) => choice.recommended)?.choiceId || item.choices[0]?.choiceId])), ...existing }));
-        if (["preparing", "planning"].includes(value.project.status)) timer = setTimeout(refresh, 1000);
+        if (value.project.status === "ready_for_editor" && value.result?.data) {
+          const executionRunId = value.executionRun?.executionRunId;
+          setProjects((existing) => {
+            const collection = existing.map((item) => {
+              if (item.id !== currentProject.id) return item;
+              const versionId = `agent-${executionRunId}`;
+              const versions = item.versions?.some((version) => version.id === versionId) ? item.versions : [...(item.versions || []), { id: versionId, name: `${item.title} · 智能体完整生成版`, createdAt: Date.now(), snapshot: versionSnapshot(value.result.data), downloadUrl: `/api/agent/projects/${item.agentProjectId}/output` }];
+              return { ...item, workflowStage: "generated", revisionMode: false, data: { ...value.result.data, designer: item.data.designer }, aiGeneration: { executionRunId, finalQa: value.result.finalQa, imageGate: value.result.imageGate }, versions, updatedAt: Date.now() };
+            });
+            try { writeStorage(storageKeys.projects, collection); setSaveState("saved"); } catch (error) { setSaveState("error"); setGenerationError(error?.message || "成品已生成，但本地项目保存失败"); }
+            return collection;
+          });
+          setProgress(100);
+          timer = setTimeout(() => { if (!stopped) setScreen("editor"); }, 900);
+          return;
+        }
+        if (["preparing", "planning", "ready_for_execution", "running"].includes(value.project.status) || ["pending", "running"].includes(value.executionRun?.status)) timer = setTimeout(refresh, 1000);
       } catch (error) { if (!stopped) setGenerationError(error?.message || "无法读取智能体项目"); }
     };
     refresh();
@@ -796,7 +804,7 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   };
   const createProject = () => { const data = clone(initialData); data.designer = designerProfile(user); const project = { id: uid("project"), flowKind: agentMode ? "agent_v1" : "fixed_v1", ownerId: user.id, title: "新的定制行程", customerName: "", requirements: "", data, files: [], workflowStage: "draft", visibility: {}, versions: [], updatedAt: Date.now() }; commitProjects([project, ...projects]); setAgentSnapshot(null); setProjectId(project.id); setScreen("upload"); };
   const openProject = (project) => {
-    if (agentMode) { setProjectId(project.id); setAgentSnapshot(null); setScreen(project.files?.length ? "confirm" : "upload"); return; }
+    if (agentMode) { setProjectId(project.id); setAgentSnapshot(null); setScreen(project.workflowStage === "generated" || project.revisionMode ? "editor" : project.files?.length ? "confirm" : "upload"); return; }
     if (project.data?.notes?.some((item) => typeof item === 'string')) {
       const issues = [{ ruleIds:['COPY-013'], ruleId:'COPY-013', code:'notes_legacy_structure', path:'notes', message:'历史字符串注意事项已转换为分组展示，仍需复核后才能正式导出', severity:'quality', action:'manual_revision' }];
       const normalized = { ...project, workflowStage:'needs-copy-revision', revisionMode:false, data:{ ...project.data, notes:normalizeLegacyNotesForDisplay(project.data.notes), copyQuality:{ ...(project.data.copyQuality || {}), version:'5.0', passed:false, status:'needs_copy_revision', needsReview:true, remainingIssueCount:issues.length, allIssues:issues } }, aiGeneration:{ ...(project.aiGeneration || {}), contentQuality:{ ...(project.aiGeneration?.contentQuality || {}), version:'5.0', passed:false, status:'needs_copy_revision', needsReview:true, remainingIssueCount:issues.length, allIssues:issues } } };
@@ -977,13 +985,13 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   const logout = () => { localStorage.removeItem(storageKeys.session); setUser(null); setProjectId(null); setScreen("list"); };
   if (!user) return <AuthScreen storageKeys={storageKeys} onAuth={(nextUser) => { setUsers(readStorage(storageKeys.users, [])); setUser(nextUser); }} />;
   return <div className={`workspace-shell${agentMode ? " workspace-agent-mode" : ""}`}><AppHeader user={user} project={currentProject && !["list", "admin"].includes(screen) ? currentProject : null} saved={saveState} canGenerate={agentMode ? false : copyExportEligibility(currentProject || {}).allowed} onHome={() => setScreen("list")} onLogout={logout} onAdmin={() => setAdminOpen(true)} onProfile={() => setProfileOpen(true)} onGenerate={() => setScreen('versions')} />
-    {agentMode && <div className="agent-mode-strip"><span>智能体试验版 · 独立项目数据</span><strong>真实执行能力尚未开放</strong></div>}
+    {agentMode && <div className="agent-mode-strip"><span>智能体试验版 · 独立项目数据</span><strong>六项真实能力 · 通过全部门禁才进入编辑器</strong></div>}
     {screen === "list" && <ProjectList user={user} projects={projects} onCreate={createProject} onOpen={openProject} onDelete={agentMode ? undefined : setDeleteProject} />}
     {screen === "upload" && currentProject && <UploadStep project={currentProject} onFiles={async (files, recognition, sourceSha256) => agentMode ? attachAgentProject(currentProject, files, recognition, sourceSha256) : updateProject({ ...currentProject, workflowStage: "uploaded", title: recognition.data.title || currentProject.title, data: { ...recognition.data, designer: currentProject.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type })) }, true)} onContinue={() => setScreen("confirm")} />}
     {screen === "confirm" && currentProject && <ConfirmStep project={currentProject} agentMode={agentMode} agentSnapshot={agentSnapshot} agentDecisions={agentDecisions} onAgentDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onChange={(data, metadata = {}) => updateProject({ ...currentProject, ...metadata, data })} onBack={() => setScreen("upload")} onContinue={() => agentMode ? continueAgent().catch((error) => setGenerationError(error?.message || "无法继续")) : (() => { setProgress(0); setGenerationError(""); setGenerationStatus({ phase: "queued", status: "idle", currentAction: "尚未开始", stats: {}, elapsedMs: 0 }); setScreen("generate"); })()} />}
-    {screen === "generate" && currentProject && (agentMode ? <AgentGenerationStep project={currentProject} snapshot={agentSnapshot} error={generationError} decisions={agentDecisions} onDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onConfirm={() => continueAgent().catch((error) => setGenerationError(error?.message || "无法保存确认"))} onReview={() => setScreen("confirm")} onCancel={() => cancelAgent().catch((error) => setGenerationError(error?.message || "无法取消任务"))} /> : <GenerationStep project={currentProject} progress={progress} status={generationStatus} error={generationError} onStart={generateProject} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onRevision={() => { updateProject({ ...currentProject, revisionMode: true }, true); setScreen('editor'); }} />)}
-    {!agentMode && screen === "editor" && currentProject && <Editor project={currentProject} ItineraryComponent={ItineraryComponent} onProject={updateProject} onResearchSlot={async (slotId) => { try { await researchImageSlot(slotId); } catch (error) { setGenerationError(error?.message || "当前位置搜索失败"); alert(error?.message || "当前位置搜索失败"); } }} onRepairCopy={repairCopy} onRecheckCopy={() => recheckCopy()} onReviewFacts={() => setScreen('confirm')} copyRepairState={copyRepairState} onVersions={() => setScreen('versions')} defaultDesigner={designerProfile(user)} />}
-    {!agentMode && screen === "versions" && currentProject && <VersionsStep project={currentProject} exporting={exporting} exportError={exportError} onExport={exportProject} onBack={() => setScreen("editor")} onReviewDecision={(key, checked) => updateProject({ ...currentProject, data: { ...currentProject.data, humanReview: recordHumanReview(currentProject.data.humanReview, key, checked, user.id) } }, true)} />}
+    {screen === "generate" && currentProject && (agentMode ? <AgentGenerationStep project={currentProject} snapshot={agentSnapshot} error={generationError} decisions={agentDecisions} onDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onConfirm={() => continueAgent().catch((error) => setGenerationError(error?.message || "无法保存确认"))} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onCancel={() => cancelAgent().catch((error) => setGenerationError(error?.message || "无法取消任务"))} /> : <GenerationStep project={currentProject} progress={progress} status={generationStatus} error={generationError} onStart={generateProject} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onRevision={() => { updateProject({ ...currentProject, revisionMode: true }, true); setScreen('editor'); }} />)}
+    {screen === "editor" && currentProject && <Editor project={currentProject} ItineraryComponent={ItineraryComponent} onProject={updateProject} onResearchSlot={agentMode ? undefined : async (slotId) => { try { await researchImageSlot(slotId); } catch (error) { setGenerationError(error?.message || "当前位置搜索失败"); alert(error?.message || "当前位置搜索失败"); } }} onRepairCopy={agentMode ? undefined : repairCopy} onRecheckCopy={agentMode ? undefined : () => recheckCopy()} onReviewFacts={() => setScreen('confirm')} copyRepairState={copyRepairState} onVersions={() => setScreen('versions')} defaultDesigner={designerProfile(user)} />}
+    {screen === "versions" && currentProject && <VersionsStep project={currentProject} exporting={exporting} exportError={exportError} existingOnly={agentMode} onExport={exportProject} onBack={() => setScreen("editor")} onReviewDecision={(key, checked) => updateProject({ ...currentProject, data: { ...currentProject.data, humanReview: recordHumanReview(currentProject.data.humanReview, key, checked, user.id) } }, true)} />}
     {adminOpen && <AdminPanel users={users} projects={projects} onClose={() => setAdminOpen(false)} onToggle={(target) => { const next = users.map((item) => item.id === target.id ? { ...item, active: item.active === false } : item); setUsers(next); writeStorage(storageKeys.users, next); }} onReset={(target) => { const next = users.map((item) => item.id === target.id ? { ...item, pin: "123456" } : item); setUsers(next); writeStorage(storageKeys.users, next); alert(`${target.name} 的PIN已重置为 123456`); }} />}
     {profileOpen && <ProfilePanel user={user} onClose={() => setProfileOpen(false)} onSave={(profile, syncProjects) => { const nextUsers = users.map((item) => item.id === user.id ? { ...item, name: profile.name || item.name, profile } : item); const nextUser = nextUsers.find((item) => item.id === user.id); setUsers(nextUsers); setUser(nextUser); writeStorage(storageKeys.users, nextUsers); if (syncProjects) { const nextProjects = projects.map((item) => item.ownerId === user.id ? { ...item, data: { ...item.data, designer: clone(profile) }, updatedAt: Date.now() } : item); commitProjects(nextProjects); } setProfileOpen(false); }} />}
     {!agentMode && deleteProject && <DeleteDialog project={deleteProject} onCancel={() => setDeleteProject(null)} onConfirm={() => { commitProjects(projects.filter((item) => item.id !== deleteProject.id)); setDeleteProject(null); }} />}

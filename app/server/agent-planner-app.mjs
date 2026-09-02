@@ -40,7 +40,7 @@ async function requestBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
-const contentTypes = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".png": "image/png", ".svg": "image/svg+xml", ".otf": "font/otf", ".ttf": "font/ttf" };
+const contentTypes = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".otf": "font/otf", ".ttf": "font/ttf" };
 function streamFile(response, file) {
   response.writeHead(200, { "content-type": contentTypes[path.extname(file).toLowerCase()] || "application/octet-stream" });
   createReadStream(file).pipe(response);
@@ -232,7 +232,26 @@ export function createAgentPlannerServer(options = {}) {
       const active = projectPayload(projectMatch[1]);
       return active ? json(response, 200, active) : json(response, 404, { error: "规划项目不存在" });
     }
+    const outputMatch = url.pathname.match(/^\/api\/agent\/projects\/([^/]+)\/output$/);
+    if (["GET", "HEAD"].includes(request.method) && outputMatch) {
+      const activeRun = store.getActiveExecutionRun(outputMatch[1]);
+      const result = activeRun?.status === "complete" ? store.getFinalResult(outputMatch[1], activeRun.executionRunId) : null;
+      const outputRoot = path.resolve(root, "output");
+      const file = result?.outputFile ? path.resolve(result.outputFile) : null;
+      if (!file || !file.startsWith(`${outputRoot}${path.sep}`) || !existsSync(file)) return json(response, 404, { error: "正式成品文件不存在" });
+      response.writeHead(200, { "content-type": "image/png", "content-disposition": `attachment; filename="itinerary-${outputMatch[1]}.png"` });
+      if (request.method === "HEAD") return response.end();
+      return createReadStream(file).pipe(response);
+    }
     if (url.pathname.startsWith("/api/")) return json(response, 404, { error: "智能体规划服务未提供该能力" });
+    if (["GET", "HEAD"].includes(request.method) && url.pathname.startsWith("/image-assets/")) {
+      const assetRoot = path.resolve(root, "output", "image-assets");
+      const relativeAsset = decodeURIComponent(url.pathname.slice("/image-assets/".length));
+      const file = path.resolve(assetRoot, relativeAsset);
+      if (!file.startsWith(`${assetRoot}${path.sep}`) || !existsSync(file)) return json(response, 404, { error: "图片素材不存在" });
+      if (request.method === "HEAD") { response.writeHead(200, { "content-type": contentTypes[path.extname(file).toLowerCase()] || "application/octet-stream" }); return response.end(); }
+      return streamFile(response, file);
+    }
     if (!["GET", "HEAD"].includes(request.method)) { response.writeHead(405).end("Method not allowed"); return; }
     const relative = decodeURIComponent(url.pathname === "/" ? "index.html" : url.pathname.replace(/^\/+/, ""));
     const candidate = path.resolve(clientDir, relative);
