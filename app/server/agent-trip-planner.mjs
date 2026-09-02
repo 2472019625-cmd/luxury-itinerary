@@ -105,6 +105,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   const context = { projectId: project.projectId, inputFingerprint: project.inputFingerprint, factBasis, previousPlanVersion: project.planIds?.length || 0 };
   const sharedInput = {
     factBasis,
+    preflightDecisions: project.confirmationDecisions || [],
     inputFingerprint: project.inputFingerprint,
     versions: { ruleProfileVersion: AGENT_RULE_PROFILE_VERSION, capabilityConfigVersion: AGENT_CAPABILITY_VERSION, promptVersion: AGENT_PROMPT_VERSION },
     globalHardRuleIds: GLOBAL_HARD_RULE_IDS,

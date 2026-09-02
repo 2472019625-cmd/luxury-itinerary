@@ -19,3 +19,29 @@ test("独立服务硬拒绝4173且不暴露旧生成端点", async () => {
     assert.match((await forbidden.json()).error, /未提供该能力/);
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
+
+test("缺失费用边界时只创建等待确认项目且不调用规划器", async () => {
+  let plannerCalls = 0;
+  const { server } = createAgentPlannerServer({ port:0, workspaceRoot:mkdtempSync(path.join(tmpdir(),"agent-confirm-")), modelConfig:{apiKey:"test"}, planner:async()=>{plannerCalls+=1;} });
+  await new Promise((resolve)=>server.listen(0,"127.0.0.1",resolve)); const port=server.address().port;
+  try {
+    const response=await fetch(`http://127.0.0.1:${port}/api/agent/projects`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({facts:{destination:"肯尼亚",days:[{route:"内罗毕—保护区"}]},report:{workbookName:"fresh-conflict.xlsx",warnings:["费用包含字段缺失，将阻止生成"]}})});
+    const created=await response.json();
+    assert.equal(created.status,"awaiting_confirmation");
+    assert.equal(plannerCalls,0);
+    const project=await (await fetch(`http://127.0.0.1:${port}/api/agent/projects/${created.projectId}`)).json();
+    assert.equal(project.confirmations.length,1);
+    assert.equal(project.plan,null);
+  } finally { await new Promise((resolve)=>server.close(resolve)); }
+});
+
+test("执行检查保存独立零调用记录并返回明确禁用状态", async () => {
+  const { server,store }=createAgentPlannerServer({port:0,workspaceRoot:mkdtempSync(path.join(tmpdir(),"agent-exec-http-")),modelConfig:{apiKey:"test"}});
+  store.createProject({projectId:"p1",flowKind:"agent_v1",executionEnabled:false,status:"planning",activePlanId:null,planIds:[],executionRunIds:[],inputFingerprint:"fp"});
+  store.activatePlan("p1",{planId:"plan1",inputFingerprint:"fp",status:"plan_only",executionEnabled:false,ruleProfileVersion:"agent-rules-v1",capabilityConfigVersion:"agent-capabilities-v1",tasks:[{taskId:"task1",taskType:"source_intake",capabilityIds:["source_parser"],dependsOn:[],parallelGroup:"P1"}]});
+  await new Promise((resolve)=>server.listen(0,"127.0.0.1",resolve)); const port=server.address().port;
+  try {
+    const response=await fetch(`http://127.0.0.1:${port}/api/agent/projects/p1/execution-runs`,{method:"POST"}); const value=await response.json();
+    assert.equal(response.status,403); assert.match(value.error,/尚未开放/); assert.equal(value.executionRun.planId,"plan1"); assert.ok(value.executionRun.capabilityCallStats.every((item)=>item.actualCalls===0));
+  } finally { await new Promise((resolve)=>server.close(resolve)); }
+});

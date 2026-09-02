@@ -39,7 +39,7 @@ function TaskCards({ tasks }) {
   </article>)}</div>;
 }
 
-function PlanView({ project, plan, onReplan, busy }) {
+export function PlanView({ project, plan, onReplan, busy, embedded = false }) {
   const fact = plan.factBasis;
   const copyTasks = tasksBy(plan, ["copy_global", "copy_hotel_transport", "copy_day_group", "copy_closing", "copy_review", "targeted_copy_repair"]);
   const webTasks = tasksBy(plan, ["web_verification"]);
@@ -47,7 +47,7 @@ function PlanView({ project, plan, onReplan, busy }) {
   const parallelGroups = useMemo(() => Object.entries((plan.tasks || []).reduce((groups, task) => { (groups[task.parallelGroup] ||= []).push(task); return groups; }, {})), [plan]);
   const nonPlanningCalls = (plan.capabilityCallStats || []).filter((item) => !["source_parser", "trip_planner"].includes(item.capabilityId)).reduce((sum, item) => sum + item.actualCalls, 0);
   return <main className="agent-plan">
-    <div className="agent-plan-heading"><div><p className="agent-eyebrow">项目 {project.projectId.slice(0, 8)} · 计划版本 {plan.planVersion}</p><h1>{fact.destination} · {fact.dayCount}日行程成品规划</h1><p>这份页面直接读取当前有效计划 <code>{plan.planId}</code>，没有另一套展示计划。</p></div><button className="agent-secondary" disabled={busy} onClick={onReplan}>重新规划</button></div>
+    {!embedded && <div className="agent-plan-heading"><div><p className="agent-eyebrow">项目 {project.projectId.slice(0, 8)} · 计划版本 {plan.planVersion}</p><h1>{fact.destination} · {fact.dayCount}日行程成品规划</h1><p>这份页面直接读取当前有效计划 <code>{plan.planId}</code>，没有另一套展示计划。</p></div><button className="agent-secondary" disabled={busy} onClick={onReplan}>重新规划</button></div>}
 
     <Section number="01" title="我理解到的行程"><div className="agent-fact-grid"><div><b>{fact.destination}</b><span>目的地</span></div><div><b>{fact.dayCount} 天</b><span>行程长度</span></div><div><b>{fact.travelerCount || "待确认"}</b><span>出行人数</span></div><div><b>{fact.hotels.length}</b><span>识别酒店</span></div></div><p>{fact.startDate || "日期待确认"} 至 {fact.endDate || "日期待确认"}；住宿：{fact.hotels.map((hotel) => `${hotel.name}${hotel.nights ? `（${hotel.nights}晚）` : ""}`).join("、") || "未识别"}。</p><div className="agent-day-strip">{fact.days.map((day) => <span key={day.day}><b>DAY {day.day}</b>{day.route || day.experience || "待补充"}</span>)}</div></Section>
     <Section number="02" title="这次的整体规划"><div className="agent-theme-grid"><article><small>内容主线</small><h3>{plan.summary.contentTheme}</h3></article><article><small>视觉主线</small><h3>{plan.summary.visualTheme}</h3></article></div><p>{plan.summary.planningRationale}</p><div className="agent-module-list">{(plan.modules || []).map((module) => <div key={module.moduleId}><Chip tone={module.decision === "show" ? "safe" : "muted"}>{module.decision === "show" ? "显示" : "隐藏"}</Chip><b>{module.label}</b><span>{module.reason}</span></div>)}</div></Section>
@@ -56,7 +56,7 @@ function PlanView({ project, plan, onReplan, busy }) {
     <Section number="05" title="图片准备怎么规划"><p>{plan.imagePlan.visualStory}</p><div className="agent-slot-grid">{(plan.imagePlan.slots || []).map((slot) => <article key={slot.slotId}><div><Chip tone={slot.required ? "warn" : "muted"}>{slot.required ? "必需主图" : "可移除补充图"}</Chip><span>{slot.role}</span></div><h3>{slot.label}</h3><p>{slot.visualDuty}</p><small>{slot.differentiation || slot.searchIntent}</small></article>)}</div><TaskCards tasks={imageTasks} /></Section>
     <Section number="06" title="任务怎样同时进行"><p>本次共有 <b>{plan.tasks.length}</b> 个由行程事实驱动的动态任务。</p><div className="agent-parallel">{parallelGroups.map(([group, tasks]) => <article key={group}><Chip>{group}</Chip><div>{tasks.map((task) => <span key={task.taskId}>{task.title}</span>)}</div></article>)}</div></Section>
     <Section number="07" title="需要你确认的问题">{plan.confirmations?.length ? <div className="agent-list">{plan.confirmations.map((item) => <article key={item.confirmationId}><Chip tone="warn">{item.category}</Chip><h3>{item.question}</h3><p>{item.reason}</p></article>)}</div> : <p className="agent-success">本次没有需要人工确认的关键问题。</p>}</Section>
-    <Section number="08" title="安全检查结果"><div className="agent-safety"><div><b>通过</b><span>规则覆盖</span></div><div><b>未改写</b><span>确定性事实</span></div><div><b>{nonPlanningCalls}</b><span>未授权能力调用</span></div><div><b>安全</b><span>依赖与并行</span></div><div><b>plan_only</b><span>当前计划状态</span></div></div><details><summary>查看技术明细</summary><pre>{JSON.stringify({ planId: plan.planId, activePlanId: project.activePlanId, inputFingerprint: plan.inputFingerprint, versions: { rules: plan.ruleProfileVersion, capabilities: plan.capabilityConfigVersion, prompt: plan.promptVersion }, checkpointCoverage: plan.checkpointCoverage, capabilityCallStats: plan.capabilityCallStats, validation: plan.validation }, null, 2)}</pre></details></Section>
+    <Section number="08" title="安全检查结果"><div className="agent-safety"><div><b>通过</b><span>规则覆盖</span></div><div><b>未改写</b><span>确定性事实</span></div><div><b>{nonPlanningCalls}</b><span>未授权能力调用</span></div><div><b>安全</b><span>依赖与并行</span></div><div><b>plan_only</b><span>当前计划状态</span></div></div>{!embedded && <details><summary>查看技术明细</summary><pre>{JSON.stringify({ planId: plan.planId, activePlanId: project.activePlanId, inputFingerprint: plan.inputFingerprint, versions: { rules: plan.ruleProfileVersion, capabilities: plan.capabilityConfigVersion, prompt: plan.promptVersion }, checkpointCoverage: plan.checkpointCoverage, capabilityCallStats: plan.capabilityCallStats, validation: plan.validation }, null, 2)}</pre></details>}</Section>
     <Section number="09" title="规划调整记录" muted>{plan.adjustments?.length ? <div className="agent-list">{plan.adjustments.map((item, index) => <article key={index}><h3>{item.issue || "规划调整"}</h3><p>{item.change || item.description}</p></article>)}</div> : <p className="agent-empty">首次计划已直接通过安全检查，没有发生结构修正。</p>}<p className="agent-record-note">旧计划会保留；重新规划只会创建新记录并更新 activePlanId，不会覆盖历史。</p></Section>
   </main>;
 }
@@ -98,6 +98,7 @@ export function AgentPlanner() {
     const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: payload ? JSON.stringify(payload) : "{}" });
     const created = await response.json();
     if (!response.ok) throw new Error(created.error || "无法创建规划任务");
+    if (created.status === "awaiting_confirmation") { window.location.assign(`/agent/projects/${created.projectId}`); return; }
     setJob(created); await poll(created);
   };
   const upload = async (event) => {

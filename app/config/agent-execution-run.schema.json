@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-execution-run-v1",
+  "title": "智能体执行运行记录",
+  "type": "object",
+  "required": ["executionRunId", "projectId", "planId", "inputFingerprint", "executionEnabled", "status", "taskRuns", "capabilityCallStats"],
+  "properties": {
+    "executionRunId": { "type": "string", "minLength": 1 },
+    "projectId": { "type": "string", "minLength": 1 },
+    "planId": { "type": "string", "minLength": 1 },
+    "inputFingerprint": { "type": "string", "minLength": 1 },
+    "executionEnabled": { "const": false },
+    "status": { "enum": ["execution_disabled", "pending", "running", "waiting_confirmation", "failed", "cancelled", "complete"] },
+    "taskRuns": { "type": "array", "items": { "type": "object", "required": ["taskId", "status", "capabilityIds", "evidenceRefs"] } },
+    "capabilityCallStats": { "type": "array", "items": { "type": "object", "required": ["capabilityId", "actualCalls"], "properties": { "actualCalls": { "const": 0 } } } }
+  }
+}
