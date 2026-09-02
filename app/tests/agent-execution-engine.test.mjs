@@ -21,6 +21,8 @@ const tasks = [
   task("control", "control", ["task_cancel", "project_store"]), task("persist", "persistence", ["project_store"]),
 ];
 
+const controlledDecision = (item, action, overrides = {}) => ({ findingId: item.findingId, targetId: item.targetId, action, finalJudgment: action === "request_user_confirmation" ? "needs_user_decision" : action === "preserve_supported" ? "not_established" : "established", reason: "测试决定", evidenceRefs: [], ruleIds: [item.ruleIds[0]], allowedTarget: item.path, forbiddenChanges: ["其他目标"], recheckTargets: ["targeted_retry", "invoke_capability", "adjust_scope_or_strength"].includes(action) ? [item.path] : [], consumesBusinessRetry: ["targeted_retry", "invoke_capability"].includes(action), proposedChanges: [], ...overrides });
+
 function fixture(adapters = {}) {
   const store = new AgentPlanStore(mkdtempSync(path.join(tmpdir(), "agent-engine-")));
   const plan = { planId: "plan-1", projectId: "project-1", inputFingerprint: "fp", status: "plan_only", executionEnabled: false, ruleProfileVersion: AGENT_RULE_PROFILE_VERSION, capabilityConfigVersion: AGENT_CAPABILITY_VERSION, factBasis: { destination: "肯尼亚" }, webVerification: [{ subject: "Example", field: "policy" }], imagePlan: { visualStory: "草原初见", slots: [{ role: "cover", required: true, searchIntent: "Kenya savanna" }, { role: "day:1", required: true, searchIntent: "Kenya safari" }] }, tasks, capabilityCallStats: [{ capabilityId: "trip_planner", actualCalls: 1 }] };
@@ -35,6 +37,7 @@ function fixture(adapters = {}) {
     resolveItineraryImages: async (data) => ({ data: { ...data, heroImage: "/image-assets/cover.webp", days: [{ ...data.days[0], spots: [{ ...data.days[0].spots[0], images: [{ src: "/image-assets/day.webp" }] }] }], imageReview: { slots: data.imageBlueprint.meta.requiredSlotIds.map((slotId) => ({ slotId, status: "auto_selected" })) } }, summary: { stats: { searchAttempts: 2, initialAuditCalls: 1, terminalAuditCalls: 1 } }, ledgerFile: "ledger.json" }),
     reviewFinalLayout: async () => ({ runId: "layout-1", outputFile: "final.png", qaFile: "qa.json", layoutQa: { width: 2000, overflows: [], brokenImages: [], largeGaps: [], footerPresent: true }, width: 2000, height: 5000, failedSlotIds: [], modelReviewed: false, outputQa: { passed: true } }),
     reviewFinalOutputData: () => ({ passed: true, issues: [] }),
+    decideAgentReviewFindings: async ({ packet }) => ({ decision: { summary: "测试决定", decisions: packet.findings.map((item) => controlledDecision(item, "request_user_confirmation")) }, callCount: 1, durationMs: 1, usage: null, model: "test" }),
   };
   const engine = new AgentExecutionEngine({ store, root: mkdtempSync(path.join(tmpdir(), "agent-app-")), origin: "http://127.0.0.1:4174", textModelConfig: {}, searchModelConfig: {}, visionModelConfig: {}, adapters: { ...defaults, ...adapters } });
   return { store, plan, project, run, engine };
@@ -69,8 +72,11 @@ test("图片搜索与视觉审核从请求开始逐次记账，不等待整段�
 
 test("定向图片重搜复用当前检查点且只调用指定图片位", async () => {
   let receivedSlotIds = [];
+  let receivedOptions = null;
   const { store, project, run, engine } = fixture({
-    resolveItineraryImages: async (data, { onlySlotIds, onCapabilityCall }) => {
+    resolveItineraryImages: async (data, options) => {
+      const { onlySlotIds, onCapabilityCall } = options;
+      receivedOptions = options;
       receivedSlotIds = onlySlotIds;
       onCapabilityCall({ phase: "started", capabilityId: "image_search", callId: "retry-search", stage: "images", target: onlySlotIds[0] });
       onCapabilityCall({ phase: "finished", capabilityId: "image_search", callId: "retry-search", stage: "images", target: onlySlotIds[0], durationMs: 8, attemptCount: 1 });
@@ -84,10 +90,13 @@ test("定向图片重搜复用当前检查点且只调用指定图片位", async
   store.saveTaskResult(project.projectId, run.executionRunId, "image-pipeline", { data: checkpoint, summary: {} });
   const retried = await engine.retryImageSlots(project.projectId, run, ["cover:hero"]);
   assert.deepEqual(receivedSlotIds, ["cover:hero"]);
+  assert.equal(receivedOptions.disableCache, false);
+  assert.equal(receivedOptions.maxBusinessRounds, 1);
   assert.match(retried.data.imageBlueprint.slots[0].searchQueries[0].query, /^肯尼亚 草原游猎/);
   assert.equal(retried.data.imageBlueprint.slots[1].searchQueries[0].query, "保留搜索");
   assert.equal(retried.imageGate.passed, true);
   assert.equal(retried.run.capabilityCallStats.find((item) => item.capabilityId === "image_search").actualCalls, 1);
+  await assert.rejects(() => engine.retryImageSlots(project.projectId, retried.run, ["cover:hero"]), /唯一一次定向补搜/);
 });
 
 test("联网来源冲突停在确认状态且不会继续生成文案", async () => {
@@ -101,6 +110,47 @@ test("联网来源冲突停在确认状态且不会继续生成文案", async ()
   assert.equal(copyCalled, false);
   assert.equal(store.getProject(project.projectId).status, "awaiting_confirmation");
   assert.equal(store.getConfirmations(project.projectId).filter((item) => item.status === "pending").length, 1);
+});
+
+test("联网审核被总智能体判定为原始资料有依据时不会误改或阻塞", async () => {
+  let copyCalled = false;
+  let decisionCalls = 0;
+  const { store, project, run, engine } = fixture({
+    runWebFactSearch: async () => ({ durationMs: 10, usage: null, adoptedFacts: [], conflicts: [{ subject: "Example", field: "policy", statement: "公开来源口径不同", sourceName: "公开页", sourceUrl: "https://example.com" }], unverified: [], internalSuggestions: [] }),
+    decideAgentReviewFindings: async ({ packet }) => {
+      decisionCalls += 1;
+      return { decision: { summary: "原始资料有明确依据", decisions: packet.findings.map((item) => controlledDecision(item, "preserve_supported", { evidenceRefs: [`source:${item.findingId}`] })) }, callCount: 1, durationMs: 1, model: "test" };
+    },
+    runAgentCopyPipeline: async () => { copyCalled = true; return { data: { ...sourceData, copyQuality: { passed: true } }, contentQuality: { passed: true, brandReviewCallCount: 1, brandReviewDurationMs: 1, targetRuns: [], remainingIssues: [] }, usage: { modules: [], brandReview: null }, model: "test" }; },
+  });
+  const complete = await engine.execute(project.projectId, run);
+  assert.equal(complete.status, "complete");
+  assert.equal(copyCalled, true);
+  assert.equal(decisionCalls, 1);
+  assert.equal(store.getConfirmations(project.projectId).filter((item) => item.status === "pending").length, 0);
+});
+
+test("图片首轮缺口只按总智能体决定局部补搜一次", async () => {
+  let imageCalls = 0;
+  let decisionCalls = 0;
+  const { project, run, engine } = fixture({
+    resolveItineraryImages: async (data, options) => {
+      imageCalls += 1;
+      assert.equal(options.maxBusinessRounds, 1);
+      assert.equal(options.disableCache, false);
+      if (imageCalls === 1) return { data: { ...data, imageReview: { slots: data.imageBlueprint.meta.requiredSlotIds.map((slotId) => ({ slotId, status: slotId === "cover:hero" ? "empty" : "auto_selected" })) } }, summary: { stats: { searchAttempts: 2 } }, ledgerFile: "initial.json" };
+      assert.deepEqual(options.onlySlotIds, ["cover:hero"]);
+      return { data: { ...data, heroImage: "/image-assets/cover.webp", days: [{ ...data.days[0], spots: [{ ...data.days[0].spots[0], images: [{ src: "/image-assets/day.webp" }] }] }], imageReview: { slots: data.imageBlueprint.meta.requiredSlotIds.map((slotId) => ({ slotId, status: "auto_selected" })) } }, summary: { stats: { searchAttempts: 1 } }, ledgerFile: "retry.json" };
+    },
+    decideAgentReviewFindings: async ({ packet }) => {
+      decisionCalls += 1;
+      return { decision: { summary: "只补搜封面", decisions: packet.findings.map((item) => controlledDecision(item, "invoke_capability", { capabilityId: "image_search" })) }, callCount: 1, durationMs: 1, model: "test" };
+    },
+  });
+  const complete = await engine.execute(project.projectId, run);
+  assert.equal(complete.status, "complete");
+  assert.equal(imageCalls, 2);
+  assert.equal(decisionCalls, 1);
 });
 
 test("取消会中止当前能力并保留已形成的运行事件", async () => {

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { AGENT_CAPABILITY_BY_ID, AGENT_CAPABILITY_VERSION } from "../config/agent-capabilities.mjs";
 import { AGENT_RULE_PROFILE_VERSION } from "../config/agent-rule-profile.mjs";
 
-export const EXECUTION_CONFIG_VERSION = "agent-execution-v3-checkpointed-calls";
+export const EXECUTION_CONFIG_VERSION = "agent-execution-v4-controlled-review-decisions";
 export const EXECUTION_ENABLED = true;
 
 export const EXECUTION_STAGES = Object.freeze([

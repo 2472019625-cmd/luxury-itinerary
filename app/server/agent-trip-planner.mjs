@@ -7,10 +7,12 @@ import { AGENT_RULE_PROFILE_VERSION, GLOBAL_HARD_RULE_IDS } from "../config/agen
 import { requestDeepSeekJson } from "./deepseek-client.mjs";
 import { compactValidationErrors, validateAgentPlan } from "./agent-plan-validator.mjs";
 import { compileAgentExecutionPlan, filterImagePlanForModules } from "./agent-plan-compiler.mjs";
+import { validateReviewDecisionBatch } from "./agent-review-decision.mjs";
 
 export const AGENT_PROMPT_VERSION = "agent-trip-planner-v2-light-business";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const prompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-trip-planner-v1.md"), "utf8");
+const reviewDecisionPrompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-review-decision-v1.md"), "utf8");
 
 function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
@@ -149,4 +151,44 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   failure.validationErrors = compactValidationErrors(firstErrors);
   failure.attempts = attempts;
   throw failure;
+}
+
+export async function decideAgentReviewFindings({ packet, apiKey, baseUrl, model, requestJson = requestDeepSeekJson, onStatus, signal }) {
+  if (!packet?.findings?.length) return { packet, decision: { summary: "本批次没有审核问题，无需调用总智能体", decisions: [] }, validation: { valid: true, errors: [], decisions: [] }, callCount: 0, durationMs: 0, usage: null, model: null };
+  onStatus?.({ status: "review_decision", message: `正在统一判断 ${packet.findings.length} 个审核结果` });
+  const started = Date.now();
+  let response;
+  let technicalAttempts = 0;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    technicalAttempts = attempt;
+    try {
+      response = await requestJson({
+        apiKey,
+        baseUrl,
+        model,
+        messages: [{ role: "system", content: reviewDecisionPrompt }, { role: "user", content: JSON.stringify(packet) }],
+        reasoningEffort: "high",
+        maxTokens: 8_000,
+        timeoutMs: 60_000,
+        emptyContentRetries: 0,
+        signal,
+        onStatus: (event) => onStatus?.({ status: "review_decision", message: attempt === 1 ? "总智能体正在返回本批次受控决定" : "首次技术调用失败，正在进行唯一一次技术重试", provider: { streamPhase: event.streamPhase, receivedContentChars: event.receivedContentChars } }),
+      });
+      break;
+    } catch (error) {
+      if (error?.name === "AbortError" || attempt === 2) {
+        error.reviewDecisionTechnicalAttempts = technicalAttempts;
+        throw error;
+      }
+    }
+  }
+  const validation = validateReviewDecisionBatch(packet, response.json);
+  if (!validation.valid) {
+    const error = new Error("总智能体的审核决定未通过权限和范围检查");
+    error.code = "review_decision_invalid";
+    error.details = validation.errors;
+    error.rawDecision = response.json;
+    throw error;
+  }
+  return { packet, decision: response.json, validation, callCount: technicalAttempts + Math.max(0, Number(response.attemptUsages?.length || 1) - 1), durationMs: Date.now() - started, usage: response.usage || null, model: response.model || model };
 }

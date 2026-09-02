@@ -8,6 +8,8 @@ import { reviewFinalLayout } from "./final-layout-review.mjs";
 import { reviewFinalOutputData } from "./final-output-qa.mjs";
 import { beginCapabilityCall, cancelExecutionRun, finishCapabilityCall, recordCapabilityCall, transitionExecutionTask } from "./agent-execution-scheduler.mjs";
 import { imageConfirmationChoices } from "./agent-image-confirmation.mjs";
+import { buildReviewPacket, validateReviewDecisionBatch } from "./agent-review-decision.mjs";
+import { decideAgentReviewFindings } from "./agent-trip-planner.mjs";
 
 const PLANNING_TYPES = ["project_setup", "source_intake", "fact_review", "confirmation", "journey_strategy", "module_strategy"];
 const COPY_GENERATION_TYPES = ["copy_global", "copy_hotel_transport", "copy_day_group", "copy_closing"];
@@ -57,7 +59,7 @@ export class AgentExecutionEngine {
     this.textModelConfig = textModelConfig;
     this.searchModelConfig = searchModelConfig;
     this.visionModelConfig = visionModelConfig;
-    this.adapters = { runWebFactSearch, runAgentCopyPipeline, resolveItineraryImages, reviewFinalLayout, reviewFinalOutputData, ...adapters };
+    this.adapters = { runWebFactSearch, runAgentCopyPipeline, resolveItineraryImages, reviewFinalLayout, reviewFinalOutputData, decideAgentReviewFindings, ...adapters };
   }
 
   persistRun(plan, run) {
@@ -107,6 +109,13 @@ export class AgentExecutionEngine {
     if (!savedImages?.data) throw new Error("当前项目没有可续跑的图片检查点");
     const requested = [...new Set(slotIds)].filter(Boolean);
     if (!requested.length) throw new Error("没有指定需要重新搜索的图片位");
+    const alreadyRetried = new Set([...(savedImages.targetedRetry?.slotIds || []), ...(savedImages.targetedRetry?.history || []).flatMap((item) => item.slotIds || [])]);
+    const repeated = requested.filter((slotId) => alreadyRetried.has(slotId));
+    if (repeated.length) {
+      const error = new Error(`图片位 ${repeated.join("、")} 已完成唯一一次定向补搜，不能重复自动搜索`);
+      error.code = "image_targeted_retry_exhausted";
+      throw error;
+    }
     const { plan } = active;
     let next = this.store.getExecutionRun(projectId, run.executionRunId) || run;
     const applyCapabilityEvent = (event) => {
@@ -125,7 +134,8 @@ export class AgentExecutionEngine {
       searchBaseUrl: this.searchModelConfig.baseUrl,
       searchModel: this.searchModelConfig.imageSearchModel || this.searchModelConfig.model,
       onlySlotIds: requested,
-      disableCache: true,
+      disableCache: false,
+      maxBusinessRounds: 1,
       signal: stageSignal,
       onProgress: (event) => {
         this.updateStage(projectId, event.currentAction || "正在定向重搜图片");
@@ -133,7 +143,8 @@ export class AgentExecutionEngine {
       },
       onCapabilityCall: applyCapabilityEvent,
     }), { signal, onTargetExceeded: () => this.updateStage(projectId, "图片定向重搜已超过目标时间，正在处理当前图片位") });
-    const saved = { summary: images.summary, ledgerFile: images.ledgerFile, data: images.data, targetedRetry: { slotIds: requested, completedAt: new Date().toISOString() } };
+    const targetedRetry = { slotIds: [...alreadyRetried, ...requested], completedAt: new Date().toISOString(), history: [...(savedImages.targetedRetry?.history || []), { slotIds: requested, completedAt: new Date().toISOString() }] };
+    const saved = { summary: images.summary, ledgerFile: images.ledgerFile, data: images.data, targetedRetry };
     this.store.saveTaskResult(projectId, run.executionRunId, "image-pipeline", saved);
     return { ...saved, run: next, imageGate: evaluateAgentImageCompletion(images.data) };
   }
@@ -149,6 +160,50 @@ export class AgentExecutionEngine {
     const applyCapabilityEvent = (event, taskId) => {
       const details = { ...event, taskId, message: event.phase === "started" ? `${event.target} 调用开始` : event.failed ? `${event.target} 调用失败` : `${event.target} 调用完成` };
       next = event.phase === "started" ? this.beginCall(plan, next, event.capabilityId, details) : this.finishCall(plan, next, event.capabilityId, details);
+    };
+    const decideReviewBatch = async ({ stage, findings, sourceFacts = plan.factBasis, currentData = null, availableCapabilities = [], context = {}, remainingAttempts = 1 }) => {
+      const valueAtPath = (value, targetPath) => String(targetPath || "").replace(/\[(\d+)\]/g, ".$1").split(".").filter(Boolean).reduce((current, key) => current == null ? undefined : current[key], value);
+      const findingsWithValues = (findings || []).map((item) => ({ ...item, currentValue: item.currentValue ?? valueAtPath(currentData, item.path || item.targetId) ?? null }));
+      const packet = buildReviewPacket({
+        stage,
+        findings: findingsWithValues,
+        sourceFacts,
+        userConfirmedFacts: this.store.getConfirmations(projectId).filter((item) => item.selectedChoiceId),
+        officialEvidence: sourceData.authoritativeFacts || [],
+        availableCapabilities,
+        context: { ...context, currentData },
+        remainingAttempts,
+      });
+      if (!packet.findings.length) return { packet, decision: { summary: "没有审核问题，无需调用总智能体", decisions: [] }, validation: { valid: true, errors: [], decisions: [] }, callCount: 0, cached: false };
+      const resultKey = `review-decision-${stage}`;
+      const cached = this.store.getTaskResult(projectId, run.executionRunId, resultKey);
+      if (cached?.packet?.fingerprint === packet.fingerprint && cached?.validation?.valid) return { ...cached, cached: true };
+      this.updateStage(projectId, `正在统一判断${stage === "copy" ? "文案" : stage === "images" ? "图片" : stage === "verification" ? "事实" : "最终检查"}审核结果`);
+      const taskId = taskIdsFor(plan, ["journey_strategy"])[0] || plan.tasks[0]?.taskId;
+      const callId = randomUUID();
+      const started = Date.now();
+      next = this.beginCall(plan, next, "trip_planner", { callId, taskId, stage: "review_decision", target: stage, message: `总智能体开始统一判断 ${packet.findings.length} 个审核结果` });
+      let raw;
+      try {
+        raw = await runWithinStageBudget("review_decision", (stageSignal) => this.adapters.decideAgentReviewFindings({ packet, ...this.textModelConfig, signal: stageSignal, onStatus: (event) => this.updateStage(projectId, event.message || "正在统一判断审核结果") }), { signal, onTargetExceeded: () => this.updateStage(projectId, "审核结果判断已超过目标时间，正在收敛当前批次") });
+        const decision = raw.decision || raw.json || raw;
+        const validation = validateReviewDecisionBatch(packet, decision);
+        if (!validation.valid) {
+          const invalid = new Error("总智能体的审核决定未通过权限和范围检查");
+          invalid.code = "review_decision_invalid";
+          invalid.details = validation.errors;
+          throw invalid;
+        }
+        const result = { packet, decision, validation, callCount: raw.callCount || 1, durationMs: raw.durationMs || Date.now() - started, usage: raw.usage || null, model: raw.model || this.textModelConfig.model, cached: false };
+        next = this.finishCall(plan, next, "trip_planner", { callId, taskId, stage: "review_decision", target: stage, durationMs: result.durationMs, usage: result.usage, attemptCount: result.callCount, message: "总智能体的审核决定已通过程序检查" });
+        const evidenceRef = this.store.saveEvidence(projectId, run.executionRunId, `${resultKey}-${packet.fingerprint.slice(0, 12)}`, result);
+        this.store.saveTaskResult(projectId, run.executionRunId, resultKey, { ...result, evidenceRef });
+        return { ...result, evidenceRef };
+      } catch (error) {
+        next = this.finishCall(plan, next, "trip_planner", { callId, taskId, stage: "review_decision", target: stage, durationMs: Date.now() - started, attemptCount: error.reviewDecisionTechnicalAttempts || 1, failed: error?.name !== "AbortError", cancelled: error?.name === "AbortError", reason: error.message, message: "审核决定未通过程序检查" });
+        this.store.saveEvidence(projectId, run.executionRunId, `${resultKey}-failure-${packet.fingerprint.slice(0, 12)}`, { packet, error: { code: error.code || "review_decision_failed", message: error.message, details: error.details || [] }, failedAt: new Date().toISOString() });
+        throw error;
+      }
     };
     try {
       this.updateStage(projectId, "正在应用已验证的整程规划");
@@ -173,11 +228,30 @@ export class AgentExecutionEngine {
         const evidenceRef = this.store.saveEvidence(projectId, run.executionRunId, "web-fact-search", verification);
         this.store.saveTaskResult(projectId, run.executionRunId, "web-verification", verification);
         if (verification.conflicts.length) {
-          const confirmations = verification.conflicts.map((item) => makeRuntimeConfirmation({ category: "事实", question: `${item.subject} 的“${item.field}”公开来源与现有资料存在冲突，是否保留原始资料并使用保守表达？`, reason: item.statement || "联网核验发现来源冲突。", source: `${item.sourceName} · ${item.sourceUrl}`, affectedTaskIds: verificationTaskIds, choices: [{ choiceId: "keep_original_conservative", label: "保留原始资料并继续", recommended: true, reason: "不让联网结果覆盖本次供应商资料和用户确认事实。" }, { choiceId: "wait_for_fact_source", label: "等待补充依据", recommended: false, reason: "项目保持等待，取得更可靠依据后继续。" }] }));
-          this.saveRuntimeConfirmations(projectId, confirmations);
-          next = this.transitionTypes(plan, next, ["web_verification"], "waiting_confirmation", { message: "事实来源存在冲突，等待确认", waitingReason: "联网来源与现有资料冲突", evidenceRefs: [evidenceRef] });
-          this.updateStage(projectId, "等待确认联网事实冲突", "awaiting_confirmation");
-          return next;
+          const findings = verification.conflicts.map((item, index) => ({ ...item, findingId: `verification-conflict-${index + 1}`, targetId: `${item.subject || "fact"}.${item.field || index + 1}`, path: `${item.subject || "fact"}.${item.field || index + 1}`, code: "source_conflict", issueLevel: "hard", message: item.statement || "联网来源与原始资料存在冲突", sourceBasis: "原始供应商资料优先", reviewEvidence: { sourceName: item.sourceName, sourceUrl: item.sourceUrl }, allowedCapabilities: ["web_fact_search"], remainingAttempts: 1 }));
+          const decision = await decideReviewBatch({ stage: "verification", findings, availableCapabilities: ["web_fact_search"], context: { verificationItems: plan.webVerification || [] } });
+          const byId = new Map(decision.decision.decisions.map((item) => [item.findingId, item]));
+          const retryFindings = findings.filter((item) => ["targeted_retry", "invoke_capability"].includes(byId.get(item.findingId)?.action));
+          let pendingConflicts = findings.filter((item) => ["request_user_confirmation", "cancel_task"].includes(byId.get(item.findingId)?.action)).map((finding) => verification.conflicts.find((item) => `${item.subject || "fact"}.${item.field || ""}` === finding.targetId)).filter(Boolean);
+          if (retryFindings.length) {
+            const retryItems = (plan.webVerification || []).filter((item) => retryFindings.some((finding) => finding.targetId === `${item.subject || "fact"}.${item.field || ""}`));
+            const retryCallId = randomUUID();
+            const retryStarted = Date.now();
+            next = this.beginCall(plan, next, "web_fact_search", { callId: retryCallId, taskId: verificationTaskIds[0], stage: "verification", target: "targeted-recheck", message: "按总智能体决定定向复核事实" });
+            const recheck = await runWithinStageBudget("verification", (stageSignal) => this.adapters.runWebFactSearch({ ...this.searchModelConfig, factBasis: plan.factBasis, verificationItems: retryItems.length ? retryItems : plan.webVerification || [], signal: stageSignal }), { signal, onTargetExceeded: () => this.updateStage(projectId, "事实定向复核已超过目标时间") });
+            next = this.finishCall(plan, next, "web_fact_search", { callId: retryCallId, taskId: verificationTaskIds[0], stage: "verification", target: "targeted-recheck", durationMs: recheck.durationMs || Date.now() - retryStarted, usage: recheck.usage, attemptCount: recheck.attemptCount || 1, message: "事实定向复核完成" });
+            pendingConflicts = [...pendingConflicts, ...(recheck.conflicts || [])];
+            verification = { ...verification, adoptedFacts: [...verification.adoptedFacts, ...(recheck.adoptedFacts || [])], targetedRecheck: recheck };
+            this.store.saveEvidence(projectId, run.executionRunId, "web-fact-search-targeted-recheck", recheck);
+            this.store.saveTaskResult(projectId, run.executionRunId, "web-verification", verification);
+          }
+          if (pendingConflicts.length) {
+            const confirmations = pendingConflicts.map((item) => makeRuntimeConfirmation({ category: "事实", question: `${item.subject} 的“${item.field}”仍缺少足够依据，是否等待补充资料？`, reason: item.statement || "联网核验发现来源冲突。", source: `${item.sourceName} · ${item.sourceUrl}`, affectedTaskIds: verificationTaskIds, choices: [{ choiceId: "wait_for_fact_source", label: "等待补充依据", recommended: true, reason: "不让联网结果覆盖本次供应商资料和用户确认事实。" }] }));
+            this.saveRuntimeConfirmations(projectId, confirmations);
+            next = this.transitionTypes(plan, next, ["web_verification"], "waiting_confirmation", { message: "事实来源仍有冲突，等待补充依据", waitingReason: "联网来源与现有资料冲突", evidenceRefs: [evidenceRef] });
+            this.updateStage(projectId, "等待补充事实依据", "awaiting_confirmation");
+            return next;
+          }
         }
         next = this.transitionTypes(plan, next, ["web_verification"], "succeeded", { message: `事实核验完成：采用 ${verification.adoptedFacts.length} 条有来源事实`, evidenceRefs: [evidenceRef] });
       }
@@ -195,7 +269,7 @@ export class AgentExecutionEngine {
         const brandCallsBefore = next.capabilityCallStats.find((item) => item.capabilityId === "brand_reviewer")?.actualCalls || 0;
         let copy;
         try {
-          copy = await runWithinStageBudget("copy", (stageSignal) => this.adapters.runAgentCopyPipeline({ sourceData, businessPlan: plan, projectRoot: this.root, executionRunId: run.executionRunId, modelConfig: this.textModelConfig, signal: stageSignal, hiddenModules, onStage: (event) => this.updateStage(projectId, event.currentAction || "正在生成客户文案"), onCapabilityCall: (event) => {
+          copy = await runWithinStageBudget("copy", (stageSignal) => this.adapters.runAgentCopyPipeline({ sourceData, businessPlan: plan, projectRoot: this.root, executionRunId: run.executionRunId, modelConfig: this.textModelConfig, signal: stageSignal, hiddenModules, decideReviewFindings: (request) => decideReviewBatch({ ...request, sourceFacts: request.sourceFacts || plan.factBasis }), onStage: (event) => this.updateStage(projectId, event.currentAction || "正在生成客户文案"), onCapabilityCall: (event) => {
             const details = { ...event, message: event.phase === "started" ? `${event.target} 调用开始` : event.failed ? `${event.target} 调用失败` : `${event.target} 调用完成` };
             next = event.phase === "started" ? this.beginCall(plan, next, event.capabilityId, details) : this.finishCall(plan, next, event.capabilityId, details);
           } }), { signal, onTargetExceeded: () => this.updateStage(projectId, "文案阶段已超过目标时间，正在处理当前批次") });
@@ -212,6 +286,19 @@ export class AgentExecutionEngine {
         if ((next.capabilityCallStats.find((item) => item.capabilityId === "brand_reviewer")?.actualCalls || 0) === brandCallsBefore && !copy.contentQuality.brandReviewReused) next = this.recordCall(plan, next, "brand_reviewer", { taskId: taskIdsFor(plan, COPY_REVIEW_TYPES)[0], stage: "brand_review", durationMs: copy.contentQuality.brandReviewDurationMs, usage: copy.usage?.brandReview, message: "唯一一次品牌审查完成" });
         if (copy.contentQuality.brandReviewCallCount !== 1) throw new Error("品牌审查调用次数违反每份成品一次的约束");
         if (!copy.contentQuality.passed) {
+          const decisions = copy.contentQuality.reviewDecision?.decision?.decisions || [];
+          const waitingIds = new Set(decisions.filter((item) => item.action === "request_user_confirmation").map((item) => item.findingId));
+          const waitingIssues = (copy.contentQuality.remainingIssues || []).filter((item) => waitingIds.has(item.findingId));
+          if (waitingIssues.length) {
+            const affectedTaskIds = taskIdsFor(plan, COPY_REPAIR_TYPES);
+            const confirmations = waitingIssues.map((item) => makeRuntimeConfirmation({ category: "审核", question: `文案目标 ${item.path || item.targetId} 缺少足够依据，是否补充依据后再继续？`, reason: item.message || "审核结果涉及关键事实或超出自动修改权限。", source: item.sourceBasis || "文案审核与总智能体判断", affectedTaskIds, choices: [{ choiceId: "wait_for_supporting_evidence", label: "等待补充依据", recommended: true, reason: "关键事实不在证据不足时自动修改或放行。" }] }));
+            this.saveRuntimeConfirmations(projectId, confirmations);
+            next = this.transitionTypes(plan, next, COPY_GENERATION_TYPES, "succeeded", { message: "文案模块生成完成", resultRef: copyRef });
+            next = this.transitionTypes(plan, next, COPY_REVIEW_TYPES, "succeeded", { message: "品牌审查与总智能体判断已完成", resultRef: copyRef });
+            next = this.transitionTypes(plan, next, COPY_REPAIR_TYPES, "waiting_confirmation", { message: "关键文案依据等待用户补充", waitingReason: "审核问题超出自动修改权限", resultRef: copyRef });
+            this.updateStage(projectId, "等待补充关键文案依据", "awaiting_confirmation");
+            return next;
+          }
           next = this.transitionTypes(plan, next, COPY_GENERATION_TYPES, "succeeded", { message: "文案模块生成完成", resultRef: copyRef });
           next = this.transitionTypes(plan, next, COPY_REVIEW_TYPES, "failed", { message: "文案仍有未解决问题", resultRef: copyRef, error: { code: "copy_quality_failed", issues: copy.contentQuality.remainingIssues } });
           throw new Error("文案经过一次品牌审查和目标重新生成后仍未通过规则门禁");
@@ -230,34 +317,66 @@ export class AgentExecutionEngine {
         workingData = { ...workingData, contentVisualMainline: workingData.contentVisualMainline || null, imageBlueprint: materializeAgentImageBlueprint(workingData, plan.imagePlan, { planId: plan.planId }) };
         const searchCallsBefore = next.capabilityCallStats.find((item) => item.capabilityId === "image_search")?.actualCalls || 0;
         const visualCallsBefore = next.capabilityCallStats.find((item) => item.capabilityId === "visual_auditor")?.actualCalls || 0;
-        const images = await runWithinStageBudget("images", (stageSignal) => this.adapters.resolveItineraryImages(workingData, { root: this.root, apiKey: this.visionModelConfig.apiKey, baseUrl: this.visionModelConfig.baseUrl, model: this.visionModelConfig.model, searchApiKey: this.searchModelConfig.apiKey, searchBaseUrl: this.searchModelConfig.baseUrl, searchModel: this.searchModelConfig.imageSearchModel || this.searchModelConfig.model, disableCache: true, signal: stageSignal, onProgress: (event) => this.updateStage(projectId, event.currentAction || "正在处理图片"), onCapabilityCall: (event) => applyCapabilityEvent(event, event.capabilityId === "image_search" ? taskIdsFor(plan, ["image_search_plan"])[0] : taskIdsFor(plan, ["visual_review"])[0]) }), { signal, onTargetExceeded: () => this.updateStage(projectId, "图片阶段已超过目标时间，正在处理当前图片位") });
+        const images = await runWithinStageBudget("images", (stageSignal) => this.adapters.resolveItineraryImages(workingData, { root: this.root, apiKey: this.visionModelConfig.apiKey, baseUrl: this.visionModelConfig.baseUrl, model: this.visionModelConfig.model, searchApiKey: this.searchModelConfig.apiKey, searchBaseUrl: this.searchModelConfig.baseUrl, searchModel: this.searchModelConfig.imageSearchModel || this.searchModelConfig.model, disableCache: false, maxBusinessRounds: 1, signal: stageSignal, onProgress: (event) => this.updateStage(projectId, event.currentAction || "正在处理图片"), onCapabilityCall: (event) => applyCapabilityEvent(event, event.capabilityId === "image_search" ? taskIdsFor(plan, ["image_search_plan"])[0] : taskIdsFor(plan, ["visual_review"])[0]) }), { signal, onTargetExceeded: () => this.updateStage(projectId, "图片阶段已超过目标时间，正在处理当前图片位") });
         workingData = images.data;
         const imageRef = this.store.saveTaskResult(projectId, run.executionRunId, "image-pipeline", { summary: images.summary, ledgerFile: images.ledgerFile, data: workingData });
         if ((next.capabilityCallStats.find((item) => item.capabilityId === "image_search")?.actualCalls || 0) === searchCallsBefore) for (let index = 0; index < Number(images.summary?.stats?.searchAttempts || 0); index += 1) next = this.recordCall(plan, next, "image_search", { taskId: taskIdsFor(plan, ["image_search_plan"])[0], stage: "images", message: "真实图片搜索与下载完成" });
         const auditCalls = Number(images.summary?.stats?.initialAuditCalls || 0) + Number(images.summary?.stats?.terminalAuditCalls || 0);
         if ((next.capabilityCallStats.find((item) => item.capabilityId === "visual_auditor")?.actualCalls || 0) === visualCallsBefore) for (let index = 0; index < auditCalls; index += 1) next = this.recordCall(plan, next, "visual_auditor", { taskId: taskIdsFor(plan, ["visual_review"])[0], stage: "images", message: "视觉候选审核完成" });
         next = this.transitionTypes(plan, next, IMAGE_TYPES, "succeeded", { message: "图片搜索、视觉审核与放置完成", resultRef: imageRef });
-        const imageGate = evaluateAgentImageCompletion(workingData);
+        let imageGate = evaluateAgentImageCompletion(workingData);
         if (!imageGate.passed) {
+          const imageDecision = await decideReviewBatch({
+            stage: "images",
+            findings: imageGate.missingRequired.map((item, index) => ({ findingId: `image-gap-${index + 1}`, targetId: item.slotId, path: item.slotId, slotId: item.slotId, code: "required_image_missing", issueLevel: "hard", required: true, message: `必需图片位当前状态为 ${item.status}`, reviewEvidence: workingData.imageReview?.slots?.find((slot) => slot.slotId === item.slotId) || null, allowedCapabilities: ["image_search"], remainingAttempts: 1 })),
+            currentData: { imageReview: workingData.imageReview, imageBlueprint: workingData.imageBlueprint },
+            availableCapabilities: ["image_search"],
+          });
+          const retrySlotIds = imageDecision.decision.decisions.filter((item) => ["targeted_retry", "invoke_capability"].includes(item.action)).map((item) => item.targetId);
+          if (retrySlotIds.length) {
+            const retried = await this.retryImageSlots(projectId, next, retrySlotIds, { signal, onProgress: (event) => this.updateStage(projectId, event.currentAction || "正在定向补搜图片") });
+            next = retried.run;
+            workingData = retried.data;
+            imageGate = retried.imageGate;
+          }
+          if (imageGate.passed) {
+            next = this.transitionTypes(plan, next, ["image_gap_resolution"], "succeeded", { message: "总智能体指定的局部补搜已补齐必需图片位", resultRef: imageRef });
+          } else {
           const gapTaskIds = taskIdsFor(plan, ["image_gap_resolution"]);
           const confirmations = imageGate.missingRequired.map((item) => ({ ...makeRuntimeConfirmation({ category: "图片", question: `必需图片位 ${item.slotId} 尚未自动通过，请看图确认候选或继续等待。`, reason: `当前状态：${item.status}。必需位不能留空进入成品。`, source: "图片搜索与视觉审核结果", affectedTaskIds: gapTaskIds, choices: imageConfirmationChoices(workingData, item.slotId) }), imageSlotId: item.slotId }));
           this.saveRuntimeConfirmations(projectId, confirmations);
           next = this.transitionTypes(plan, next, ["image_gap_resolution"], "waiting_confirmation", { message: "必需图片位等待处理", waitingReason: "必需图片位没有可自动采用图片", resultRef: imageRef });
           this.updateStage(projectId, "等待处理必需图片位", "awaiting_confirmation");
           return next;
+          }
         }
-        next = this.transitionTypes(plan, next, ["image_gap_resolution"], "succeeded", { message: "所有必需图片位均已有可用图片", resultRef: imageRef });
+        if (needsWork(plan, next, ["image_gap_resolution"])) next = this.transitionTypes(plan, next, ["image_gap_resolution"], "succeeded", { message: "所有必需图片位均已有可用图片", resultRef: imageRef });
       }
 
       this.updateStage(projectId, "正在生成实际 2000px 成品并检查");
       next = this.transitionTypes(plan, next, ["layout_render"], "running", { message: "正在渲染实际 2000px 长图" });
       const layoutVisualCallsBefore = next.capabilityCallStats.find((item) => item.capabilityId === "visual_auditor")?.actualCalls || 0;
-      const layout = await runWithinStageBudget("render", (stageSignal) => this.adapters.reviewFinalLayout(workingData, { root: this.root, origin: this.origin, apiKey: this.visionModelConfig.apiKey, baseUrl: this.visionModelConfig.baseUrl, model: this.visionModelConfig.model, signal: stageSignal, onProgress: (event) => this.updateStage(projectId, event.currentAction || "正在检查实际长图"), onCapabilityCall: (event) => applyCapabilityEvent(event, taskIdsFor(plan, ["layout_render"])[0]) }), { signal, onTargetExceeded: () => this.updateStage(projectId, "渲染检查已超过目标时间，正在保存当前版面证据") });
-      const layoutRef = this.store.saveEvidence(projectId, run.executionRunId, "final-layout-review", layout);
+      let layout = await runWithinStageBudget("render", (stageSignal) => this.adapters.reviewFinalLayout(workingData, { root: this.root, origin: this.origin, apiKey: this.visionModelConfig.apiKey, baseUrl: this.visionModelConfig.baseUrl, model: this.visionModelConfig.model, signal: stageSignal, onProgress: (event) => this.updateStage(projectId, event.currentAction || "正在检查实际长图"), onCapabilityCall: (event) => applyCapabilityEvent(event, taskIdsFor(plan, ["layout_render"])[0]) }), { signal, onTargetExceeded: () => this.updateStage(projectId, "渲染检查已超过目标时间，正在保存当前版面证据") });
+      let layoutRef = this.store.saveEvidence(projectId, run.executionRunId, "final-layout-review", layout);
       if (layout.modelReviewed && (next.capabilityCallStats.find((item) => item.capabilityId === "visual_auditor")?.actualCalls || 0) === layoutVisualCallsBefore) next = this.recordCall(plan, next, "visual_auditor", { taskId: taskIdsFor(plan, ["layout_render"])[0], stage: "render", message: "实际 2000px 长图视觉检查完成" });
       if (layout.failedSlotIds?.length) {
-        next = this.transitionTypes(plan, next, ["layout_render"], "failed", { message: "实际长图仍有图片放置问题", evidenceRefs: [layoutRef], error: { code: "layout_image_failed", failedSlotIds: layout.failedSlotIds } });
-        throw new Error(`实际 2000px 长图有 ${layout.failedSlotIds.length} 个图片位未通过`);
+        const layoutDecision = await decideReviewBatch({ stage: "layout", findings: layout.failedSlotIds.map((slotId, index) => ({ findingId: `layout-slot-${index + 1}`, targetId: slotId, path: slotId, slotId, code: "layout_image_failed", issueLevel: "hard", required: true, message: "实际 2000px 长图中的图片位未通过版面检查", reviewEvidence: { layoutRunId: layout.runId, qaFile: layout.qaFile }, allowedCapabilities: ["image_search"], remainingAttempts: 1 })), currentData: { imageReview: workingData.imageReview, layoutQa: layout.layoutQa }, availableCapabilities: ["image_search"] });
+        const retrySlotIds = layoutDecision.decision.decisions.filter((item) => ["targeted_retry", "invoke_capability"].includes(item.action)).map((item) => item.targetId);
+        if (retrySlotIds.length) {
+          const retried = await this.retryImageSlots(projectId, next, retrySlotIds, { signal, onProgress: (event) => this.updateStage(projectId, event.currentAction || "正在修复版面中的图片位") });
+          next = retried.run;
+          workingData = retried.data;
+          layout = await runWithinStageBudget("render", (stageSignal) => this.adapters.reviewFinalLayout(workingData, { root: this.root, origin: this.origin, apiKey: this.visionModelConfig.apiKey, baseUrl: this.visionModelConfig.baseUrl, model: this.visionModelConfig.model, signal: stageSignal, onProgress: (event) => this.updateStage(projectId, event.currentAction || "正在复查修改后的实际长图"), onCapabilityCall: (event) => applyCapabilityEvent(event, taskIdsFor(plan, ["layout_render"])[0]) }), { signal, onTargetExceeded: () => this.updateStage(projectId, "版面局部复查已超过目标时间") });
+          layoutRef = this.store.saveEvidence(projectId, run.executionRunId, "final-layout-targeted-recheck", layout);
+        }
+        if (layout.failedSlotIds?.length) {
+          const gapTaskIds = taskIdsFor(plan, ["image_gap_resolution"]);
+          const confirmations = layout.failedSlotIds.map((slotId) => ({ ...makeRuntimeConfirmation({ category: "图片", question: `实际长图中的图片位 ${slotId} 仍未通过，请确认候选或等待补充图片。`, reason: "局部修复后仍未通过实际 2000px 版面检查。", source: layout.qaFile || "实际长图检查", affectedTaskIds: gapTaskIds.length ? gapTaskIds : taskIdsFor(plan, ["layout_render"]), choices: imageConfirmationChoices(workingData, slotId) }), imageSlotId: slotId }));
+          this.saveRuntimeConfirmations(projectId, confirmations);
+          next = this.transitionTypes(plan, next, ["layout_render"], "waiting_confirmation", { message: "实际长图仍有图片位等待处理", waitingReason: "局部修复后版面仍未通过", evidenceRefs: [layoutRef] });
+          this.updateStage(projectId, "等待处理实际长图图片位", "awaiting_confirmation");
+          return next;
+        }
       }
       next = this.transitionTypes(plan, next, ["layout_render"], "succeeded", { message: "实际 2000px 长图渲染与视觉检查完成", evidenceRefs: [layoutRef] });
 
@@ -267,6 +386,21 @@ export class AgentExecutionEngine {
       const finalPassed = finalQa.passed && imageGate.passed && layout.width === 2000 && layout.outputQa?.passed !== false;
       const qaRef = this.store.saveEvidence(projectId, run.executionRunId, "final-qa", { finalQa, imageGate, layout: { runId: layout.runId, width: layout.width, height: layout.height, outputFile: layout.outputFile, qaFile: layout.qaFile, outputQa: layout.outputQa } });
       if (!finalPassed) {
+        const finalFindings = [
+          ...(finalQa.issues || []).map((item, index) => ({ ...item, findingId: `final-qa-${index + 1}`, targetId: item.path || item.code || `final-${index + 1}`, path: item.path || item.code || `final-${index + 1}`, issueLevel: "hard", message: item.message || item.reason || "最终门禁未通过", remainingAttempts: 0 })),
+          ...imageGate.missingRequired.map((item, index) => ({ findingId: `final-image-${index + 1}`, targetId: item.slotId, path: item.slotId, code: "required_image_missing", issueLevel: "hard", required: true, message: `最终门禁发现必需图片位状态为 ${item.status}`, remainingAttempts: 0 })),
+          ...(layout.width !== 2000 ? [{ findingId: "final-width", targetId: "render.width", path: "render.width", code: "output_width_invalid", issueLevel: "hard", message: `实际成品宽度为 ${layout.width}，不是 2000px`, remainingAttempts: 0 }] : []),
+          ...(layout.outputQa?.passed === false ? [{ findingId: "final-output-qa", targetId: "render.outputQa", path: "render.outputQa", code: "render_output_failed", issueLevel: "hard", message: "实际渲染成品未通过输出检查", remainingAttempts: 0 }] : []),
+        ];
+        const finalDecision = await decideReviewBatch({ stage: "final", findings: finalFindings, currentData: { finalQa, imageGate, layout: { width: layout.width, outputQa: layout.outputQa } }, availableCapabilities: [], remainingAttempts: 0 });
+        const needsConfirmation = finalDecision.decision.decisions.some((item) => item.action === "request_user_confirmation");
+        if (needsConfirmation) {
+          const confirmations = finalDecision.decision.decisions.filter((item) => item.action === "request_user_confirmation").map((item) => makeRuntimeConfirmation({ category: "审核", question: `最终检查项 ${item.targetId} 仍未通过，是否等待补充或修复后继续？`, reason: item.reason || "最终硬门禁不能自动忽略。", source: layout.qaFile || "最终门禁证据", affectedTaskIds: taskIdsFor(plan, ["final_qa"]), choices: [{ choiceId: "wait_for_final_fix", label: "等待修复", recommended: true, reason: "不绕过最终数据、图片和2000px版式门禁。" }] }));
+          this.saveRuntimeConfirmations(projectId, confirmations);
+          next = this.transitionTypes(plan, next, ["final_qa"], "waiting_confirmation", { message: "最终门禁等待修复", waitingReason: "最终硬门禁未通过", evidenceRefs: [qaRef] });
+          this.updateStage(projectId, "等待修复最终门禁问题", "awaiting_confirmation");
+          return next;
+        }
         next = this.transitionTypes(plan, next, ["final_qa"], "failed", { message: "最终完成门禁未通过", evidenceRefs: [qaRef], error: { code: "final_qa_failed", issues: finalQa.issues, imageGate } });
         throw new Error("最终数据、图片或2000px版式检查未通过");
       }

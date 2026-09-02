@@ -13,6 +13,8 @@ import { classifyImageCandidate, IMAGE_REVIEW_STATE } from "../src/lib/imageRevi
 import { cacheKey, createImageResearchCache } from "./image-cache.mjs";
 import { resolvedImagePipelineConfig } from "../config/image-pipeline.mjs";
 
+export const IMAGE_TERMINAL_AUDIT_CACHE_VERSION = "visual-audit-cache-v2-slot-rules";
+
 export function imagePipelineLimits(env = process.env) {
   const config = resolvedImagePipelineConfig(env);
   return {
@@ -198,9 +200,10 @@ function imageRecord(candidate, audit) {
   };
 }
 
-export async function resolveItineraryImages(data, { root, apiKey, baseUrl, model, searchApiKey, searchBaseUrl, searchModel, onlySlotIds = [], disableCache = false, onProgress = () => {}, onCapabilityCall = () => {}, signal } = {}) {
+export async function resolveItineraryImages(data, { root, apiKey, baseUrl, model, searchApiKey, searchBaseUrl, searchModel, onlySlotIds = [], disableCache = false, maxBusinessRounds, onProgress = () => {}, onCapabilityCall = () => {}, signal } = {}) {
   if (process.env.IMAGE_PIPELINE_ENABLED === "off") return { data, summary: { enabled: false } };
-  const config = resolvedImagePipelineConfig();
+  const baseConfig = resolvedImagePipelineConfig();
+  const config = { ...baseConfig, maxAutomaticRounds: Number.isInteger(maxBusinessRounds) ? Math.max(1, Math.min(baseConfig.maxAutomaticRounds, maxBusinessRounds)) : baseConfig.maxAutomaticRounds };
   const runId = randomUUID();
   const assetDirectory = path.join(root, "output", "image-assets", runId);
   const ledgerDirectory = path.join(root, "output", "image-ledgers");
@@ -309,7 +312,7 @@ export async function resolveItineraryImages(data, { root, apiKey, baseUrl, mode
       try {
         stats.terminalAuditCalls += 1;
         const before = Date.now();
-        const auditKey = cacheKey(candidate.sha256, model, state.slot.module, state.slot.mustHave || [], state.slot.forbid || []);
+        const auditKey = cacheKey(IMAGE_TERMINAL_AUDIT_CACHE_VERSION, candidate.sha256, model, state.slot.key, state.slot.module, state.slot.subject, state.slot.location, state.slot.mustHave || [], state.slot.forbid || []);
         validation = disableCache ? null : cache.get("terminal-audit", auditKey);
         if (!validation) {
           validation = await runTimedStage(state, "terminal_audit", config.terminalAuditTimeoutMs, (signal) => apiKey && process.env.IMAGE_VISUAL_AUDIT !== "off"

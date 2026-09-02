@@ -138,7 +138,7 @@ test("软建议不会触发重生成，直接保留内容只有硬问题才能�
   assert.equal(repairs.targets.length, 1);
 });
 
-test("无依据细节先由程序做最小安全修正，不再消耗整模块重生成", () => {
+test("总智能体批准调整表达强度后，程序只对命中路径做最小安全修正", () => {
   const sourceData = {
     hotels: [{ officialName: "Nimali Tarangire", shortName: "Nimali Tarangire", proofPoints: ["塔兰吉雷国家公园行程"], sourceEvidence: ["入住 Nimali Tarangire"] }],
     days: [], transportSummary: [], diningExperiences: [], included: [], excluded: [], cancellation: [], notes: [],

@@ -221,7 +221,7 @@ export function createAgentCopyModelRequester({ apiKey, baseUrl, model, requestJ
     });
 }
 
-export async function runAgentCopyPipeline({ sourceData, businessPlan = {}, projectRoot, executionRunId, modelConfig, requestJson = requestDeepSeekJson, signal, onStage = () => {}, onCapabilityCall, hiddenModules = [] }) {
+export async function runAgentCopyPipeline({ sourceData, businessPlan = {}, projectRoot, executionRunId, modelConfig, requestJson = requestDeepSeekJson, signal, onStage = () => {}, onCapabilityCall, decideReviewFindings, hiddenModules = [] }) {
   const sourceFacts = compactForModel(sourceData);
   const requestModel = createAgentCopyModelRequester({ ...modelConfig, requestJson, signal, onCapabilityCall });
   const modular = await generateModularCopy({
@@ -274,14 +274,37 @@ export async function runAgentCopyPipeline({ sourceData, businessPlan = {}, proj
     ...brandResponse.json.unresolvedIssues.map((item) => normalizeIssue(item, true)),
   ];
   const initialPartition = partitionAgentBrandIssues(initialDeterministic.issues, preservedTargets);
-  const deterministicCorrection = applyAgentDeterministicHardCorrections(currentData, sourceData, initialPartition.hardIssues);
+  const brandPartition = partitionAgentBrandIssues(brandIssues, preservedTargets);
+  const reviewFindings = uniqueIssues([
+    ...initialPartition.hardIssues,
+    ...initialPartition.optimizationSuggestions,
+    ...brandPartition.hardIssues,
+    ...brandPartition.optimizationSuggestions,
+  ]).map((item, index) => ({ ...item, findingId: `copy-review-${index + 1}`, targetId: item.path || item.targetModule || `copy-target-${index + 1}`, allowedCapabilities: ["copy_writer"], remainingAttempts: 1 }));
+  let reviewDecision = { packet: { findings: [] }, decision: { decisions: [] }, validation: { valid: true, errors: [] }, callCount: 0 };
+  if (reviewFindings.length) {
+    if (typeof decideReviewFindings !== "function") {
+      const failure = new Error("文案审核发现问题，但未配置总智能体受控判断入口");
+      failure.code = "review_decision_missing";
+      failure.details = reviewFindings;
+      throw failure;
+    }
+    onStage({ phase: "review_decision", currentAction: `正在统一判断 ${reviewFindings.length} 个文案审核结果`, completedUnits: 0, totalUnits: 1 });
+    reviewDecision = await decideReviewFindings({ stage: "copy", findings: reviewFindings, sourceFacts, currentData: selectCustomerCopy(currentData, hiddenModules), preservedTargets, hiddenModules, availableCapabilities: ["copy_writer"] });
+  }
+  const decisionByFinding = new Map((reviewDecision.decision?.decisions || []).map((item) => [item.findingId, item]));
+  const actionForIssue = (issue) => decisionByFinding.get(issue.findingId)?.action;
+  const adjustmentIssues = reviewFindings.filter((item) => actionForIssue(item) === "adjust_scope_or_strength" && DETERMINISTIC_SAFE_CORRECTION_CODES.has(item.code));
+  const deterministicCorrection = applyAgentDeterministicHardCorrections(currentData, sourceData, adjustmentIssues);
   currentData = deterministicCorrection.data;
   const postCorrectionDeterministic = deterministicCorrection.corrections.length ? reviewCustomerContent(currentData, { sourceData }) : initialDeterministic;
   const postCorrectionPartition = partitionAgentBrandIssues(postCorrectionDeterministic.issues, preservedTargets);
-  const brandPartition = partitionAgentBrandIssues(brandIssues, preservedTargets);
+  const repairActions = new Set(["targeted_retry", "invoke_capability", "adjust_scope_or_strength"]);
+  const selectedRepairIssues = reviewFindings.filter((item) => repairActions.has(actionForIssue(item)) && !adjustmentIssues.includes(item));
   const correctedPaths = deterministicCorrection.corrections.map((item) => item.path);
-  const remainingBrandHard = brandPartition.hardIssues.filter((item) => !DETERMINISTIC_SAFE_CORRECTION_CODES.has(item.code) || !correctedPaths.some((path) => pathCovered(item.path, path)) || postCorrectionPartition.hardIssues.some((remaining) => pathCovered(item.path, remaining.path)));
-  const repairPlan = planAgentHardRepairs(uniqueIssues([...postCorrectionPartition.hardIssues, ...remainingBrandHard]));
+  const stillFailedAdjustments = adjustmentIssues.filter((item) => !correctedPaths.some((path) => pathCovered(item.path, path)) || postCorrectionPartition.hardIssues.some((remaining) => pathCovered(item.path, remaining.path)));
+  const userDecisionIssues = reviewFindings.filter((item) => ["request_user_confirmation", "cancel_task"].includes(actionForIssue(item)));
+  const repairPlan = planAgentHardRepairs(uniqueIssues([...selectedRepairIssues, ...stillFailedAdjustments]));
   const targetRuns = [];
   const repairBatches = groupRepairTargets(repairPlan.targets);
   for (const batch of repairBatches) {
@@ -308,12 +331,15 @@ export async function runAgentCopyPipeline({ sourceData, businessPlan = {}, proj
   const finalFactComparison = compareDeterministicFacts(sourceData, currentData);
   const finalDeterministic = reviewCustomerContent(currentData, { sourceData });
   const finalPartition = partitionAgentBrandIssues(finalDeterministic.issues, preservedTargets);
+  const changedPaths = uniqueIssues(targetRuns.flatMap((item) => item.changedPaths || []).map((path) => ({ path }))).map((item) => item.path);
+  const changedTargetIssues = finalPartition.hardIssues.filter((item) => changedPaths.some((path) => pathCovered(item.path, path) || pathCovered(path, item.path)));
   const remainingIssues = uniqueIssues([
+    ...userDecisionIssues,
     ...repairPlan.blockers,
     ...targetRuns.flatMap((item) => item.unresolvedIssues),
-    ...finalPartition.hardIssues,
+    ...changedTargetIssues,
   ]);
-  const optimizationSuggestions = uniqueIssues([...initialPartition.optimizationSuggestions, ...postCorrectionPartition.optimizationSuggestions, ...brandPartition.optimizationSuggestions, ...finalPartition.optimizationSuggestions]);
+  const optimizationSuggestions = uniqueIssues(reviewFindings.filter((item) => item.issueLevel === "optimization" && !repairActions.has(actionForIssue(item))));
   const passed = finalFactComparison.preserved && remainingIssues.length === 0;
   currentData.copySourceFacts = sourceFacts;
   currentData.copyQuality = { version: "agent-copy-v2-hard-vs-suggestion", passed, status: passed ? optimizationSuggestions.length ? "passed_with_suggestions" : "passed" : "blocked_generation", hardIssueCount: remainingIssues.length, suggestionCount: optimizationSuggestions.length, remainingIssueCount: remainingIssues.length, allIssues: remainingIssues, optimizationSuggestions, checkedAt: new Date().toISOString() };
@@ -321,7 +347,7 @@ export async function runAgentCopyPipeline({ sourceData, businessPlan = {}, proj
     data: currentData,
     mainline: modular.mainline,
     contentPlacement: modular.placement,
-    contentQuality: { passed, factsPreserved: finalFactComparison.preserved, preservedTargets, initialDeterministic, deterministicCorrections: deterministicCorrection.corrections, postCorrectionDeterministic, brandReview: brandResponse.json, brandReviewCallCount: 1, brandReviewReused: Boolean(reusableBrand), brandReviewDurationMs: Date.now() - reviewStarted, targetRuns, repairBatchCount: repairBatches.length, repairTargetCount: repairPlan.targets.length, finalDeterministic, remainingIssues, optimizationSuggestions, ruleVersion: COPY_RULE_RUNTIME[0]?.version || null },
+    contentQuality: { passed, factsPreserved: finalFactComparison.preserved, preservedTargets, initialDeterministic, deterministicCorrections: deterministicCorrection.corrections, postCorrectionDeterministic, brandReview: brandResponse.json, brandReviewCallCount: 1, brandReviewReused: Boolean(reusableBrand), brandReviewDurationMs: Date.now() - reviewStarted, reviewDecision, reviewedFindingCount: reviewFindings.length, recheckedPaths: changedPaths, targetRuns, repairBatchCount: repairBatches.length, repairTargetCount: repairPlan.targets.length, finalDeterministic, remainingIssues, optimizationSuggestions, ruleVersion: COPY_RULE_RUNTIME[0]?.version || null },
     usage: { modules: modular.usages, brandReview: brandResponse.usage || null, targetRegeneration: targetRuns.map((item) => item.usage) },
     model: brandResponse.model,
   };

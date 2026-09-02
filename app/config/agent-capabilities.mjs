@@ -1,4 +1,4 @@
-export const AGENT_CAPABILITY_VERSION = "agent-capabilities-v2";
+export const AGENT_CAPABILITY_VERSION = "agent-capabilities-v3-review-decision";
 
 const professionalIds = new Set(["trip_planner", "web_fact_search", "copy_writer", "brand_reviewer", "image_search", "visual_auditor"]);
 
@@ -26,7 +26,7 @@ export const AGENT_CAPABILITIES = Object.freeze([
   capability("source_parser", "program", "deterministic-source-parser", ["factsDraft", "sourceCoverage"], ["source_intake"]),
   capability("fact_validator", "program", "deterministic-fact-validator", ["checks", "confirmations", "verificationEvidence", "copyReview"], ["fact_review", "web_verification", "copy_review", "targeted_copy_repair"]),
   capability("human_confirmation", "human", "user-confirmation", ["confirmations"], ["confirmation", "image_gap_resolution", "completion_gate"]),
-  capability("trip_planner", "deepseek", "TEXT_MODEL_NAME", ["plan.summary", "plan.modules", "imagePlan"], ["journey_strategy", "module_strategy"], { reasoningPolicy: "high", timeoutMs: 180_000, retryLimit: 1 }),
+  capability("trip_planner", "deepseek", "TEXT_MODEL_NAME", ["plan.summary", "plan.modules", "imagePlan", "reviewDecisions"], ["journey_strategy", "module_strategy", "review_decision"], { reasoningPolicy: "high", timeoutMs: 180_000, retryLimit: 1 }),
   capability("web_fact_search", "vveai", "gemini-3.7-flash-search", ["verificationEvidence", "internalSuggestions"], ["web_verification"], { reasoningPolicy: "search_grounded", timeoutMs: 90_000, retryLimit: 1 }),
   capability("copy_writer", "deepseek", "TEXT_MODEL_NAME", ["customerCopy.global", "customerCopy.hotels", "customerCopy.transport", "customerCopy.days", "customerCopy.closing", "customerCopy.target"], ["copy_global", "copy_hotel_transport", "copy_day_group", "copy_closing", "targeted_copy_repair"], { reasoningPolicy: "medium_high", timeoutMs: 180_000, retryLimit: 1 }),
   capability("brand_reviewer", "deepseek", "TEXT_MODEL_NAME", ["copyReview"], ["copy_review"], { reasoningPolicy: "high", timeoutMs: 120_000, retryLimit: 0 }),
