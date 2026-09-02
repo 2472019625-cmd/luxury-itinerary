@@ -8,7 +8,7 @@ import { ImageDeduper } from "../server/image-dedupe.mjs";
 import { applySelections, buildImageSlots } from "../server/image-allocator.mjs";
 import { isOfficialSource, parseSearchResults } from "../server/image-search.mjs";
 import { filterDiningExperiences } from "../server/refinement-rules.mjs";
-import { baseScore, candidateRecordId, classifyAuditFailure, ConcurrentTaskQueue, imagePipelineLimits, settledMap, shouldContinueAutomaticSearch, uniqueCandidatesByContent } from "../server/image-pipeline.mjs";
+import { baseScore, candidateRecordId, classifyAuditFailure, ConcurrentTaskQueue, imagePipelineLimits, internationalizeImageQuery, settledMap, shouldContinueAutomaticSearch, uniqueCandidatesByContent } from "../server/image-pipeline.mjs";
 import { applyImageToSlot, classifyImageCandidate, IMAGE_REVIEW_STATE } from "../src/lib/imageReviewPolicy.js";
 import { buildLayoutImageSlots, moveImageToSlot } from "../src/lib/imageSlots.js";
 import { buildBlueprintInput, validateImageBlueprint } from "../server/image-blueprint.mjs";
@@ -200,6 +200,14 @@ test("hard rejects watermark, wrong subject, broken images and duplicates", () =
     assert.equal(result.state, IMAGE_REVIEW_STATE.HARD_REJECTED);
     assert.equal(result.adoptable, false);
   }
+});
+
+test("second-round public image search converts common destination terms to international names", () => {
+  const query = internationalizeImageQuery("坦桑尼亚 恩戈罗恩戈罗火山口 犀牛 日落");
+  assert.match(query, /Tanzania/);
+  assert.match(query, /Ngorongoro Crater/);
+  assert.match(query, /rhino/);
+  assert.match(query, /sunset/);
 });
 
 test("hard rejects explicit subject or place mismatch even when the model forgets the reject code", () => {

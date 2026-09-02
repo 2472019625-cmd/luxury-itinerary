@@ -100,6 +100,19 @@ function queryForRound(slot, round) {
   return `${slot.brand || slot.label} ${slot.location || slot.context} ${slot.subject} official gallery photos`.trim().slice(0, 180);
 }
 
+export function internationalizeImageQuery(query) {
+  const replacements = [
+    ["坦桑尼亚", "Tanzania"], ["桑给巴尔岛", "Zanzibar"], ["桑给巴尔", "Zanzibar"],
+    ["乞力马扎罗山", "Mount Kilimanjaro"], ["乞力马扎罗", "Kilimanjaro"], ["阿鲁沙", "Arusha"],
+    ["塔兰吉雷国家公园", "Tarangire National Park"], ["塔兰吉雷", "Tarangire"],
+    ["恩戈罗恩戈罗火山口", "Ngorongoro Crater"], ["恩戈罗恩戈罗", "Ngorongoro"], ["恩戈罗", "Ngorongoro"],
+    ["塞伦盖蒂", "Serengeti"], ["马拉河大迁徙", "Mara River wildebeest migration"], ["马拉河", "Mara River"],
+    ["石头城", "Stone Town"], ["海岸线", "coastline"], ["海豚", "dolphin"], ["浮潜", "snorkeling"],
+    ["犀牛", "rhino"], ["象群", "elephant herd"], ["猴面包树", "baobab"], ["游猎", "safari"], ["日落", "sunset"],
+  ];
+  return replacements.reduce((value, [source, target]) => value.replaceAll(source, target), String(query || "")).replace(/\s+/g, " ").trim();
+}
+
 export function candidateRecordId(slotId, attempt, sha256) {
   return createHash("sha256").update(`${slotId}\n${attempt}\n${sha256}`).digest("hex");
 }
@@ -131,9 +144,9 @@ async function candidatesForSlotRound(slot, round, options) {
     return found;
   });
   let raw = pageGroups.flatMap((value) => Array.isArray(value) ? value : []).filter((item, index, array) => array.findIndex((other) => other.imageUrl === item.imageUrl) === index);
-  if (round > 1 && raw.length < 12) {
-    const commons = await searchCommonsImages(query, { signal: options.signal, count: 12 }).catch(() => []);
-    raw = [...raw, ...commons].filter((item, index, array) => array.findIndex((other) => other.imageUrl === item.imageUrl) === index);
+  if (round > 1) {
+    const commons = await searchCommonsImages(internationalizeImageQuery(query), { signal: options.signal, count: 12 }).catch(() => []);
+    raw = [...commons, ...raw].filter((item, index, array) => array.findIndex((other) => other.imageUrl === item.imageUrl) === index);
   }
   raw = raw.slice(0, config.downloadsPerRound);
   const downloaded = await settledMap(raw, 3, (candidate) => downloadCandidate(candidate, { directory: options.assetDirectory, publicPrefix: options.publicPrefix, signal: options.signal }));
