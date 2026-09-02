@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent.project-plan.v1",
+  "type": "object",
+  "required": ["planId", "projectId", "planVersion", "previousPlanId", "flowKind", "executionEnabled", "status", "inputFingerprint", "createdAt", "validatedAt", "ruleProfileVersion", "capabilityConfigVersion", "promptVersion", "runtime", "globalRuleIds", "summary", "factBasis", "modules", "copyPlan", "webVerification", "imagePlan", "tasks", "checkpointCoverage", "confirmations", "validation", "adjustments", "capabilityCallStats"],
+  "properties": {
+    "planId": { "type": "string", "minLength": 1 },
+    "projectId": { "type": "string", "minLength": 1 },
+    "planVersion": { "type": "integer", "minimum": 1 },
+    "previousPlanId": { "type": ["string", "null"] },
+    "flowKind": { "const": "agent_v1" },
+    "executionEnabled": { "const": false },
+    "status": { "const": "plan_only" },
+    "inputFingerprint": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "createdAt": { "type": "string" },
+    "validatedAt": { "type": "string" },
+    "ruleProfileVersion": { "type": "string" },
+    "capabilityConfigVersion": { "type": "string" },
+    "promptVersion": { "type": "string" },
+    "runtime": {
+      "type": "object",
+      "required": ["port", "namespace"],
+      "properties": { "port": { "const": 4174 }, "namespace": { "const": "agent_v1" } }
+    },
+    "globalRuleIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "summary": {
+      "type": "object",
+      "required": ["contentTheme", "visualTheme", "planningRationale"],
+      "properties": {
+        "contentTheme": { "type": "string", "minLength": 1 },
+        "visualTheme": { "type": "string", "minLength": 1 },
+        "planningRationale": { "type": "string", "minLength": 1 }
+      }
+    },
+    "factBasis": { "type": "object" },
+    "modules": { "type": "array" },
+    "copyPlan": { "type": "object" },
+    "webVerification": { "type": "array" },
+    "imagePlan": { "type": "object", "required": ["visualStory", "slots"] },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["taskId", "taskType", "title", "objective", "targetPath", "requiredContext", "expectedResult", "capabilityIds", "requiredRuleIds", "checkpointIds", "dependsOn", "parallelGroup", "invocationMode", "status", "failurePolicy", "reasoningLevel", "budgetKey", "retryLimit", "rationale"],
+        "properties": {
+          "taskId": { "type": "string", "minLength": 1 },
+          "taskType": { "type": "string", "minLength": 1 },
+          "targetPath": { "type": "string", "minLength": 1 },
+          "capabilityIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "requiredRuleIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "checkpointIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "dependsOn": { "type": "array", "items": { "type": "string" } },
+          "invocationMode": { "const": "plan_only" },
+          "status": { "const": "planned" },
+          "retryLimit": { "type": "integer", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "checkpointCoverage": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "confirmations": { "type": "array" },
+    "validation": { "type": "object" },
+    "adjustments": { "type": "array" },
+    "capabilityCallStats": { "type": "array" }
+  }
+}

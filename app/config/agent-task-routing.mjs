@@ -1,0 +1,28 @@
+const route = (capabilityIds, requiredRuleIds, allowedTargets, checkpoints) => Object.freeze({ capabilityIds, requiredRuleIds, allowedTargets, checkpoints });
+
+export const AGENT_TASK_ROUTES = Object.freeze({
+  project_setup: route(["project_store"], ["FLOW-009", "OPS-004", "OPS-005", "OPS-010", "OPS-011", "OPS-013"], ["project"], ["T01"]),
+  source_intake: route(["source_parser", "project_store"], ["DATA-002", "DATA-003", "DATA-012", "DATA-014", "OPS-012"], ["factsDraft", "sourceCoverage"], ["T02", "T03"]),
+  fact_review: route(["fact_validator"], ["DATA-004", "DATA-005", "DATA-007", "DATA-008", "DATA-011", "DATA-012", "DATA-013", "COPY-014", "COPY-017"], ["checks", "confirmations"], ["T04"]),
+  confirmation: route(["human_confirmation", "project_store"], ["DATA-001", "DATA-013", "FLOW-007"], ["confirmations"], ["T05"]),
+  journey_strategy: route(["trip_planner"], ["FLOW-001", "COPY-001", "COPY-002", "COPY-005", "COPY-006", "COPY-010", "COPY-015"], ["plan.summary"], ["T06"]),
+  module_strategy: route(["trip_planner"], ["COPY-002", "DATA-009", "DATA-010"], ["plan.modules"], ["T07"]),
+  web_verification: route(["web_fact_search", "fact_validator"], ["DATA-001", "DATA-016", "COPY-007", "COPY-013", "COPY-015"], ["verificationEvidence"], ["T08"]),
+  copy_global: route(["copy_writer"], ["DATA-001", "DATA-011", "DATA-012", "COPY-001", "COPY-002", "COPY-005", "COPY-006"], ["customerCopy.global"], ["T09"]),
+  copy_hotel_transport: route(["copy_writer"], ["DATA-001", "DATA-011", "DATA-012", "COPY-001", "COPY-010", "COPY-015"], ["customerCopy.hotels", "customerCopy.transport"], ["T09"]),
+  copy_day_group: route(["copy_writer"], ["DATA-001", "DATA-011", "DATA-012", "COPY-001", "COPY-010", "COPY-011", "COPY-012", "COPY-015"], ["customerCopy.days"], ["T09"]),
+  copy_closing: route(["copy_writer"], ["DATA-001", "DATA-011", "DATA-012", "COPY-003", "COPY-016", "COPY-017"], ["customerCopy.closing"], ["T09"]),
+  copy_review: route(["fact_validator", "brand_reviewer"], ["DATA-001", "DATA-011", "DATA-012", "DATA-014", ...Array.from({ length: 17 }, (_, i) => `COPY-${String(i + 1).padStart(3, "0")}`)], ["copyReview"], ["T10"]),
+  targeted_copy_repair: route(["target_patcher", "fact_validator", "brand_reviewer"], ["DATA-001", "COPY-011", "COPY-014"], ["customerCopy.target", "copyReview"], ["T11"]),
+  image_strategy: route(["image_blueprint"], ["IMG-001", "IMG-002", "IMG-003", "IMG-004", "IMG-005", "IMG-006", "IMG-007", "IMG-008", "COPY-011"], ["imageBlueprint"], ["T12"]),
+  image_slot_plan: route(["image_blueprint"], ["IMG-001", "IMG-003", "IMG-004", "IMG-006", "IMG-007", "IMG-008", "COPY-011"], ["imageBlueprint.slots"], ["T12"]),
+  image_search_plan: route(["image_search"], ["IMG-006", "IMG-007", "IMG-008", "IMG-009", "IMG-010", "IMG-012", "OPS-012"], ["imageCandidates"], ["T13"]),
+  visual_review: route(["visual_auditor"], ["IMG-004", "IMG-005", "IMG-006", "IMG-007", "IMG-011", "IMG-012", "IMG-016", "IMG-019"], ["visualReview"], ["T14"]),
+  image_placement: route(["visual_auditor", "project_store"], ["IMG-004", "IMG-012", "IMG-016", "IMG-017", "COPY-011"], ["visualReview", "currentProject"], ["T15"]),
+  image_gap_resolution: route(["project_store", "human_confirmation"], ["FLOW-004", "FLOW-005", "IMG-001", "IMG-003", "IMG-008", "IMG-012", "IMG-014", "IMG-018"], ["currentProject", "confirmations"], ["T16"]),
+  layout_render: route(["layout_renderer"], ["VIS-001", "VIS-003", "VIS-004", "VIS-005", "VIS-006", "VIS-007", "VIS-008", "VIS-009", "VIS-010", "VIS-011", "VIS-012", "VIS-013", "VIS-014", "VIS-015", "VIS-016", "IMG-018", "IMG-020"], ["renderArtifacts"], ["T17"]),
+  final_qa: route(["final_qa"], ["VIS-001", "VIS-003", "VIS-004", "VIS-005", "VIS-006", "VIS-007", "VIS-008", "VIS-009", "VIS-010", "VIS-011", "VIS-012", "VIS-013", "VIS-014", "VIS-015", "VIS-016", "IMG-018", "IMG-020", "COPY-017", "DATA-012"], ["finalQa"], ["T17"]),
+  completion_gate: route(["final_qa", "project_store", "human_confirmation"], ["FLOW-002", "FLOW-007", "IMG-019", "VIS-003", "VIS-016"], ["finalQa", "currentProject", "confirmations"], ["T18"]),
+  control: route(["task_cancel", "project_store"], ["FLOW-007", "FLOW-009", "OPS-004", "OPS-010", "OPS-011"], ["currentProject"], ["T19"]),
+  persistence: route(["project_store"], ["FLOW-007", "FLOW-010", "OPS-004", "OPS-006", "OPS-007", "OPS-008", "OPS-009", "OPS-010", "OPS-013"], ["currentProject"], ["T20"]),
+});

@@ -5,6 +5,7 @@ import kenyaLuxury8dData from "../data/kenya-luxury-8d.json";
 import tanzaniaLuxury10dData from "../data/tanzania-luxury-10d.json";
 import { Workspace } from "./Workspace.jsx";
 import { createProductionDefaultData, formatTravelerCount, inferOvernightType, isUsableFinalImageSource } from "./lib/itineraryRules.js";
+import { AgentPlanner } from "./AgentPlanner.jsx";
 import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
 import { transportUsageLabel } from './lib/transportPresentation.js';
 
@@ -342,6 +343,7 @@ function StyleProofA({ data }) {
 }
 
 export function App() {
+  if (window.location.pathname.startsWith("/agent-planner")) return <AgentPlanner />;
   const params = new URLSearchParams(window.location.search);
   const exportMode = params.get("export") === "1";
   const outputWidth = Number(params.get("width") || 2000);

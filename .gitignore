@@ -15,6 +15,7 @@ app/dist/
 # Local runtime data
 workspace/*
 !workspace/README.md
+app/workspace/
 app/output/
 app/.jobs/
 
