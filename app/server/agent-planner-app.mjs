@@ -9,7 +9,7 @@ import { AGENT_CAPABILITY_VERSION } from "../config/agent-capabilities.mjs";
 import { AGENT_RULE_PROFILE_VERSION } from "../config/agent-rule-profile.mjs";
 import { AGENT_PROMPT_VERSION, buildAgentFactBasis, fingerprintFacts, generateAgentPlan } from "./agent-trip-planner.mjs";
 import { analyzeAgentPreflight, resolvePreflightConfirmations } from "./agent-preflight.mjs";
-import { cancelExecutionRun, createExecutionRun, EXECUTION_CONFIG_VERSION, EXECUTION_ENABLED, transitionExecutionTask } from "./agent-execution-scheduler.mjs";
+import { cancelExecutionRun, createExecutionRun, EXECUTION_CONFIG_VERSION, EXECUTION_ENABLED, resumeFailedExecutionRun, transitionExecutionTask } from "./agent-execution-scheduler.mjs";
 import { AgentExecutionEngine } from "./agent-execution-engine.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -184,6 +184,12 @@ export function createAgentPlannerServer(options = {}) {
         if (!active?.plan) return json(response, 409, { error: "当前项目还没有可用计划" });
         const current = store.getActiveExecutionRun(active.project.projectId);
         if (current && ["pending", "running", "waiting_confirmation"].includes(current.status)) return json(response, 200, { executionRun: current });
+        if (current?.status === "failed") {
+          const resumed = resumeFailedExecutionRun(active.plan, current);
+          store.updateExecutionRun(active.project.projectId, resumed);
+          const job = resumeExecution(store.getProject(active.project.projectId), resumed, "正在从失败阶段继续执行");
+          return json(response, 202, { executionRun: resumed, job, resumedFromFailure: true });
+        }
         const executionRun = createExecutionRun(active.project, active.plan);
         store.saveExecutionRun(active.project.projectId, executionRun);
         const job = resumeExecution(store.getProject(active.project.projectId), executionRun, "正在执行当前计划");

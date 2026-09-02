@@ -748,7 +748,8 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
               if (item.id !== currentProject.id) return item;
               const versionId = `agent-${executionRunId}`;
               const versions = item.versions?.some((version) => version.id === versionId) ? item.versions : [...(item.versions || []), { id: versionId, name: `${item.title} · 智能体完整生成版`, createdAt: Date.now(), snapshot: versionSnapshot(value.result.data), downloadUrl: `/api/agent/projects/${item.agentProjectId}/output` }];
-              return { ...item, workflowStage: "generated", revisionMode: false, data: { ...value.result.data, designer: item.data.designer }, aiGeneration: { executionRunId, finalQa: value.result.finalQa, imageGate: value.result.imageGate }, versions, updatedAt: Date.now() };
+              const visibility = value.result.data.showExpenseSection === false ? { ...(item.visibility || {}), expenses: false } : item.visibility;
+              return { ...item, workflowStage: "generated", revisionMode: false, data: { ...value.result.data, designer: item.data.designer }, visibility, aiGeneration: { executionRunId, finalQa: value.result.finalQa, imageGate: value.result.imageGate }, versions, updatedAt: Date.now() };
             });
             try { writeStorage(storageKeys.projects, collection); setSaveState("saved"); } catch (error) { setSaveState("error"); setGenerationError(error?.message || "成品已生成，但本地项目保存失败"); }
             return collection;

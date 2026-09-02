@@ -106,3 +106,17 @@ export function cancelExecutionRun(plan, run, now = new Date().toISOString()) {
   const withEvent = appendExecutionEvent(cancelled, { type: "run_cancelled", status: "cancelled", message: "用户已取消生成，已有项目和证据已保留" }, now);
   return { ...withEvent, progress: taskProgress(plan, withEvent) };
 }
+
+export function resumeFailedExecutionRun(plan, run, now = new Date().toISOString()) {
+  if (run.status !== "failed") throw new Error("只有失败的执行运行可以从断点续跑");
+  const taskRuns = run.taskRuns.map((task) => ["failed", "running"].includes(task.status) ? {
+    ...task,
+    status: "pending",
+    endedAt: null,
+    error: null,
+    retryCount: task.retryCount + 1,
+  } : task);
+  const resumed = { ...run, status: "pending", endedAt: null, error: null, taskRuns };
+  const withEvent = appendExecutionEvent(resumed, { type: "run_resumed", stage: taskRuns.find((task) => task.status === "pending")?.stage || null, status: "pending", message: "已保留完成任务与证据，从失败阶段继续执行" }, now);
+  return { ...withEvent, progress: taskProgress(plan, withEvent) };
+}

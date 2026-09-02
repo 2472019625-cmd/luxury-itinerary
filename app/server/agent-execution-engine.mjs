@@ -68,6 +68,7 @@ export class AgentExecutionEngine {
     const active = this.store.getActive(projectId);
     if (!active?.plan || active.plan.planId !== run.planId) throw new Error("执行计划已不是项目当前计划");
     const { plan } = active;
+    const hiddenModules = (plan.modules || []).filter((item) => item.decision === "hide").map((item) => item.moduleId);
     let sourceData = this.store.getSourceData(projectId)?.facts;
     if (!sourceData) throw new Error("项目缺少不可变原始资料快照");
     let next = run;
@@ -110,7 +111,13 @@ export class AgentExecutionEngine {
         this.updateStage(projectId, "正在生成模块文案");
         next = this.transitionTypes(plan, next, COPY_GENERATION_TYPES, "running", { message: "正在按模块并行生成客户文案" });
         next = this.transitionTypes(plan, next, COPY_REVIEW_TYPES, "running", { message: "文案完成后将执行唯一一次品牌审查" });
-        const copy = await this.adapters.runAgentCopyPipeline({ sourceData, projectRoot: this.root, executionRunId: run.executionRunId, modelConfig: this.textModelConfig, signal, onStage: (event) => this.updateStage(projectId, event.currentAction || "正在生成客户文案") });
+        let copy;
+        try {
+          copy = await this.adapters.runAgentCopyPipeline({ sourceData, projectRoot: this.root, executionRunId: run.executionRunId, modelConfig: this.textModelConfig, signal, hiddenModules, onStage: (event) => this.updateStage(projectId, event.currentAction || "正在生成客户文案") });
+        } catch (error) {
+          if (error.details?.length) this.store.saveEvidence(projectId, run.executionRunId, "copy-pipeline-failure", { code: error.code || "copy_failed", message: error.message, details: error.details, preservedCompletedUnits: true, failedAt: new Date().toISOString() });
+          throw error;
+        }
         const copyRef = this.store.saveTaskResult(projectId, run.executionRunId, "copy-pipeline", copy);
         const moduleCalls = copy.usage?.modules?.length || 0;
         for (let index = 0; index < moduleCalls; index += 1) next = this.recordCall(plan, next, "copy_writer", { taskId: copyTaskIds[0], stage: "copy", usage: copy.usage.modules[index]?.usage || null, message: "文案模块调用完成" });

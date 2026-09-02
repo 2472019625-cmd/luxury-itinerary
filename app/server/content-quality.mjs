@@ -225,6 +225,7 @@ function checkNotes(data, issues) {
 }
 
 function checkExpenses(data, sourceData, issues) {
+  if (data.showExpenseSection === false) return;
   const included = list(data.includedCustomer).length ? data.includedCustomer : list(data.included);
   const excluded = list(data.excludedCustomer).length ? data.excludedCustomer : list(data.excluded);
   const sourceIncluded = list(sourceData?.included);

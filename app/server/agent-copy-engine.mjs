@@ -8,6 +8,7 @@ import { generateModularCopy } from "./modular-copy-generator.mjs";
 import { reviewCustomerContent } from "./content-quality.mjs";
 import { buildCopyTargetContext, planCopyRepairs } from "./copy-repair.mjs";
 import { copyUnitRuleCards } from "./agent-rule-cards.mjs";
+import { copyTaskQueue } from "./copy-task-queue.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const promptCache = new Map();
@@ -56,20 +57,26 @@ function pathCovered(issuePath, patchPath) {
 }
 
 export function createAgentCopyModelRequester({ apiKey, baseUrl, model, requestJson = requestDeepSeekJson, signal, onStatus }) {
-  return async (promptFile, payload, options = {}) => requestJson({
-    apiKey,
-    baseUrl,
-    model,
-    messages: [{ role: "system", content: promptText(promptFile) }, { role: "user", content: JSON.stringify(payload) }],
-    reasoningEffort: options.reasoningEffort || "high",
-    maxTokens: options.maxTokens || 12_000,
-    emptyContentRetries: 1,
-    signal,
-    onStatus: options.onStatus || onStatus,
-  });
+  return async (promptFile, payload, options = {}) => copyTaskQueue.add(() => requestJson({
+      apiKey,
+      baseUrl,
+      model,
+      messages: [{ role: "system", content: promptText(promptFile) }, { role: "user", content: JSON.stringify(payload) }],
+      reasoningEffort: options.reasoningEffort || "high",
+      maxTokens: options.maxTokens || 12_000,
+      emptyContentRetries: 1,
+      signal,
+      onStatus: (status) => {
+        if (status?.reason === "http_429") copyTaskQueue.throttle();
+        (options.onStatus || onStatus)?.(status);
+      },
+    }), {
+      taskId: options.taskId || promptFile,
+      onQueueStatus: (queue) => (options.onStatus || onStatus)?.({ streamPhase: queue.state === "queued" ? "queued" : undefined, queue }),
+    });
 }
 
-export async function runAgentCopyPipeline({ sourceData, projectRoot, executionRunId, modelConfig, requestJson = requestDeepSeekJson, signal, onStage = () => {} }) {
+export async function runAgentCopyPipeline({ sourceData, projectRoot, executionRunId, modelConfig, requestJson = requestDeepSeekJson, signal, onStage = () => {}, hiddenModules = [] }) {
   const sourceFacts = compactForModel(sourceData);
   const requestModel = createAgentCopyModelRequester({ ...modelConfig, requestJson, signal });
   const modular = await generateModularCopy({
@@ -78,7 +85,7 @@ export async function runAgentCopyPipeline({ sourceData, projectRoot, executionR
     jobId: executionRunId,
     requestModel: (promptFile, payload, options = {}) => requestModel(promptFile, payload, { ...options, reasoningEffort: "high" }),
     onStage,
-    reuseCompleted: false,
+    reuseCompleted: true,
     ruleCardsFor: copyUnitRuleCards,
   });
   if (modular.errors.length) {
@@ -88,13 +95,16 @@ export async function runAgentCopyPipeline({ sourceData, projectRoot, executionR
     throw failure;
   }
   const merged = mergeRefinement(sourceData, modular.draft);
-  if (!merged.dailyRefinement.accepted || merged.mergeWarnings?.length) {
+  const expensesHidden = hiddenModules.includes("expenses");
+  const mergeWarnings = (merged.mergeWarnings || []).filter((item) => !(expensesHidden && /^(?:includedCustomer|excludedCustomer|cancellationCustomer|expenses)/.test(String(item.path || ""))));
+  if (!merged.dailyRefinement.accepted || mergeWarnings.length) {
     const failure = new Error("文案模块结构或费用映射未通过确定性合并检查");
     failure.code = "copy_merge_failed";
-    failure.details = [...(merged.dailyRefinement.errors || []), ...(merged.mergeWarnings || [])];
+    failure.details = [...(merged.dailyRefinement.errors || []), ...mergeWarnings];
     throw failure;
   }
   let currentData = merged.data;
+  if (expensesHidden) currentData = { ...currentData, showExpenseSection: false, includedCustomer: [], excludedCustomer: [], cancellationCustomer: [] };
   const initialDeterministic = reviewCustomerContent(currentData, { sourceData });
   onStage({ phase: "brand_review", currentAction: "正在进行每份成品唯一一次品牌审查", completedUnits: 0, totalUnits: 1 });
   const reviewStarted = Date.now();

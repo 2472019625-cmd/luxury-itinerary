@@ -238,6 +238,7 @@ function ListCard({ icon, title, items, tone = "gold" }) {
 }
 
 function Expenses({ data }) {
+  if (data.showExpenseSection === false) return null;
   const show = data.totalPrice || data.included?.length || data.excluded?.length || data.cancellation?.length;
   if (!show) return null;
   return <section className="expense-section" data-edit-path="expenses"><SectionTitle en="EXPENSE" zh="费用说明" />{data.totalPrice != null && <div className="total-price"><strong>{Number(data.totalPrice).toLocaleString("zh-CN")}</strong><em>{data.priceUnit}</em></div>}{data.priceNotes?.length > 0 && <div className="price-notes"><h3>报价说明</h3>{data.priceNotes.map((note) => <p key={note}>{note}</p>)}</div>}<div className="expense-grid"><ListCard icon="included" title="费用包含" items={data.includedCustomer?.length ? data.includedCustomer : data.included} /><ListCard icon="excluded" title="费用不含" items={data.excludedCustomer?.length ? data.excludedCustomer : data.excluded} /><ListCard icon="cancellation" title="退改政策" items={data.cancellationCustomer?.length ? data.cancellationCustomer : data.cancellation} /></div></section>;

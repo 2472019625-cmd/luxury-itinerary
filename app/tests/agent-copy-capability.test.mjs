@@ -47,3 +47,22 @@ test("同一copy_writer请求器复用既定文字模型并支持取消信号", 
   assert.equal(captured.signal, controller.signal);
   assert.match(captured.messages[0].content, /同一位高级旅行产品编辑/);
 });
+
+test("智能体文案模块共享限流队列，避免长行程同时压满文字模型", async () => {
+  let active = 0;
+  let peak = 0;
+  const request = createAgentCopyModelRequester({
+    apiKey: "test",
+    baseUrl: "https://text.example/v1",
+    model: "deepseek-test",
+    requestJson: async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 8));
+      active -= 1;
+      return { json: {}, model: "deepseek-test" };
+    },
+  });
+  await Promise.all(Array.from({ length: 6 }, (_, index) => request("customer-itinerary-module-v1.md", { index }, { taskId: `agent-copy-${index}` })));
+  assert.ok(peak <= 2);
+});

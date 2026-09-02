@@ -98,6 +98,13 @@ test('requires source coverage counts for expenses and transport modules', () =>
   assert.ok(codes.includes('transport_module_missing'));
 });
 
+test('a confirmed hidden expense module preserves source facts without requiring customer-facing fee rewrites', () => {
+  const source = goodSample();
+  const data = { ...structuredClone(source), showExpenseSection: false, includedCustomer: [], excludedCustomer: [], cancellationCustomer: [] };
+  const codes = reviewCustomerContent(data, { sourceData: source }).issues.map((item) => item.code);
+  assert.equal(codes.some((code) => code.startsWith('fee_')), false);
+});
+
 test('blocks unsupported animal details and unverified visa numbers with evidence status', () => {
   const data = goodSample();
   const source = structuredClone(data);
