@@ -19,6 +19,18 @@ function actionMap(plan = {}) {
   return new Map(list(plan.modules).map((item) => [item.moduleId, item.contentAction || (item.decision === "hide" ? "hide" : "generate")]));
 }
 
+function dayActions(plan = {}, days = []) {
+  const roles = list(plan.dayRoles);
+  const numeric = roles.map((item) => Number(item.index)).filter(Number.isInteger);
+  const oneBased = numeric.length > 0 && !numeric.includes(0) && numeric.includes(days.length);
+  const result = new Map();
+  for (const role of roles) {
+    const index = Number(role.index) - (oneBased ? 1 : 0);
+    if (Number.isInteger(index) && index >= 0 && index < days.length && ["preserve", "optimize", "generate"].includes(role.contentAction)) result.set(index, role.contentAction);
+  }
+  return result;
+}
+
 function deriveMainline(sourceFacts, plan = {}) {
   const dayRoles = list(plan.dayRoles).length ? plan.dayRoles : list(sourceFacts.days).map((day) => ({ index: day.index, role: day.theme || list(day.routeNodes).join(" → ") || `DAY ${Number(day.index) + 1}`, differenceFromAdjacent: "按当天事实保持差异" }));
   return {
@@ -155,7 +167,13 @@ export async function generateModularCopy({ sourceFacts, businessPlan = {}, requ
   addModule("dining", "dining", "dining", list(sourceFacts.diningExperiences).length > 0);
   addModule("transport", "transport", "transport", list(sourceFacts.transportSummary).length > 0);
   const dayAction = actions.get("days") || "generate";
-  if (dayAction !== "hide") splitDayBatches(sourceFacts.days || []).forEach((group, index) => specs.push({ id: group.splitReason ? `days-${index + 1}` : "days-all", type: "days", moduleId: "days", action: dayAction, days: group.days, dayIndexes: group.days.map((day) => day.index), splitReason: group.splitReason }));
+  if (dayAction !== "hide") {
+    const perDay = dayActions(businessPlan, sourceFacts.days || []);
+    const preservedDays = list(sourceFacts.days).filter((day, index) => dayAction === "preserve" || perDay.get(Number(day.index ?? index)) === "preserve");
+    const targetDays = list(sourceFacts.days).filter((day) => !preservedDays.includes(day));
+    if (preservedDays.length) specs.push({ id: "days-preserved", type: "days", moduleId: "days", action: "preserve", days: preservedDays, dayIndexes: preservedDays.map((day) => day.index) });
+    splitDayBatches(targetDays).forEach((group, index) => specs.push({ id: group.splitReason ? `days-${index + 1}` : "days-all", type: "days", moduleId: "days", action: dayAction === "preserve" ? "preserve" : dayAction, days: group.days, dayIndexes: group.days.map((day) => day.index), splitReason: group.splitReason }));
+  }
   const closingActions = [actions.get("notes") || "generate", actions.get("expenses") || "generate"];
   if (closingActions.some((action) => action !== "hide")) specs.push({ id: "closing", type: "closing", moduleId: "notes_expenses", action: closingActions.every((action) => action === "preserve" || action === "hide") ? "preserve" : closingActions.includes("generate") ? "generate" : "optimize", visibleSubmodules: ["notes", "expenses"].filter((id, index) => closingActions[index] !== "hide") });
 
@@ -199,13 +217,15 @@ export async function generateModularCopy({ sourceFacts, businessPlan = {}, requ
   const transport = outputFor("transport")[0] || (actions.get("transport") === "hide" ? { transportSummary: [] } : preservedOutput("transport", sourceFacts));
   const closing = outputFor("closing")[0] || preservedOutput("closing", sourceFacts);
   const dayOutputs = outputFor("days");
-  const days = (dayOutputs.length ? dayOutputs.flatMap((item) => list(item.days)) : list(sourceFacts.days).map(safeDay)).sort((a, b) => Number(a.index) - Number(b.index));
+  const dayByIndex = new Map(list(sourceFacts.days).map((day) => [Number(day.index), safeDay(day)]));
+  for (const day of dayOutputs.flatMap((item) => list(item.days))) dayByIndex.set(Number(day.index), day);
+  const days = [...dayByIndex.values()].sort((a, b) => Number(a.index) - Number(b.index));
   const evidenceMap = Object.assign({}, global.evidenceMap, hotels.evidenceMap, dining.evidenceMap, transport.evidenceMap, closing.evidenceMap, ...dayOutputs.map((item) => item.evidenceMap || {}));
   return {
     draft: { ...global, ...hotels, ...dining, ...transport, ...closing, days, evidenceMap },
     mainline, placement, errors, usages,
     unitFiles: results.map((item) => item.file),
-    unitSummary: { completed: specs.length - errors.length, fallback: errors.length, total: specs.length, dayBatchCount: results.filter((item) => item.unit.type === "days").length, splitReasons: [...new Set(results.map((item) => item.unit.splitReason).filter(Boolean))] },
+    unitSummary: { completed: specs.length - errors.length, fallback: errors.length, total: specs.length, dayBatchCount: results.filter((item) => item.unit.type === "days" && item.unit.action !== "preserve").length, preservedDayCount: results.filter((item) => item.unit.type === "days" && item.unit.action === "preserve").reduce((sum, item) => sum + item.unit.days.length, 0), splitReasons: [...new Set(results.map((item) => item.unit.splitReason).filter(Boolean))] },
     storeDirectory: store.directory, parallelTask,
   };
 }

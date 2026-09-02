@@ -80,7 +80,8 @@ test('rejects action-only and hotel-name daily themes', () => {
   const data = goodSample();
   data.days[0].theme = '全天游猎';
   data.days[1].theme = 'Test Camp';
-  const codes = reviewCustomerContent(data).issues.map((item) => item.code);
+  const result = reviewCustomerContent(data);
+  const codes = result.issues.map((item) => item.code);
   assert.ok(codes.includes('overview_theme_action_only'));
   assert.ok(codes.includes('overview_theme_hotel_name'));
 });
@@ -132,11 +133,31 @@ test('detects comma-separated subtitle lists, incomplete highlights and overlong
   data.subtitle = '草原飞机直达，庄园帐篷连住，敞篷越野车，一价全包，私人保护区';
   data.highlights = ['一家一团：专属节奏不用迁就陌生团友','在地服务：定制师协同减少等待','草原腹地：把清晨时段留给游猎'];
   data.days[0].description = `抵达后乘车深入草原，眼前逐渐转为开阔旷野；${'随后安排一项具体体验并感受草原节奏；'.repeat(14)}让这一天承接整段旅程。`;
-  const codes = reviewCustomerContent(data).issues.map((item) => item.code);
+  const result = reviewCustomerContent(data);
+  const codes = result.issues.map((item) => item.code);
   assert.ok(codes.includes('subtitle_selling_point_list'));
   assert.ok(codes.includes('highlight_incomplete'));
   assert.ok(codes.includes('day_overlong'));
   assert.ok(codes.includes('day_fact_dump'));
+  assert.ok(result.issues.filter((item) => ['day_overlong','day_fact_dump'].includes(item.code)).every((item) => item.issueLevel === 'optimization'));
+});
+
+test('keeps source-backed hotel anchors and rankings without demanding new model evidence', () => {
+  const data = goodSample();
+  data.hotels[0].sourceEvidence.push('泳池边可以看见前来饮水的大象', '入选世界排名前50酒店');
+  data.hotels[0].editorialCopy = '酒店承接草原段的晨昏动线，泳池边可以看见前来饮水的大象；这处入选世界排名前50的下榻，让停留本身也成为旅程记忆。';
+  const source = structuredClone(data);
+  const result = reviewCustomerContent(data, { sourceData: source });
+  assert.equal(result.issues.some((item) => item.code === 'factual_sentence_without_evidence' && item.path.startsWith('hotels.0')), false, JSON.stringify(result.issues));
+});
+
+test('allows one real dining experience to be brief in DAY and expanded in dining module', () => {
+  const data = goodSample();
+  data.diningExperiences = [{ id:'d1', title:'百兽宴 The Carnivore', sourceEvidence:['百兽宴 The Carnivore 晚餐'], editorialCopy:'百兽宴 The Carnivore 以现场烤制与热闹仪式感收束城市夜晚，让这一餐成为从草原返回内罗毕后的鲜明记忆。' }];
+  data.days[1].description = '清晨乘车深入保护区，在晨光中完成最后一段草原守候；随后返回内罗毕，晚间前往百兽宴 The Carnivore 用餐，为旅程留下有仪式感的收束。';
+  const source = structuredClone(data);
+  const result = reviewCustomerContent(data, { sourceData: source });
+  assert.equal(result.issues.some((item) => /重复/.test(item.message) && /dining|days/.test(item.path)), false, JSON.stringify(result.issues));
 });
 
 test('detects unsupported guide credentials, photographer and activity inventions', () => {

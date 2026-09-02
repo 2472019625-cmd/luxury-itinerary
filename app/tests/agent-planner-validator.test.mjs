@@ -48,7 +48,7 @@ function makePlan() {
     ruleProfileVersion: AGENT_RULE_PROFILE_VERSION, capabilityConfigVersion: AGENT_CAPABILITY_VERSION, promptVersion: "agent-trip-planner-v1",
     runtime: { port: 4174, namespace: "agent_v1" }, globalRuleIds: [...GLOBAL_HARD_RULE_IDS],
     summary: { contentTheme: "循序渐进的草原体验", visualTheme: "从辽阔到细节", planningRationale: "重复游猎日按体验差异拆分" },
-    factBasis: structuredClone(factBasis), dayRoles: [], contentPlacement: [], modules: [], copyPlan: { compiledBy: "program", groups: [] }, webVerification: [],
+    factBasis: structuredClone(factBasis), dayRoles: Array.from({ length: factBasis.dayCount }, (_, index) => ({ index, role: `DAY ${index + 1}`, differenceFromAdjacent: "真实路线不同", contentAction: "optimize", sourceRefs: [`days.${index}`] })), contentPlacement: [], modules: [], copyPlan: { compiledBy: "program", groups: [] }, webVerification: [],
     imagePlan: { visualStory: "每一天承担不同视觉职责", slots: [
       { slotId: "cover", role: "cover", required: true },
       { slotId: "hotel-1", role: "hotel:1", required: true },

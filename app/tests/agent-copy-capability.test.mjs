@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildSourceContentPlacement, generateModularCopy, splitDayBatches } from "../server/modular-copy-generator.mjs";
 import { copyUnitRuleCards, fullRuleCardsFor } from "../server/agent-rule-cards.mjs";
-import { createAgentCopyModelRequester, groupRepairTargets, normalizeCustomerCopyPath } from "../server/agent-copy-engine.mjs";
+import { createAgentCopyModelRequester, groupRepairTargets, isHardBrandIssue, normalizeCustomerCopyPath, partitionAgentBrandIssues, planAgentHardRepairs } from "../server/agent-copy-engine.mjs";
 
 test("正式规则卡同时包含规则表原文、运行细则和版本", () => {
   const [card] = fullRuleCardsFor(["COPY-010"]);
@@ -101,4 +101,39 @@ test("品牌目标路径会先归一且同模块问题合并为一次重生成�
   ]);
   assert.equal(batches.length, 3);
   assert.equal(batches.find((item) => item.key === "days").targets.length, 2);
+});
+
+test("DAY直接保留可以和其余DAY单批生成同时成立", async () => {
+  const sourceFacts = { title: "肯尼亚10天9晚深度游", subtitle: "原文", currentHighlights: ["原文亮点"], destination: "肯尼亚", dayCount: 10, days: Array.from({ length: 10 }, (_, index) => ({ index, theme: `原主题${index + 1}`, description: `原文DAY ${index + 1}`, spots: [] })), hotels: [], diningExperiences: [], transportSummary: [], included: [], excluded: [], cancellation: [], notes: [] };
+  const businessPlan = {
+    summary: { contentTheme: "轻量主线" },
+    modules: ["global", "hotels", "dining", "transport", "notes", "expenses"].map((moduleId) => ({ moduleId, decision: "show", contentAction: "preserve" })).concat({ moduleId: "days", decision: "show", contentAction: "optimize" }),
+    dayRoles: Array.from({ length: 10 }, (_, index) => ({ index, role: `DAY ${index + 1}`, contentAction: [0, 9].includes(index) ? "preserve" : "optimize" })),
+  };
+  const calls = [];
+  const result = await generateModularCopy({ sourceFacts, businessPlan, requestModel: async (_prompt, payload) => {
+    calls.push(payload.facts.days.map((day) => day.index));
+    return { json: { days: payload.facts.days.map((day) => ({ index: day.index, theme: `新主题${day.index + 1}`, description: `新文案DAY ${day.index + 1}`, spots: [], dayNotices: [] })), evidenceMap: {} }, model: "test" };
+  }, projectRoot: mkdtempSync(path.join(tmpdir(), "agent-day-preserve-")), jobId: "run-day-preserve", reuseCompleted: false, ruleCardsFor: copyUnitRuleCards });
+  assert.deepEqual(calls, [[1, 2, 3, 4, 5, 6, 7, 8]]);
+  assert.equal(result.draft.days[0].description, "原文DAY 1");
+  assert.equal(result.draft.days[9].description, "原文DAY 10");
+  assert.equal(result.draft.days[4].description, "新文案DAY 5");
+  assert.equal(result.unitSummary.preservedDayCount, 2);
+});
+
+test("软建议不会触发重生成，直接保留内容只有硬问题才能解锁", () => {
+  const issues = [
+    { code: "day_overlong", issueLevel: "hard", ruleIds: ["COPY-010"], path: "days.0.description", targetModule: "days", sourceBasis: "字数统计", suggestedAction: "targeted_rewrite", modificationScope: "days.0.description", message: "略超建议字数" },
+    { code: "unsupported_promise", severity: "safety", action: "block", ruleIds: ["COPY-015"], path: "days.0.description", targetModule: "days", sourceBasis: "原始资料没有保证", suggestedAction: "targeted_rewrite", modificationScope: "days.0.description", message: "无依据保证一定看到动物" },
+  ];
+  assert.equal(isHardBrandIssue(issues[0]), false);
+  assert.equal(isHardBrandIssue(issues[1]), true);
+  const partition = partitionAgentBrandIssues(issues, [{ path: "days.0", reason: "用户明确满意", confirmedByUser: true }]);
+  assert.equal(partition.optimizationSuggestions.length, 0);
+  assert.equal(partition.hardIssues.length, 1);
+  assert.equal(partition.hardIssues[0].lockOverride, true);
+  const repairs = planAgentHardRepairs(partition.hardIssues);
+  assert.equal(repairs.blockers.length, 0);
+  assert.equal(repairs.targets.length, 1);
 });

@@ -43,8 +43,20 @@ function isSimpleTransitDay(day = {}) {
   return day.overnightType === 'inflight' || day.overnightType === 'none' || /返程|离境|送机|抵达|转场|飞往/.test(body) && list(day.spots).length <= 1;
 }
 
+function targetModuleForPath(path = '') {
+  if (String(path).startsWith('days.')) return 'days';
+  if (String(path).startsWith('hotels.')) return 'hotels';
+  if (String(path).startsWith('diningExperiences.')) return 'dining';
+  if (String(path).startsWith('transportSummary.')) return 'transport';
+  if (/^(includedCustomer|excludedCustomer|cancellationCustomer|expenses)/.test(String(path))) return 'expenses';
+  if (String(path).startsWith('notes')) return 'notes';
+  return 'global';
+}
+
 function issue(ruleIds, code, path, message, action = 'targeted_rewrite', severity = 'quality') {
-  return { ruleIds: Array.isArray(ruleIds) ? ruleIds : [ruleIds], code, path, message, action, severity };
+  const ids = Array.isArray(ruleIds) ? ruleIds : [ruleIds];
+  const issueLevel = ['fact', 'safety', 'structure'].includes(severity) || action === 'block' ? 'hard' : 'optimization';
+  return { ruleIds: ids, code, path, targetModule: targetModuleForPath(path), issueLevel, sourceBasis: `deterministic:${ids.join('+')}`, suggestedAction: action, modificationScope: path, message, action, severity };
 }
 
 function moduleText(data) {

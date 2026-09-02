@@ -85,7 +85,15 @@ export function validateAgentPlan(plan, context) {
     if (!['show','hide'].includes(module?.decision) || !['preserve','optimize','generate','hide'].includes(module?.contentAction)) errors.push(error("schema_invalid", `modules.${index}`, "模块必须包含合法的显示决定和内容处理动作"));
     if (String(module?.reason || '').length > 240) errors.push(error("schema_invalid", `modules.${index}.reason`, "模块说明过长，疑似混入最终文案"));
   }
-  for (const [index, role] of asArray(plan.dayRoles).entries()) if (JSON.stringify(role).length > 800) errors.push(error("schema_invalid", `dayRoles.${index}`, "DAY角色过长，规划阶段不得提前写完整每日成稿"));
+  const dayRoles = asArray(plan.dayRoles);
+  const dayIndexes = new Set();
+  for (const [index, role] of dayRoles.entries()) {
+    if (JSON.stringify(role).length > 800) errors.push(error("schema_invalid", `dayRoles.${index}`, "DAY角色过长，规划阶段不得提前写完整每日成稿"));
+    if (!Number.isInteger(Number(role?.index)) || Number(role.index) < 0 || Number(role.index) >= Number(context.factBasis.dayCount) || dayIndexes.has(Number(role.index))) errors.push(error("schema_invalid", `dayRoles.${index}.index`, "DAY角色必须使用从0开始且不重复的真实DAY编号"));
+    dayIndexes.add(Number(role?.index));
+    if (!["preserve", "optimize", "generate"].includes(role?.contentAction)) errors.push(error("schema_invalid", `dayRoles.${index}.contentAction`, "每个DAY必须标记直接保留、优化或生成"));
+  }
+  if (dayRoles.length !== Number(context.factBasis.dayCount)) errors.push(error("schema_invalid", "dayRoles", "DAY角色必须与真实行程天数一一对应"));
   const serialized = JSON.stringify(plan);
   if (forbiddenRuntimeValue.test(serialized)) errors.push(error("capability_unauthorized", "$", "计划引用了固定流程端口、98%或缺图留空旧口径"));
 

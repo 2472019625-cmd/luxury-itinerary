@@ -20,7 +20,7 @@
 
 - `summary`: `contentTheme`、`visualTheme`、`planningRationale`，使用员工能读懂的普通中文。
 - `modules`: 只使用 `global/hotels/dining/transport/days/notes/expenses`，每项含 `moduleId/label/decision(show|hide)/contentAction(preserve|optimize|generate|hide)/reason`。
-- `dayRoles`: 每项含 `index/role/differenceFromAdjacent/contentAction/sourceRefs`，不得包含完整成品正文。
+- `dayRoles`: 每项含 `index/role/differenceFromAdjacent/contentAction/sourceRefs`，`index`必须从0开始并与输入DAY顺序一一对应，不得包含完整成品正文。用户明确满意或来源文案已经可直接使用时标记`contentAction:preserve`。
 - `contentPlacement`: 只列容易混放的原始内容，每项含 `sourceRef/targetModule/targetField/reason`，不复制大段原文。
 - `webVerification`: 只针对已有实体列出未来核验项；每项含 `subject/field/reason/preferredSource/blockingTaskIds`。当前不联网。
 - `imagePlan`: 含 `visualStory` 和 `slots`。封面、每个显示酒店、每个DAY各有一个 `required:true` 主图，role 分别为 `cover`、`hotel:1`、`day:1` 等；每项含 `slotId/role/label/required/visualDuty/differentiation/searchIntent/removable`。必需位不可移除，补充位才可移除。

@@ -26,13 +26,37 @@ export function normalizeCustomerCopyPath(value) {
   return path;
 }
 
-const normalizeIssue = (item = {}, unresolved = false) => ({
-  ...item,
-  path: normalizeCustomerCopyPath(item.path),
-  ruleIds: item.ruleIds || (item.ruleId ? [item.ruleId] : ["COPY-001"]),
-  severity: item.severity || (unresolved ? "fact" : "quality"),
-  action: item.action || (unresolved ? "block" : "targeted_rewrite"),
-});
+const HARD_SEVERITIES = new Set(["fact", "safety", "structure"]);
+const SOFT_ONLY_CODES = new Set(["day_overlong", "day_fact_dump", "day_thin", "day_no_value", "day_no_progression", "day_no_scene", "day_no_action_scene", "day_near_duplicate", "hotel_thin", "hotel_route_value", "hotel_scene", "hotel_facility_dump", "subtitle_generic", "subtitle_too_long", "highlight_incomplete", "notes_item_overlong"]);
+const NON_REPAIRABLE_HARD_CODES = new Set(["fee_included_count_mismatch", "fee_excluded_count_mismatch", "fee_source_coverage_mismatch", "source_coverage_missing", "source_transport_coverage_missing", "transport_module_missing", "days_missing", "experience_status_missing", "deterministic_fact_changed"]);
+const HARD_REASON = /事实(?:错误|冲突|无依据)|无依据(?:承诺|保证)|费用(?:错误|冲突)|履约|状态错误|内部信息|内部术语|结构缺失|无法阅读|版面溢出|安全风险|确定性事实/;
+
+function issueRuleIds(item = {}) {
+  return [...new Set([...(Array.isArray(item.ruleIds) ? item.ruleIds : []), item.ruleId].filter(Boolean))];
+}
+
+export function isHardBrandIssue(item = {}) {
+  if (SOFT_ONLY_CODES.has(item.code)) return false;
+  if (HARD_SEVERITIES.has(item.severity) || item.action === "block" || item.unresolved === true) return true;
+  const claimedHard = ["hard", "硬问题"].includes(String(item.issueLevel || item.level || "").toLowerCase());
+  return claimedHard && issueRuleIds(item).length > 0 && Boolean(item.sourceBasis || item.originalBasis) && HARD_REASON.test(`${item.message || ""} ${item.impact || ""}`);
+}
+
+const normalizeIssue = (item = {}, unresolved = false) => {
+  const path = normalizeCustomerCopyPath(item.path || item.modificationScope);
+  const provisional = { ...item, path, unresolved, ruleIds: issueRuleIds(item).length ? issueRuleIds(item) : ["COPY-001"], severity: item.severity || (unresolved ? "fact" : "quality"), action: item.action || item.suggestedAction || (unresolved ? "block" : "targeted_rewrite") };
+  const hard = isHardBrandIssue(provisional);
+  return {
+    ...provisional,
+    issueLevel: hard ? "hard" : "optimization",
+    targetModule: item.targetModule || path.split(".")[0] || "global",
+    sourceBasis: item.sourceBasis || item.originalBasis || "品牌审核判断",
+    suggestedAction: item.suggestedAction || provisional.action,
+    modificationScope: item.modificationScope || path,
+    severity: hard ? provisional.severity : "quality",
+    action: hard ? provisional.action : "suggest_only",
+  };
+};
 
 function uniqueIssues(items = []) {
   const unique = new Map();
@@ -77,6 +101,55 @@ export function groupRepairTargets(targets = []) {
     groups.get(key).push(target);
   }
   return [...groups.entries()].map(([key, batchTargets]) => ({ key, targets: batchTargets }));
+}
+
+function preservedCopyTargets(businessPlan = {}, sourceData = {}) {
+  const targets = [];
+  const modulePaths = { global: ["title", "subtitle", "highlights"], hotels: ["hotels"], dining: ["diningExperiences"], transport: ["transportSummary"], days: ["days"], notes: ["notes"], expenses: ["expenses"] };
+  for (const module of businessPlan.modules || []) if (module.contentAction === "preserve") for (const path of modulePaths[module.moduleId] || [module.moduleId]) targets.push({ path, reason: module.reason || "规划判断直接保留", confirmedByUser: false });
+  const roles = Array.isArray(businessPlan.dayRoles) ? businessPlan.dayRoles : [];
+  const numeric = roles.map((item) => Number(item.index)).filter(Number.isInteger);
+  const oneBased = numeric.length > 0 && !numeric.includes(0) && numeric.includes(Number(sourceData.dayCount || sourceData.days?.length || 0));
+  for (const role of roles) if (role.contentAction === "preserve") {
+    const index = Number(role.index) - (oneBased ? 1 : 0);
+    if (Number.isInteger(index) && index >= 0) targets.push({ path: `days.${index}`, reason: role.reason || "规划判断直接保留", confirmedByUser: Boolean(role.confirmedByUser) });
+  }
+  for (const decision of sourceData.copyPreservationDecisions || []) if (decision?.confirmedByUser && decision.path) targets.push({ path: normalizeCustomerCopyPath(decision.path), reason: decision.reason || "用户明确确认保留", confirmedByUser: true, confirmedAt: decision.confirmedAt || null });
+  return targets;
+}
+
+function issueHitsPreservedTarget(issue, preservedTargets) {
+  return preservedTargets.some((target) => pathCovered(issue.path, target.path));
+}
+
+export function partitionAgentBrandIssues(issues = [], preservedTargets = []) {
+  const hardIssues = [];
+  const optimizationSuggestions = [];
+  for (const issue of issues.map((item) => normalizeIssue(item, item.unresolved === true))) {
+    if (isHardBrandIssue(issue)) hardIssues.push({ ...issue, lockOverride: issueHitsPreservedTarget(issue, preservedTargets), preservation: preservedTargets.find((target) => pathCovered(issue.path, target.path)) || null });
+    else if (!issueHitsPreservedTarget(issue, preservedTargets)) optimizationSuggestions.push(issue);
+  }
+  return { hardIssues: uniqueIssues(hardIssues), optimizationSuggestions: uniqueIssues(optimizationSuggestions) };
+}
+
+export function planAgentHardRepairs(hardIssues = []) {
+  const blockers = [];
+  const repairable = [];
+  for (const issue of hardIssues) {
+    if (issue.unresolved || NON_REPAIRABLE_HARD_CODES.has(issue.code) || !issue.path || issue.path === "customer") blockers.push(issue);
+    else repairable.push({ ...issue, severity: "quality", action: "targeted_rewrite", issueLevel: "hard" });
+  }
+  const planned = planCopyRepairs(repairable);
+  return { blockers: uniqueIssues([...blockers, ...planned.blockers]), targets: planned.targets };
+}
+
+function brandReviewStructureError(value) {
+  if (!Array.isArray(value?.reviewIssues) || !Array.isArray(value?.unresolvedIssues)) return "缺少reviewIssues或unresolvedIssues数组";
+  for (const item of [...value.reviewIssues, ...value.unresolvedIssues]) {
+    if (!item || typeof item !== "object" || !item.path || !item.targetModule || !item.issueLevel || !issueRuleIds(item).length || !item.sourceBasis || !item.suggestedAction || !item.modificationScope) return "审核问题缺少目标模块、问题级别、规则、原始依据、建议动作或修改范围";
+  }
+  if (value.unresolvedIssues.some((item) => !["hard", "硬问题"].includes(String(item.issueLevel)))) return "unresolvedIssues只能包含硬问题";
+  return null;
 }
 
 function applyHiddenModuleDecisions(data, hiddenModules = []) {
@@ -175,24 +248,27 @@ export async function runAgentCopyPipeline({ sourceData, businessPlan = {}, proj
   const reviewStarted = Date.now();
   const checkpointStore = createCopyUnitStore(projectRoot, executionRunId);
   const checkpointRuleVersion = COPY_RULE_RUNTIME[0]?.version || "copy-rules";
+  const preservedTargets = preservedCopyTargets(businessPlan, sourceData);
   const brandInput = {
     mode: "full",
     sourceFacts,
     hiddenModules,
+    preservedTargets,
     firstDraft: selectCustomerCopy(currentData, hiddenModules),
     deterministicIssues: initialDeterministic.issues,
     copyRules: copyUnitRuleCards("brand_review"),
   };
   const brandUnit = { id: "brand-review", type: "brand_review", ruleVersion: checkpointRuleVersion };
   const reusableBrand = checkpointStore.loadReusable(brandUnit, brandInput);
-  const brandResponse = reusableBrand ? { json: reusableBrand.record.output, usage: null, model: reusableBrand.record.model, reused: true } : await requestStructuredTwice(requestModel, "customer-itinerary-brand-reviewer-v1.md", brandInput, { capabilityId: "brand_reviewer", taskId: `${executionRunId}:brand-review`, reasoningEffort: "high", maxTokens: 18_000 }, (value) => !Array.isArray(value?.reviewIssues) || !Array.isArray(value?.unresolvedIssues) ? "缺少reviewIssues或unresolvedIssues数组" : null, "品牌审查");
+  const brandResponse = reusableBrand ? { json: reusableBrand.record.output, usage: null, model: reusableBrand.record.model, reused: true } : await requestStructuredTwice(requestModel, "customer-itinerary-brand-reviewer-v1.md", brandInput, { capabilityId: "brand_reviewer", taskId: `${executionRunId}:brand-review`, reasoningEffort: "high", maxTokens: 18_000 }, brandReviewStructureError, "品牌审查");
   checkpointStore.save(brandUnit, brandInput, { status: "complete", attempts: reusableBrand ? 0 : 1, startedAt: new Date(reviewStarted).toISOString(), completedAt: new Date().toISOString(), model: brandResponse.model, usage: brandResponse.usage, recovery: reusableBrand ? { reason: "reused_completed_brand_review" } : null, recoveredFrom: reusableBrand?.file, output: brandResponse.json });
   const brandIssues = [
     ...brandResponse.json.reviewIssues.map((item) => normalizeIssue(item)),
     ...brandResponse.json.unresolvedIssues.map((item) => normalizeIssue(item, true)),
   ];
-  const allIssues = uniqueIssues([...initialDeterministic.issues.map((item) => normalizeIssue(item)), ...brandIssues]);
-  const repairPlan = planCopyRepairs(allIssues);
+  const initialPartition = partitionAgentBrandIssues(initialDeterministic.issues, preservedTargets);
+  const brandPartition = partitionAgentBrandIssues(brandIssues, preservedTargets);
+  const repairPlan = planAgentHardRepairs(uniqueIssues([...initialPartition.hardIssues, ...brandPartition.hardIssues]));
   const targetRuns = [];
   const repairBatches = groupRepairTargets(repairPlan.targets);
   for (const batch of repairBatches) {
@@ -218,19 +294,21 @@ export async function runAgentCopyPipeline({ sourceData, businessPlan = {}, proj
   }
   const finalFactComparison = compareDeterministicFacts(sourceData, currentData);
   const finalDeterministic = reviewCustomerContent(currentData, { sourceData });
+  const finalPartition = partitionAgentBrandIssues(finalDeterministic.issues, preservedTargets);
   const remainingIssues = uniqueIssues([
     ...repairPlan.blockers,
     ...targetRuns.flatMap((item) => item.unresolvedIssues),
-    ...finalDeterministic.issues,
+    ...finalPartition.hardIssues,
   ]);
+  const optimizationSuggestions = uniqueIssues([...initialPartition.optimizationSuggestions, ...brandPartition.optimizationSuggestions, ...finalPartition.optimizationSuggestions]);
   const passed = finalFactComparison.preserved && remainingIssues.length === 0;
   currentData.copySourceFacts = sourceFacts;
-  currentData.copyQuality = { version: "agent-copy-v1", passed, status: passed ? "passed" : "needs_copy_revision", remainingIssueCount: remainingIssues.length, allIssues: remainingIssues, checkedAt: new Date().toISOString() };
+  currentData.copyQuality = { version: "agent-copy-v2-hard-vs-suggestion", passed, status: passed ? optimizationSuggestions.length ? "passed_with_suggestions" : "passed" : "blocked_generation", hardIssueCount: remainingIssues.length, suggestionCount: optimizationSuggestions.length, remainingIssueCount: remainingIssues.length, allIssues: remainingIssues, optimizationSuggestions, checkedAt: new Date().toISOString() };
   return {
     data: currentData,
     mainline: modular.mainline,
     contentPlacement: modular.placement,
-    contentQuality: { passed, factsPreserved: finalFactComparison.preserved, initialDeterministic, brandReview: brandResponse.json, brandReviewCallCount: 1, brandReviewReused: Boolean(reusableBrand), brandReviewDurationMs: Date.now() - reviewStarted, targetRuns, repairBatchCount: repairBatches.length, repairTargetCount: repairPlan.targets.length, finalDeterministic, remainingIssues, ruleVersion: COPY_RULE_RUNTIME[0]?.version || null },
+    contentQuality: { passed, factsPreserved: finalFactComparison.preserved, preservedTargets, initialDeterministic, brandReview: brandResponse.json, brandReviewCallCount: 1, brandReviewReused: Boolean(reusableBrand), brandReviewDurationMs: Date.now() - reviewStarted, targetRuns, repairBatchCount: repairBatches.length, repairTargetCount: repairPlan.targets.length, finalDeterministic, remainingIssues, optimizationSuggestions, ruleVersion: COPY_RULE_RUNTIME[0]?.version || null },
     usage: { modules: modular.usages, brandReview: brandResponse.usage || null, targetRegeneration: targetRuns.map((item) => item.usage) },
     model: brandResponse.model,
   };
