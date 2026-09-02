@@ -154,8 +154,9 @@ async function runTimedStage(state, stage, timeoutMs, worker) {
   const startedAt = Date.now();
   const timer = setTimeout(() => controller.abort(), budget);
   let outcome = "complete";
+  const combinedSignal = state.signal && typeof AbortSignal.any === "function" ? AbortSignal.any([state.signal, controller.signal]) : controller.signal;
   try {
-    return await worker(controller.signal);
+    return await worker(combinedSignal);
   } catch (cause) {
     outcome = controller.signal.aborted ? "timeout" : "error";
     if (controller.signal.aborted) {
@@ -184,7 +185,7 @@ function imageRecord(candidate, audit) {
   };
 }
 
-export async function resolveItineraryImages(data, { root, apiKey, baseUrl, model, searchApiKey, searchBaseUrl, searchModel, onlySlotIds = [], disableCache = false, onProgress = () => {} } = {}) {
+export async function resolveItineraryImages(data, { root, apiKey, baseUrl, model, searchApiKey, searchBaseUrl, searchModel, onlySlotIds = [], disableCache = false, onProgress = () => {}, signal } = {}) {
   if (process.env.IMAGE_PIPELINE_ENABLED === "off") return { data, summary: { enabled: false } };
   const config = resolvedImagePipelineConfig();
   const runId = randomUUID();
@@ -204,7 +205,7 @@ export async function resolveItineraryImages(data, { root, apiKey, baseUrl, mode
   const publicPrefix = `/image-assets/${runId}`;
   const searchQueue = new ConcurrentTaskQueue(config.searchConcurrency);
   const auditQueue = new ConcurrentTaskQueue(config.auditConcurrency);
-  const states = slots.map((slot) => ({ slot, config, activeMs: 0, attempts: 0, selected: false, manualAvailable: false, searched: false, accounted: false, lastStage: "search", lastReason: "尚未找到合格图片", stopReason: "", stageTimings: [] }));
+  const states = slots.map((slot) => ({ slot, config, signal, activeMs: 0, attempts: 0, selected: false, manualAvailable: false, searched: false, accounted: false, lastStage: "search", lastReason: "尚未找到合格图片", stopReason: "", stageTimings: [] }));
   const stats = { slotCount: slots.length, searchedSlots: 0, searchAttempts: 0, candidateCount: 0, initialAuditCalls: 0, terminalAuditCalls: 0, auditedCandidates: 0, autoApproved: 0, manualReviewCandidates: 0, manualReviewSlots: 0, hardRejected: 0, auditTimeout: 0, auditUnavailable: 0, emptySlots: 0, failedSlots: 0, resolvedSlots: 0, processingSlots: 0, searchDownloadMs: 0, initialAuditMs: 0, terminalAuditMs: 0 };
   const report = (stage, label, currentAction) => {
     stats.manualReviewCandidates = candidatesLedger.filter((item) => item.status === IMAGE_REVIEW_STATE.MANUAL_REVIEW && item.adoptable).length;
