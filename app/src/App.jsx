@@ -344,7 +344,7 @@ function StyleProofA({ data }) {
 }
 
 export function App() {
-  if (window.location.pathname.startsWith("/agent/projects/") || window.location.pathname === "/agent" || window.location.pathname === "/agent/") return <AgentWorkspace />;
+  if (window.location.pathname.startsWith("/agent-diagnostics") || window.location.pathname.startsWith("/agent/projects/")) return <AgentWorkspace />;
   if (window.location.pathname.startsWith("/agent-planner")) return <AgentPlanner />;
   const params = new URLSearchParams(window.location.search);
   const exportMode = params.get("export") === "1";
@@ -358,6 +358,6 @@ export function App() {
   const dataset = workspaceData || (datasetName === "xinjiang" ? sampleData : datasetName === "kenya-luxury-8d" ? kenyaLuxury8dData : datasetName === "tanzania-luxury-10d" ? tanzaniaLuxury10dData : africaData);
   const data = buildScenario(dataset, params.get("scenario"));
   if (params.get("styleProof") === "A") return <StyleProofA data={data} />;
-  if (!exportMode && params.get("templatePreview") !== "1") return <Workspace initialData={createProductionDefaultData()} ItineraryComponent={Itinerary} />;
+  if (!exportMode && params.get("templatePreview") !== "1") return <Workspace initialData={createProductionDefaultData()} ItineraryComponent={Itinerary} agentMode={window.location.pathname === "/agent" || window.location.pathname === "/agent/"} />;
   return <>{!exportMode && <nav className="preview-toolbar"><div><strong>奢游国际行程长图模板</strong><span>{data.days.length}天真实资料 · 动态组件预览</span></div><div className="toolbar-actions"><a href="/?export=1&width=2000" target="_blank">2000px 原图</a><a href="/?export=1&width=1080" target="_blank">1080px 分享版</a></div></nav>}<div className={exportMode ? "export-mode" : "preview-stage"}><Itinerary data={data} scale={scale} /></div></>;
 }
