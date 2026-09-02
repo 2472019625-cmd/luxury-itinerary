@@ -40,6 +40,45 @@ test('generation preview may carry copy issues into editor but formal export sti
   assert.ok(formal.issues.some((item) => item.severity === 'blocker' && item.code.startsWith('brand_')));
 });
 
+test('agent final gate preserves accepted optimization suggestions as warnings', () => {
+  const reviewed = {
+    ...data,
+    copyQuality: {
+      version:'agent-copy-v2-hard-vs-suggestion',
+      passed:true,
+      status:'passed_with_suggestions',
+      blocked:false,
+      hardIssueCount:0,
+    },
+    subtitle:'非凡之旅',
+  };
+  const layout = { width:2000, overflows:[], brokenImages:[], largeGaps:[], footerPresent:true };
+  const result = reviewFinalOutputData(reviewed, layout);
+  assert.equal(result.passed, true);
+  assert.ok(result.issues.some((item) => item.severity === 'warning' && item.code.startsWith('brand_')));
+  assert.equal(result.issues.some((item) => item.severity === 'blocker' && item.code.startsWith('brand_')), false);
+});
+
+test('agent final gate still blocks hard copy and real layout failures', () => {
+  const reviewed = {
+    ...data,
+    copyQuality: {
+      version:'agent-copy-v2-hard-vs-suggestion',
+      passed:false,
+      status:'blocked_generation',
+      blocked:true,
+      hardIssueCount:1,
+    },
+    notes:['错误字符串'],
+  };
+  const layout = { width:2000, overflows:[{selector:'.day-description'}], brokenImages:[], largeGaps:[], footerPresent:true };
+  const result = reviewFinalOutputData(reviewed, layout);
+  assert.equal(result.passed, false);
+  assert.ok(result.issues.some((item) => item.code === 'copy_hard_block_pending'));
+  assert.ok(result.issues.some((item) => item.code === 'brand_notes_invalid_structure'));
+  assert.ok(result.issues.some((item) => item.code === 'text_overflow'));
+});
+
 test('acknowledged ordinary copy warnings may export, but structure errors still block', () => {
   const warningDraft = { ...data, copyQuality:{passed:false,blocked:false,hardIssueCount:0}, subtitle:'非凡之旅' };
   const layout = { width:2000, overflows:[], brokenImages:[], largeGaps:[], footerPresent:true };
