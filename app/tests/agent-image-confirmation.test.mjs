@@ -56,3 +56,9 @@ test("只通过拼版初审但没有逐图终审的候选不会交给用户采�
   const choices = imageConfirmationChoices({ imageCandidates: [unreviewed] }, "cover:hero");
   assert.deepEqual(choices.map((item) => item.choiceId), ["wait_for_image:cover:hero"]);
 });
+
+test("审核已经说明是错误酒店品牌时不会继续展示为可采用候选", () => {
+  const wrongBrand = { ...candidate, candidateId: "wrong-brand", reason: "来源品牌与文案品牌不一致，需人工确认是否同一酒店" };
+  const choices = imageConfirmationChoices({ imageCandidates: [wrongBrand] }, "cover:hero");
+  assert.deepEqual(choices.map((item) => item.choiceId), ["wait_for_image:cover:hero"]);
+});

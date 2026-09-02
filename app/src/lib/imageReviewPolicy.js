@@ -16,6 +16,10 @@ export const IMAGE_MODULE_POLICY = Object.freeze({
 
 const HARD_CODES = new Set(["watermark", "subject_mismatch", "place_mismatch", "broken", "low_resolution", "low_quality", "duplicate", "forbid"]);
 
+export function auditReasonHasIdentityMismatch(reason = "") {
+  return /来源品牌.{0,40}(?:与|并非).{0,40}(?:不一致|不同|需人工确认)|(?:不支持|无法支持).{0,24}(?:目标)?(?:酒店|品牌)身份|无法确认.{0,32}(?:目标品牌|目标酒店)|并非.{0,24}(?:目标品牌|目标酒店)/.test(String(reason));
+}
+
 export function classifyImageCandidate({ slot = {}, candidate = {}, audit = {}, duplicate = false, technicalFailure = "" }) {
   const modulePolicy = IMAGE_MODULE_POLICY[slot.module] || IMAGE_MODULE_POLICY.day;
   const code = duplicate ? "duplicate" : technicalFailure ? "broken" : String(audit.hardRejectCode || "none");
@@ -23,7 +27,8 @@ export function classifyImageCandidate({ slot = {}, candidate = {}, audit = {}, 
   const hardPlaceMismatch = audit.placeMatch === false && !officialHotelIdentity;
   const hardSubjectMismatch = audit.subjectMatch === false;
   const clearlyIrrelevant = Number.isFinite(Number(audit.relevance)) && Number(audit.relevance) < 50;
-  const hard = duplicate || technicalFailure || audit.watermark === true || ["broken", "low_resolution", "low_quality", "forbid"].includes(code) || hardPlaceMismatch || hardSubjectMismatch || clearlyIrrelevant;
+  const identityMismatch = auditReasonHasIdentityMismatch(audit.reason);
+  const hard = duplicate || technicalFailure || audit.watermark === true || ["broken", "low_resolution", "low_quality", "forbid"].includes(code) || hardPlaceMismatch || hardSubjectMismatch || clearlyIrrelevant || identityMismatch;
   if (hard) return { state: IMAGE_REVIEW_STATE.HARD_REJECTED, adoptable: false, reason: technicalFailure || audit.reason || `命中硬拒绝：${code}`, hardRejectCode: HARD_CODES.has(code) ? code : "forbid" };
 
   const placeSupported = audit.placeMatch === true || officialHotelIdentity || audit.sourceSupportsIdentity === true;

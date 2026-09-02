@@ -1,11 +1,12 @@
 import { moveImageToSlot } from "../src/lib/imageSlots.js";
 import { recordImageDecision } from "../src/lib/imageDecisions.js";
+import { auditReasonHasIdentityMismatch } from "../src/lib/imageReviewPolicy.js";
 
 const list = (value) => Array.isArray(value) ? value : [];
 
 export function imageConfirmationChoices(data = {}, slotId) {
   const candidates = list(data.imageCandidates)
-    .filter((item) => item.slotId === slotId && item.status === "manual_review" && item.adoptable === true && item.hardRejectCode === "none" && item.terminalAudit && item.terminalAudit.subjectMatch !== false && item.terminalAudit.placeMatch !== false && Number(item.terminalAudit.relevance || 0) >= 50)
+    .filter((item) => item.slotId === slotId && item.status === "manual_review" && item.adoptable === true && item.hardRejectCode === "none" && item.terminalAudit && item.terminalAudit.subjectMatch !== false && item.terminalAudit.placeMatch !== false && Number(item.terminalAudit.relevance || 0) >= 50 && !auditReasonHasIdentityMismatch(item.reason || item.terminalAudit.reason))
     .sort((left, right) => Number(right.terminalAudit?.relevance || right.baseScore || 0) - Number(left.terminalAudit?.relevance || left.baseScore || 0))
     .slice(0, 3);
   return [
