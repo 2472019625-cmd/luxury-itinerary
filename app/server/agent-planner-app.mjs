@@ -11,6 +11,8 @@ import { AGENT_PROMPT_VERSION, buildAgentFactBasis, fingerprintFacts, generateAg
 import { analyzeAgentPreflight, resolvePreflightConfirmations } from "./agent-preflight.mjs";
 import { cancelExecutionRun, createExecutionRun, EXECUTION_CONFIG_VERSION, EXECUTION_ENABLED, resumeFailedExecutionRun, transitionExecutionTask } from "./agent-execution-scheduler.mjs";
 import { AgentExecutionEngine } from "./agent-execution-engine.mjs";
+import { applyRuntimeImageConfirmations, enrichPendingImageConfirmations } from "./agent-image-confirmation.mjs";
+import { evaluateAgentImageCompletion } from "./agent-image-plan.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const clientDir = path.join(root, "dist", "client");
@@ -119,7 +121,16 @@ export function createAgentPlannerServer(options = {}) {
     const active = store.getActive(projectId);
     if (!active) return null;
     const executionRun = store.getActiveExecutionRun(projectId);
-    return { ...active, confirmations: store.getConfirmations(projectId), executionRun, result: executionRun?.status === "complete" ? store.getFinalResult(projectId, executionRun.executionRunId) : null, activeJob: active.project.activeJobId ? jobs.get(active.project.activeJobId) || null : null };
+    let confirmations = store.getConfirmations(projectId);
+    if (executionRun?.status === "waiting_confirmation") {
+      const savedImages = store.getTaskResult(projectId, executionRun.executionRunId, "image-pipeline");
+      if (savedImages?.data) {
+        const enriched = enrichPendingImageConfirmations(confirmations, savedImages.data);
+        if (JSON.stringify(enriched) !== JSON.stringify(confirmations)) store.saveConfirmations(projectId, enriched);
+        confirmations = enriched;
+      }
+    }
+    return { ...active, confirmations, executionRun, result: executionRun?.status === "complete" ? store.getFinalResult(projectId, executionRun.executionRunId) : null, activeJob: active.project.activeJobId ? jobs.get(active.project.activeJobId) || null : null };
   };
 
   const server = createServer(async (request, response) => {
@@ -150,7 +161,10 @@ export function createAgentPlannerServer(options = {}) {
         const project = store.getProject(confirmationMatch[1]);
         if (!project) return json(response, 404, { error: "智能体项目不存在" });
         const payload = await requestBody(request);
-        const resolved = resolvePreflightConfirmations(store.getConfirmations(project.projectId), payload.decisions);
+        const activeBeforeConfirmation = store.getActiveExecutionRun(project.projectId);
+        const savedImagesBeforeConfirmation = activeBeforeConfirmation?.status === "waiting_confirmation" ? store.getTaskResult(project.projectId, activeBeforeConfirmation.executionRunId, "image-pipeline") : null;
+        const currentConfirmations = savedImagesBeforeConfirmation?.data ? enrichPendingImageConfirmations(store.getConfirmations(project.projectId), savedImagesBeforeConfirmation.data) : store.getConfirmations(project.projectId);
+        const resolved = resolvePreflightConfirmations(currentConfirmations, payload.decisions);
         store.saveConfirmations(project.projectId, resolved);
         const pending = resolved.filter((item) => item.status === "pending");
         if (pending.length) {
@@ -160,6 +174,13 @@ export function createAgentPlannerServer(options = {}) {
         const next = store.updateProject(project.projectId, { confirmationDecisions: resolved, status: "preparing", currentStage: "正在准备" });
         const activeRun = store.getActiveExecutionRun(project.projectId);
         if (activeRun?.status === "waiting_confirmation") {
+          const savedImages = store.getTaskResult(project.projectId, activeRun.executionRunId, "image-pipeline");
+          if (savedImages?.data) {
+            const appliedImages = applyRuntimeImageConfirmations(savedImages, resolved);
+            if (appliedImages.appliedCount) store.saveTaskResult(project.projectId, activeRun.executionRunId, "image-pipeline", appliedImages);
+            const imageGate = evaluateAgentImageCompletion(appliedImages.data);
+            if (!imageGate.passed) return json(response, 409, { error: "仍有必需图片位等待确认", imageGate });
+          }
           const plan = store.getPlan(project.projectId, activeRun.planId);
           let resumed = activeRun;
           for (const taskRun of resumed.taskRuns.filter((item) => item.status === "waiting_confirmation")) resumed = transitionExecutionTask(plan, resumed, taskRun.taskId, "user_resolved", { message: "用户已保存关键确认" });

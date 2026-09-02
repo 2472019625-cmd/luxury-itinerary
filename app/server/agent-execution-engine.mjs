@@ -7,6 +7,7 @@ import { resolveItineraryImages } from "./image-pipeline.mjs";
 import { reviewFinalLayout } from "./final-layout-review.mjs";
 import { reviewFinalOutputData } from "./final-output-qa.mjs";
 import { beginCapabilityCall, cancelExecutionRun, finishCapabilityCall, recordCapabilityCall, transitionExecutionTask } from "./agent-execution-scheduler.mjs";
+import { imageConfirmationChoices } from "./agent-image-confirmation.mjs";
 
 const PLANNING_TYPES = ["project_setup", "source_intake", "fact_review", "confirmation", "journey_strategy", "module_strategy"];
 const COPY_GENERATION_TYPES = ["copy_global", "copy_hotel_transport", "copy_day_group", "copy_closing"];
@@ -201,7 +202,7 @@ export class AgentExecutionEngine {
         const imageGate = evaluateAgentImageCompletion(workingData);
         if (!imageGate.passed) {
           const gapTaskIds = taskIdsFor(plan, ["image_gap_resolution"]);
-          const confirmations = imageGate.missingRequired.map((item) => makeRuntimeConfirmation({ category: "图片", question: `必需图片位 ${item.slotId} 尚未自动通过，是否等待补图或人工确认候选？`, reason: `当前状态：${item.status}。必需位不能留空进入成品。`, source: "图片搜索与视觉审核结果", affectedTaskIds: gapTaskIds, choices: [{ choiceId: `wait_for_image:${item.slotId}`, label: "等待补图或确认", recommended: true, reason: "保持项目和候选证据，不让必需位留空。" }] }));
+          const confirmations = imageGate.missingRequired.map((item) => ({ ...makeRuntimeConfirmation({ category: "图片", question: `必需图片位 ${item.slotId} 尚未自动通过，请看图确认候选或继续等待。`, reason: `当前状态：${item.status}。必需位不能留空进入成品。`, source: "图片搜索与视觉审核结果", affectedTaskIds: gapTaskIds, choices: imageConfirmationChoices(workingData, item.slotId) }), imageSlotId: item.slotId }));
           this.saveRuntimeConfirmations(projectId, confirmations);
           next = this.transitionTypes(plan, next, ["image_gap_resolution"], "waiting_confirmation", { message: "必需图片位等待处理", waitingReason: "必需图片位没有可自动采用图片", resultRef: imageRef });
           this.updateStage(projectId, "等待处理必需图片位", "awaiting_confirmation");

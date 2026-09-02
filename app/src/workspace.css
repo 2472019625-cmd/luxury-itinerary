@@ -441,6 +441,9 @@ body:has(.editor-page) { overflow: hidden; }
 .agent-inline-confirm label { display: grid; grid-template-columns: auto auto auto 1fr; align-items: center; gap: 9px; margin-top: 9px; padding: 12px; border: 1px solid #e4d8c7; border-radius: 6px; background: white; }
 .agent-inline-confirm label em { padding: 2px 6px; color: #795b31; border-radius: 99px; background: #f4eadb; font-size: 10px; font-style: normal; }
 .agent-inline-confirm label small { color: var(--ws-muted); }
+.agent-inline-confirm .agent-image-choice { grid-template-columns: 180px auto auto auto 1fr; align-items: start; }
+.agent-inline-confirm .agent-image-choice img { grid-row: 1 / span 3; width: 180px; height: 112px; object-fit: cover; border-radius: 5px; background: #eee7dc; }
+.agent-inline-confirm .agent-image-choice a { grid-column: 2 / -1; color: var(--ws-gold-deep); font-size: 11px; text-decoration: underline; }
 .agent-runtime-confirm { margin: 18px 0; padding: 16px; border: 1px solid #dfcfb7; border-radius: 9px; background: #fffdf8; }
 .agent-runtime-confirm .agent-inline-confirm { margin: 0 0 14px; padding: 12px; border: 0; background: transparent; }
 .agent-workspace-generation { grid-template-columns: minmax(0,1fr) 340px; }
@@ -536,6 +539,9 @@ body:has(.editor-page) { overflow: hidden; }
   .agent-generation-stats, .agent-locked-next { grid-template-columns: 1fr 1fr; }
   .agent-inline-confirm label { grid-template-columns: auto 1fr; }
   .agent-inline-confirm label small { grid-column: 2; }
+  .agent-inline-confirm .agent-image-choice { grid-template-columns: auto 1fr; }
+  .agent-inline-confirm .agent-image-choice img { grid-column: 1 / -1; grid-row: auto; width: 100%; height: 180px; }
+  .agent-inline-confirm .agent-image-choice a { grid-column: 2; }
   .editor-grid { grid-template-columns: 190px minmax(560px, 1fr); }
   .inspector-panel { position: fixed; z-index: 50; top: 192px; right: 0; bottom: 0; width: 330px; box-shadow: -16px 0 38px rgba(45,37,29,.12); }
 }
