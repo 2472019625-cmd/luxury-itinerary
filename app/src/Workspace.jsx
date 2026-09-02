@@ -274,6 +274,61 @@ function GenerationStep({ project, progress, status, error, onStart, onEdit, onR
   </section></main>;
 }
 
+const AGENT_PROGRESS_STAGES = [
+  { key: "intake", label: "资料检查" },
+  { key: "planning", label: "智能规划" },
+  { key: "facts", label: "事实核验", taskTypes: ["web_verification"] },
+  { key: "copy", label: "文案生成", taskTypes: ["copy_global", "copy_hotel_transport", "copy_day_group", "copy_closing"] },
+  { key: "images", label: "图片准备", taskTypes: ["image_search_plan"] },
+  { key: "review", label: "审核排版", taskTypes: ["copy_review", "targeted_copy_repair", "visual_review", "image_placement", "image_gap_resolution", "layout_render"] },
+  { key: "final", label: "成品检查", taskTypes: ["final_qa", "completion_gate", "persistence"] },
+];
+const AGENT_TASK_SUCCESS = new Set(["succeeded", "user_resolved", "user_accepted_suggestion", "not_applicable", "removed_optional"]);
+
+function taskStageState(tasks, runByTaskId) {
+  if (!tasks.length) return { state: "pending", progress: 0 };
+  const states = tasks.map((task) => runByTaskId.get(task.taskId)?.status || "pending");
+  if (states.some((state) => ["failed", "blocked"].includes(state))) return { state: "failed", progress: 0 };
+  if (states.some((state) => ["waiting_confirmation", "waiting_user"].includes(state))) return { state: "waiting", progress: states.filter((state) => AGENT_TASK_SUCCESS.has(state)).length / states.length };
+  if (states.some((state) => ["running", "retrying", "queued"].includes(state))) return { state: "active", progress: states.filter((state) => AGENT_TASK_SUCCESS.has(state)).length / states.length };
+  const completed = states.filter((state) => AGENT_TASK_SUCCESS.has(state)).length;
+  return { state: completed === states.length ? "complete" : "pending", progress: completed / states.length };
+}
+
+function buildAgentProgress(snapshot) {
+  const project = snapshot?.project;
+  const plan = snapshot?.plan;
+  const run = snapshot?.executionRun;
+  const runByTaskId = new Map((run?.taskRuns || []).map((item) => [item.taskId, item]));
+  const planActive = Boolean(plan?.validation?.passed && project?.activePlanId === plan?.planId);
+  const intakeComplete = Boolean(project && !["preparing", "awaiting_confirmation"].includes(project.status));
+  const stages = AGENT_PROGRESS_STAGES.map((definition) => {
+    if (definition.key === "intake") {
+      if (project?.status === "awaiting_confirmation") return { ...definition, state: "waiting", progress: 0 };
+      if (intakeComplete) return { ...definition, state: "complete", progress: 1 };
+      return { ...definition, state: project ? "active" : "pending", progress: 0 };
+    }
+    if (definition.key === "planning") {
+      if (planActive) return { ...definition, state: "complete", progress: 1 };
+      if (project?.status === "planning_failed") return { ...definition, state: "failed", progress: 0 };
+      return { ...definition, state: project?.status === "planning" ? "active" : "pending", progress: 0 };
+    }
+    const tasks = (plan?.tasks || []).filter((task) => definition.taskTypes.includes(task.taskType));
+    return { ...definition, ...taskStageState(tasks, runByTaskId) };
+  });
+  if (project?.status === "cancelled") stages.forEach((stage) => { if (!["complete", "failed"].includes(stage.state)) stage.state = "cancelled"; });
+  const formallyComplete = ["completed", "ready_for_editor"].includes(project?.status) && stages.every((stage) => stage.state === "complete");
+  const percent = formallyComplete ? 100 : Math.min(99, Math.floor(stages.reduce((sum, stage) => sum + stage.progress, 0) / stages.length * 100));
+  return { stages, percent, planActive };
+}
+
+function AgentProgressOverview({ snapshot, taskCount, executed, elapsed, action }) {
+  const progress = buildAgentProgress(snapshot);
+  const labels = { complete: "已完成", active: "进行中", waiting: "等待确认", failed: "已中断", cancelled: "已取消", pending: "未开始" };
+  const waitingReason = snapshot?.project?.status === "awaiting_confirmation" ? "等待：需要你确认关键业务问题" : snapshot?.executionRun?.status === "execution_disabled" ? "等待：真实执行能力尚未开放" : "";
+  return <aside className="agent-progress-overview"><header><small>REAL-TIME PROGRESS</small><h2>实时进度总览</h2></header><div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress.percent} aria-label="智能体真实总进度"><strong>{progress.percent}<sup>%</sup></strong><div><span style={{ width: `${progress.percent}%` }} /></div><p>{action}</p></div><ol>{progress.stages.map((stage) => <li className={`agent-progress-${stage.state}`} key={stage.key}><i /> <span>{stage.label}</span><em>{labels[stage.state]}</em></li>)}</ol>{waitingReason && <p className="agent-progress-wait">{waitingReason}</p>}<footer><div><strong>{executed}/{taskCount}</strong><span>完成任务</span></div><div><strong>{Math.floor(elapsed / 60)}分{elapsed % 60}秒</strong><span>实际用时</span></div></footer></aside>;
+}
+
 function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, decisions, onDecision, onConfirm }) {
   const agentProject = snapshot?.project;
   const plan = snapshot?.plan;
@@ -287,18 +342,17 @@ function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, dec
   const failed = agentProject?.status === "planning_failed";
   const cancelled = agentProject?.status === "cancelled";
   const ready = agentProject?.status === "ready_for_execution";
-  const activeTitle = waiting ? "等待确认" : failed ? "生成中断" : cancelled ? "已取消" : ready ? "计划已经准备好" : "正在制定本次生成计划";
-  const action = activeJob?.message || agentProject?.currentStage || "正在读取智能体项目";
+  const intakeFinished = Boolean(agentProject && !["preparing", "awaiting_confirmation"].includes(agentProject.status));
+  const activeTitle = waiting ? "需要你的确认" : failed ? "生成任务已中断" : cancelled ? "生成任务已取消" : "正在生成行程成品";
+  const action = waiting ? "等待你确认关键业务问题" : ready && run?.status === "execution_disabled" ? "等待真实执行能力开放" : activeJob?.message || agentProject?.currentStage || "正在读取智能体项目";
+  const latestResult = plan ? `智能规划已完成并通过检查，已建立 ${taskCount} 个执行任务。` : intakeFinished ? "资料检查已经完成，正在建立本次唯一任务计划。" : "正在读取并检查本次上传资料。";
   return <main className="flow-page"><StepRail active={2} /><section className="generation-page agent-workspace-generation">
-    <div className="generation-main"><header><small>STEP 03 · AGENT GENERATION</small><h1>{activeTitle}</h1><p>{ready ? "后续专业能力尚未开放，当前不会生成文案、联网搜图、渲染或导出。" : waiting ? "请返回确认信息处理关键问题，确认后会从当前阶段继续。" : failed ? agentProject?.lastError || "规划未通过安全检查。" : cancelled ? "项目记录和已有计划已保留。" : "智能体正在按已确认事实建立唯一任务计划。"}</p></header>
-      <div className={`agent-stage-banner ${ready ? "agent-stage-ready" : failed || cancelled ? "agent-stage-stop" : ""}`}><span className={!ready && !failed && !cancelled ? "agent-stage-spinner" : ""} /><div><strong>{action}</strong><small>已用时 {Math.floor(elapsed / 60)}分{elapsed % 60}秒</small></div></div>
-      <div className="agent-generation-stats"><div><strong>{taskCount}</strong><span>计划任务</span></div><div><strong>{executed}</strong><span>已实际完成</span></div><div><strong>{run?.capabilityCallStats?.reduce((sum, item) => sum + item.actualCalls, 0) || 0}</strong><span>下游能力调用</span></div><div><strong>{plan?.planVersion || "—"}</strong><span>当前计划版本</span></div></div>
+    <div className="generation-main"><header><small>STEP 03 · AGENT GENERATION</small><h1>{activeTitle}</h1><p>{waiting ? "保存选择后会从受影响的当前任务继续，不会整份重跑。" : failed ? agentProject?.lastError || "当前阶段没有通过安全检查。" : cancelled ? "项目、计划和已经形成的证据都已保留。" : latestResult}</p></header>
       {waiting && <div className="agent-runtime-confirm"><AgentConfirmationPanel confirmations={snapshot?.confirmations || []} decisions={decisions} onDecision={onDecision} /><Button tone="primary" onClick={onConfirm}>保存选择并从当前任务继续</Button></div>}
       {error && <p className="generation-error"><UiIcon name="warning" />{error}</p>}
-      {plan && <><section className="agent-task-summary"><header><div><small>当前有效计划</small><h2>{plan.summary?.contentTheme || `${project.data.destination}行程生成计划`}</h2></div><span>{plan.planId.slice(0, 8)}</span></header><p>{plan.summary?.planningRationale}</p><div>{plan.tasks.slice(0, 8).map((task) => <article key={task.taskId}><span>{task.parallelGroup}</span><b>{task.title}</b><em>{taskState.get(task.taskId) === "cancelled" ? "已取消" : "待执行"}</em></article>)}</div>{plan.tasks.length > 8 && <small>还有 {plan.tasks.length - 8} 个任务可在完整规划中查看</small>}</section><details className="agent-plan-details workspace-agent-plan"><summary><small>查看本次规划 · 当前计划 {plan.planId.slice(0, 8)}</small></summary><PlanView project={agentProject} plan={plan} embedded /></details></>}
-      {ready && <div className="agent-locked-next"><article><UiIcon name="process" /><div><strong>编辑预览尚未开放</strong><p>文案、事实核验、图片、审核、自动放置和实际2000px检查尚未完成。</p></div></article><article><UiIcon name="download" /><div><strong>下载版本尚未开放</strong><p>未生成完整客户成品，不会提供伪造下载或导出入口。</p></div></article></div>}
+      {plan && <details className="agent-plan-details workspace-agent-plan"><summary><small>查看本次规划 / 技术详情</small></summary><section className="agent-technical-summary"><span>计划 {plan.planId.slice(0, 8)}</span><span>{taskCount} 个任务</span><span>{executed} 个完成</span><span>{run?.capabilityCallStats?.reduce((sum, item) => sum + item.actualCalls, 0) || 0} 次下游调用</span><span>版本 {plan.planVersion}</span></section><PlanView project={agentProject} plan={plan} embedded /></details>}
     </div>
-    <aside className="generation-preview"><header><strong>当前项目</strong><span>智能体试验版</span></header><div className="mini-itinerary"><img src="/assets/logos/logo-gold.png" alt="奢游国际" /><small>PRIVATE JOURNEY · {project.data.destination || "目的地待确认"}</small><h2>{project.data.title || project.title}</h2><div className="mini-image"><span>成品预览将在全部生成门禁通过后开放</span></div></div><h3><UiIcon name="process" />项目状态</h3><p>{ready ? "执行准备完成，真实执行能力尚未开放。" : action}</p></aside>
+    <AgentProgressOverview snapshot={snapshot} taskCount={taskCount} executed={executed} elapsed={elapsed} action={action} />
     <footer className="generation-footer">{!waiting && <Button onClick={onReview}>查看确认信息</Button>}{!["cancelled"].includes(agentProject?.status) && <Button onClick={onCancel}>取消任务</Button>}</footer>
   </section></main>;
 }
