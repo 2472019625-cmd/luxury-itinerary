@@ -5,8 +5,38 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { buildImageConstraints, runImageSearchSkill } from "../server/simple-image-skill.mjs";
+import { judgeCandidatesBatch } from "../server/image-audit.mjs";
 
 const slot = (id, overrides = {}) => ({ slotId: id, moduleType: "day", required: true, location: "塞伦盖蒂", activity: "全天游猎", subject: "草原环境与游猎行动", visualGoal: "表现进入草原后的环境建立", visualContext: { dayRole: "环境建立", avoid: ["与相邻 DAY 相同机位"] }, copyTargetId: `copy-${id}`, aspectRatio: "16:9", userLocked: false, ...overrides });
+
+async function runAuditedFixture(t, slotInput, { candidateCount = 1, judgments }) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-image-hard-match-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  return runImageSearchSkill({
+    root,
+    slots: [slotInput],
+    searchApiKey: "search-key",
+    searchModel: "search-model",
+    visionApiKey: "vision-key",
+    visionBaseUrl: "https://vision.example/v1",
+    visionModel: "vision-model",
+    sourcePagesPerSlot: 1,
+    downloadsPerSlot: candidateCount,
+    visionCandidatesPerSlot: candidateCount,
+    adapters: {
+      searchWebBatch: async () => [{ title: "受控候选页", pageUrl: "https://example.com/page", officialHint: true }],
+      searchCommonsImages: async () => [],
+      extractPageImages: async (page) => Array.from({ length: candidateCount }, (_, index) => ({ ...page, fixtureIndex: index, imageUrl: `${page.pageUrl}/candidate-${index + 1}.jpg` })),
+      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+        const number = candidate.fixtureIndex + 1;
+        const filePath = path.join(directory, `candidate-${number}.jpg`);
+        await sharp({ create: { width: 1200, height: 800, channels: 3, background: { r: 30 * number, g: 90, b: 120 } } }).jpeg().toFile(filePath);
+        return { ...candidate, filePath, publicUrl: `${publicPrefix}/candidate-${number}.jpg`, sha256: `controlled-hash-${number}`, width: 1200, height: 800 };
+      },
+      judgeCandidatesBatch: async ({ candidates }) => judgments(candidates),
+    },
+  });
+}
 
 test("多 slot 单批次并发处理，多 query 且单 slot 失败不影响其他 slot", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-image-skill-"));
@@ -34,7 +64,7 @@ test("多 slot 单批次并发处理，多 query 且单 slot 失败不影响其�
         files.set(candidate.imageUrl, filePath);
         return { ...candidate, filePath, publicUrl: `${publicPrefix}/${colorIndex}.jpg`, sha256: `hash-${colorIndex}`, width: 1200, height: 800 };
       },
-      judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate, index) => ({ index, score: 90 - index, pass: true, actualSubject: candidate.alt, subjectMatch: true, placeMatch: true, sourceSupportsIdentity: false, watermark: false, hardRejectCode: "none", reason: "地点、活动和主体匹配" })),
+      judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate, index) => ({ candidateId: candidate.candidateId, score: 90 - index, actualSubject: candidate.alt, locationMatch: true, hotelIdentityMatch: true, activityMatch: true, subjectMatch: true, watermarkFree: true, nonAI: true, technicalUsable: true, eligible: true, hardRejectCode: "none", reason: "地点、活动和主体匹配" })),
     };
     const result = await runImageSearchSkill({
       root,
@@ -47,6 +77,8 @@ test("多 slot 单批次并发处理，多 query 且单 slot 失败不影响其�
     assert.equal(result.metrics.businessBatches, 1);
     assert.ok(result.results[0].queriesUsed.length >= 2);
     assert.equal(result.results[0].status, "success");
+    assert.ok(result.results[0].selected.candidateId.startsWith("candidate-"));
+    assert.equal(result.results[0].selected.candidateId, result.results[0].candidates[0].candidateId);
     assert.equal(result.results[1].status, "not_found");
     assert.equal(result.results[2].status, "failed");
     assert.ok(searchPeak > 1);
@@ -147,4 +179,61 @@ test("酒店 slot 不搜索 Commons，普通 slot 每批最多一次", async () 
     assert.equal(result.metrics.commonsCalls, 1);
     assert.equal(result.metrics.searchCalls, 2);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("DAY2酒店室内与DAY6帐篷室内均不能通过游猎视觉职责", async (t) => {
+  for (const [id, actualSubject] of [["day-2", "Faru Faru 酒店室内休息区"], ["day-6", "Sabora 帐篷内部客厅"]]) {
+    const result = await runAuditedFixture(t, slot(id, { activity: id === "day-6" ? "反偷猎观察站参访" : "塞伦盖蒂西部游猎", subject: id === "day-6" ? "反偷猎观察站参访" : "塞伦盖蒂西部游猎" }), {
+      judgments: (candidates) => candidates.map((candidate) => ({ candidateId: candidate.candidateId, actualSubject, locationMatch: true, hotelIdentityMatch: true, activityMatch: false, subjectMatch: false, watermarkFree: true, nonAI: true, technicalUsable: true, eligible: true, hardRejectCode: "none", score: 88, reason: "地点可能相关，但实际主体是住宿室内，不承担目标活动职责" })),
+    });
+    assert.equal(result.results[0].status, "not_found");
+    assert.equal(result.results[0].selected, null);
+    assert.equal(result.results[0].candidates[0].rejection, "activity_mismatch");
+    assert.equal(result.results[0].candidates[0].hardJudgment.activityMatch, false);
+  }
+});
+
+test("封面按candidateId绑定同一视觉记录与本地文件，不受判断返回顺序影响", async (t) => {
+  const result = await runAuditedFixture(t, slot("cover", { moduleType: "cover", location: "坦桑尼亚", activity: "", subject: "塞伦盖蒂草原雄狮", visualGoal: "以草原雄狮作为唯一封面焦点", aspectRatio: "5:3" }), {
+    candidateCount: 2,
+    judgments: (candidates) => [
+      { candidateId: candidates[1].candidateId, actualSubject: "塞伦盖蒂草原雄狮", locationMatch: true, hotelIdentityMatch: true, activityMatch: true, subjectMatch: true, watermarkFree: true, nonAI: true, technicalUsable: true, eligible: true, hardRejectCode: "none", score: 96, reason: "主体与封面职责一致" },
+      { candidateId: candidates[0].candidateId, actualSubject: "酒店室内", locationMatch: true, hotelIdentityMatch: true, activityMatch: true, subjectMatch: false, watermarkFree: true, nonAI: true, technicalUsable: true, eligible: false, hardRejectCode: "subject_mismatch", score: 20, reason: "主体不符" },
+    ],
+  });
+  const selected = result.results[0].selected;
+  const selectedRecord = result.results[0].candidates.find((candidate) => candidate.candidateId === selected.candidateId);
+  assert.equal(result.results[0].status, "success");
+  assert.equal(selected.actualSubject, "塞伦盖蒂草原雄狮");
+  assert.equal(selected.localUrl, selectedRecord.localUrl);
+  assert.equal(selected.actualSubject, selectedRecord.actualSubject);
+  assert.equal(selected.hardJudgment.eligible, true);
+  assert.match(selected.localUrl, /candidate-2\.jpg$/);
+});
+
+test("真实批量视觉请求和返回都以candidateId为硬契约", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-image-audit-contract-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const files = await Promise.all([1, 2].map(async (number) => {
+    const filePath = path.join(root, `${number}.jpg`);
+    await sharp({ create: { width: 1200, height: 800, channels: 3, background: { r: 20 * number, g: 80, b: 140 } } }).jpeg().toFile(filePath);
+    return { candidateId: `candidate-fixed-${number}`, filePath, pageUrl: `https://example.com/${number}`, title: `候选${number}`, officialHint: true };
+  }));
+  const originalFetch = globalThis.fetch;
+  let requestBody;
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ judgments: [
+      { candidateId: "candidate-fixed-2", actualSubject: "游猎车与草原", locationMatch: true, hotelIdentityMatch: true, activityMatch: true, subjectMatch: true, watermarkFree: true, nonAI: true, technicalUsable: true, eligible: true, hardRejectCode: "none", score: 95 },
+      { candidateId: "unknown", actualSubject: "未知", locationMatch: true, hotelIdentityMatch: true, activityMatch: true, subjectMatch: true, watermarkFree: true, nonAI: true, technicalUsable: true, eligible: true, hardRejectCode: "none", score: 99 },
+      { candidateId: "candidate-fixed-1", actualSubject: "酒店室内", locationMatch: true, hotelIdentityMatch: true, activityMatch: false, subjectMatch: false, watermarkFree: true, nonAI: true, technicalUsable: true, eligible: false, hardRejectCode: "activity_mismatch", score: 20 },
+    ] }) } }] }) };
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const judgments = await judgeCandidatesBatch({ slot: { label: "DAY2", module: "day", context: "塞伦盖蒂", subject: "游猎", visualGoal: "游猎职责", mustHave: ["地点：塞伦盖蒂", "活动：游猎", "主体：游猎"], prefer: [], forbid: [] }, candidates: files, apiKey: "key", baseUrl: "https://vision.invalid", model: "model" });
+  const promptText = requestBody.messages[0].content.find((item) => item.type === "text").text;
+  assert.match(promptText, /candidateId=candidate-fixed-1/);
+  assert.match(promptText, /locationMatch/);
+  assert.match(promptText, /eligible/);
+  assert.deepEqual(judgments.map((item) => item.candidateId), ["candidate-fixed-2", "candidate-fixed-1"]);
 });

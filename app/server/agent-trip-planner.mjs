@@ -128,7 +128,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   };
   const callStats = { source_parser: 1, trip_planner: 0 };
   const attempts = [];
-  const simpleContractPrompt = "simple-skill-pipeline 额外接口：在原有 JSON 字段之外返回 selectedHighlights 数组。每项只含 sourceText、sourceType(source_designated|official_product|planner_derived)、sourceRefs、selectionReason，不写最终客户文案。你必须在本次规划中最终确定实际采用的亮点集合：优先来源指定亮点，其次正式产品级亮点，前两类不足目标时才补充整程级购买理由；目标5—7条，真实事实不足时允许少于5条并在 selectionReason 说明素材不足。不得把普通DAY细节拔高。";
+  const simpleContractPrompt = "simple-skill-pipeline 额外接口：在原有 JSON 字段之外返回 selectedHighlights 数组。每项只含 sourceText、sourceType(source_designated|official_product|planner_derived)、sourceRefs、selectionReason，不写最终客户文案。你必须在本次规划中最终确定实际采用的亮点集合：优先来源指定亮点，其次正式产品级亮点，前两类不足目标时才补充整程级购买理由；目标5—7条，真实事实不足时允许少于5条并在 selectionReason 说明素材不足。不得把普通DAY细节拔高。图片规划必须读取每个 DAY 的完整 experience 与全部 spots：dayRoles.primaryVisualSubject 只能选已有真实活动并结合 differenceFromAdjacent，不能机械取 spots[0] 或虚构差异；自费/可选/待确认体验成为视觉重点时必须保留状态。封面 imagePlan cover slot 的 primaryVisualSubject 只能是一个核心焦点，DAY 地点不得以酒店名代替。原始资料明确写有游猎时不得判断为无游猎。";
   let raw;
   let firstErrors = [];
   for (let index = 0; index < 2; index += 1) {

@@ -110,14 +110,15 @@ export function applySimpleSkillResults({ preparedData, copyTasks = [], copyExec
       }
       setSlotImage(data, binding, {
         src,
-        label: result.actualSubject || slot.subject || slot.activity || slot.visualGoal,
+        label: result.selected.actualSubject || result.actualSubject || slot.subject || slot.activity || slot.visualGoal,
+        candidateId: result.selected.candidateId,
         focus: result.selected.focus || "50% 50%",
         fit: result.selected.fit || "cover",
         sourcePage: result.selected.sourcePage || null,
         sourceTitle: result.selected.sourceTitle || null,
         officialSource: result.selected.officialSource === true,
       });
-      imageWriteback.push({ slotId: slot.slotId, fieldPath: binding.fieldPath, status: "written", src });
+      imageWriteback.push({ slotId: slot.slotId, fieldPath: binding.fieldPath, status: "written", src, candidateId: result.selected.candidateId });
       continue;
     }
     setSlotImage(data, binding, null);

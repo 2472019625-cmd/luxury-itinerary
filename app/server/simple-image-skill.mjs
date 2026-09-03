@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ import { extractPageImages } from "./page-images.mjs";
 import { searchCommonsImages } from "./commons-search.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const hardRejectCodes = new Set(["watermark", "subject_mismatch", "place_mismatch", "broken", "low_resolution", "low_quality", "forbid"]);
+const hardRejectCodes = new Set(["watermark", "subject_mismatch", "place_mismatch", "hotel_identity_mismatch", "activity_mismatch", "ai_generated", "technical_unusable", "broken", "low_resolution", "low_quality", "forbid"]);
 
 class TaskQueue {
   constructor(limit) { this.limit = Math.max(1, Number(limit) || 1); this.active = 0; this.peak = 0; this.pending = []; }
@@ -83,8 +83,27 @@ function basicScore(candidate, slot) {
   return (candidate.officialHint ? 40 : 0) + match * 8 + Math.min(20, Math.round(pixels / 500_000)) - Number(candidate.searchRank || 0);
 }
 
+function stableCandidateId(slotId, candidate = {}) {
+  const identity = [slotId, candidate.sha256, candidate.imageUrl, candidate.pageUrl].map((item) => String(item || "").trim()).join("|");
+  return `candidate-${createHash("sha256").update(identity).digest("hex").slice(0, 20)}`;
+}
+
+function hardJudgment(audit = null) {
+  if (!audit) return null;
+  return {
+    locationMatch: audit.locationMatch,
+    hotelIdentityMatch: audit.hotelIdentityMatch,
+    activityMatch: audit.activityMatch,
+    subjectMatch: audit.subjectMatch,
+    watermarkFree: audit.watermarkFree,
+    nonAI: audit.nonAI,
+    technicalUsable: audit.technicalUsable,
+    eligible: audit.eligible,
+  };
+}
+
 function publicCandidate(candidate, audit = null, rejection = null) {
-  return { imageUrl: candidate.imageUrl, localUrl: candidate.publicUrl, sourcePage: candidate.pageUrl, sourceTitle: candidate.title || "", officialSource: Boolean(candidate.officialHint), width: candidate.width, height: candidate.height, sha256: candidate.sha256, actualSubject: audit?.actualSubject || null, matchReason: audit?.reason || null, rejection };
+  return { candidateId: candidate.candidateId, imageUrl: candidate.imageUrl, localUrl: candidate.publicUrl, sourcePage: candidate.pageUrl, sourceTitle: candidate.title || "", officialSource: Boolean(candidate.officialHint), width: candidate.width, height: candidate.height, sha256: candidate.sha256, actualSubject: audit?.actualSubject || null, matchReason: audit?.reason || null, hardJudgment: hardJudgment(audit), rejection };
 }
 
 function resultStatus(results) {
@@ -95,8 +114,23 @@ function resultStatus(results) {
   return "failed";
 }
 
+const hardBooleanFields = ["locationMatch", "hotelIdentityMatch", "activityMatch", "subjectMatch", "watermarkFree", "nonAI", "technicalUsable", "eligible"];
+
 function completeVisualJudgment(audit) {
-  return audit && typeof audit.pass === "boolean" && typeof audit.subjectMatch === "boolean" && typeof audit.placeMatch === "boolean" && typeof audit.watermark === "boolean" && typeof audit.actualSubject === "string" && audit.actualSubject.trim();
+  return audit && typeof audit.candidateId === "string" && audit.candidateId.trim() && hardBooleanFields.every((field) => typeof audit[field] === "boolean") && typeof audit.actualSubject === "string" && audit.actualSubject.trim();
+}
+
+function failedHardRequirement(slot, audit) {
+  if (audit.technicalUsable !== true) return "technical_unusable";
+  if (audit.watermarkFree !== true) return "watermark";
+  if (audit.nonAI !== true) return "ai_generated";
+  if (text(slot.location) && audit.locationMatch !== true) return "place_mismatch";
+  if (text(slot.hotel) && audit.hotelIdentityMatch !== true) return "hotel_identity_mismatch";
+  if (text(slot.activity) && audit.activityMatch !== true) return "activity_mismatch";
+  if (text(slot.subject) && audit.subjectMatch !== true) return "subject_mismatch";
+  if (audit.eligible !== true) return "not_eligible";
+  if (hardRejectCodes.has(String(audit.hardRejectCode || "none"))) return String(audit.hardRejectCode);
+  return null;
 }
 
 export async function runImageSearchSkill({
@@ -161,7 +195,7 @@ export async function runImageSearchSkill({
       catch (error) { warnings.push(`候选下载失败：${error?.message || error}`); return null; }
     })));
     const contentSeen = new Set();
-    const downloaded = downloadedResults.filter((item) => item?.filePath && item?.sha256 && !contentSeen.has(item.sha256) && contentSeen.add(item.sha256)).sort((a, b) => basicScore(b, slot) - basicScore(a, slot));
+    const downloaded = downloadedResults.filter((item) => item?.filePath && item?.sha256 && !contentSeen.has(item.sha256) && contentSeen.add(item.sha256)).sort((a, b) => basicScore(b, slot) - basicScore(a, slot)).map((item) => ({ ...item, candidateId: stableCandidateId(slot.slotId, item) }));
     if (!downloaded.length) {
       const allSearchFailed = pagesResult.status === "rejected" && (isHotel || commonsResult.status === "rejected");
       return { slotId: slot.slotId, status: allSearchFailed ? "failed" : "not_found", selected: null, candidates: [], queriesUsed, sourceEvidence: allPages.map((item) => item.pageUrl), actualSubject: null, matchReason: allSearchFailed ? "首轮聚合搜索失败" : "首轮业务批次未找到可下载解码的候选", technicalStatus: allSearchFailed ? "search_failed" : "no_technical_candidate", warnings, constraints, durationMs: Date.now() - slotStartedAt };
@@ -177,14 +211,13 @@ export async function runImageSearchSkill({
       return { slotId: slot.slotId, status: "needs_user_action", selected: null, candidates: downloaded.map((item) => publicCandidate(item)), queriesUsed, sourceEvidence: unique(downloaded.map((item) => item.pageUrl)), actualSubject: null, matchReason: "视觉判断不可用，不得默认通过", technicalStatus: "visual_judgment_failed", warnings, constraints, durationMs: Date.now() - slotStartedAt };
     }
     const judged = [];
+    const candidateById = new Map(visionCandidates.map((candidate) => [candidate.candidateId, candidate]));
     for (const audit of judgments) {
-      const candidate = visionCandidates[audit.index];
+      const candidate = candidateById.get(audit?.candidateId);
       if (!candidate) continue;
       if (!completeVisualJudgment(audit)) { judged.push({ candidate, audit, rejection: "needs_user_judgment" }); continue; }
-      const hard = audit.watermark === true || audit.subjectMatch === false || audit.placeMatch === false || hardRejectCodes.has(String(audit.hardRejectCode || "none"));
-      const hotelIdentityMissing = isHotel && !candidate.officialHint && audit.sourceSupportsIdentity !== true;
-      if (hard || hotelIdentityMissing) { judged.push({ candidate, audit, rejection: hard ? String(audit.hardRejectCode || "fact_mismatch") : "hotel_identity_unconfirmed" }); continue; }
-      if (audit.pass !== true || audit.subjectMatch !== true || (audit.placeMatch !== true && audit.sourceSupportsIdentity !== true)) { judged.push({ candidate, audit, rejection: "needs_user_judgment" }); continue; }
+      const rejection = failedHardRequirement(slot, audit);
+      if (rejection) { judged.push({ candidate, audit, rejection }); continue; }
       const duplicate = await withDedupeLock(candidate);
       if (!duplicate.accepted) { judged.push({ candidate, audit, rejection: duplicate.reason }); continue; }
       judged.push({ candidate, audit, rejection: null });

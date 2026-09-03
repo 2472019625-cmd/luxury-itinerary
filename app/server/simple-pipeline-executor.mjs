@@ -16,10 +16,13 @@ const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const disabledLegacyCapabilities = new Set(["brand_reviewer", "review_decision", "finding_package", "copy_regeneration", "image_second_round", "targeted_image_research", "stage_budget"]);
 
 function elapsed(startedAt) { return Date.now() - startedAt; }
-function statusFor(unresolved, renderStatus) {
+export function statusFor(unresolved, renderStatus) {
   if (renderStatus === "success" && !unresolved.length) return "complete";
-  if (unresolved.some((item) => item.required && item.kind === "image" && ["not_found", "needs_user_action"].includes(item.status))) return "awaiting_user_action";
-  if (unresolved.some((item) => item.required)) return "partial";
+  const required = unresolved.filter((item) => item.required);
+  if (required.some((item) => item.kind !== "image")) return "partial";
+  if (required.some((item) => item.kind === "image" && !["not_found", "needs_user_action"].includes(item.status))) return "partial";
+  if (required.some((item) => item.kind === "image" && ["not_found", "needs_user_action"].includes(item.status) && item.requiredAction === "needs_user_action")) return "awaiting_user_action";
+  if (required.length) return "partial";
   return renderStatus === "blocked" || renderStatus === "failed" ? "partial" : "ready_to_render";
 }
 
@@ -42,7 +45,7 @@ function callCounts({ agentPlan, copyExecution, imageExecution, renderExecution 
 
 function runtimeLegacyEvidence(events, copyExecution, imageExecution) {
   const invoked = [...new Set(events.map((item) => item.capabilityId).filter((id) => disabledLegacyCapabilities.has(id)))];
-  const automaticCopyRegenerationRounds = Math.max(0, Number(copyExecution?.metrics?.businessBatches || 0) - 1);
+  const automaticCopyRegenerationRounds = Number(copyExecution?.metrics?.automaticBusinessRetryRounds || 0);
   const automaticImageFollowupRounds = Number(imageExecution?.metrics?.automaticFollowupRounds || 0);
   return {
     source: "executor_runtime_capability_events",

@@ -73,8 +73,8 @@ export async function judgeCandidatesBatch({ slot, candidates, apiKey, baseUrl, 
   }
   const judgedCandidates = candidates.slice(0, 4);
   const sheet = await contactSheet(judgedCandidates);
-  const sourceContext = judgedCandidates.map((candidate, index) => `${index + 1}. 来源页面：${candidate.pageUrl || "未知"}；标题：${candidate.title || "未知"}；官方来源提示：${candidate.officialHint ? "是" : "否"}`).join("\n");
-  const prompt = `你是高端定制旅行图片事实与视觉判断员。请在一次判断中逐张核验编号候选，并完成排序。\n展示位：${slot.label}\n模块：${slot.module}\n地点/品牌与现有语境：${slot.context}\n目标主体：${slot.subject}\n视觉目标：${slot.visualGoal || ""}\nmustHave：${(slot.mustHave || []).join("；")}\nprefer：${(slot.prefer || []).join("；")}\nforbid：${(slot.forbid || []).join("；")}\n${sourceContext}\n\n事实匹配高于单纯好看。每张图必须先描述实际主体，再分别判断地点、酒店身份、活动、主体、水印、破图/明显低质和 AI 生成迹象。官方来源可以支持酒店身份，但不能替代对图片实际主体的判断。prefer 只影响排序，不作为硬拒绝。禁止因不确定而默认 pass。输出JSON：{"judgments":[{"index":从0开始的图片序号,"pass":true或false,"actualSubject":"实际主体","subjectMatch":true或false,"placeMatch":true或false,"sourceSupportsIdentity":true或false,"watermark":true或false,"hardRejectCode":"none|watermark|subject_mismatch|place_mismatch|broken|low_resolution|low_quality|forbid","relevance":0到100,"luxury":0到100,"cleanliness":0到100,"composition":0到100,"score":0到100,"reason":"事实化说明"}]}。judgments 按推荐顺序排列，但 index 必须对应原编号。`;
+  const sourceContext = judgedCandidates.map((candidate, index) => `${index + 1}. candidateId=${candidate.candidateId}；来源页面：${candidate.pageUrl || "未知"}；标题：${candidate.title || "未知"}；官方来源提示：${candidate.officialHint ? "是" : "否"}`).join("\n");
+  const prompt = `你是高端定制旅行图片事实与视觉判断员。请在一次判断中逐张核验候选，并严格按 candidateId 返回。\n展示位：${slot.label}\n模块：${slot.module}\n地点/品牌与现有语境：${slot.context}\n目标主体：${slot.subject}\n视觉目标：${slot.visualGoal || ""}\nmustHave：${(slot.mustHave || []).join("；")}\nprefer：${(slot.prefer || []).join("；")}\nforbid：${(slot.forbid || []).join("；")}\n${sourceContext}\n\n事实匹配高于单纯好看。每张图必须先描述实际主体，再对地点、酒店身份、活动、主体、水印、AI痕迹和技术可用性逐项给出布尔硬判断。某项对当前 slot 不适用时填 true；任何适用 mustHave 不满足时 eligible 必须为 false。官方来源只能支持酒店身份，不能替代对图片实际主体、活动与地点的判断。prefer 只影响排序，不作为硬拒绝。禁止因不确定而默认 eligible。输出JSON：{"judgments":[{"candidateId":"与输入完全一致","actualSubject":"实际主体","locationMatch":true或false,"hotelIdentityMatch":true或false,"activityMatch":true或false,"subjectMatch":true或false,"watermarkFree":true或false,"nonAI":true或false,"technicalUsable":true或false,"eligible":true或false,"hardRejectCode":"none|watermark|subject_mismatch|place_mismatch|hotel_identity_mismatch|activity_mismatch|ai_generated|technical_unusable|broken|low_resolution|low_quality|forbid","relevance":0到100,"luxury":0到100,"cleanliness":0到100,"composition":0到100,"score":0到100,"reason":"事实化说明"}]}。judgments 可按推荐顺序排列，但 candidateId 必须对应同一张输入图片。`;
   const response = await fetch(`${String(baseUrl).replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
@@ -95,8 +95,10 @@ export async function judgeCandidatesBatch({ slot, candidates, apiKey, baseUrl, 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw responseError(payload, response.status, "批量视觉判断失败");
   const result = parseAuditJson(payload?.choices?.[0]?.message?.content, "批量视觉判断");
+  const knownIds = new Set(judgedCandidates.map((candidate) => candidate.candidateId));
+  const seenIds = new Set();
   return (Array.isArray(result.judgments) ? result.judgments : [])
-    .filter((item) => Number.isInteger(item.index) && judgedCandidates[item.index])
+    .filter((item) => knownIds.has(item?.candidateId) && !seenIds.has(item.candidateId) && seenIds.add(item.candidateId))
     .sort((a, b) => (b.score || 0) - (a.score || 0));
 }
 

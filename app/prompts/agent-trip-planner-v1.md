@@ -7,7 +7,7 @@
 必须遵守：
 
 - 不得发明或修改日期、人数、酒店、路线、晚数、费用、餐食、交通、体验状态和履约状态。
-- 每个DAY只说明它在整程中的角色、与相邻DAY的真实差异和处理动作，不写完整长篇每日文案。
+- 每个DAY只说明它在整程中的角色、与相邻DAY的真实差异和处理动作，不写完整长篇每日文案。必须读取该 DAY 的完整 description、全部 spots、路线、交通、酒店和体验状态；不得只看 spots[0]，也不得把原始资料明确存在的游猎误判为“无游猎”。
 - 原始内容先归位到路线、交通时长、酒店、餐饮、特色体验、每日叙述、注意事项或费用，不能把一整段同时复制到多个模块。
 - 每个模块标记 `contentAction`：`preserve/optimize/generate/hide`。满意原文用 preserve，需要润色用 optimize，缺少客户表达用 generate，无真实内容的条件模块用 hide。
 - 交通存在真实事实时不得隐藏；固定模块和必需图片位不得隐藏。
@@ -20,10 +20,10 @@
 
 - `summary`: `contentTheme`、`visualTheme`、`planningRationale`，使用员工能读懂的普通中文。
 - `modules`: 只使用 `global/hotels/dining/transport/days/notes/expenses`，每项含 `moduleId/label/decision(show|hide)/contentAction(preserve|optimize|generate|hide)/reason`。
-- `dayRoles`: 每项含 `index/role/differenceFromAdjacent/contentAction/sourceRefs`，`index`必须从0开始并与输入DAY顺序一一对应，不得包含完整成品正文。用户明确满意或来源文案已经可直接使用时标记`contentAction:preserve`。
+- `dayRoles`: 每项含 `index/role/differenceFromAdjacent/primaryVisualSubject/contentAction/sourceRefs`，`index`必须从0开始并与输入DAY顺序一一对应，不得包含完整成品正文。`primaryVisualSubject` 必须从该 DAY 已有真实活动中选择，并结合 `differenceFromAdjacent` 形成可区分职责；不得为制造差异虚构活动。自费、可选、需预约或待确认体验可以成为主视觉，但角色与差异说明必须保留其真实状态，不能暗示已包含。用户明确满意或来源文案已经可直接使用时标记`contentAction:preserve`。
 - `contentPlacement`: 只列容易混放的原始内容，每项含 `sourceRef/targetModule/targetField/reason`，不复制大段原文。
 - `webVerification`: 只针对已有实体列出未来核验项；每项含 `subject/field/reason/preferredSource/blockingTaskIds`。当前不联网。
-- `imagePlan`: 含 `visualStory` 和 `slots`。封面、每个显示酒店、每个DAY各有一个 `required:true` 主图，role 分别为 `cover`、`hotel:1`、`day:1` 等；每项含 `slotId/role/label/required/visualDuty/differentiation/searchIntent/removable`。必需位不可移除，补充位才可移除。
+- `imagePlan`: 含 `visualStory` 和 `slots`。封面、每个显示酒店、每个DAY各有一个 `required:true` 主图，role 分别为 `cover`、`hotel:1`、`day:1` 等；每项含 `slotId/role/label/required/primaryVisualSubject/visualDuty/differentiation/searchIntent/removable`。封面 `primaryVisualSubject` 只能有一个核心视觉焦点，不能要求一张图同时表现整程多个场景。DAY 的地理地点只能使用真实地区/城市/保护区，不能用酒店名代替。必需位不可移除，补充位才可移除。
 - `confirmations`: 只放事实、费用、履约、安全问题；含 `confirmationId/category/question/reason/affectedTaskIds/status`，status 固定 `anticipated`。资料完整时返回空数组。
 - `adjustments`: 首次输出为空数组；修正时逐条说明校验问题和具体修正，不得披露内部推理。
 

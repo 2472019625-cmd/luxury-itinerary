@@ -55,6 +55,70 @@ function dayRole(agentPlan, index) {
   return (agentPlan.dayRoles || []).find((item) => Number(item.index) === index) || {};
 }
 
+function dayFactText(day = {}) {
+  return unique([day.theme, day.city, day.description, ...(day.routeNodes || []), ...(day.spots || []).flatMap((spot) => [spot.name, spot.description, ...(spot.sourceEvidence || [])])]).join("；");
+}
+
+function removeFalseNoSafari(value, day) {
+  const sourceHasSafari = /游猎|safari/i.test(dayFactText(day));
+  const claim = clean(value);
+  if (!sourceHasSafari || !/(?:无|没有|不含|未安排)[^，。；]{0,10}(?:游猎|safari)/i.test(claim)) return claim;
+  const corrected = clean(claim.replace(/(?:无|没有|不含|未安排)[^，。；]{0,10}(?:游猎|safari)(?:活动)?/gi, "抵达后包含已确认游猎内容"));
+  return corrected || "抵达后包含原始资料明确的游猎内容";
+}
+
+function normalizedDayRoles(agentPlan, days) {
+  return days.map((day, index) => {
+    const role = dayRole(agentPlan, index);
+    return {
+      ...role,
+      index,
+      role: removeFalseNoSafari(role.role || day.theme || `DAY ${index + 1}`, day),
+      differenceFromAdjacent: removeFalseNoSafari(role.differenceFromAdjacent || "按当天全部真实事实与相邻 DAY 区分", day),
+      contentAction: role.contentAction || "optimize",
+      sourceRefs: Array.isArray(role.sourceRefs) ? role.sourceRefs : [],
+    };
+  });
+}
+
+function longestSharedRun(left, right) {
+  const a = clean(left).toLowerCase();
+  const b = clean(right).toLowerCase();
+  let best = 0;
+  for (let start = 0; start < a.length; start += 1) {
+    for (let end = start + 2; end <= a.length; end += 1) if (b.includes(a.slice(start, end))) best = Math.max(best, end - start);
+  }
+  return best;
+}
+
+function selectPrimaryDaySpot(day, role = {}, plannedSlot = {}) {
+  const spots = Array.isArray(day.spots) ? day.spots : [];
+  if (!spots.length) return { spot: null, spotIndex: 0 };
+  const plannedSubject = clean(role.primaryVisualSubject || plannedSlot.primaryVisualSubject);
+  if (plannedSubject) {
+    const plannedIndex = spots.findIndex((spot) => {
+      const facts = clean([spot.name, spot.description, ...(spot.sourceEvidence || [])].join(" "));
+      return facts.includes(plannedSubject) || plannedSubject.includes(clean(spot.name));
+    });
+    if (plannedIndex >= 0) return { spot: spots[plannedIndex], spotIndex: plannedIndex };
+  }
+  const distinction = clean([role.differenceFromAdjacent, role.role, plannedSlot.differentiation, plannedSlot.visualDuty].join(" "));
+  const ranked = spots.map((spot, spotIndex) => ({ spot, spotIndex, score: Math.max(longestSharedRun(spot.name, distinction), longestSharedRun(spot.description, distinction)) }));
+  ranked.sort((a, b) => b.score - a.score || Number(b.spot.status === "included") - Number(a.spot.status === "included") || a.spotIndex - b.spotIndex);
+  return ranked[0];
+}
+
+function geographicDayLocation(day = {}, hotelNames = [], fallback = "") {
+  const hotelKeys = unique([day.hotel, day.hotelShortName, day.hotelOfficialName, ...hotelNames]).map((item) => clean(item).toLowerCase());
+  const nodes = unique(day.routeNodes || []).filter((node) => !hotelKeys.some((hotel) => hotel && (clean(node).toLowerCase() === hotel || clean(node).toLowerCase().includes(hotel))));
+  const geographic = nodes.filter((node) => !/机场|airport|酒店|lodge|camp|resort/i.test(node));
+  return clean(geographic.at(-1) || nodes.at(-1) || day.city || fallback);
+}
+
+function plannedImageSlot(agentPlan = {}, role) {
+  return (agentPlan.imagePlan?.slots || []).find((item) => item.role === role) || {};
+}
+
 function ensureDaySpot(data, index) {
   const day = data.days[index];
   if (Array.isArray(day.spots) && day.spots.length) return;
@@ -90,6 +154,8 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
   data.notes = Array.isArray(data.notes) ? data.notes : [];
   data.days = Array.isArray(data.days) ? data.days : [];
   data.days.forEach((_day, index) => ensureDaySpot(data, index));
+  const normalizedRoles = normalizedDayRoles(agentPlan, data.days);
+  const effectiveAgentPlan = { ...agentPlan, dayRoles: normalizedRoles };
 
   const itineraryContext = {
     destination: data.destination,
@@ -155,7 +221,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     targetId: `copy:day:${index + 1}`, targetPath: `days.${index}.description`, moduleType: "day",
     facts: day,
     plannerGoal: `写清 DAY ${index + 1} 今天具体经历什么、为什么值得，以及如何承接整程；保留所有事实与状态。`,
-    relevantContext: { ...itineraryContext, dayRole: dayRole(agentPlan, index), adjacentDays: [data.days[index - 1], data.days[index + 1]].filter(Boolean).map((item) => ({ theme: item.theme, routeNodes: item.routeNodes, description: item.description })) },
+    relevantContext: { ...itineraryContext, dayRole: dayRole(effectiveAgentPlan, index), adjacentDays: [data.days[index - 1], data.days[index + 1]].filter(Boolean).map((item) => ({ theme: item.theme, routeNodes: item.routeNodes, description: item.description })) },
     layoutHints: { placement: "day_detail", dayIndex: index, ordinaryDaySoftMaxChars: 220, transferDaySoftMaxChars: 130, sentenceCountReference: 5 }, required: true,
   })));
   if (!Array.isArray(data.notes) || data.notes.length === 0) {
@@ -185,11 +251,13 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
   const imageSlots = [];
   const slotBindings = {};
   const addSlot = (value, binding) => { imageSlots.push(value); slotBindings[value.slotId] = binding; };
+  const coverPlan = plannedImageSlot(effectiveAgentPlan, "cover");
+  const coverSubject = clean(coverPlan.primaryVisualSubject) || clean(data.destination);
   addSlot(slot({
     slotId: "image:cover:primary", moduleType: "cover", required: true,
-    location: clean(data.destination), subject: clean(data.destination),
-    visualGoal: clean(agentPlan.imagePlan?.visualStory) || `呈现${data.destination || "本次目的地"}最具代表性的整程主视觉，并为标题保留空间`,
-    visualContext: { destination: data.destination, productTheme: agentPlan.summary?.visualTheme || "", avoid: [] },
+    location: clean(data.destination), subject: coverSubject,
+    visualGoal: `只以${coverSubject || data.destination || "本次目的地代表性场景"}作为封面唯一核心视觉焦点，并为标题保留清晰空间`,
+    visualContext: { destination: data.destination, productTheme: agentPlan.summary?.visualTheme || "", journeyVisualStory: clean(agentPlan.imagePlan?.visualStory), singleFocus: true, avoid: [] },
     copyTargetId: "copy:cover:title", aspectRatio: "5:3", userLocked: Boolean(data.imageLocks?.["image:cover:primary"]),
   }), { module: "cover", fieldPath: "heroImage", imageIndex: 0, required: true });
 
@@ -207,16 +275,22 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     addSlot(slot({ slotId, moduleType: "transport", required: false, activity: clean(item.category), subject: clean(item.modelGuaranteed ? item.model : item.category), visualGoal: `准确展示${item.category || "本次主要交通方式"}及其真实移动体验，不形成未确认车型承诺`, visualContext: { category: item.category, serviceLevel: item.serviceLevel, usageLabel: item.usageLabel, modelGuaranteed: item.modelGuaranteed === true ? "已确认车型" : "车型未保证", avoid: [] }, copyTargetId: `copy:transport:${item.id || index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "transport", itemIndex: index, fieldPath: `transportSummary.${index}.images.0`, imageIndex: 0, required: false });
   });
   data.days.forEach((day, index) => {
-    const primarySpot = day.spots[0];
-    const role = dayRole(agentPlan, index);
+    const role = dayRole(effectiveAgentPlan, index);
+    const dayPlan = plannedImageSlot(effectiveAgentPlan, `day:${index + 1}`);
+    const { spot: primarySpot, spotIndex } = selectPrimaryDaySpot(day, role, dayPlan);
+    const primarySubject = clean(primarySpot?.name || role.primaryVisualSubject || day.theme);
+    const location = geographicDayLocation(day, data.hotels.flatMap((hotel) => [hotel.officialName, hotel.shortName]), data.destination);
+    const status = clean(primarySpot?.status || primarySpot?.feeBoundary || "included");
+    const statusLabel = clean(primarySpot?.statusLabel || (status === "optional_paid" ? "自费可选" : status === "included" ? "已包含" : "待确认"));
+    const optionalBoundary = ["optional_paid", "reservation_required", "pending"].includes(status) ? `；该视觉重点为${statusLabel}，不得暗示已包含` : "";
     const slotId = `image:day:${index + 1}:primary`;
     addSlot(slot({
       slotId, moduleType: "day", required: true,
-      location: clean((day.routeNodes || []).at(-1) || day.city), activity: clean(primarySpot?.name || day.theme), subject: clean(primarySpot?.name || day.theme),
-      visualGoal: role.differenceFromAdjacent ? `${day.theme || `DAY ${index + 1}`}的核心体验；${role.differenceFromAdjacent}` : `展示 DAY ${index + 1} 在${(day.routeNodes || []).at(-1) || day.city || "当日地点"}的核心真实体验，并与相邻 DAY 形成视觉差异`,
-      visualContext: { dayIndex: index, dayRole: role.role || "", routeNodes: day.routeNodes || [], activity: primarySpot?.name || "", sourceExperience: primarySpot?.description || day.description, adjacentVisualResponsibilities: [dayRole(agentPlan, index - 1).role, dayRole(agentPlan, index + 1).role].filter(Boolean), avoid: [] },
+      location, activity: primarySubject, subject: primarySubject,
+      visualGoal: `以${primarySubject}作为 DAY ${index + 1} 的真实主要视觉职责；${role.differenceFromAdjacent || "与相邻 DAY 保持真实差异"}${optionalBoundary}`,
+      visualContext: { dayIndex: index, dayRole: role.role || "", differenceFromAdjacent: role.differenceFromAdjacent || "", routeNodes: day.routeNodes || [], geographicLocation: location, primaryVisualSubject: primarySubject, allActivities: (day.spots || []).map((spot) => ({ name: spot.name, description: spot.description, status: spot.status, statusLabel: spot.statusLabel, feeBoundary: spot.feeBoundary })), experienceStatus: status, statusLabel, feeBoundary: primarySpot?.feeBoundary || "", sourceExperience: primarySpot?.description || day.description, daySourceFacts: dayFactText(day), adjacentVisualResponsibilities: [dayRole(effectiveAgentPlan, index - 1).role, dayRole(effectiveAgentPlan, index + 1).role].filter(Boolean), avoid: [] },
       copyTargetId: `copy:day:${index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]),
-    }), { module: "day", dayIndex: index, spotIndex: 0, fieldPath: `days.${index}.spots.0.images.0`, imageIndex: 0, required: true });
+    }), { module: "day", dayIndex: index, spotIndex, fieldPath: `days.${index}.spots.${spotIndex}.images.0`, imageIndex: 0, required: true });
   });
 
   if (imageSlots.length > 48) {
@@ -239,7 +313,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     moduleVisibility,
     plannerSummary: agentPlan.summary || {},
     warnings,
-    dayRoles: agentPlan.dayRoles || [],
+    dayRoles: normalizedRoles,
     copyTasks,
     imageSlots,
     slotBindings,

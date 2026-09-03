@@ -100,6 +100,6 @@ export function imageAdapters({ appRoot, failMatcher = () => false, delayMs = 80
       return [{ ...page, imageUrl: `${page.pageUrl}/image.jpg`, width: 1800, height: 1100, fixtureAsset: asset }];
     },
     downloadCandidate: async (candidate) => ({ ...candidate, filePath: candidate.fixtureAsset.filePath, publicUrl: candidate.fixtureAsset.publicUrl, sha256: `fixture-${candidate.fixtureAsset.publicUrl}` }),
-    judgeCandidatesBatch: async ({ slot, candidates }) => candidates.map((_candidate, index) => ({ index, pass: true, subjectMatch: true, placeMatch: true, watermark: false, actualSubject: slot.label || slot.subject || slot.slotId, reason: "结构化事实、主体、地点和来源均匹配", sourceSupportsIdentity: true, hardRejectCode: "none" })),
+    judgeCandidatesBatch: async ({ slot, candidates }) => candidates.map((candidate, index) => ({ candidateId: candidate.candidateId, score: 90 - index, locationMatch: true, hotelIdentityMatch: true, activityMatch: true, subjectMatch: true, watermarkFree: true, nonAI: true, technicalUsable: true, eligible: true, actualSubject: slot.label || slot.subject || slot.slotId, reason: "结构化事实、主体、地点和来源均匹配", hardRejectCode: "none" })),
   };
 }
