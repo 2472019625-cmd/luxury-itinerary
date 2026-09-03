@@ -68,6 +68,10 @@ export function copyRequestJson({ failTargetId = null, delayMs = 60 } = {}) {
       if (task.moduleType === "hotel") value = "坐落于安博塞利核心景观区域，以真实开阔视野与完整营地空间构成值得期待的住宿体验。";
       if (task.moduleType === "transport") value = "草原飞机与专属游猎车承担主要移动，在真实交通类别范围内兼顾跨区效率与游猎舒适度。";
       if (task.moduleType === "day") value = `当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。`;
+      if (task.moduleType === "notes") value = [
+        { title: "行前准备", icon: "calendar", tone: "gold", items: ["请根据本次目的地与活动安排准备合适衣物和随身用品，具体清单由定制师在出发前协助复核。"] },
+        { title: "活动与安全", icon: "security", tone: "gold", items: ["参加游猎与营地活动时请遵循现场人员指引，相关时效要求以出发前正式通知为准。"] },
+      ];
       return { targetId: task.targetId, targetPath: task.targetPath, value, warnings: [] };
     });
     return { json: { results }, model: "copy-fixture", usage: { input_tokens: 100, output_tokens: 200 }, attemptUsages: [{}] };

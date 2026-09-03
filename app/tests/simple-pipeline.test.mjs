@@ -71,6 +71,27 @@ test("全部必需单元满足时进入 Renderer，并只在真实渲染成功�
   assert.ok(receivedData.heroImage.startsWith("/assets/placeholders/"));
   assert.ok(receivedData.hotels.every((hotel) => hotel.images?.[0]?.src));
   assert.ok(receivedData.days.every((day) => day.spots?.[0]?.images?.[0]?.src));
+  assert.ok(receivedData.notes.length > 0);
+  assert.equal(result.writeback.copy.find((item) => item.targetId === "copy:notes:travel-preparation").status, "written");
   assert.deepEqual(receivedData.payment, APPROVED_PAYMENT);
   assert.ok(result.plannerResult.warnings.some((item) => item.code === "product_highlight_material_insufficient"));
+});
+
+test("原始资料没有 notes 且必需生成失败时不得渲染或完成", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-pipeline-notes-failed-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let rendererCalls = 0;
+  const result = await runSimplePipeline({
+    sourceFile: createWorkbookFile(),
+    root: appRoot,
+    storeRoot: path.join(root, "projects"),
+    plannerOptions: { apiKey: "fixture", baseUrl: "https://planner.invalid", model: "fixture", requestJson: plannerRequestJson() },
+    copyOptions: { apiKey: "fixture", baseUrl: "https://copy.invalid", model: "fixture", requestJson: copyRequestJson({ failTargetId: "copy:notes:travel-preparation" }) },
+    imageOptions: { visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture", sourcePagesPerSlot: 1, downloadsPerSlot: 1, visionCandidatesPerSlot: 1, adapters: imageAdapters({ appRoot }) },
+    adapters: { render: async () => { rendererCalls += 1; return { status: "success", outputPath: "should-not-render.png", rendererCalls: 1 }; } },
+  });
+  assert.notEqual(result.pipelineStatus, "complete");
+  assert.equal(result.renderStatus, "blocked_by_required_items");
+  assert.equal(rendererCalls, 0);
+  assert.ok(result.unresolvedItems.some((item) => item.id === "copy:notes:travel-preparation" && item.required));
 });

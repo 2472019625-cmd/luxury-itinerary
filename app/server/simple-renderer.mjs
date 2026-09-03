@@ -17,6 +17,7 @@ export function deterministicPreflight(data, { root = appRoot } = {}) {
   const customer = selectCustomerRenderData(data);
   const expectedFixedModules = fixedModuleExpectations(customer);
   if (!customer.title || !customer.days?.length) issues.push({ severity: "blocker", code: "required_module_missing", message: "封面标题或每日行程缺失" });
+  if (!Array.isArray(customer.notes) || customer.notes.length === 0) issues.push({ severity: "blocker", code: "fixed_notes_missing", module: FIXED_MODULE_NAMES.notes, message: `固定必需模块缺失：${FIXED_MODULE_NAMES.notes}` });
   if (expectedFixedModules.payment) {
     const payment = validateApprovedPayment(customer.payment, { root });
     if (!payment.passed) {

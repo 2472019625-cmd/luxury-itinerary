@@ -41,7 +41,7 @@ export function fixedModuleExpectations(data = {}) {
     booking: data.showBookingSection !== false,
     security,
     payment: security && data.showPaymentSection !== false,
-    notes: Array.isArray(data.notes) && data.notes.length > 0,
+    notes: true,
     footer: true,
   };
 }

@@ -1,6 +1,21 @@
 import { randomUUID } from "node:crypto";
 
 const stringSchema = Object.freeze({ type: "string", minLength: 1 });
+const notesSchema = Object.freeze({
+  type: "array",
+  minItems: 1,
+  items: {
+    type: "object",
+    required: ["title", "items"],
+    properties: {
+      title: { type: "string", minLength: 1 },
+      icon: { type: "string", minLength: 1 },
+      tone: { enum: ["gold", "warning"] },
+      items: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+    },
+    additionalProperties: false,
+  },
+});
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
 const unique = (values) => [...new Set(values.map(clean).filter(Boolean))];
 
@@ -72,6 +87,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
   if (!moduleVisibility.hotels) data.hotels = [];
   if (!moduleVisibility.dining) data.diningExperiences = [];
   if (!moduleVisibility.transport) data.transportSummary = [];
+  data.notes = Array.isArray(data.notes) ? data.notes : [];
   data.days = Array.isArray(data.days) ? data.days : [];
   data.days.forEach((_day, index) => ensureDaySpot(data, index));
 
@@ -142,6 +158,29 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     relevantContext: { ...itineraryContext, dayRole: dayRole(agentPlan, index), adjacentDays: [data.days[index - 1], data.days[index + 1]].filter(Boolean).map((item) => ({ theme: item.theme, routeNodes: item.routeNodes, description: item.description })) },
     layoutHints: { placement: "day_detail", dayIndex: index, ordinaryDaySoftMaxChars: 220, transferDaySoftMaxChars: 130, sentenceCountReference: 5 }, required: true,
   })));
+  if (!Array.isArray(data.notes) || data.notes.length === 0) {
+    copyTasks.push({
+      ...copyTask({
+        targetId: "copy:notes:travel-preparation",
+        targetPath: "notes",
+        moduleType: "notes",
+        facts: {
+          destination: data.destination,
+          dates: { startDate: data.startDate, endDate: data.endDate, dayCount: data.days.length },
+          travelers: { travelers: data.travelers, adults: data.adults, children: data.children },
+          routeNodes: unique(data.days.flatMap((day) => day.routeNodes || [])),
+          activities: unique(data.days.flatMap((day) => (day.spots || []).map((spot) => spot.name))),
+          transportCategories: unique((data.transportSummary || []).map((item) => item.category)),
+          dayFacts: data.days.map((day, index) => ({ index, theme: day.theme, routeNodes: day.routeNodes || [], activities: (day.spots || []).map((spot) => spot.name), overnightType: day.overnightType })),
+        },
+        plannerGoal: "生成每份行程固定必需的旅行准备与注意事项。按本次已确认目的地、路线、活动和旅客事实选择实际相关类别，使用温和、具体、可执行的服务型语气；时效信息无正式来源时只作行前核验提示，不虚构政策、天气、健康或安全结论。",
+        relevantContext: itineraryContext,
+        layoutHints: { placement: "closing_notes", compact: true },
+        required: true,
+      }),
+      outputSchema: notesSchema,
+    });
+  }
 
   const imageSlots = [];
   const slotBindings = {};

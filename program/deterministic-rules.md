@@ -45,7 +45,8 @@ Program 接收主输入、补充资料、用户确认、Planner 计划、Copy Sk
 ## 4. Structure and Slot Contract
 
 - 模块顺序固定，必需模块不能缺失；可选模块无数据时隐藏并收缩。
-- 注意事项使用 `{title, items[], tone?}[]`，不能拼成长字符串。
+- 旅行准备与注意事项是每份行程固定必需模块，不因原始资料没有 notes 而隐藏；缺省时必须形成必需 Copy Task。
+- 注意事项使用 `{title, items[], tone?}[]`，不能拼成长字符串；生成失败、写回为空或实际版面未渲染时必须阻止完成。
 - Planner 的每个 Copy Task 必须包含稳定 `targetId`、精确 `targetPath` 和 `outputSchema`。`targetPath` 使用客户行程数据根对象下已授权文案字段的点路径，数组下标从 0 开始，不得指向确定性事实字段；`outputSchema` 必须与 `app/config/itinerary-schema.json` 中对应字段相容。
 - Copy Skill 每个成功结果必须原样返回 `targetId`、`targetPath` 和符合 `outputSchema` 的 `value`。Program 必须验证任务标识、路径和结构后再按 `targetPath` 确定性写回，不得根据自然语言猜测模块或字段，也不得允许 Copy Skill 改写目标路径。
 - 产品亮点由 Planner 最终确定并逐项建立任务。Program 不得允许 Copy Skill 增删、重排或重新筛选亮点；亮点任务接口不完整时保留明确的单项接口错误，不得自动重新规划。

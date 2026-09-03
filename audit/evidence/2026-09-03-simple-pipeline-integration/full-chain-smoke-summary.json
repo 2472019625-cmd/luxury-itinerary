@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-09-03T09:07:13.709Z",
+  "generatedAt": "2026-09-03T09:26:19.092Z",
   "origin": "http://127.0.0.1:4174",
   "result": {
-    "projectId": "b8c28290-5cee-4f54-9bd6-f8bd8a3cc47f",
+    "projectId": "64ff8269-e6a0-42d6-b0d6-bea8f28e17dd",
     "pipelineStatus": "complete",
     "plannerResult": {
-      "planId": "2585b81a-7808-4e25-891f-fd8b096404a6",
-      "sourceAgentPlanId": "23b34c13-9a06-4000-90f5-423241fdde94",
+      "planId": "f913d6f0-dc2e-4691-94a6-c495e4bb2ac4",
+      "sourceAgentPlanId": "faf4746c-442a-476b-82bb-c4f814ad6403",
       "moduleVisibility": {
         "global": true,
         "hotels": true,
@@ -16,7 +16,7 @@
         "notes": true,
         "expenses": true
       },
-      "copyTaskCount": 8,
+      "copyTaskCount": 9,
       "imageSlotCount": 7,
       "warnings": [
         {
@@ -42,7 +42,7 @@
       }
     ],
     "copyExecution": {
-      "batchId": "77bedf62-e6f1-4c4e-b6a1-8f8f8aed3941",
+      "batchId": "e13ff5c3-0cee-4f43-a740-3d53cfeb5e98",
       "status": "success",
       "results": [
         {
@@ -100,6 +100,30 @@
           "status": "success",
           "value": "当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。",
           "warnings": []
+        },
+        {
+          "targetId": "copy:notes:travel-preparation",
+          "targetPath": "notes",
+          "status": "success",
+          "value": [
+            {
+              "title": "行前准备",
+              "icon": "calendar",
+              "tone": "gold",
+              "items": [
+                "请根据本次目的地与活动安排准备合适衣物和随身用品，具体清单由定制师在出发前协助复核。"
+              ]
+            },
+            {
+              "title": "活动与安全",
+              "icon": "security",
+              "tone": "gold",
+              "items": [
+                "参加游猎与营地活动时请遵循现场人员指引，相关时效要求以出发前正式通知为准。"
+              ]
+            }
+          ],
+          "warnings": []
         }
       ],
       "warnings": [],
@@ -109,11 +133,11 @@
         "transportAttempts": 1,
         "reasoningEffort": "medium",
         "modelMs": 69,
-        "durationMs": 71
+        "durationMs": 70
       }
     },
     "imageExecution": {
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "status": "success",
       "results": [
         {
@@ -182,7 +206,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 98
+          "durationMs": 96
         },
         {
           "slotId": "image:hotel:imported-hotel-1:primary",
@@ -250,7 +274,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 107
+          "durationMs": 108
         },
         {
           "slotId": "image:transport:imported-transport-1:primary",
@@ -317,7 +341,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 116
+          "durationMs": 117
         },
         {
           "slotId": "image:transport:imported-transport-2:primary",
@@ -384,7 +408,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 92
+          "durationMs": 93
         },
         {
           "slotId": "image:day:1:primary",
@@ -453,7 +477,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 94
+          "durationMs": 91
         },
         {
           "slotId": "image:day:2:primary",
@@ -522,7 +546,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 95
+          "durationMs": 92
         },
         {
           "slotId": "image:day:3:primary",
@@ -591,7 +615,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 94
+          "durationMs": 95
         }
       ],
       "warnings": [],
@@ -606,7 +630,7 @@
         "batchVisionCalls": 7,
         "topConfirmationCalls": 0,
         "timingsMs": {
-          "searchProvider": 587,
+          "searchProvider": 583,
           "commons": 0,
           "pageExtraction": 0,
           "download": 0,
@@ -621,7 +645,7 @@
           "downloads": 1,
           "vision": 1
         },
-        "durationMs": 284
+        "durationMs": 285
       }
     },
     "writeback": {
@@ -664,6 +688,11 @@
         {
           "targetId": "copy:day:3",
           "targetPath": "days.2.description",
+          "status": "written"
+        },
+        {
+          "targetId": "copy:notes:travel-preparation",
+          "targetPath": "notes",
           "status": "written"
         }
       ],
@@ -714,16 +743,16 @@
     },
     "unresolvedItems": [],
     "renderStatus": "success",
-    "outputPath": "D:\\奢游\\行程单报价单\\奢游行程单美化-智能体试验区\\app\\output\\simple-pipeline\\b8c28290-5cee-4f54-9bd6-f8bd8a3cc47f\\b8c28290-5cee-4f54-9bd6-f8bd8a3cc47f-itinerary-2000.png",
+    "outputPath": "D:\\奢游\\行程单报价单\\奢游行程单美化-智能体试验区\\app\\output\\simple-pipeline\\64ff8269-e6a0-42d6-b0d6-bea8f28e17dd\\64ff8269-e6a0-42d6-b0d6-bea8f28e17dd-itinerary-2000.png",
     "timingsMs": {
-      "parser": 9,
-      "planner": 13,
-      "copySkill": 71,
-      "imageSkill": 284,
+      "parser": 10,
+      "planner": 21,
+      "copySkill": 70,
+      "imageSkill": 285,
       "programWriteback": 1,
-      "renderer": 4655,
-      "persistence": 27,
-      "total": 4991
+      "renderer": 4845,
+      "persistence": 26,
+      "total": 5191
     },
     "callCounts": {
       "parserCalls": 1,
@@ -740,11 +769,11 @@
     },
     "concurrency": {
       "copyImage": {
-        "copyStartedAtMs": 1788426428752,
-        "imageStartedAtMs": 1788426428753,
-        "copyFinishedAtMs": 1788426428823,
-        "imageFinishedAtMs": 1788426429037,
-        "startDeltaMs": 1,
+        "copyStartedAtMs": 1788427573946,
+        "imageStartedAtMs": 1788427573946,
+        "copyFinishedAtMs": 1788427574016,
+        "imageFinishedAtMs": 1788427574231,
+        "startDeltaMs": 0,
         "overlapMs": 70,
         "parallel": true
       },
@@ -786,13 +815,13 @@
       "runSimpleRenderer",
       "renderer/render.mjs --width=2000"
     ],
-    "finalResultRef": "execution-runs/153cd8b9-f802-4ff4-9269-dbe63eb28b9e/final-result.json"
+    "finalResultRef": "execution-runs/e6adbc0b-4176-4008-b99e-894d337dd918/final-result.json"
   },
   "outputMetadata": {
     "format": "png",
     "mediaType": "image/png",
     "width": 2000,
-    "height": 29256,
+    "height": 30338,
     "space": "srgb",
     "channels": 3,
     "depth": "uchar",
@@ -804,12 +833,12 @@
     "hasAlpha": false,
     "autoOrient": {
       "width": 2000,
-      "height": 29256
+      "height": 30338
     }
   },
   "layoutQa": {
     "width": 2000,
-    "height": 29256,
+    "height": 30338,
     "overflows": [],
     "brokenImages": [],
     "largeGaps": [],
@@ -831,11 +860,9 @@
         "missingParts": []
       },
       "notes": {
-        "present": false,
-        "complete": false,
-        "missingParts": [
-          "注意事项内容"
-        ]
+        "present": true,
+        "complete": true,
+        "missingParts": []
       },
       "footer": {
         "present": true,
@@ -846,25 +873,25 @@
   },
   "events": [
     {
-      "at": "2026-09-03T09:07:08.716Z",
+      "at": "2026-09-03T09:26:13.900Z",
       "stage": "parser",
       "phase": "started"
     },
     {
-      "at": "2026-09-03T09:07:08.726Z",
+      "at": "2026-09-03T09:26:13.911Z",
       "stage": "parser",
       "phase": "finished",
-      "durationMs": 9,
+      "durationMs": 10,
       "dayCount": 3
     },
     {
-      "at": "2026-09-03T09:07:08.733Z",
+      "at": "2026-09-03T09:26:13.919Z",
       "stage": "planner",
       "phase": "started",
-      "projectId": "b8c28290-5cee-4f54-9bd6-f8bd8a3cc47f"
+      "projectId": "64ff8269-e6a0-42d6-b0d6-bea8f28e17dd"
     },
     {
-      "at": "2026-09-03T09:07:08.733Z",
+      "at": "2026-09-03T09:26:13.919Z",
       "stage": "planner",
       "phase": "progress",
       "detail": {
@@ -873,7 +900,7 @@
       }
     },
     {
-      "at": "2026-09-03T09:07:08.744Z",
+      "at": "2026-09-03T09:26:13.938Z",
       "stage": "planner",
       "phase": "progress",
       "detail": {
@@ -882,71 +909,71 @@
       }
     },
     {
-      "at": "2026-09-03T09:07:08.747Z",
+      "at": "2026-09-03T09:26:13.941Z",
       "stage": "planner",
       "phase": "finished",
-      "durationMs": 13,
-      "copyTaskCount": 8,
+      "durationMs": 21,
+      "copyTaskCount": 9,
       "imageSlotCount": 7
     },
     {
-      "at": "2026-09-03T09:07:08.752Z",
+      "at": "2026-09-03T09:26:13.946Z",
       "stage": "copy_skill",
       "phase": "started",
-      "targetCount": 8,
-      "startedAtMs": 1788426428752
+      "targetCount": 9,
+      "startedAtMs": 1788427573946
     },
     {
-      "at": "2026-09-03T09:07:08.753Z",
+      "at": "2026-09-03T09:26:13.946Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "copy_writer",
-      "callId": "8ed37f0a-63d1-4360-809a-03bc24784eb8",
-      "batchId": "77bedf62-e6f1-4c4e-b6a1-8f8f8aed3941",
-      "targetCount": 8
+      "callId": "6db6556c-d401-409b-b3c8-506c23d89fa2",
+      "batchId": "e13ff5c3-0cee-4f43-a740-3d53cfeb5e98",
+      "targetCount": 9
     },
     {
-      "at": "2026-09-03T09:07:08.753Z",
+      "at": "2026-09-03T09:26:13.946Z",
       "stage": "image_skill",
       "phase": "started",
       "slotCount": 7,
-      "startedAtMs": 1788426428753
+      "startedAtMs": 1788427573946
     },
     {
-      "at": "2026-09-03T09:07:08.754Z",
+      "at": "2026-09-03T09:26:13.947Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "7be80734-651b-407e-bd87-b767a10e90c9",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "820ca892-f7c6-4aba-80a4-4e1bf82399f1",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:cover:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.754Z",
+      "at": "2026-09-03T09:26:13.947Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "7c4f044b-c8a7-4a82-857c-6baa266f3126",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "d4a32e30-3a21-4b74-a5fe-1f8d36358304",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:hotel:imported-hotel-1:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.754Z",
+      "at": "2026-09-03T09:26:13.947Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "7ae7b14a-087f-46da-b49d-4b773ec9eea0",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "2cb80101-df87-4d95-bfd4-ca01f7e91dbe",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:transport:imported-transport-1:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.823Z",
+      "at": "2026-09-03T09:26:14.016Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "copy_writer",
-      "callId": "8ed37f0a-63d1-4360-809a-03bc24784eb8",
-      "batchId": "77bedf62-e6f1-4c4e-b6a1-8f8f8aed3941",
-      "targetCount": 8,
+      "callId": "6db6556c-d401-409b-b3c8-506c23d89fa2",
+      "batchId": "e13ff5c3-0cee-4f43-a740-3d53cfeb5e98",
+      "targetCount": 9,
       "durationMs": 70,
       "attemptCount": 1,
       "usage": {
@@ -955,289 +982,289 @@
       }
     },
     {
-      "at": "2026-09-03T09:07:08.838Z",
+      "at": "2026-09-03T09:26:14.031Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "7be80734-651b-407e-bd87-b767a10e90c9",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "820ca892-f7c6-4aba-80a4-4e1bf82399f1",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:cover:primary:batch",
       "durationMs": 84,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:08.839Z",
+      "at": "2026-09-03T09:26:14.031Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "457d2e7f-71a1-4791-ab7e-d6db72c38478",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "8c7d6c88-330a-4120-81bd-db7e36363cd4",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:cover:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.839Z",
+      "at": "2026-09-03T09:26:14.031Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "457d2e7f-71a1-4791-ab7e-d6db72c38478",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "8c7d6c88-330a-4120-81bd-db7e36363cd4",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:cover:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:08.840Z",
+      "at": "2026-09-03T09:26:14.032Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "7c4f044b-c8a7-4a82-857c-6baa266f3126",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "d4a32e30-3a21-4b74-a5fe-1f8d36358304",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:hotel:imported-hotel-1:primary:batch",
-      "durationMs": 86,
+      "durationMs": 85,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:08.840Z",
+      "at": "2026-09-03T09:26:14.032Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "85430e0c-6164-47d6-975c-2cc8af4d39fa",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "6268f140-7105-4b07-8879-305be76a9a36",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:hotel:imported-hotel-1:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.840Z",
+      "at": "2026-09-03T09:26:14.032Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "85430e0c-6164-47d6-975c-2cc8af4d39fa",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "6268f140-7105-4b07-8879-305be76a9a36",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:hotel:imported-hotel-1:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:08.840Z",
+      "at": "2026-09-03T09:26:14.032Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "7ae7b14a-087f-46da-b49d-4b773ec9eea0",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "2cb80101-df87-4d95-bfd4-ca01f7e91dbe",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:transport:imported-transport-1:primary:batch",
-      "durationMs": 86,
+      "durationMs": 85,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:08.840Z",
+      "at": "2026-09-03T09:26:14.032Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "1c1e7fea-b755-472c-8751-3edcbdd661ef",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "6bbb051c-60d3-4580-8dba-d61618035da1",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:transport:imported-transport-1:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.840Z",
+      "at": "2026-09-03T09:26:14.032Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "1c1e7fea-b755-472c-8751-3edcbdd661ef",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "6bbb051c-60d3-4580-8dba-d61618035da1",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:transport:imported-transport-1:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:08.851Z",
+      "at": "2026-09-03T09:26:14.043Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "3dbfb8c0-2a6f-4a31-88bc-82e12c5c1994",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "0ad2289f-3cdc-48f2-bbc5-298ca80a2a6b",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:transport:imported-transport-2:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.860Z",
+      "at": "2026-09-03T09:26:14.055Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "228732cf-ed11-48a1-ab1e-85ec88b63b13",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "0002a1b2-b8c1-431e-bea2-436f69754e13",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:day:1:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.870Z",
+      "at": "2026-09-03T09:26:14.064Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "4f73ff32-38b7-4e41-a93f-a97cde4b6bf3",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "ace1936e-6933-4fa1-b45e-981ce12887c2",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:day:2:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.933Z",
+      "at": "2026-09-03T09:26:14.125Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "3dbfb8c0-2a6f-4a31-88bc-82e12c5c1994",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "0ad2289f-3cdc-48f2-bbc5-298ca80a2a6b",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:transport:imported-transport-2:primary:batch",
       "durationMs": 82,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:08.933Z",
+      "at": "2026-09-03T09:26:14.125Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "9d727f4b-d21b-48d3-a5fe-19c41ce93e00",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "a9ccb5b2-6b32-411c-806d-482af98e610b",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:transport:imported-transport-2:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.933Z",
+      "at": "2026-09-03T09:26:14.125Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "9d727f4b-d21b-48d3-a5fe-19c41ce93e00",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "a9ccb5b2-6b32-411c-806d-482af98e610b",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:transport:imported-transport-2:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:08.943Z",
+      "at": "2026-09-03T09:26:14.136Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "e7783c03-c508-40e9-baf0-8703debdb35f",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "4f3ff6d7-a03c-4303-b8c4-1539f37fb5ea",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:day:3:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.943Z",
+      "at": "2026-09-03T09:26:14.136Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "228732cf-ed11-48a1-ab1e-85ec88b63b13",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "0002a1b2-b8c1-431e-bea2-436f69754e13",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:day:1:primary:batch",
-      "durationMs": 83,
+      "durationMs": 81,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:08.943Z",
+      "at": "2026-09-03T09:26:14.136Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "64f2ada7-ef62-4242-91be-5c835a1aa3a0",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "b45639ea-d651-40d2-be18-14437852ad2a",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:day:1:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:08.943Z",
+      "at": "2026-09-03T09:26:14.136Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "64f2ada7-ef62-4242-91be-5c835a1aa3a0",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "b45639ea-d651-40d2-be18-14437852ad2a",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:day:1:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:08.954Z",
+      "at": "2026-09-03T09:26:14.146Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "4f73ff32-38b7-4e41-a93f-a97cde4b6bf3",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "ace1936e-6933-4fa1-b45e-981ce12887c2",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:day:2:primary:batch",
+      "durationMs": 82,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T09:26:14.146Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "visual_judgment",
+      "callId": "d9ebd9ef-b996-4e02-9de5-d45160388862",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
+      "target": "image:day:2:primary:batch"
+    },
+    {
+      "at": "2026-09-03T09:26:14.146Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "d9ebd9ef-b996-4e02-9de5-d45160388862",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
+      "target": "image:day:2:primary:batch",
+      "durationMs": 0,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T09:26:14.220Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "4f3ff6d7-a03c-4303-b8c4-1539f37fb5ea",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
+      "target": "image:day:3:primary:batch",
       "durationMs": 84,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:08.954Z",
+      "at": "2026-09-03T09:26:14.220Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "544d2b55-9ded-4968-9535-7efdf015cbc0",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
-      "target": "image:day:2:primary:batch"
-    },
-    {
-      "at": "2026-09-03T09:07:08.954Z",
-      "stage": "capability",
-      "phase": "finished",
-      "capabilityId": "visual_judgment",
-      "callId": "544d2b55-9ded-4968-9535-7efdf015cbc0",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
-      "target": "image:day:2:primary:batch",
-      "durationMs": 0,
-      "attemptCount": 1
-    },
-    {
-      "at": "2026-09-03T09:07:09.026Z",
-      "stage": "capability",
-      "phase": "finished",
-      "capabilityId": "image_search",
-      "callId": "e7783c03-c508-40e9-baf0-8703debdb35f",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
-      "target": "image:day:3:primary:batch",
-      "durationMs": 83,
-      "attemptCount": 1
-    },
-    {
-      "at": "2026-09-03T09:07:09.026Z",
-      "stage": "capability",
-      "phase": "started",
-      "capabilityId": "visual_judgment",
-      "callId": "72e9baf5-5164-4dad-a17b-ed057334891e",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "7aaf4d62-28a6-4b14-b29a-08b5527b7983",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:day:3:primary:batch"
     },
     {
-      "at": "2026-09-03T09:07:09.026Z",
+      "at": "2026-09-03T09:26:14.220Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "72e9baf5-5164-4dad-a17b-ed057334891e",
-      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
+      "callId": "7aaf4d62-28a6-4b14-b29a-08b5527b7983",
+      "batchId": "2ef6d6c0-6e5a-49fd-890a-403289935c0b",
       "target": "image:day:3:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T09:07:09.037Z",
+      "at": "2026-09-03T09:26:14.232Z",
       "stage": "skills",
       "phase": "finished",
       "parallelEvidence": {
-        "copyStartedAtMs": 1788426428752,
-        "imageStartedAtMs": 1788426428753,
-        "copyFinishedAtMs": 1788426428823,
-        "imageFinishedAtMs": 1788426429037,
-        "startDeltaMs": 1,
+        "copyStartedAtMs": 1788427573946,
+        "imageStartedAtMs": 1788427573946,
+        "copyFinishedAtMs": 1788427574016,
+        "imageFinishedAtMs": 1788427574231,
+        "startDeltaMs": 0,
         "overlapMs": 70,
         "parallel": true
       }
     },
     {
-      "at": "2026-09-03T09:07:09.038Z",
+      "at": "2026-09-03T09:26:14.233Z",
       "stage": "program_writeback",
       "phase": "finished",
       "durationMs": 1,
       "unresolvedCount": 0
     },
     {
-      "at": "2026-09-03T09:07:09.038Z",
+      "at": "2026-09-03T09:26:14.233Z",
       "stage": "renderer",
       "phase": "started"
     },
     {
-      "at": "2026-09-03T09:07:13.693Z",
+      "at": "2026-09-03T09:26:19.078Z",
       "stage": "renderer",
       "phase": "finished",
-      "durationMs": 4655,
+      "durationMs": 4845,
       "status": "success"
     }
   ]

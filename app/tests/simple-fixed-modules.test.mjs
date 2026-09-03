@@ -17,6 +17,15 @@ test("缺少指定收款账户板块时 Simple Renderer 必须阻断", async () 
   assert.ok(result.qa.issues.some((item) => item.module === "指定收款账户/二维码板块"));
 });
 
+test("没有 notes 时 Simple Renderer 必须阻断且不能调用实际渲染", async () => {
+  const data = structuredClone(sample);
+  data.notes = [];
+  const result = await runSimpleRenderer({ data, projectId: "missing-notes", root: appRoot });
+  assert.equal(result.status, "blocked");
+  assert.equal(result.rendererCalls, 0);
+  assert.ok(result.qa.issues.some((item) => item.code === "fixed_notes_missing" && item.module === "旅行准备与注意事项"));
+});
+
 test("批准收款数据和本机二维码资产完整，且伪造字段不能通过", () => {
   const approved = validateApprovedPayment(APPROVED_PAYMENT, { root: appRoot });
   assert.equal(approved.passed, true);
