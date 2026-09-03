@@ -1,7 +1,4 @@
-function parseJsonContent(content) {
-  const source = String(content || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  return JSON.parse(source);
-}
+import { parseJsonWithSyntaxRepair } from "./json-syntax-repair.mjs";
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -89,6 +86,8 @@ export async function requestDeepSeekJson({
   fetchImpl = fetch,
   sleepImpl = wait,
   onStatus,
+  onModelAttempt,
+  allowSyntaxRepair = false,
   signal,
 }) {
   if (!apiKey) throw new Error("尚未配置 DeepSeek 文字模型 API Key");
@@ -98,6 +97,9 @@ export async function requestDeepSeekJson({
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let content = "";
+    let parseResult = null;
+    let attemptError = null;
     try {
       emitStatus(onStatus, { providerResponded: false, streamPhase: "waiting", attempt, receivedContentChars: 0, reasoningChars: 0 });
       const combinedSignal = signal && typeof AbortSignal.any === "function" ? AbortSignal.any([signal, controller.signal]) : controller.signal;
@@ -115,7 +117,6 @@ export async function requestDeepSeekJson({
       }
 
       emitStatus(onStatus, { providerResponded: true, streamPhase: "responded", attempt, receivedContentChars: 0, reasoningChars: 0 });
-      let content = "";
       let reasoningChars = 0;
       let finishReason = null;
       let usage = null;
@@ -151,6 +152,7 @@ export async function requestDeepSeekJson({
       attemptUsages.push(attemptRecord);
       if (!content) {
         attemptRecord.outcome = "empty_content";
+        parseResult = { status: "empty_content", repaired: false, operations: [], parseError: "模型未返回正文", repairError: null };
         emptyDiagnostic = { finishReason, reasoningChars };
         if (attempt < attempts) {
           emitStatus(onStatus, { providerResponded: true, streamPhase: "retrying", attempt, nextAttempt: attempt + 1, receivedContentChars: 0, reasoningChars, reason: "empty_content" });
@@ -160,27 +162,39 @@ export async function requestDeepSeekJson({
         throw new Error(`DeepSeek 接口连续 ${attempts} 次没有返回可用内容（finish_reason=${emptyDiagnostic.finishReason || "unknown"}，reasoning_chars=${emptyDiagnostic.reasoningChars}）`);
       }
       try {
-        const parsed = parseJsonContent(content);
-        attemptRecord.outcome = "accepted";
+        const parsedResult = parseJsonWithSyntaxRepair(content, { allowRepair: allowSyntaxRepair });
+        const parsed = parsedResult.json;
+        parseResult = parsedResult.result;
+        attemptRecord.outcome = parseResult.repaired ? "accepted_repaired" : "accepted";
+        attemptRecord.parseResult = parseResult;
         const result = {
           json: parsed, usage: aggregateUsage(attemptUsages), attemptUsages, model: actualModel,
           recovery: attempt > 1 ? { reason: "empty_or_invalid_json", retryCount: attempt - 1, thinkingType: "disabled" } : null,
           stream: { doneReceived, finishReason, receivedContentChars: content.length, reasoningChars },
           requestProfile: { reasoningEffort, thinkingType },
+          parseResult,
         };
         emitStatus(onStatus, { providerResponded: true, streamPhase: "complete", attempt, receivedContentChars: content.length, reasoningChars });
         return result;
       } catch (error) {
+        parseResult = error.parseResult || { status: "invalid_json", repaired: false, operations: [], parseError: error.message, repairError: null };
+        attemptRecord.parseResult = parseResult;
         if (error instanceof SyntaxError) attemptRecord.outcome = finishReason === "length" ? "truncated_json" : "invalid_json";
         if (attempt < attempts && error instanceof SyntaxError) {
           emitStatus(onStatus, { providerResponded: true, streamPhase: "retrying", attempt, nextAttempt: attempt + 1, receivedContentChars: content.length, reasoningChars, reason: finishReason === "length" ? "truncated_json" : "invalid_json" });
           await sleepImpl(Math.min(750 * attempt, 2000));
           continue;
         }
-        if (error instanceof SyntaxError) throw new Error(`DeepSeek 接口连续 ${attempts} 次未返回完整合法JSON（${error.message}）`);
+        if (error instanceof SyntaxError) {
+          const invalidJsonError = new Error(`DeepSeek 接口连续 ${attempts} 次未返回完整合法JSON（${error.message}）`);
+          invalidJsonError.code = "planner_json_invalid";
+          invalidJsonError.parseResult = parseResult;
+          throw invalidJsonError;
+        }
         throw error;
       }
     } catch (error) {
+      attemptError = error;
       if (!attemptUsages.some((item) => item.attempt === attempt)) attemptUsages.push({ attempt, usage: null, finishReason: null, receivedContentChars: 0, reasoningChars: 0, outcome: error?.status ? `http_${error.status}` : error?.name === "AbortError" ? "timeout" : "stream_interrupted", reasoningEffort, thinkingType: attempt === 1 ? thinkingType : "disabled" });
       error.attemptUsages = [...attemptUsages];
       if (signal?.aborted) throw error;
@@ -209,6 +223,17 @@ export async function requestDeepSeekJson({
       throw error;
     } finally {
       clearTimeout(timer);
+      if (onModelAttempt) {
+        const usageRecord = attemptUsages.find((item) => item.attempt === attempt) || null;
+        await onModelAttempt({
+          attempt,
+          rawContent: content,
+          parseResult: parseResult || { status: usageRecord?.outcome || "request_failed", repaired: false, operations: [], parseError: attemptError?.message || null, repairError: null },
+          request: { model, reasoningEffort, thinkingType: attempt === 1 ? thinkingType : "disabled", responseFormat: { type: "json_object" } },
+          response: { finishReason: usageRecord?.finishReason || null, receivedContentChars: content.length, usage: usageRecord?.usage || null },
+          error: attemptError ? { code: attemptError.code || null, message: attemptError.message } : null,
+        });
+      }
     }
   }
 }

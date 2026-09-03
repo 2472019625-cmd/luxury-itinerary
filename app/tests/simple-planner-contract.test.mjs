@@ -1,0 +1,39 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { buildAgentFactBasis, validateSimpleHighlightSelection } from "../server/agent-trip-planner.mjs";
+
+test("Planner 事实基座拆分原海报亮点并注入已确认奢游产品价值", () => {
+  const facts = buildAgentFactBasis({
+    destination: "坦桑尼亚",
+    sourcePosterHighlights: ["Singita连住\n私人保护区徒步/夜游\n庄园帐篷双奢\n全程一价全包"],
+    days: [],
+  });
+  assert.deepEqual(facts.sourcePosterHighlights, ["Singita连住", "私人保护区徒步/夜游", "庄园帐篷双奢", "全程一价全包"]);
+  assert.ok(facts.officialProductValues.some((item) => item.sourceText.includes("一家一团")));
+  assert.ok(facts.officialProductValues.some((item) => item.sourceText.includes("1V1")));
+  const valid = {
+    selectedHighlights: [
+      ...facts.sourcePosterHighlights.map((sourceText) => ({ sourceText, sourceType: "source_designated" })),
+      { sourceText: facts.officialProductValues[0].sourceText, sourceType: "official_product" },
+    ],
+  };
+  assert.deepEqual(validateSimpleHighlightSelection(valid, facts), []);
+});
+
+test("热气球 DAY 体验不能伪装为 official_product，且不能越过正式服务候选", () => {
+  const facts = buildAgentFactBasis({ destination: "坦桑尼亚", sourcePosterHighlights: ["Singita连住"], days: [{ description: "自费热气球 Safari", spots: [] }] });
+  const errors = validateSimpleHighlightSelection({ selectedHighlights: [{ sourceText: "自费升级热气球Safari", sourceType: "official_product" }] }, facts);
+  assert.ok(errors.some((item) => item.code === "official_product_untraceable"));
+  assert.ok(errors.some((item) => item.code === "official_product_priority_missing"));
+});
+
+test("原海报指定亮点不能被低优先级候选越过，单DAY体验不能直接抬升", () => {
+  const facts = buildAgentFactBasis({ destination: "坦桑尼亚", sourcePosterHighlights: ["Singita连住\n私人保护区徒步/夜游"], days: [] });
+  const errors = validateSimpleHighlightSelection({ selectedHighlights: [
+    { sourceText: "Singita连住", sourceType: "source_designated" },
+    ...facts.officialProductValues.map((item) => ({ sourceText: item.sourceText, sourceType: "official_product" })),
+    { sourceText: "自费热气球", sourceType: "planner_derived", sourceRefs: ["days.3.spots.1"] },
+  ] }, facts);
+  assert.ok(errors.some((item) => item.code === "source_highlight_priority_missing"));
+  assert.ok(errors.some((item) => item.code === "ordinary_day_highlight_promoted"));
+});

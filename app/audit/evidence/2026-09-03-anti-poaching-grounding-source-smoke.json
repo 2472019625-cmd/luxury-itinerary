@@ -1,0 +1,211 @@
+{
+  "createdAt": "2026-09-03T12:17:12.399Z",
+  "branch": "agent/simple-skill-pipeline-v1",
+  "scope": "anti-poaching targeted real image slot; no Excel, Planner, Copy, Program or Renderer",
+  "wallClockMs": 25473,
+  "result": {
+    "batchId": "b4a15990-a5ae-413a-ba7e-de3b29612c9e",
+    "status": "not_found",
+    "results": [
+      {
+        "slotId": "smoke:day:grumeti-anti-poaching",
+        "status": "not_found",
+        "selected": null,
+        "candidates": [
+          {
+            "candidateId": "candidate-762019402e8760c8d30d",
+            "imageUrl": "https://images.ctfassets.net/wds1hqrprqxb/6LzfgrGAWKxsyh1xod1zZZ/e2a1d78eea0c9ca3271857ab7144bd4c/Singita_Kruger_National_Park_Moon_With_Lillies_Ross_Couper_AR502062.jpg?w=2400&q=85&fm=webp",
+            "localUrl": "/image-assets/simple-b4a15990-a5ae-413a-ba7e-de3b29612c9e/1bf9b0782f308b81ff1b.webp",
+            "sourcePage": "https://singita.com/conservation-project/grumeti-fund-anti-poaching-unit/",
+            "sourceTitle": "Grumeti Fund Anti-Poaching Unit | Conservation Projects - Singita",
+            "officialSource": true,
+            "width": 2000,
+            "height": 1334,
+            "sha256": "1bf9b0782f308b81ff1be84948b3ba54de0634b29f615985e2db8b271bfa4bb4",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "水面上倒映的月亮和睡莲叶，非反偷猎观察站场景",
+            "matchReason": "图片实际为水面月夜与睡莲倒影，与反偷猎观察站及任何现场工作场景完全无关；虽有官方来源但主体不匹配，mustHave 全部不满足。",
+            "hardJudgment": {
+              "locationMatch": false,
+              "hotelIdentityMatch": false,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": false,
+              "eligible": false
+            },
+            "rejection": "technical_unusable"
+          },
+          {
+            "candidateId": "candidate-495857ab0327fff32026",
+            "imageUrl": "https://images.ctfassets.net/wds1hqrprqxb/6LzfgrGAWKxsyh1xod1zZZ/e2a1d78eea0c9ca3271857ab7144bd4c/Singita_Kruger_National_Park_Moon_With_Lillies_Ross_Couper_AR502062.jpg?w=1600&h=1067&q=85&fm=webp",
+            "localUrl": "/image-assets/simple-b4a15990-a5ae-413a-ba7e-de3b29612c9e/a427bc033f1db6828323.webp",
+            "sourcePage": "https://singita.com/conservation-project/grumeti-fund-anti-poaching-unit/",
+            "sourceTitle": "Grumeti Fund Anti-Poaching Unit | Conservation Projects - Singita",
+            "officialSource": true,
+            "width": 1600,
+            "height": 1067,
+            "sha256": "a427bc033f1db682832353431c7125075126c51d452a5f26cb67110466cdabbb",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "水面上倒映的月亮和睡莲叶，非反偷猎观察站场景",
+            "matchReason": "图片实际为水面月夜与睡莲倒影，与反偷猎观察站及任何现场工作场景完全无关；虽有官方来源但主体不匹配，mustHave 全部不满足。",
+            "hardJudgment": {
+              "locationMatch": false,
+              "hotelIdentityMatch": false,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": false,
+              "eligible": false
+            },
+            "rejection": "technical_unusable"
+          }
+        ],
+        "queriesUsed": [
+          "Singita Grumeti Serengeti Tanzania anti-poaching observation post visit travel photography",
+          "Singita Grumeti Serengeti Tanzania anti-poaching observation post visit safari photos"
+        ],
+        "sourceEvidence": [
+          "https://singita.com/conservation-project/grumeti-fund-anti-poaching-unit/"
+        ],
+        "actualSubject": "水面上倒映的月亮和睡莲叶，非反偷猎观察站场景",
+        "matchReason": "首轮候选均有明确事实、技术或重复问题",
+        "technicalStatus": "no_eligible_candidate",
+        "pipelineEvidence": {
+          "searchPages": 6,
+          "searchPageUrls": [
+            "https://singita.com/activity/anti-poaching-observation-post-visit/",
+            "https://singita.com/conservation-project/grumeti-fund-anti-poaching-unit/",
+            "https://singita.com/story/the-canine-human-teams-dedicated-to-securing-the-serengeti/",
+            "https://www.fathomaway.com/photos-safari-serengeti-tanzania/",
+            "https://grumetifund.org/",
+            "https://www.classicafrica.com/tanzania/singita-grumeti/"
+          ],
+          "groundingRedirectUnresolved": [],
+          "extractedCandidates": 20,
+          "semanticRelevantCandidates": 0,
+          "downloadAttempts": 4,
+          "downloadedCandidates": 2,
+          "pageFailures": [
+            {
+              "pageUrl": "https://singita.com/activity/anti-poaching-observation-post-visit/",
+              "layer": "page_fetch",
+              "reason": "来源页跳转到无关页面：https://singita.com/lodges/"
+            },
+            {
+              "pageUrl": "https://www.classicafrica.com/tanzania/singita-grumeti/",
+              "layer": "page_access",
+              "reason": "网页访问被站点拦截（403）"
+            }
+          ],
+          "downloadFailures": [
+            {
+              "imageUrl": "https://s3.amazonaws.com/fathom_media/static/images/404.jpg",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            },
+            {
+              "imageUrl": "https://s3.amazonaws.com/fathom_media/static/images/logo_compass.png",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            }
+          ]
+        },
+        "warnings": [
+          "Commons 搜索失败：fetch failed",
+          "网页图片提取失败：https://singita.com/activity/anti-poaching-observation-post-visit/：来源页跳转到无关页面：https://singita.com/lodges/",
+          "网页图片提取失败：https://www.classicafrica.com/tanzania/singita-grumeti/：网页访问被站点拦截（403）",
+          "候选下载失败：图片分辨率不足",
+          "候选下载失败：图片分辨率不足"
+        ],
+        "constraints": {
+          "mustHave": [
+            "地点：Singita Grumeti Serengeti Tanzania",
+            "活动：anti-poaching observation post visit",
+            "主体：anti-poaching observation post"
+          ],
+          "prefer": [
+            "符合视觉职责：真实呈现格鲁梅蒂反偷猎观察站或其现场工作场景，不以帐篷室内替代",
+            "构图适配 16:9",
+            "真实自然、干净、有品质",
+            "与相邻 DAY 形成可辨识的视觉职责差异"
+          ],
+          "forbid": [
+            "错误地点",
+            "错误酒店身份",
+            "错误活动",
+            "错误主体",
+            "明显水印",
+            "破图或不可解码",
+            "AI 生成图",
+            "地图、示意图、信息图或截图",
+            "明显低质",
+            "酒店室内",
+            "帐篷客房"
+          ]
+        },
+        "durationMs": 25471
+      }
+    ],
+    "warnings": [],
+    "metrics": {
+      "businessBatches": 1,
+      "automaticFollowupRounds": 0,
+      "slotCount": 1,
+      "searchCalls": 1,
+      "commonsCalls": 1,
+      "pageExtractionCalls": 6,
+      "downloadAttempts": 4,
+      "batchVisionCalls": 1,
+      "topConfirmationCalls": 0,
+      "technicalRetries": {
+        "search": 0,
+        "pageExtraction": 0,
+        "download": 0
+      },
+      "timingsMs": {
+        "searchProvider": 6124,
+        "commons": 10627,
+        "pageExtraction": 10361,
+        "download": 6563,
+        "batchVision": 8238,
+        "topConfirmation": 0
+      },
+      "timingsSemantics": "各阶段所有并发操作耗时累计；阶段间存在重叠，不应相加作为总耗时",
+      "concurrencyPeak": {
+        "slots": 1,
+        "search": 2,
+        "pages": 4,
+        "downloads": 3,
+        "vision": 1
+      },
+      "durationMs": 25472
+    }
+  },
+  "capabilityEvents": [
+    {
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "497cd539-b0dd-4b3c-8b5d-de6da5fb7809",
+      "batchId": "b4a15990-a5ae-413a-ba7e-de3b29612c9e",
+      "target": "smoke:day:grumeti-anti-poaching:batch",
+      "durationMs": 6124,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "36cc89b6-c8a8-4348-97a1-964624df28a4",
+      "batchId": "b4a15990-a5ae-413a-ba7e-de3b29612c9e",
+      "target": "smoke:day:grumeti-anti-poaching:batch",
+      "durationMs": 8238,
+      "attemptCount": 1
+    }
+  ]
+}

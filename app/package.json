@@ -26,6 +26,7 @@
     "test:simple-pipeline": "node --test tests/simple-pipeline.test.mjs tests/simple-pipeline-isolation.test.mjs tests/simple-fixed-modules.test.mjs",
     "smoke:simple-pipeline": "node scripts/simple-pipeline-render-smoke.mjs",
     "smoke:simple-skills": "node scripts/simple-skills-live-smoke.mjs",
+    "smoke:simple-image-targeted": "node scripts/simple-image-targeted-live-smoke.mjs",
     "assets": "python renderer/build-assets.py && node renderer/trace-logo.mjs",
     "fonts": "python renderer/install-fonts.py",
     "render": "npm run render:2000",

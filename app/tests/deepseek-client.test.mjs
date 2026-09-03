@@ -119,6 +119,7 @@ test("retries empty content twice before accepting a usable JSON response", asyn
 
 test("retries a truncated JSON response without accepting partial output", async () => {
   let calls = 0;
+  const attempts = [];
   const result = await requestDeepSeekJson({
     apiKey: "test-key",
     emptyContentRetries: 1,
@@ -128,10 +129,59 @@ test("retries a truncated JSON response without accepting partial output", async
       return sseResponse([completion(calls === 1 ? '{"broken":"' : '{"ok":true}', { finishReason: calls === 1 ? "length" : "stop" }), "[DONE]"]);
     },
     sleepImpl: async () => {},
+    onModelAttempt: (attempt) => attempts.push(attempt),
   });
   assert.equal(calls, 2);
   assert.deepEqual(result.json, { ok: true });
   assert.equal(result.recovery.reason, "empty_or_invalid_json");
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].rawContent, '{"broken":"');
+  assert.equal(attempts[0].parseResult.status, "invalid_json");
+  assert.equal(attempts[1].rawContent, '{"ok":true}');
+  assert.equal(attempts[1].parseResult.status, "valid_json");
+});
+
+test("repairs only deterministic JSON punctuation before accepting the response", async () => {
+  let calls = 0;
+  const attempts = [];
+  const result = await requestDeepSeekJson({
+    apiKey: "test-key",
+    emptyContentRetries: 1,
+    allowSyntaxRepair: true,
+    messages: [{ role: "user", content: "return json" }],
+    fetchImpl: async () => {
+      calls += 1;
+      return sseResponse([completion('{"summary":{"ok":true} "items":[1,2,],}', { finishReason: "stop" }), "[DONE]"]);
+    },
+    sleepImpl: async () => {},
+    onModelAttempt: (attempt) => attempts.push(attempt),
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(result.json, { summary: { ok: true }, items: [1, 2] });
+  assert.equal(result.parseResult.status, "repaired_json");
+  assert.deepEqual(result.parseResult.operations.map((item) => item.type), ["removed_trailing_comma", "removed_trailing_comma", "inserted_missing_comma"]);
+  assert.equal(attempts[0].parseResult.status, "repaired_json");
+});
+
+test("does not invent content when malformed JSON cannot be deterministically repaired", async () => {
+  let calls = 0;
+  const attempts = [];
+  await assert.rejects(() => requestDeepSeekJson({
+    apiKey: "test-key",
+    emptyContentRetries: 1,
+    allowSyntaxRepair: true,
+    messages: [{ role: "user", content: "return json" }],
+    fetchImpl: async () => {
+      calls += 1;
+      return sseResponse([completion('{"businessField":"unterminated', { finishReason: "length" }), "[DONE]"]);
+    },
+    sleepImpl: async () => {},
+    onModelAttempt: (attempt) => attempts.push(attempt),
+  }), /连续 2 次未返回完整合法JSON/);
+  assert.equal(calls, 2);
+  assert.equal(attempts.length, 2);
+  assert.ok(attempts.every((attempt) => attempt.parseResult.status === "invalid_json"));
+  assert.ok(attempts.every((attempt) => attempt.rawContent === '{"businessField":"unterminated'));
 });
 
 test("reports a clear error after all empty-content retries are exhausted", async () => {

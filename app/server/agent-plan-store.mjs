@@ -9,6 +9,11 @@ function writeJson(file, value) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function writeText(file, value) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, String(value ?? ""), "utf8");
+}
+
 export class AgentPlanStore {
   constructor(root) { this.root = path.resolve(root); }
   projectDir(projectId) { return path.join(this.root, projectId); }
@@ -21,6 +26,9 @@ export class AgentPlanStore {
   taskResultFile(projectId, executionRunId, taskId) { return path.join(this.projectDir(projectId), "execution-runs", executionRunId, "results", `${taskId}.json`); }
   evidenceFile(projectId, executionRunId, evidenceId) { return path.join(this.projectDir(projectId), "execution-runs", executionRunId, "evidence", `${evidenceId}.json`); }
   finalResultFile(projectId, executionRunId) { return path.join(this.projectDir(projectId), "execution-runs", executionRunId, "final-result.json"); }
+  plannerAttemptDir(projectId) { return path.join(this.projectDir(projectId), "planner-attempts"); }
+  plannerRawFile(projectId, index) { return path.join(this.plannerAttemptDir(projectId), `planner-attempt-${index}-raw.txt`); }
+  plannerParseFile(projectId, index) { return path.join(this.plannerAttemptDir(projectId), `planner-attempt-${index}-parse.json`); }
   createProject(project) {
     if (existsSync(this.projectFile(project.projectId))) throw new Error("项目已存在");
     writeJson(this.projectFile(project.projectId), project);
@@ -31,6 +39,28 @@ export class AgentPlanStore {
     return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
   }
   saveAttempt(projectId, attempt) { writeJson(this.attemptFile(projectId, attempt.attemptId), attempt); }
+  savePlannerModelAttempt(projectId, attempt = {}) {
+    if (!this.getProject(projectId)) throw new Error("项目不存在");
+    let index = 1;
+    while (existsSync(this.plannerRawFile(projectId, index)) || existsSync(this.plannerParseFile(projectId, index))) index += 1;
+    const rawFile = this.plannerRawFile(projectId, index);
+    const parseFile = this.plannerParseFile(projectId, index);
+    writeText(rawFile, attempt.rawContent);
+    writeJson(parseFile, {
+      attempt: index,
+      providerAttempt: Number(attempt.attempt) || null,
+      savedAt: new Date().toISOString(),
+      parseResult: attempt.parseResult || null,
+      request: attempt.request || null,
+      response: attempt.response || null,
+      error: attempt.error || null,
+    });
+    return {
+      attempt: index,
+      rawRef: path.relative(this.projectDir(projectId), rawFile).replaceAll("\\", "/"),
+      parseRef: path.relative(this.projectDir(projectId), parseFile).replaceAll("\\", "/"),
+    };
+  }
   saveSourceData(projectId, sourceData) {
     if (!this.getProject(projectId)) throw new Error("项目不存在");
     if (existsSync(this.sourceDataFile(projectId))) throw new Error("原始资料快照不可覆盖");

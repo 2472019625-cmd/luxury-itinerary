@@ -144,13 +144,57 @@ export async function runSimplePipeline({
   const plannerStartedAt = Date.now();
   let agentPlanning;
   let simplePlan;
+  const plannerAttemptFiles = [];
+  const externalModelAttempt = plannerOptions.onModelAttempt;
+  const onModelAttempt = async (attempt) => {
+    plannerAttemptFiles.push(store.savePlannerModelAttempt(projectId, attempt));
+    await externalModelAttempt?.(attempt);
+  };
   try {
-    agentPlanning = await planAgent({ project, simpleSkillContract: true, ...plannerOptions, signal, onStatus: (event) => emit({ stage: "planner", phase: "progress", detail: event }) });
+    agentPlanning = await planAgent({ project, simpleSkillContract: true, ...plannerOptions, onModelAttempt, signal, onStatus: (event) => emit({ stage: "planner", phase: "progress", detail: event }) });
+    for (const attempt of agentPlanning.attempts || []) store.saveAttempt(projectId, attempt);
     simplePlan = adaptPlan({ data: parsedData, report: imported.report || {}, agentPlan: agentPlanning.plan || agentPlanning });
     simplePlan.projectId = projectId;
     simplePlan.inputFingerprint = inputFingerprint;
-  } finally {
+  } catch (error) {
     timingsMs.planner = elapsed(plannerStartedAt);
+    timingsMs.total = elapsed(totalStartedAt);
+    const executionRunId = randomUUID();
+    const errorCode = error.code || "planner_system_failure";
+    const errorRecord = { code: errorCode, message: error.message || String(error) };
+    const unresolvedItems = [{ kind: "planner", id: "planner:system", status: "failed", required: true, error: { code: "planner_system_failure", message: errorRecord.message, causeCode: errorCode } }];
+    const failureResult = {
+      projectId,
+      pipelineStatus: "failed",
+      currentStage: "Planner failure",
+      error: errorRecord,
+      unresolvedItems,
+      stageStatus: { parser: "success", planner: "failed", copy: "not_started", image: "not_started", programWriteback: "not_started", renderer: "not_started" },
+      copyExecution: { status: "not_started", results: [], metrics: { businessBatches: 0, modelCalls: 0, durationMs: 0 } },
+      imageExecution: { status: "not_started", results: [], metrics: { businessBatches: 0, searchCalls: 0, downloadAttempts: 0, batchVisionCalls: 0, durationMs: 0 } },
+      renderStatus: "not_started",
+      render: { status: "not_started", outputPath: null, rendererCalls: 0, durationMs: 0 },
+      outputPath: null,
+      timingsMs,
+      callCounts: { parserCalls: 1, plannerModelCalls: Math.max(plannerAttemptFiles.length, Number(error.attemptUsages?.length || 0)), copyBusinessBatches: 0, copyModelCalls: 0, imageBusinessBatches: 0, imageSearchCalls: 0, imageCommonsCalls: 0, imagePageExtractionCalls: 0, imageDownloadAttempts: 0, imageVisualJudgmentCalls: 0, rendererCalls: 0 },
+      plannerAttemptFiles,
+    };
+    const failedRun = { executionRunId, projectId, planId: null, inputFingerprint, flowKind: "simple_skill_v1", status: "failed", progress: 10, executionEnabled: false, currentStage: "Planner failure", error: errorRecord, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    try {
+      for (const attempt of error.attempts || []) store.saveAttempt(projectId, attempt);
+      store.saveExecutionRun(projectId, failedRun);
+      const finalResultRef = store.saveFinalResult(projectId, executionRunId, failureResult);
+      store.updateExecutionRun(projectId, { ...failedRun, finalResultRef, updatedAt: new Date().toISOString() });
+      store.updateProject(projectId, { status: "failed", currentStage: "Planner failure", progress: 10, executionEnabled: false, lastError: errorRecord.message, errorCode, finalResultRef, outputPath: null });
+      error.projectId = projectId;
+      error.finalResultRef = finalResultRef;
+    } catch (persistenceError) {
+      error.persistenceError = persistenceError.message;
+    }
+    emit({ stage: "planner", phase: "failed", projectId, durationMs: timingsMs.planner, error: errorRecord });
+    throw error;
+  } finally {
+    if (!timingsMs.planner) timingsMs.planner = elapsed(plannerStartedAt);
   }
   const planPersistStartedAt = Date.now();
   try {
@@ -225,6 +269,7 @@ export async function runSimplePipeline({
     pipelineStatus,
     plannerResult: { planId: simplePlan.planId, sourceAgentPlanId: simplePlan.sourceAgentPlanId, moduleVisibility: simplePlan.moduleVisibility, copyTaskCount: simplePlan.copyTasks.length, imageSlotCount: simplePlan.imageSlots.length, warnings: simplePlan.warnings || [] },
     warnings: simplePlan.warnings || [],
+    plannerAttemptFiles,
     copyExecution,
     imageExecution,
     writeback: { copy: writeback.copyWriteback, images: writeback.imageWriteback },

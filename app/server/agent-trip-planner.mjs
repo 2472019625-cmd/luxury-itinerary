@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_CAPABILITIES, AGENT_CAPABILITY_VERSION } from "../config/agent-capabilities.mjs";
 import { AGENT_RULE_PROFILE_VERSION, GLOBAL_HARD_RULE_IDS } from "../config/agent-rule-profile.mjs";
+import { publicSheyouProductValues } from "../config/sheyou-product-values.mjs";
 import { requestDeepSeekJson } from "./deepseek-client.mjs";
 import { compactValidationErrors, validateAgentPlan } from "./agent-plan-validator.mjs";
 import { compileAgentExecutionPlan, filterImagePlanForModules } from "./agent-plan-compiler.mjs";
@@ -26,6 +27,40 @@ export function fingerprintFacts(value) {
 
 const cleanText = (value) => typeof value === "string" ? value.trim() : "";
 const unique = (values) => [...new Set(values.filter(Boolean))];
+
+function posterHighlightLines(values = []) {
+  return unique(values.flatMap((value) => cleanText(value).split(/\r?\n/).map(cleanText)).filter(Boolean));
+}
+
+export function validateSimpleHighlightSelection(raw = {}, factBasis = {}) {
+  const errors = [];
+  const selected = Array.isArray(raw.selectedHighlights) ? raw.selectedHighlights : [];
+  const sourceDesignated = new Set(posterHighlightLines(factBasis.sourcePosterHighlights));
+  const officialProducts = new Set((factBasis.officialProductValues || []).map((item) => cleanText(item?.sourceText)).filter(Boolean));
+  const allowedTypes = new Set(["source_designated", "official_product", "planner_derived"]);
+  if (!Array.isArray(raw.selectedHighlights)) return [{ code: "selected_highlights_missing", message: "simple-skill-pipeline 必须返回 selectedHighlights" }];
+  if (selected.length > 7) errors.push({ code: "selected_highlights_overflow", message: "产品亮点超过7条，Planner必须先排序和合并" });
+  for (const [index, item] of selected.entries()) {
+    const sourceText = cleanText(item?.sourceText);
+    const sourceType = cleanText(item?.sourceType);
+    if (!sourceText || !allowedTypes.has(sourceType)) errors.push({ code: "selected_highlight_invalid", message: `产品亮点 ${index + 1} 缺少有效 sourceText/sourceType` });
+    else if (sourceType === "source_designated" && !sourceDesignated.has(sourceText)) errors.push({ code: "source_highlight_untraceable", message: `来源指定亮点无法追溯：${sourceText}` });
+    else if (sourceType === "official_product" && !officialProducts.has(sourceText)) errors.push({ code: "official_product_untraceable", message: `正式服务亮点不在已确认候选中：${sourceText}` });
+    else if (sourceType === "planner_derived") {
+      const dayRefs = (Array.isArray(item?.sourceRefs) ? item.sourceRefs : []).map(cleanText).filter((ref) => /(?:^|\b)day(?:s)?[-.:[\] ]?\d+/i.test(ref));
+      if (dayRefs.length === 1) errors.push({ code: "ordinary_day_highlight_promoted", message: `不能用单个 DAY 体验补产品亮点：${sourceText}` });
+    }
+  }
+  const selectedSourceCount = selected.filter((item) => item?.sourceType === "source_designated" && sourceDesignated.has(cleanText(item?.sourceText))).length;
+  const requiredSourceCount = Math.min(7, sourceDesignated.size);
+  if (selectedSourceCount < requiredSourceCount) errors.push({ code: "source_highlight_priority_missing", message: "Planner 未先保留原始报价单已指定的产品亮点" });
+  const selectedOfficialCount = selected.filter((item) => item?.sourceType === "official_product" && officialProducts.has(cleanText(item?.sourceText))).length;
+  const requiredOfficialCount = Math.min(officialProducts.size, Math.max(0, 5 - requiredSourceCount));
+  if (selectedOfficialCount < requiredOfficialCount) {
+    errors.push({ code: "official_product_priority_missing", message: "来源指定亮点不足5条时，必须先从已确认奢游服务价值中选择，不能直接用DAY体验补足" });
+  }
+  return errors;
+}
 
 export function buildAgentFactBasis(data = {}, report = {}) {
   const days = Array.isArray(data.days) ? data.days : [];
@@ -71,7 +106,8 @@ export function buildAgentFactBasis(data = {}, report = {}) {
       warnings: (Array.isArray(report.warnings) ? report.warnings : []).map(cleanText).filter(Boolean),
       unrecognizedFields: (Array.isArray(report.unrecognizedFields) ? report.unrecognizedFields : []).map(cleanText).filter(Boolean).slice(0, 30),
     },
-    sourcePosterHighlights: (Array.isArray(data.sourcePosterHighlights) ? data.sourcePosterHighlights : []).map(cleanText).filter(Boolean).slice(0, 20),
+    sourcePosterHighlights: posterHighlightLines(Array.isArray(data.sourcePosterHighlights) ? data.sourcePosterHighlights : []).slice(0, 20),
+    officialProductValues: publicSheyouProductValues(),
   };
 }
 
@@ -114,7 +150,7 @@ function assemblePlan(raw, context, previousPlanId, callStats) {
   };
 }
 
-export async function generateAgentPlan({ project, apiKey, baseUrl, model, requestJson = requestDeepSeekJson, onStatus, signal, simpleSkillContract = false }) {
+export async function generateAgentPlan({ project, apiKey, baseUrl, model, requestJson = requestDeepSeekJson, onStatus, onModelAttempt, signal, simpleSkillContract = false }) {
   const factBasis = project.factBasis;
   const context = { projectId: project.projectId, inputFingerprint: project.inputFingerprint, factBasis, previousPlanVersion: project.planIds?.length || 0 };
   const sharedInput = {
@@ -128,7 +164,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   };
   const callStats = { source_parser: 1, trip_planner: 0 };
   const attempts = [];
-  const simpleContractPrompt = "simple-skill-pipeline 额外接口：在原有 JSON 字段之外返回 selectedHighlights 数组。每项只含 sourceText、sourceType(source_designated|official_product|planner_derived)、sourceRefs、selectionReason，不写最终客户文案。你必须在本次规划中最终确定实际采用的亮点集合：优先来源指定亮点，其次正式产品级亮点，前两类不足目标时才补充整程级购买理由；目标5—7条，真实事实不足时允许少于5条并在 selectionReason 说明素材不足。不得把普通DAY细节拔高。图片规划必须读取每个 DAY 的完整 experience 与全部 spots：dayRoles.primaryVisualSubject 只能选已有真实活动并结合 differenceFromAdjacent，不能机械取 spots[0] 或虚构差异；自费/可选/待确认体验成为视觉重点时必须保留状态。封面 imagePlan cover slot 的 primaryVisualSubject 只能是一个核心焦点，DAY 地点不得以酒店名代替。原始资料明确写有游猎时不得判断为无游猎。";
+  const simpleContractPrompt = "simple-skill-pipeline 额外接口：在原有 JSON 字段之外返回 selectedHighlights 数组。每项只含 sourceText、sourceType(source_designated|official_product|planner_derived)、sourceRefs、selectionReason，不写最终客户文案。你必须在本次规划中最终确定实际采用的亮点集合：第一优先逐条读取 factBasis.sourcePosterHighlights；第二优先只能从 factBasis.officialProductValues 选择奢游已确认服务/产品价值，sourceText 必须原样引用对应候选；前两类仍不足5条时才补充整程级购买理由。目标5—7条，真实事实不足时允许少于5条并在 selectionReason 说明素材不足。不得把普通DAY细节拔高，也不得把 DAY 中的自费热气球标成 official_product。图片规划必须读取每个 DAY 的完整 experience 与全部 spots：dayRoles.primaryVisualSubject 只能选已有真实活动并结合 differenceFromAdjacent，不能机械取 spots[0] 或虚构差异；徒步/夜游、马赛部落、反偷猎观察站和真实存在的热气球都可以承担 DAY 主视觉，自费/可选/待确认体验成为视觉重点时必须保留状态。封面 imagePlan cover slot 的 primaryVisualSubject 只能是一个核心焦点，DAY 地点不得以酒店名代替。原始资料明确写有游猎时不得判断为无游猎。";
   let raw;
   let firstErrors = [];
   for (let index = 0; index < 2; index += 1) {
@@ -141,7 +177,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
     const attemptStartedAt = new Date().toISOString();
     let response;
     try {
-      response = await requestJson({ apiKey, baseUrl, model, messages, reasoningEffort: "high", maxTokens: 12000, timeoutMs: 180_000, emptyContentRetries: 1, signal, onStatus: (event) => onStatus?.({ status: "planning", message: "规划模型正在返回紧凑业务计划", provider: { streamPhase: event.streamPhase, receivedContentChars: event.receivedContentChars } }) });
+      response = await requestJson({ apiKey, baseUrl, model, messages, reasoningEffort: "high", maxTokens: 12000, timeoutMs: 180_000, emptyContentRetries: 1, allowSyntaxRepair: true, onModelAttempt, signal, onStatus: (event) => onStatus?.({ status: "planning", message: "规划模型正在返回紧凑业务计划", provider: { streamPhase: event.streamPhase, receivedContentChars: event.receivedContentChars } }) });
     } catch (error) {
       attempts.push({ attemptId: randomUUID(), index: index + 1, createdAt: attemptStartedAt, completedAt: new Date().toISOString(), status: "failed", rawModelPlan: null, validation: null, model, usage: null, attemptUsages: error.attemptUsages || [], error: error.message });
       error.attempts = attempts;
@@ -152,7 +188,12 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
     const plan = assemblePlan(raw, context, project.activePlanId, callStats);
     onStatus?.({ status: "checking", message: "正在检查规则、权限、依赖与图片位" });
     const validation = validateAgentPlan(plan, context);
-    attempts.push({ attemptId: randomUUID(), index: index + 1, createdAt: new Date().toISOString(), rawModelPlan: raw, validation, model: response.model, usage: response.usage || null });
+    if (simpleSkillContract) {
+      const highlightErrors = validateSimpleHighlightSelection(raw, factBasis);
+      validation.errors.push(...highlightErrors);
+      validation.valid = validation.errors.length === 0;
+    }
+    attempts.push({ attemptId: randomUUID(), index: index + 1, createdAt: new Date().toISOString(), rawModelPlan: raw, parseResult: response.parseResult || null, validation, model: response.model, usage: response.usage || null });
     if (validation.valid) {
       const completed = { ...plan, validatedAt: new Date().toISOString(), validation: { passed: true, correctionUsed: index === 1, errors: [], firstAttemptErrors: compactValidationErrors(firstErrors) }, adjustments: index === 1 ? [...plan.adjustments, ...compactValidationErrors(firstErrors).map((item) => ({ issue: item.message, change: "规划器已按该项安全检查修正并重新通过校验" }))] : plan.adjustments };
       return { plan: completed, attempts };

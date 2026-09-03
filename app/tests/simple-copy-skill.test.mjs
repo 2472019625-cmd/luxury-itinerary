@@ -27,6 +27,10 @@ test("Copy 按全局、DAY、notes形成三个物理批次并按 targetId 隔离
       assert.equal(emptyContentRetries, 1);
       assert.equal(reasoningEffort, "medium");
       assert.match(messages[0].content, /Copy Writer Skill/);
+      assert.match(messages[0].content, /不是只能逐字复述 Excel/);
+      assert.match(messages[0].content, /真实常见野生动物语境/);
+      assert.match(messages[0].content, /不得把“可能看到”写成“保证\/必然看到”/);
+      assert.match(messages[0].content, /禁止修改价格、交通承诺、接待等级/);
       const payload = JSON.parse(messages.at(-1).content);
       seenBatchKinds.push(payload.batchKind);
       return { json: { results: payload.tasks.map((item) => ({ targetId: item.targetId, targetPath: item.targetPath, value: item.targetId === "day-2" ? 123 : item.targetId === "notes" ? ["行前准备"] : "草原纵深｜以差异化区域串联完整观察体验。" })) }, attemptUsages: [{ attempt: 1 }] };

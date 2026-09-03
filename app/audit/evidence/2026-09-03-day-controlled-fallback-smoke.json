@@ -1,0 +1,1031 @@
+{
+  "createdAt": "2026-09-03T12:43:30.035Z",
+  "branch": "agent/simple-skill-pipeline-v1",
+  "scope": "three targeted real image slots; no Excel, Planner, Copy, Program or Renderer",
+  "wallClockMs": 243060,
+  "result": {
+    "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+    "status": "partial_success",
+    "results": [
+      {
+        "slotId": "smoke:day:grumeti-walking-night-safari",
+        "status": "not_found",
+        "matchLevel": null,
+        "fallbackReason": "exact_activity_image_not_found",
+        "originalExactTarget": {
+          "location": "Singita Grumeti Serengeti Tanzania",
+          "activity": "walking safari or night game drive",
+          "subject": "walking safari or night game drive"
+        },
+        "fallbackTarget": "同保护区由 ranger 带领的荒野步行、户外探索或夜间保护区活动",
+        "fallbackTheme": "ranger-led wilderness walking or night reserve activity",
+        "selected": null,
+        "candidates": [
+          {
+            "candidateId": "candidate-c6bb866eb9f4008fd06d",
+            "imageUrl": "https://www.serengeti.com/assets/img/romantic-safari-serengeti-singita-sabora-tented-camp.jpg",
+            "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/f7916d85d6270daf3318.jpg",
+            "sourcePage": "https://www.serengeti.com/singita-sabora-tented-camp.php",
+            "sourceTitle": "Singita Sabora Tented Camp - Serengeti National Park",
+            "officialSource": false,
+            "width": 1441,
+            "height": 758,
+            "sha256": "f7916d85d6270daf331887bc0909b9999f68810a454fa1213a78cfed7f2f48dd",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "Singita Sabora Tented Camp 草原树下灯笼晚餐场景，远处有动物群，黄昏/夜间",
+            "matchReason": "画面为灯笼晚餐而非夜间游猎，虽远处有野生动物且夜景氛围，但未呈现game drive或walking safari活动本身。",
+            "hardJudgment": {
+              "locationMatch": true,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "activity_mismatch"
+          },
+          {
+            "candidateId": "candidate-328ef1481ddba9ac9e1c",
+            "imageUrl": "https://www.serengeti.com/assets/img/singita-sasakwa-lodge-exclusive-safari-experience-grumeti.jpg",
+            "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/39b4e85712db207373d6.jpg",
+            "sourcePage": "https://www.serengeti.com/singita-sasakwa-lodge.php",
+            "sourceTitle": "Singita Sasakwa Lodge near Serengeti National Park",
+            "officialSource": false,
+            "width": 1441,
+            "height": 758,
+            "sha256": "39b4e85712db207373d68ea263a22f2c2b5794c07af726149850988f27cb8f62",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "Singita Sasakwa Lodge 草坪上的户外晚餐布置，灯光照明，非游猎活动",
+            "matchReason": "虽在格鲁梅蒂酒店场地且真实摄影，但主体为户外用餐，属酒店餐饮而非徒步游猎或夜间游猎，被forbid的酒店场景替代目标活动。",
+            "hardJudgment": {
+              "locationMatch": true,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "activity_mismatch"
+          },
+          {
+            "candidateId": "candidate-5a27e75209a9e5992ceb",
+            "imageUrl": "https://images.ctfassets.net/wds1hqrprqxb/6LzfgrGAWKxsyh1xod1zZZ/e2a1d78eea0c9ca3271857ab7144bd4c/Singita_Kruger_National_Park_Moon_With_Lillies_Ross_Couper_AR502062.jpg?w=2400&q=85&fm=webp",
+            "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/1bf9b0782f308b81ff1b.webp",
+            "sourcePage": "https://singita.com/destination/tanzania/grumeti/game-drives",
+            "sourceTitle": "Game Drives at Grumeti | African Safari - Singita",
+            "officialSource": true,
+            "width": 2000,
+            "height": 1334,
+            "sha256": "1bf9b0782f308b81ff1be84948b3ba54de0634b29f615985e2db8b271bfa4bb4",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "夜间水面上的月亮与睡莲叶的特写，非游猎活动场景",
+            "matchReason": "图片为月亮与睡莲叶水面特写，未展示格鲁梅蒂徒步游猎或夜间游猎，地点与活动均无法辨识。",
+            "hardJudgment": {
+              "locationMatch": false,
+              "hotelIdentityMatch": false,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "place_mismatch"
+          },
+          {
+            "candidateId": "candidate-296c9171f26dd083a387",
+            "imageUrl": "https://images.ctfassets.net/wds1hqrprqxb/6LzfgrGAWKxsyh1xod1zZZ/e2a1d78eea0c9ca3271857ab7144bd4c/Singita_Kruger_National_Park_Moon_With_Lillies_Ross_Couper_AR502062.jpg?w=1600&h=1067&q=85&fm=webp",
+            "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/a427bc033f1db6828323.webp",
+            "sourcePage": "https://singita.com/destination/tanzania/grumeti/game-drives",
+            "sourceTitle": "Game Drives at Grumeti | African Safari - Singita",
+            "officialSource": true,
+            "width": 1600,
+            "height": 1067,
+            "sha256": "a427bc033f1db682832353431c7125075126c51d452a5f26cb67110466cdabbb",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "同一夜间水面月亮与睡莲叶特写的另一版本，非游猎活动场景",
+            "matchReason": "同样为月亮水面特写，与walking safari或night game drive目标主体不符。",
+            "hardJudgment": {
+              "locationMatch": false,
+              "hotelIdentityMatch": false,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "place_mismatch"
+          },
+          {
+            "candidateId": "candidate-49ccf26cb2c5b3b6fa1c",
+            "imageUrl": "https://images.ctfassets.net/wds1hqrprqxb/6LzfgrGAWKxsyh1xod1zZZ/e2a1d78eea0c9ca3271857ab7144bd4c/Singita_Kruger_National_Park_Moon_With_Lillies_Ross_Couper_AR502062.jpg?w=2400&q=85&fm=webp",
+            "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/1bf9b0782f308b81ff1b.webp",
+            "sourcePage": "https://singita.com/destinations/tanzania/grumeti/",
+            "sourceTitle": "Game Drives & Wilderness Activities at Singita Grumeti | Official Site",
+            "officialSource": true,
+            "width": 2000,
+            "height": 1334,
+            "sha256": "1bf9b0782f308b81ff1be84948b3ba54de0634b29f615985e2db8b271bfa4bb4",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "夜间池塘水面上的一轮倒影月亮与睡莲叶，无人物或活动痕迹；来源为 Singita Grumeti 官方页面",
+            "matchReason": "官方来源支持酒店身份，画面可能摄于保护区，但主体仅为水面月亮与睡莲，无法辨识任何 ranger 带领的荒野步行或夜间保护区活动，不满足目标主体要求。",
+            "hardJudgment": {
+              "locationMatch": true,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "activity_mismatch"
+          },
+          {
+            "candidateId": "candidate-f3378df81370fb7669de",
+            "imageUrl": "https://images.ctfassets.net/wds1hqrprqxb/6LzfgrGAWKxsyh1xod1zZZ/e2a1d78eea0c9ca3271857ab7144bd4c/Singita_Kruger_National_Park_Moon_With_Lillies_Ross_Couper_AR502062.jpg?w=1600&h=1067&q=85&fm=webp",
+            "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/a427bc033f1db6828323.webp",
+            "sourcePage": "https://singita.com/destinations/tanzania/grumeti/",
+            "sourceTitle": "Game Drives & Wilderness Activities at Singita Grumeti | Official Site",
+            "officialSource": true,
+            "width": 1600,
+            "height": 1067,
+            "sha256": "a427bc033f1db682832353431c7125075126c51d452a5f26cb67110466cdabbb",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "夜间水面月亮与睡莲叶的近似画面，无人物或活动；来源为 Singita Grumeti 官方页面",
+            "matchReason": "与候选2高度相似且构图更空，主体仍为水面月亮，无任何 ranger-led 荒野步行或夜间活动可辨识，主体不匹配。",
+            "hardJudgment": {
+              "locationMatch": true,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "activity_mismatch"
+          },
+          {
+            "candidateId": "candidate-74ce62bc1bfb2a34345b",
+            "imageUrl": "https://afar.brightspotcdn.com/dims4/default/04bb8c2/2147483647/strip/true/crop/3000x1684+0+225/resize/980x550!/quality/90/?url=https%3A%2F%2Fk3-prod-afar-media.s3.us-west-2.amazonaws.com%2Fbrightspot%2F55%2Fc1%2F977247db43f6bf90c6ee6bbecf51%2Fbruges-cheesshop-shutterstock-farutxo.jpg",
+            "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/19c2c0c62149a5c49683.jpg",
+            "sourcePage": "https://www.afar.com/places/singita-grumeti-serengeti",
+            "sourceTitle": "Review of Singita Grumeti | Serengeti, Tanzania - AFAR Travel",
+            "officialSource": false,
+            "width": 980,
+            "height": 550,
+            "sha256": "19c2c0c62149a5c49683df9d29810d1fca57529b3500a5807587bb9156a14b74",
+            "semanticScore": 7,
+            "semanticMatches": [
+              "led"
+            ],
+            "actualSubject": "欧洲街头市场流动餐车前顾客购买奶酪食品的场景，与非洲保护区无关",
+            "matchReason": "画面为街头奶酪餐车与顾客，地点与目标 Singita Grumeti 明显冲突，与荒野步行或夜间保护区活动完全无关，硬性拒绝。",
+            "hardJudgment": {
+              "locationMatch": false,
+              "hotelIdentityMatch": false,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "place_mismatch"
+          }
+        ],
+        "queriesUsed": [
+          "Singita Grumeti Serengeti Tanzania walking safari or night game drive travel photography",
+          "Singita Grumeti Serengeti Tanzania walking safari or night game drive safari photos",
+          "Singita Grumeti Serengeti Tanzania ranger led wilderness walking photography",
+          "Singita Grumeti Serengeti Tanzania night reserve activity ranger photography"
+        ],
+        "sourceEvidence": [
+          "https://singita.com/destination/tanzania/grumeti/game-drives",
+          "https://www.serengeti.com/singita-sasakwa-lodge.php",
+          "https://www.serengeti.com/singita-sabora-tented-camp.php",
+          "https://www.serengeti.com/singita-faru-faru-lodge.php",
+          "https://singita.com/destinations/tanzania/grumeti/",
+          "https://www.afar.com/places/singita-grumeti-serengeti"
+        ],
+        "actualSubject": "Singita Sasakwa Lodge 户外草坪上的晚餐餐桌、灯笼照明与山景，属酒店户外餐饮场景",
+        "matchReason": "精确层与 controlled_fallback 均无合格候选",
+        "technicalStatus": "no_eligible_candidate",
+        "pipelineEvidence": {
+          "searchPages": 6,
+          "searchPageUrls": [
+            "https://singita.com/destination/tanzania/grumeti/game-drives",
+            "https://www.serengeti.com/singita-sasakwa-lodge.html",
+            "https://tanyafoster.com/tanzania-guide-african-safari-serengeti/",
+            "https://www.safaribookings.com/photos/grumeti-game-reserve",
+            "https://www.serengeti.com/singita-sabora-tented-camp.html",
+            "https://www.serengeti.com/singita-faru-faru-lodge.html"
+          ],
+          "groundingRedirectUnresolved": [],
+          "extractedCandidates": 86,
+          "semanticRelevantCandidates": 4,
+          "downloadAttempts": 12,
+          "downloadedCandidates": 6,
+          "pageFailures": [],
+          "downloadFailures": [
+            {
+              "imageUrl": "https://www.serengeti.com/assets/img/singita-sasakwa-lodge-exclusive-safari-experience-grumeti-small.jpg",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            },
+            {
+              "imageUrl": "https://www.serengeti.com/assets/img/romantic-safari-serengeti-singita-sabora-tented-camp-small.jpg",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            },
+            {
+              "imageUrl": "https://cfstatic.safaribookings.com/img/logos/logo-240x35@2x.png",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            },
+            {
+              "imageUrl": "https://cfstatic.safaribookings.com/img/logos/logo.png",
+              "layer": "download",
+              "reason": "图片下载失败（403）"
+            }
+          ],
+          "searchCompleted": true,
+          "semanticExtractionCompleted": true,
+          "visualJudgmentCompleted": true,
+          "exactMatchSuccess": false,
+          "controlledFallback": {
+            "entered": true,
+            "reason": "exact_activity_image_not_found",
+            "originalExactTarget": {
+              "location": "Singita Grumeti Serengeti Tanzania",
+              "activity": "walking safari or night game drive",
+              "subject": "walking safari or night game drive"
+            },
+            "fallbackTarget": "同保护区由 ranger 带领的荒野步行、户外探索或夜间保护区活动",
+            "fallbackTheme": "ranger-led wilderness walking or night reserve activity",
+            "queries": [
+              "Singita Grumeti Serengeti Tanzania ranger led wilderness walking photography",
+              "Singita Grumeti Serengeti Tanzania night reserve activity ranger photography"
+            ],
+            "evidence": {
+              "searchPages": 6,
+              "searchPageUrls": [
+                "https://singita.com/destinations/tanzania/grumeti/",
+                "https://www.atrsafari.com/tanzania/serengeti/singita-faru-faru-lodge",
+                "https://www.afar.com/places/singita-grumeti-serengeti",
+                "https://www.fathomaway.com/photos-safari-serengeti-tanzania/",
+                "https://www.serengeti.com/singita-sasakwa-lodge.html",
+                "https://www.ubuntutravelgroup.com/tours/singita-grumeti-safari/"
+              ],
+              "groundingRedirectUnresolved": [],
+              "extractedCandidates": 51,
+              "semanticRelevantCandidates": 6,
+              "downloadAttempts": 8,
+              "downloadedCandidates": 4,
+              "pageFailures": [
+                {
+                  "pageUrl": "https://www.atrsafari.com/tanzania/serengeti/singita-faru-faru-lodge",
+                  "layer": "page_fetch",
+                  "reason": "网页提取失败（404）"
+                },
+                {
+                  "pageUrl": "https://www.ubuntutravelgroup.com/tours/singita-grumeti-safari/",
+                  "layer": "page_fetch",
+                  "reason": "fetch failed"
+                }
+              ],
+              "downloadFailures": [
+                {
+                  "imageUrl": "https://www.serengeti.com/assets/img/singita-sasakwa-lodge-exclusive-safari-experience-grumeti-small.jpg",
+                  "layer": "size",
+                  "reason": "图片分辨率不足"
+                },
+                {
+                  "imageUrl": "https://afar.brightspotcdn.com/dims4/default/2db04b3/2147483647/strip/true/crop/3000x1684+0+225/resize/490x275!/quality/90/?url=https%3A%2F%2Fk3-prod-afar-media.s3.us-west-2.amazonaws.com%2Fbrightspot%2F55%2Fc1%2F977247db43f6bf90c6ee6bbecf51%2Fbruges-cheesshop-shutterstock-farutxo.jpg",
+                  "layer": "size",
+                  "reason": "图片分辨率不足"
+                },
+                {
+                  "imageUrl": "https://s3.amazonaws.com/fathom_media/static/images/logo_compass.png",
+                  "layer": "size",
+                  "reason": "图片分辨率不足"
+                },
+                {
+                  "imageUrl": "https://s3.amazonaws.com/fathom_media/static/images/404.jpg",
+                  "layer": "size",
+                  "reason": "图片分辨率不足"
+                }
+              ],
+              "searchCompleted": true,
+              "semanticExtractionCompleted": true,
+              "visualJudgmentCompleted": true
+            }
+          }
+        },
+        "warnings": [
+          "exact Commons 搜索失败：fetch failed",
+          "exact 候选下载技术重试：fetch failed",
+          "exact 候选下载技术重试：fetch failed",
+          "exact 候选下载失败：图片分辨率不足",
+          "exact 候选下载失败：图片分辨率不足",
+          "exact 候选下载失败：图片分辨率不足",
+          "exact 候选下载失败：图片下载失败（403）",
+          "controlled_fallback Commons 搜索失败：fetch failed",
+          "controlled_fallback 网页图片提取失败：https://www.atrsafari.com/tanzania/serengeti/singita-faru-faru-lodge：网页提取失败（404）",
+          "controlled_fallback 网页提图技术重试：https://www.ubuntutravelgroup.com/tours/singita-grumeti-safari/：fetch failed",
+          "controlled_fallback 网页图片提取失败：https://www.ubuntutravelgroup.com/tours/singita-grumeti-safari/：fetch failed",
+          "controlled_fallback 候选下载失败：图片分辨率不足",
+          "controlled_fallback 候选下载失败：图片分辨率不足",
+          "controlled_fallback 候选下载失败：图片分辨率不足",
+          "controlled_fallback 候选下载失败：图片分辨率不足"
+        ],
+        "constraints": {
+          "mustHave": [
+            "地点：Singita Grumeti Serengeti Tanzania",
+            "活动：walking safari or night game drive",
+            "主体：walking safari or night game drive"
+          ],
+          "prefer": [
+            "符合视觉职责：真实呈现格鲁梅蒂保护区徒步游猎或夜间游猎体验，不以酒店室内替代",
+            "构图适配 16:9",
+            "真实自然、干净、有品质",
+            "与相邻 DAY 形成可辨识的视觉职责差异"
+          ],
+          "forbid": [
+            "错误地点",
+            "错误酒店身份",
+            "错误活动",
+            "错误主体",
+            "明显水印",
+            "破图或不可解码",
+            "AI 生成图",
+            "地图、示意图、信息图或截图",
+            "明显低质",
+            "酒店室内",
+            "普通客房"
+          ]
+        },
+        "durationMs": 167535
+      },
+      {
+        "slotId": "smoke:day:maasai-village",
+        "status": "not_found",
+        "matchLevel": null,
+        "fallbackReason": "exact_activity_image_not_found",
+        "originalExactTarget": {
+          "location": "Serengeti Tanzania",
+          "activity": "Maasai village cultural visit",
+          "subject": "Maasai village cultural visit"
+        },
+        "fallbackTarget": "同地区真实 Maasai 人物、文化互动或村落环境",
+        "fallbackTheme": "Maasai cultural experience and village environment",
+        "selected": null,
+        "candidates": [
+          {
+            "candidateId": "candidate-eeac1a619a11ad165dca",
+            "imageUrl": "https://www.serengetitanzaniapark.com/wp-content/uploads/2025/10/Elephants-in-Tarangire-National-Park.jpg",
+            "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/b97c42fed279d88af5df.jpg",
+            "sourcePage": "https://www.shadowsofafrica.com/",
+            "sourceTitle": "Masai village visit - Shadows Of Africa",
+            "officialSource": false,
+            "width": 900,
+            "height": 596,
+            "sha256": "b97c42fed279d88af5df2db2bcf7c31ddf349085c2cba705dae8b7a29192d62e",
+            "semanticScore": 31,
+            "semanticMatches": [
+              "masai"
+            ],
+            "actualSubject": "一群大象（含幼象）在河边饮水、河岸坡地活动，典型非洲草原游猎场景，无任何马赛村落或文化参访元素",
+            "matchReason": "图片为普通游猎大象饮水场景，完全不符合 Maasai village cultural visit 的文化体验职责，禁止以普通草原动物图替代，主体与活动均不匹配，硬拒绝。",
+            "hardJudgment": {
+              "locationMatch": false,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "place_mismatch"
+          },
+          {
+            "candidateId": "candidate-d89fe16d8233418b2b2d",
+            "imageUrl": "https://cdn.website-editor.net/11dbc23af6e641ed90dece856d37b8c5/dms3rep/multi/_MG_3156_Olpopongi_300dpi.jpg",
+            "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/66e627175fdb1d0c5cc9.jpg",
+            "sourcePage": "https://www.maasai-village.com/",
+            "sourceTitle": "Olpopongi Maasai Cultural Village Photo Gallery",
+            "officialSource": false,
+            "width": 1920,
+            "height": 1280,
+            "sha256": "66e627175fdb1d0c5cc9a57fe307748fb46caf970e533b9acba60ba215129f24",
+            "semanticScore": 69,
+            "semanticMatches": [
+              "maasai",
+              "cultural village",
+              "cultural",
+              "village"
+            ],
+            "actualSubject": "Olpopongi Maasai Cultural Village 入口木牌下的真实马赛人身着传统红格服饰与珠饰，属实拍文化村落照片；该村落位于坦桑尼亚 Monduli/Arusha 地区，而非塞伦盖蒂",
+            "matchReason": "主体与活动符合（真实马赛人物与文化村落，真实摄影、无水印、无明显 AI 痕迹），但 mustHave 要求地点为 Serengeti Tanzania；Olpopongi 位于坦桑尼亚 Monduli/Arusha 一带，与目标地区明显不符，构成 forbid 的错误地点，故不合格。",
+            "hardJudgment": {
+              "locationMatch": false,
+              "hotelIdentityMatch": true,
+              "activityMatch": true,
+              "subjectMatch": true,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "place_mismatch"
+          },
+          {
+            "candidateId": "candidate-42fbaaf1c4176b1df679",
+            "imageUrl": "https://www.gregdutoit.com/wp-content/uploads/2019/04/Greg-du-Toit-404-Page.jpg",
+            "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/04fdccd54f59c68e0d1d.webp",
+            "sourcePage": "https://www.gregdutoit.com/safaris/ngorongoro-crater-and-serengeti-safari/",
+            "sourceTitle": "Ngorongoro & Serengeti Photo Safari Portfolio - Greg du Toit",
+            "officialSource": false,
+            "width": 1904,
+            "height": 1226,
+            "sha256": "04fdccd54f59c68e0d1dd5fea72379f4d80ea2daeada3836f43c5e4bba9aa74b",
+            "semanticScore": 7,
+            "semanticMatches": [
+              "and"
+            ],
+            "actualSubject": "长时间曝光星轨照片（同心圆星空）配稀树草原枯树剪影，疑为东非草原夜景，但画面中无任何马赛人物、文化互动或村落环境",
+            "matchReason": "来源语境为 Ngorongoro/Serengeti 摄影作品集，地点可能接近，但本展示位明确要求真实马赛人物、文化互动或村落环境；星轨夜景属于风景/天文题材，不满足 subject 与 activity 的 mustHave，故不合格。",
+            "hardJudgment": {
+              "locationMatch": true,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "activity_mismatch"
+          }
+        ],
+        "queriesUsed": [
+          "Serengeti Tanzania Maasai village cultural visit travel photography",
+          "Serengeti Tanzania Maasai village cultural visit safari photos",
+          "Serengeti Tanzania Maasai cultural experience photography",
+          "Serengeti Tanzania Maasai people village environment photography"
+        ],
+        "sourceEvidence": [
+          "https://www.shadowsofafrica.com/",
+          "https://www.maasai-village.com/",
+          "https://www.gregdutoit.com/safaris/ngorongoro-crater-and-serengeti-safari/"
+        ],
+        "actualSubject": "Olpopongi Maasai Cultural Village 入口木牌下的真实马赛人身着传统红格服饰与珠饰，属实拍文化村落照片；该村落位于坦桑尼亚 Monduli/Arusha 地区，而非塞伦盖蒂",
+        "matchReason": "精确层与 controlled_fallback 均无合格候选",
+        "technicalStatus": "no_eligible_candidate",
+        "pipelineEvidence": {
+          "searchPages": 6,
+          "searchPageUrls": [
+            "https://www.andbeyond.com/",
+            "https://www.serengetinationalpark.travel/",
+            "https://commons.wikimedia.org/wiki/Category:Serengeti",
+            "https://www.serengeti.com/",
+            "https://www.shadowsofafrica.com/",
+            "https://expertvagabond.com/tanzania-safari-photos/"
+          ],
+          "groundingRedirectUnresolved": [],
+          "extractedCandidates": 72,
+          "semanticRelevantCandidates": 33,
+          "downloadAttempts": 6,
+          "downloadedCandidates": 1,
+          "pageFailures": [
+            {
+              "pageUrl": "https://www.andbeyond.com/",
+              "layer": "page_access",
+              "reason": "网页访问被站点拦截（403）"
+            },
+            {
+              "pageUrl": "https://expertvagabond.com/tanzania-safari-photos/",
+              "layer": "page_access",
+              "reason": "网页访问被站点拦截（403）"
+            },
+            {
+              "pageUrl": "https://commons.wikimedia.org/wiki/Category:Serengeti",
+              "layer": "page_fetch",
+              "reason": "fetch failed"
+            }
+          ],
+          "downloadFailures": [
+            {
+              "imageUrl": "https://www.serengetinationalpark.travel/images/logo.png",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            },
+            {
+              "imageUrl": "https://www.shadowsofafrica.com/media/wysiwyg/wild-migration.jpg",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            },
+            {
+              "imageUrl": "https://www.serengeti.com/assets/img/five-stars-four.png",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            },
+            {
+              "imageUrl": "https://www.serengeti.com/assets/img/serengeti-kleins-camp.jpg",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            },
+            {
+              "imageUrl": "https://www.serengetinationalpark.travel/images/maasai-village-visit.jpg",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            }
+          ],
+          "searchCompleted": true,
+          "semanticExtractionCompleted": true,
+          "visualJudgmentCompleted": true,
+          "exactMatchSuccess": false,
+          "controlledFallback": {
+            "entered": true,
+            "reason": "exact_activity_image_not_found",
+            "originalExactTarget": {
+              "location": "Serengeti Tanzania",
+              "activity": "Maasai village cultural visit",
+              "subject": "Maasai village cultural visit"
+            },
+            "fallbackTarget": "同地区真实 Maasai 人物、文化互动或村落环境",
+            "fallbackTheme": "Maasai cultural experience and village environment",
+            "queries": [
+              "Serengeti Tanzania Maasai cultural experience photography",
+              "Serengeti Tanzania Maasai people village environment photography"
+            ],
+            "evidence": {
+              "searchPages": 5,
+              "searchPageUrls": [
+                "https://www.andbeyond.com/experiences/africa/tanzania/serengeti-national-park/maasai-cultural-tour/",
+                "https://www.serengetinationalpark.travel/maasai-village-visit.php",
+                "https://maasai-village.com/",
+                "https://expertvagabond.com/tanzania-photos/",
+                "https://www.gregdutoit.com/safaris/ngorongoro-crater-and-serengeti-safari/"
+              ],
+              "groundingRedirectUnresolved": [],
+              "extractedCandidates": 21,
+              "semanticRelevantCandidates": 6,
+              "downloadAttempts": 4,
+              "downloadedCandidates": 2,
+              "pageFailures": [
+                {
+                  "pageUrl": "https://expertvagabond.com/tanzania-photos/",
+                  "layer": "page_access",
+                  "reason": "网页访问被站点拦截（403）"
+                },
+                {
+                  "pageUrl": "https://www.andbeyond.com/experiences/africa/tanzania/serengeti-national-park/maasai-cultural-tour/",
+                  "layer": "page_access",
+                  "reason": "网页访问被站点拦截（403）"
+                }
+              ],
+              "downloadFailures": [
+                {
+                  "imageUrl": "https://le-cdn.website-editor.net/s/11dbc23af6e641ed90dece856d37b8c5/dms3rep/multi/opt/_MG_3156_Olpopongi_300dpi-455w.jpg?Expires=1790361354&Signature=staUaMbNSE7r6NwocygtPlBM2HIlbXBqMfdlLj9UGnyBLrNLqkLfgGiV6gJLavrn2cxv-A8t0dC1ePd2XGoSiVoZHaODGcC3H0U~tr7C3GGX3ULg7FZTNIBU9-T8myNdVZgGkz5xM1uARZQeMwypLXUZ9rGAOqVG6F559p-6DMy7NUgMI59spNPzqf-rbGZMJnwA60BSLGGDlSUeYnrcb3KqkqgzTl5raxgLlZ2RVzM3q4HKx3g2V4HBVMnV6vXKEk135DQtBEdFRttI-0mHhu~W62kM0u1Z-H8RhRmhTbdHRAf2bo0E0sUPN7QTbhgtNlcrL0BGGJWT1woJcBi6lQ__&Key-Pair-Id=K2NXBXLF010TJW",
+                  "layer": "size",
+                  "reason": "图片分辨率不足"
+                },
+                {
+                  "imageUrl": "https://www.gregdutoit.com/wp-content/uploads/2022/09/Greg-du-Toit-Safari-Full-Size-Black-287.png",
+                  "layer": "size",
+                  "reason": "图片分辨率不足"
+                }
+              ],
+              "searchCompleted": true,
+              "semanticExtractionCompleted": true,
+              "visualJudgmentCompleted": true
+            }
+          }
+        },
+        "warnings": [
+          "exact Commons 搜索失败：fetch failed",
+          "exact 网页图片提取失败：https://www.andbeyond.com/：网页访问被站点拦截（403）",
+          "exact 网页图片提取失败：https://expertvagabond.com/tanzania-safari-photos/：网页访问被站点拦截（403）",
+          "exact 网页提图技术重试：https://commons.wikimedia.org/wiki/Category:Serengeti：fetch failed",
+          "exact 网页图片提取失败：https://commons.wikimedia.org/wiki/Category:Serengeti：fetch failed",
+          "exact 候选下载失败：图片分辨率不足",
+          "exact 候选下载失败：图片分辨率不足",
+          "exact 候选下载失败：图片分辨率不足",
+          "exact 候选下载失败：图片分辨率不足",
+          "exact 候选下载失败：图片分辨率不足",
+          "controlled_fallback Commons 搜索失败：fetch failed",
+          "controlled_fallback 网页图片提取失败：https://expertvagabond.com/tanzania-photos/：网页访问被站点拦截（403）",
+          "controlled_fallback 网页图片提取失败：https://www.andbeyond.com/experiences/africa/tanzania/serengeti-national-park/maasai-cultural-tour/：网页访问被站点拦截（403）",
+          "controlled_fallback 候选下载失败：图片分辨率不足",
+          "controlled_fallback 候选下载失败：图片分辨率不足"
+        ],
+        "constraints": {
+          "mustHave": [
+            "地点：Serengeti Tanzania",
+            "活动：Maasai village cultural visit",
+            "主体：Maasai village cultural visit"
+          ],
+          "prefer": [
+            "符合视觉职责：真实呈现塞伦盖蒂地区马赛村落文化参访，不以普通草原动物图替代",
+            "构图适配 16:9",
+            "真实自然、干净、有品质",
+            "与相邻 DAY 形成可辨识的视觉职责差异"
+          ],
+          "forbid": [
+            "错误地点",
+            "错误酒店身份",
+            "错误活动",
+            "错误主体",
+            "明显水印",
+            "破图或不可解码",
+            "AI 生成图",
+            "地图、示意图、信息图或截图",
+            "明显低质",
+            "摆拍影棚",
+            "其他地区无关部族"
+          ]
+        },
+        "durationMs": 243054
+      },
+      {
+        "slotId": "smoke:day:grumeti-anti-poaching",
+        "status": "success",
+        "matchLevel": "controlled_fallback",
+        "fallbackReason": "exact_activity_image_not_found",
+        "originalExactTarget": {
+          "location": "Singita Grumeti Serengeti Tanzania",
+          "activity": "anti-poaching observation post visit",
+          "subject": "anti-poaching observation post"
+        },
+        "fallbackTarget": "同保护区的 ranger、game scout、巡护队或真实野生动物保护工作现场",
+        "fallbackTheme": "ranger patrol and wildlife conservation work",
+        "fallbackAllowedBecause": "精确活动图未找到；候选经视觉判断确认为五名携带装备与步枪的game scouts/ranger在金色草原中列队徒步巡逻，背景为稀树草原，来源明确指向坦桑尼亚Grumeti Fund game scouts，同时满足目标地点、ranger patrol and wildlife conservation work体验主题和真实摄影要求",
+        "selected": {
+          "candidateId": "candidate-4e408d33100cbdb73667",
+          "imageUrl": "https://africanccf.org/wp-content/uploads/2021/01/Game-scouts-in-Tanzania.jpg",
+          "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/1338fbef4d5a894a9b8b.jpg",
+          "sourcePage": "https://africanccf.org/project/game-scouts-in-tanzania/",
+          "sourceTitle": "Game Scouts in Tanzania | Grumeti Fund - African Community & Conservation Foundation",
+          "officialSource": false,
+          "width": 1024,
+          "height": 683,
+          "sha256": "1338fbef4d5a894a9b8b3e93df9653b8cd590e84de2f6a19262cecf74b6c1e64",
+          "semanticScore": 0,
+          "semanticMatches": [],
+          "actualSubject": "五名携带装备与步枪的game scouts/ranger在金色草原中列队徒步巡逻，背景为稀树草原，来源明确指向坦桑尼亚Grumeti Fund game scouts",
+          "matchReason": "真实摄影：同Grumeti保护区game scouts巡护队现场巡逻，地点（坦桑尼亚Serengeti/Grumeti）、活动（ranger patrol）与主体均匹配mustHave，构图开阔、真实自然，无水印无AI痕迹，适合DAY模块且与相邻内容形成明确视觉职责差异。",
+          "hardJudgment": {
+            "locationMatch": true,
+            "hotelIdentityMatch": true,
+            "activityMatch": true,
+            "subjectMatch": true,
+            "watermarkFree": true,
+            "nonAI": true,
+            "photographic": true,
+            "technicalUsable": true,
+            "eligible": true
+          },
+          "rejection": null,
+          "dHash": "04476722998d8dad",
+          "aspectRatio": "16:9",
+          "matchLevel": "controlled_fallback",
+          "fallbackReason": "exact_activity_image_not_found",
+          "originalExactTarget": {
+            "location": "Singita Grumeti Serengeti Tanzania",
+            "activity": "anti-poaching observation post visit",
+            "subject": "anti-poaching observation post"
+          },
+          "fallbackTarget": "同保护区的 ranger、game scout、巡护队或真实野生动物保护工作现场",
+          "fallbackTheme": "ranger patrol and wildlife conservation work",
+          "fallbackAllowedBecause": "精确活动图未找到；候选经视觉判断确认为五名携带装备与步枪的game scouts/ranger在金色草原中列队徒步巡逻，背景为稀树草原，来源明确指向坦桑尼亚Grumeti Fund game scouts，同时满足目标地点、ranger patrol and wildlife conservation work体验主题和真实摄影要求"
+        },
+        "candidates": [
+          {
+            "candidateId": "candidate-4e408d33100cbdb73667",
+            "imageUrl": "https://africanccf.org/wp-content/uploads/2021/01/Game-scouts-in-Tanzania.jpg",
+            "localUrl": "/image-assets/simple-f51ff516-7458-4794-b37b-64aa41bbc6ee/1338fbef4d5a894a9b8b.jpg",
+            "sourcePage": "https://africanccf.org/project/game-scouts-in-tanzania/",
+            "sourceTitle": "Game Scouts in Tanzania | Grumeti Fund - African Community & Conservation Foundation",
+            "officialSource": false,
+            "width": 1024,
+            "height": 683,
+            "sha256": "1338fbef4d5a894a9b8b3e93df9653b8cd590e84de2f6a19262cecf74b6c1e64",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "五名携带装备与步枪的game scouts/ranger在金色草原中列队徒步巡逻，背景为稀树草原，来源明确指向坦桑尼亚Grumeti Fund game scouts",
+            "matchReason": "真实摄影：同Grumeti保护区game scouts巡护队现场巡逻，地点（坦桑尼亚Serengeti/Grumeti）、活动（ranger patrol）与主体均匹配mustHave，构图开阔、真实自然，无水印无AI痕迹，适合DAY模块且与相邻内容形成明确视觉职责差异。",
+            "hardJudgment": {
+              "locationMatch": true,
+              "hotelIdentityMatch": true,
+              "activityMatch": true,
+              "subjectMatch": true,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": true
+            },
+            "rejection": null
+          }
+        ],
+        "queriesUsed": [
+          "Singita Grumeti Serengeti Tanzania anti-poaching observation post visit travel photography",
+          "Singita Grumeti Serengeti Tanzania anti-poaching observation post visit safari photos",
+          "Singita Grumeti Serengeti Tanzania ranger patrol conservation team photography",
+          "Singita Grumeti Serengeti Tanzania game scout wildlife protection photography"
+        ],
+        "sourceEvidence": [
+          "https://singita.com/experience/anti-poaching-observation-post-visit-at-grumeti/",
+          "https://africanccf.org/project/game-scouts-in-tanzania/"
+        ],
+        "actualSubject": "五名携带装备与步枪的game scouts/ranger在金色草原中列队徒步巡逻，背景为稀树草原，来源明确指向坦桑尼亚Grumeti Fund game scouts",
+        "matchReason": "精确活动图未找到；候选经视觉判断确认为五名携带装备与步枪的game scouts/ranger在金色草原中列队徒步巡逻，背景为稀树草原，来源明确指向坦桑尼亚Grumeti Fund game scouts，同时满足目标地点、ranger patrol and wildlife conservation work体验主题和真实摄影要求",
+        "technicalStatus": "downloaded_decoded_and_judged",
+        "pipelineEvidence": {
+          "searchPages": 0,
+          "searchPageUrls": [],
+          "groundingRedirectUnresolved": [
+            {
+              "code": "grounding_redirect_unresolved",
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEjqO3-R1ptJz8JvGGnSyRILRKlHaJwM3jKuLIb1jVveEgrJ0Lype-sDFw_vQat4rZv6Hd28yMStfdKuTta2UfwMXGOVutFTP-B-QMZfmp6AqYzhQ0u_7XrhMasfutfg-1EhiL32ekFvu02VaWF_W6xfLliMWgQOlrSC4zRLAeRov_cO8Rneunnbw==",
+              "title": "Anti-poaching Observation Post Visit at Grumeti | African Safari - Singita",
+              "reason": "Connect Timeout Error (attempted address: vertexaisearch.cloud.google.com:443, timeout: 10000ms)"
+            },
+            {
+              "code": "grounding_redirect_unresolved",
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQF22TGAQ_8Q4O_6tGreHXeMnC39W7-eKgDkYOa0XRfxEuK2gneB8Fnlmbk68HJJiPbj34a28ck_Al7kVinem569qz2xDAh_MQr9ddYCwiS8LKd8C8TjcWuxmWik7kqF0XnpWeDD8H5o7lLNAP5yDWzsJpYg9uafBLcWZgHpd1I=",
+              "title": "Grumeti Fund Anti-Poaching Unit | Conservation Projects - Singita",
+              "reason": "Connect Timeout Error (attempted address: vertexaisearch.cloud.google.com:443, timeout: 10000ms)"
+            },
+            {
+              "code": "grounding_redirect_unresolved",
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHGXJZJzAlNoHVob9W8n-GXod8lpEMUcwPcFoRDAC0kL8YKlXlMPZP1b5OzQgIg8kV1TDXu1MJ7g60jgqUyBUul3NuURCCyqC_5D-ZfhVIgUgetVhyAQ2uqzjFrYVqS1xUyocrjTZOyhw==",
+              "title": "Serengeti House Luxury Safari Villa | Grumeti - Singita",
+              "reason": "Connect Timeout Error (attempted address: vertexaisearch.cloud.google.com:443, timeout: 10000ms)"
+            },
+            {
+              "code": "grounding_redirect_unresolved",
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFynmFM4VEtKfhEw2X2yX2iV6PWt7XNfL78AN2AGP56To-FRj8dKs2_Ps3brViraqS84uoDYxH9PMFlyexJarYbGmlXx_5HfJ68KsiekhF0Kqk8Kl62aaVCBaK9XxZHDI65EixQGUbPZp_oNkRjgB4nRPflQuRwUOT_-cAFaqA8G5-QjEuNoIYZL9HsGTv8IhX1",
+              "title": "The Canine & Human Teams Dedicated to Securing the Serengeti - Singita",
+              "reason": "Connect Timeout Error (attempted address: vertexaisearch.cloud.google.com:443, timeout: 10000ms)"
+            },
+            {
+              "code": "grounding_redirect_unresolved",
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQEMQTWbGupiulhS943ouK-KF-pqznY6kexTEQwAUmEaZ2RK4bkJKOlpTEf9Mv2W5MNd4pVJa7jTG5yz3aJATRHdYbUiqqD-RnFTSn1gZ83N47NXZzU_RyXt0-Xmls7EJkA=",
+              "title": "Game Scouts in Tanzania | Grumeti Fund - African Community & Conservation Foundation",
+              "reason": "Connect Timeout Error (attempted address: vertexaisearch.cloud.google.com:443, timeout: 10000ms)"
+            },
+            {
+              "code": "grounding_redirect_unresolved",
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGUAXCN6ue9i_bz71vZ6RarsYL5oayrb1pa-QorqwzxKwr2_VVpJjUu8S3PCvyW9S4akKzXqk9BsrS20P8ec28zgoJm2oNT4mvIuzcjTbbrsRHI9THwIbHUFxRMvxMmxdrh5id-x69LSGe-a6yOGBaTTUOuisBoUTQrhgY=",
+              "title": "Singita Grumeti Reserves - Micato Luxury Africa Safaris",
+              "reason": "Connect Timeout Error (attempted address: vertexaisearch.cloud.google.com:443, timeout: 10000ms)"
+            }
+          ],
+          "extractedCandidates": 0,
+          "semanticRelevantCandidates": 0,
+          "downloadAttempts": 0,
+          "downloadedCandidates": 0,
+          "pageFailures": [],
+          "downloadFailures": [],
+          "searchCompleted": true,
+          "semanticExtractionCompleted": true,
+          "visualJudgmentCompleted": true,
+          "exactMatchSuccess": false,
+          "controlledFallback": {
+            "entered": true,
+            "reason": "exact_activity_image_not_found",
+            "originalExactTarget": {
+              "location": "Singita Grumeti Serengeti Tanzania",
+              "activity": "anti-poaching observation post visit",
+              "subject": "anti-poaching observation post"
+            },
+            "fallbackTarget": "同保护区的 ranger、game scout、巡护队或真实野生动物保护工作现场",
+            "fallbackTheme": "ranger patrol and wildlife conservation work",
+            "queries": [
+              "Singita Grumeti Serengeti Tanzania ranger patrol conservation team photography",
+              "Singita Grumeti Serengeti Tanzania game scout wildlife protection photography"
+            ],
+            "evidence": {
+              "searchPages": 6,
+              "searchPageUrls": [
+                "https://singita.com/experience/anti-poaching-observation-post-visit-at-grumeti/",
+                "https://singita.com/conservation/project/grumeti-fund-anti-poaching-unit/",
+                "https://singita.com/story/meet-singitas-elite-anti-poaching-task-force/",
+                "https://africanccf.org/project/game-scouts-in-tanzania/",
+                "https://africanccf.org/project/special-operations-group-in-tanzania/",
+                "https://grumetifund.org/empowering-wildlife-protectors/"
+              ],
+              "groundingRedirectUnresolved": [],
+              "extractedCandidates": 28,
+              "semanticRelevantCandidates": 0,
+              "downloadAttempts": 3,
+              "downloadedCandidates": 3,
+              "pageFailures": [],
+              "downloadFailures": [],
+              "searchCompleted": true,
+              "semanticExtractionCompleted": true,
+              "visualJudgmentCompleted": true
+            }
+          }
+        },
+        "warnings": [
+          "exact Commons 搜索失败：fetch failed",
+          "exact 搜索来源未解析：grounding_redirect_unresolved：Anti-poaching Observation Post Visit at Grumeti | African Safari - Singita",
+          "exact 搜索来源未解析：grounding_redirect_unresolved：Grumeti Fund Anti-Poaching Unit | Conservation Projects - Singita",
+          "exact 搜索来源未解析：grounding_redirect_unresolved：Serengeti House Luxury Safari Villa | Grumeti - Singita",
+          "exact 搜索来源未解析：grounding_redirect_unresolved：The Canine & Human Teams Dedicated to Securing the Serengeti - Singita",
+          "exact 搜索来源未解析：grounding_redirect_unresolved：Game Scouts in Tanzania | Grumeti Fund - African Community & Conservation Foundation",
+          "exact 搜索来源未解析：grounding_redirect_unresolved：Singita Grumeti Reserves - Micato Luxury Africa Safaris",
+          "controlled_fallback Commons 搜索失败：fetch failed"
+        ],
+        "constraints": {
+          "mustHave": [
+            "地点：Singita Grumeti Serengeti Tanzania",
+            "活动：anti-poaching observation post visit",
+            "主体：anti-poaching observation post"
+          ],
+          "prefer": [
+            "符合视觉职责：真实呈现格鲁梅蒂反偷猎观察站或其现场工作场景，不以帐篷室内替代",
+            "构图适配 16:9",
+            "真实自然、干净、有品质",
+            "与相邻 DAY 形成可辨识的视觉职责差异"
+          ],
+          "forbid": [
+            "错误地点",
+            "错误酒店身份",
+            "错误活动",
+            "错误主体",
+            "明显水印",
+            "破图或不可解码",
+            "AI 生成图",
+            "地图、示意图、信息图或截图",
+            "明显低质",
+            "酒店室内",
+            "帐篷客房"
+          ]
+        },
+        "durationMs": 184513
+      }
+    ],
+    "warnings": [],
+    "metrics": {
+      "businessBatches": 1,
+      "automaticFollowupRounds": 0,
+      "slotCount": 3,
+      "searchCalls": 6,
+      "commonsCalls": 6,
+      "pageExtractionCalls": 31,
+      "downloadAttempts": 33,
+      "batchVisionCalls": 5,
+      "topConfirmationCalls": 0,
+      "technicalRetries": {
+        "search": 0,
+        "pageExtraction": 2,
+        "download": 2
+      },
+      "timingsMs": {
+        "searchProvider": 126679,
+        "commons": 65867,
+        "pageExtraction": 118712,
+        "download": 144746,
+        "batchVision": 161865,
+        "topConfirmation": 0
+      },
+      "timingsSemantics": "各阶段所有并发操作耗时累计；阶段间存在重叠，不应相加作为总耗时",
+      "concurrencyPeak": {
+        "slots": 3,
+        "search": 2,
+        "pages": 4,
+        "downloads": 3,
+        "vision": 1
+      },
+      "durationMs": 243059
+    }
+  },
+  "capabilityEvents": [
+    {
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "741aa246-f26a-491f-be00-78bf0ae414ee",
+      "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+      "target": "smoke:day:grumeti-walking-night-safari:exact",
+      "durationMs": 7336,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "1e50790e-fcb3-4204-bc68-b8be9896fc10",
+      "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+      "target": "smoke:day:maasai-village:exact",
+      "durationMs": 12067,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "8531ddd9-075c-4c87-ba21-625167f13842",
+      "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+      "target": "smoke:day:grumeti-walking-night-safari:exact",
+      "durationMs": 5538,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "6eaf925d-bdc0-4e47-b916-4c262f657f48",
+      "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+      "target": "smoke:day:grumeti-walking-night-safari:controlled_fallback",
+      "durationMs": 14209,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "f70bbb52-6cf0-43aa-ad64-1f019998cb84",
+      "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+      "target": "smoke:day:grumeti-anti-poaching:exact",
+      "durationMs": 73588,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "bbb71e27-2850-4d4b-a4b4-9cd742d9b421",
+      "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+      "target": "smoke:day:grumeti-anti-poaching:controlled_fallback",
+      "durationMs": 13588,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "056933d7-11b1-48ce-8722-7e9487ba475d",
+      "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+      "target": "smoke:day:maasai-village:exact",
+      "durationMs": 91027,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "0d1d5de1-1138-492f-abcb-b1a7166ba3bc",
+      "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+      "target": "smoke:day:maasai-village:controlled_fallback",
+      "durationMs": 5891,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "d9c80e4f-8604-4d5b-ac5d-2d57e9f22948",
+      "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+      "target": "smoke:day:grumeti-walking-night-safari:controlled_fallback",
+      "durationMs": 23182,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "4d531b1b-8ef0-407d-8fbb-5ed71a503e1c",
+      "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+      "target": "smoke:day:grumeti-anti-poaching:controlled_fallback",
+      "durationMs": 16974,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "3d5f01ab-3e78-4031-a71d-c3d1a9e7a16f",
+      "batchId": "f51ff516-7458-4794-b37b-64aa41bbc6ee",
+      "target": "smoke:day:maasai-village:controlled_fallback",
+      "durationMs": 25144,
+      "attemptCount": 1
+    }
+  ]
+}

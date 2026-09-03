@@ -41,7 +41,10 @@ export function plannerRequestJson({ delayMs = 5 } = {}) {
     return {
       json: {
         summary: { contentTheme: "以草原深入程度推进旅程", visualTheme: "从抵达到深入再到收束", planningRationale: "按真实地点、移动和每日角色形成差异" },
-        selectedHighlights: (facts.sourcePosterHighlights.length ? facts.sourcePosterHighlights : facts.coreExperiences.slice(0, 1)).map((sourceText) => ({ sourceText, sourceType: "source_designated", sourceRefs: ["sourcePosterHighlights"], selectionReason: "原始报价单明确指定" })),
+        selectedHighlights: [
+          ...facts.sourcePosterHighlights.map((sourceText) => ({ sourceText, sourceType: "source_designated", sourceRefs: ["sourcePosterHighlights"], selectionReason: "原始报价单明确指定" })),
+          ...facts.officialProductValues.slice(0, Math.max(0, 5 - facts.sourcePosterHighlights.length)).map((item) => ({ sourceText: item.sourceText, sourceType: "official_product", sourceRefs: item.sourceRefs, selectionReason: "已确认奢游产品价值" })),
+        ],
         modules,
         dayRoles: facts.days.map((day, index) => ({ index, role: index === 0 ? "抵达与进入草原" : index === facts.days.length - 1 ? "晨间体验与返程收束" : "核心区域深度游猎", differenceFromAdjacent: `使用DAY ${index + 1}真实地点、移动与活动区分`, contentAction: "optimize", sourceRefs: [`days.${index}`] })),
         contentPlacement: [],
@@ -100,6 +103,6 @@ export function imageAdapters({ appRoot, failMatcher = () => false, delayMs = 80
       return [{ ...page, imageUrl: `${page.pageUrl}/image.jpg`, width: 1800, height: 1100, fixtureAsset: asset }];
     },
     downloadCandidate: async (candidate) => ({ ...candidate, filePath: candidate.fixtureAsset.filePath, publicUrl: candidate.fixtureAsset.publicUrl, sha256: `fixture-${candidate.fixtureAsset.publicUrl}` }),
-    judgeCandidatesBatch: async ({ slot, candidates }) => candidates.map((candidate, index) => ({ candidateId: candidate.candidateId, score: 90 - index, locationMatch: true, hotelIdentityMatch: true, activityMatch: true, subjectMatch: true, watermarkFree: true, nonAI: true, technicalUsable: true, eligible: true, actualSubject: slot.label || slot.subject || slot.slotId, reason: "结构化事实、主体、地点和来源均匹配", hardRejectCode: "none" })),
+    judgeCandidatesBatch: async ({ slot, candidates }) => candidates.map((candidate, index) => ({ candidateId: candidate.candidateId, score: 90 - index, locationMatch: true, hotelIdentityMatch: true, activityMatch: true, subjectMatch: true, watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true, eligible: true, actualSubject: slot.label || slot.subject || slot.slotId, reason: "结构化事实、主体、地点和来源均匹配", hardRejectCode: "none" })),
   };
 }

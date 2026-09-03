@@ -1,0 +1,56 @@
+{
+  "recordedAt": "2026-09-03T12:55:03.243Z",
+  "branch": "agent/simple-skill-pipeline-v1",
+  "projectId": "3f327386-525c-4f9b-bd47-fcd45bbdec84",
+  "inputFile": "【行程内容】坦桑尼亚7日顶奢（10.4W起）：Singita连住.xlsx",
+  "runScope": "third independent full real Simple Pipeline regression",
+  "result": {
+    "pipelineStatus": null,
+    "savedProjectStatus": "planning",
+    "stoppedStage": "planner",
+    "error": {
+      "code": null,
+      "message": "DeepSeek 接口连续 2 次未返回完整合法JSON（Expected ',' or '}' after property value in JSON at position 1645 (line 62 column 62)）"
+    },
+    "outputPath": null,
+    "renderStarted": false,
+    "finalResultCreated": false
+  },
+  "timingsMs": {
+    "totalWallClock": 136041,
+    "parser": 18,
+    "plannerUntilFailure": 136011,
+    "copy": 0,
+    "image": 0,
+    "programWriteback": 0,
+    "renderer": 0
+  },
+  "calls": {
+    "parser": 1,
+    "plannerLogicalCalls": 1,
+    "plannerModelRequests": 2,
+    "copyBusinessBatches": 0,
+    "copyModelCalls": 0,
+    "imageBusinessBatches": 0,
+    "imageSearchCalls": 0,
+    "imageVisualJudgmentCalls": 0,
+    "rendererCalls": 0,
+    "legacyComplexPathCalls": 0
+  },
+  "savedArtifacts": [
+    "output/simple-pipeline/projects/3f327386-525c-4f9b-bd47-fcd45bbdec84/project.json",
+    "output/simple-pipeline/projects/3f327386-525c-4f9b-bd47-fcd45bbdec84/inputs/source-data.json"
+  ],
+  "missingBecausePlannerFailed": [
+    "plan JSON",
+    "execution run",
+    "Copy results",
+    "Image results",
+    "Program writeback",
+    "Renderer result",
+    "2000px output",
+    "final-result.json"
+  ],
+  "codeRulesPromptsOrConfigChangedDuringRun": false,
+  "rerunAfterFailure": false
+}

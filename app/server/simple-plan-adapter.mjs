@@ -161,7 +161,8 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     destination: data.destination,
     dates: { startDate: data.startDate, endDate: data.endDate, dayCount: data.days.length },
     travelers: { travelers: data.travelers, adults: data.adults, children: data.children },
-    sourcePosterHighlights: data.sourcePosterHighlights || [],
+    sourcePosterHighlights: (agentPlan.factBasis?.sourcePosterHighlights || data.sourcePosterHighlights || []).flatMap((item) => clean(item).split(/\r?\n/).map(clean)).filter(Boolean),
+    officialProductValues: agentPlan.factBasis?.officialProductValues || [],
     plannerSummary: agentPlan.summary || {},
     moduleVisibility,
     sourceWarnings: report.warnings || [],
@@ -272,7 +273,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
   });
   data.transportSummary.forEach((item, index) => {
     const slotId = `image:transport:${item.id || index + 1}:primary`;
-    addSlot(slot({ slotId, moduleType: "transport", required: false, activity: clean(item.category), subject: clean(item.modelGuaranteed ? item.model : item.category), visualGoal: `准确展示${item.category || "本次主要交通方式"}及其真实移动体验，不形成未确认车型承诺`, visualContext: { category: item.category, serviceLevel: item.serviceLevel, usageLabel: item.usageLabel, modelGuaranteed: item.modelGuaranteed === true ? "已确认车型" : "车型未保证", avoid: [] }, copyTargetId: `copy:transport:${item.id || index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "transport", itemIndex: index, fieldPath: `transportSummary.${index}.images.0`, imageIndex: 0, required: false });
+    addSlot(slot({ slotId, moduleType: "transport", required: false, location: clean(item.location || data.destination), activity: clean(item.category), subject: clean(item.modelGuaranteed ? item.model : item.category), visualGoal: `准确展示${item.category || "本次主要交通方式"}及其真实移动体验，不形成未确认车型承诺`, visualContext: { destination: data.destination, category: item.category, serviceLevel: item.serviceLevel, usageLabel: item.usageLabel, modelGuaranteed: item.modelGuaranteed === true ? "已确认车型" : "车型未保证", avoid: [] }, copyTargetId: `copy:transport:${item.id || index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "transport", itemIndex: index, fieldPath: `transportSummary.${index}.images.0`, imageIndex: 0, required: false });
   });
   data.days.forEach((day, index) => {
     const role = dayRole(effectiveAgentPlan, index);

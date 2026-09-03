@@ -1,0 +1,578 @@
+{
+  "createdAt": "2026-09-03T12:04:36.019Z",
+  "branch": "agent/simple-skill-pipeline-v1",
+  "scope": "three targeted real image slots; no Excel, Planner, Copy, Program or Renderer",
+  "wallClockMs": 132088,
+  "result": {
+    "batchId": "52025a1d-a41e-46ed-8bec-eb463cafe51a",
+    "status": "not_found",
+    "results": [
+      {
+        "slotId": "smoke:day:grumeti-walking-night-safari",
+        "status": "not_found",
+        "selected": null,
+        "candidates": [
+          {
+            "candidateId": "candidate-710d6efc8e4425ec707c",
+            "imageUrl": "https://www.go2africa.com/wp-content/uploads/2017/08/grumeti1-1920x630.jpg",
+            "localUrl": "/image-assets/simple-52025a1d-a41e-46ed-8bec-eb463cafe51a/85bc37448162868a7755.jpg",
+            "sourcePage": "https://www.go2africa.com/destinations/grumeti-reserves/accommodation",
+            "sourceTitle": "Singita Grumeti Accommodation & Activity Photos - Go2Africa",
+            "officialSource": false,
+            "width": 1920,
+            "height": 630,
+            "sha256": "85bc37448162868a77554c69d3dcc3bc475e4a2f1f02a59fd3a4c5348da628ec",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "白天乘车游猎场景：敞篷游猎车上的游客与草原上的母狮及幼狮，真实摄影",
+            "matchReason": "真实坦桑尼亚草原游猎摄影，符合 Grumeti 语境，但为白天乘车游猎，slot 明确要求 walking safari 或 night game drive，且需区别于普通日间乘车游猎，活动与主体 mustHave 不满足。",
+            "hardJudgment": {
+              "locationMatch": true,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "activity_mismatch"
+          },
+          {
+            "candidateId": "candidate-9e1d558dcf8c9643bac0",
+            "imageUrl": "https://images.ctfassets.net/wds1hqrprqxb/6LzfgrGAWKxsyh1xod1zZZ/e2a1d78eea0c9ca3271857ab7144bd4c/Singita_Kruger_National_Park_Moon_With_Lillies_Ross_Couper_AR502062.jpg?w=2400&q=85&fm=webp",
+            "localUrl": "/image-assets/simple-52025a1d-a41e-46ed-8bec-eb463cafe51a/1bf9b0782f308b81ff1b.webp",
+            "sourcePage": "https://singita.com/lodge/singita-sasakwa-lodge/",
+            "sourceTitle": "Sasakwa Luxury Safari Lodge & Grumeti Activities - Singita",
+            "officialSource": true,
+            "width": 2000,
+            "height": 1334,
+            "sha256": "1bf9b0782f308b81ff1be84948b3ba54de0634b29f615985e2db8b271bfa4bb4",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "夜间水面睡莲与倒映月亮的暗调照片",
+            "matchReason": "虽为夜间真实摄影，但主体为水塘睡莲，无徒步游猎或夜间 game drive 内容，无法辨识地点，且画面昏暗低对比，与 slot 主体不符。",
+            "hardJudgment": {
+              "locationMatch": false,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": false,
+              "eligible": false
+            },
+            "rejection": "technical_unusable"
+          },
+          {
+            "candidateId": "candidate-fb80831b21b77032d1f8",
+            "imageUrl": "https://images.ctfassets.net/wds1hqrprqxb/6LzfgrGAWKxsyh1xod1zZZ/e2a1d78eea0c9ca3271857ab7144bd4c/Singita_Kruger_National_Park_Moon_With_Lillies_Ross_Couper_AR502062.jpg?w=1600&h=1067&q=85&fm=webp",
+            "localUrl": "/image-assets/simple-52025a1d-a41e-46ed-8bec-eb463cafe51a/a427bc033f1db6828323.webp",
+            "sourcePage": "https://singita.com/lodge/singita-sasakwa-lodge/",
+            "sourceTitle": "Sasakwa Luxury Safari Lodge & Grumeti Activities - Singita",
+            "officialSource": true,
+            "width": 1600,
+            "height": 1067,
+            "sha256": "a427bc033f1db682832353431c7125075126c51d452a5f26cb67110466cdabbb",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "几乎全黑的夜景，仅隐约可见月亮，主体不可辨识",
+            "matchReason": "曝光严重不足，主体几乎不可见，既不能证明夜间游猎活动，也无法辨识地点，技术不可用。",
+            "hardJudgment": {
+              "locationMatch": false,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": false,
+              "eligible": false
+            },
+            "rejection": "technical_unusable"
+          },
+          {
+            "candidateId": "candidate-2c67a1d6fe91ac838694",
+            "imageUrl": "https://afar.brightspotcdn.com/dims4/default/ca180b0/2147483647/strip/true/crop/3600x2400+0+0/resize/1600x1066!/quality/90/?url=https%3A%2F%2Fk3-prod-afar-media.s3.us-west-2.amazonaws.com%2Fbrightspot%2Fc8%2F91%2F7c65088b42e4b9bf6ac7c0a9e930%2Fimg-6736.jpg",
+            "localUrl": "/image-assets/simple-52025a1d-a41e-46ed-8bec-eb463cafe51a/cc90d88b8be3b5b9f475.jpg",
+            "sourcePage": "https://www.afar.com/places/singita-grumeti-reserves-serengeti",
+            "sourceTitle": "Review of Singita Grumeti | Serengeti, Tanzania - AFAR",
+            "officialSource": false,
+            "width": 1600,
+            "height": 1066,
+            "sha256": "cc90d88b8be3b5b9f47575a9b2acb59130f734a5e194f52fd73d3e8a3cfda001",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "AI 生成插画：多名旅行者站在写有美国州名的指示牌旁，带行李箱",
+            "matchReason": "AI 插画且为美国州名示意牌，与坦桑尼亚 Singita Grumeti 完全不符，非真实摄影，命中 AI 生成与地点错误硬拒。",
+            "hardJudgment": {
+              "locationMatch": false,
+              "hotelIdentityMatch": false,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": false,
+              "photographic": false,
+              "technicalUsable": false,
+              "eligible": false
+            },
+            "rejection": "technical_unusable"
+          }
+        ],
+        "queriesUsed": [
+          "Singita Grumeti Serengeti Tanzania walking safari or night game drive travel photography",
+          "Singita Grumeti Serengeti Tanzania walking safari or night game drive safari photos"
+        ],
+        "sourceEvidence": [
+          "https://www.go2africa.com/destinations/grumeti-reserves/accommodation",
+          "https://singita.com/lodge/singita-sasakwa-lodge/",
+          "https://www.afar.com/places/singita-grumeti-reserves-serengeti"
+        ],
+        "actualSubject": "白天乘车游猎场景：敞篷游猎车上的游客与草原上的母狮及幼狮，真实摄影",
+        "matchReason": "首轮候选均有明确事实、技术或重复问题",
+        "technicalStatus": "no_eligible_candidate",
+        "pipelineEvidence": {
+          "searchPages": 6,
+          "searchPageUrls": [
+            "https://singita.com/lodge/singita-sasakwa-lodge/",
+            "https://www.go2africa.com/destinations/grumeti-reserves/accommodation",
+            "https://www.atrsafari.com/tanzania/serengeti/singita-sasakwa-lodge/",
+            "https://www.safaribookings.com/photos/grumeti",
+            "https://www.afar.com/places/singita-grumeti-reserves-serengeti",
+            "https://travelplusstyle.com/singita-faru-faru-lodge-tanzania"
+          ],
+          "extractedCandidates": 51,
+          "semanticRelevantCandidates": 4,
+          "downloadAttempts": 8,
+          "downloadedCandidates": 4,
+          "pageFailures": [
+            {
+              "pageUrl": "https://www.atrsafari.com/tanzania/serengeti/singita-sasakwa-lodge/",
+              "layer": "page_fetch",
+              "reason": "网页提取失败（404）"
+            }
+          ],
+          "downloadFailures": [
+            {
+              "imageUrl": "https://www.go2africa.com/wp-content/uploads/2026/07/Dark_100x100_Seal.png",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            },
+            {
+              "imageUrl": "https://cfstatic.safaribookings.com/img/logos/logo.png",
+              "layer": "download",
+              "reason": "图片下载失败（403）"
+            },
+            {
+              "imageUrl": "https://cfstatic.safaribookings.com/img/logos/logo-240x35@2x.png",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            },
+            {
+              "imageUrl": "https://afar.brightspotcdn.com/dims4/default/465c779/2147483647/strip/true/crop/3600x2400+0+0/resize/800x533!/quality/90/?url=https%3A%2F%2Fk3-prod-afar-media.s3.us-west-2.amazonaws.com%2Fbrightspot%2Fc8%2F91%2F7c65088b42e4b9bf6ac7c0a9e930%2Fimg-6736.jpg",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            }
+          ]
+        },
+        "warnings": [
+          "Commons 搜索失败：fetch failed",
+          "网页图片提取失败：https://www.atrsafari.com/tanzania/serengeti/singita-sasakwa-lodge/：网页提取失败（404）",
+          "候选下载失败：图片分辨率不足",
+          "候选下载失败：图片下载失败（403）",
+          "候选下载失败：图片分辨率不足",
+          "候选下载失败：图片分辨率不足"
+        ],
+        "constraints": {
+          "mustHave": [
+            "地点：Singita Grumeti Serengeti Tanzania",
+            "活动：walking safari or night game drive",
+            "主体：walking safari or night game drive"
+          ],
+          "prefer": [
+            "符合视觉职责：真实呈现格鲁梅蒂保护区徒步游猎或夜间游猎体验，不以酒店室内替代",
+            "构图适配 16:9",
+            "真实自然、干净、有品质",
+            "与相邻 DAY 形成可辨识的视觉职责差异"
+          ],
+          "forbid": [
+            "错误地点",
+            "错误酒店身份",
+            "错误活动",
+            "错误主体",
+            "明显水印",
+            "破图或不可解码",
+            "AI 生成图",
+            "地图、示意图、信息图或截图",
+            "明显低质",
+            "酒店室内",
+            "普通客房"
+          ]
+        },
+        "durationMs": 55493
+      },
+      {
+        "slotId": "smoke:day:maasai-village",
+        "status": "not_found",
+        "selected": null,
+        "candidates": [
+          {
+            "candidateId": "candidate-21fe28a4e9cd20cbcfdb",
+            "imageUrl": "https://tanzania-specialist.com/wp-content/uploads/2023/08/guide_tanzania_specialist.jpg",
+            "localUrl": "/image-assets/simple-52025a1d-a41e-46ed-8bec-eb463cafe51a/adf7eac7150c0e912f3f.jpg",
+            "sourcePage": "https://tanzania-specialist.com/what-to-expect-visiting-maasai-village/",
+            "sourceTitle": "What to Expect when Visiting a Maasai Village | Tanzania Specialist",
+            "officialSource": false,
+            "width": 1920,
+            "height": 1280,
+            "sha256": "adf7eac7150c0e912f3fe3e1de6642df7348ac8539457e1447dd95739d3ebfd7",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "坦桑尼亚游猎向导倚靠在印有 Tanzania Specialist 标识的游猎越野车旁，草原背景",
+            "matchReason": "地点为坦桑尼亚草原且为真实摄影，但主体是游猎车辆与向导，非马赛村落文化参访，活动与主体不匹配",
+            "hardJudgment": {
+              "locationMatch": true,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "activity_mismatch"
+          },
+          {
+            "candidateId": "candidate-0991b903a7ef78488955",
+            "imageUrl": "https://tanzania-specialist.com/wp-content/uploads/2023/07/safaritanzania_home.jpg",
+            "localUrl": "/image-assets/simple-52025a1d-a41e-46ed-8bec-eb463cafe51a/31a8ca22daaac3c22ec0.webp",
+            "sourcePage": "https://tanzania-specialist.com/what-to-expect-visiting-maasai-village/",
+            "sourceTitle": "What to Expect when Visiting a Maasai Village | Tanzania Specialist",
+            "officialSource": false,
+            "width": 920,
+            "height": 580,
+            "sha256": "31a8ca22daaac3c22ec0e07b9048688524b301394a0f22defb4945bfc64ec171",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "塞伦盖蒂草原上的一群非洲水牛，背景有金合欢树与山丘",
+            "matchReason": "为普通草原动物图（水牛群），正是视觉目标中明确禁止的替代图，无马赛村落文化元素",
+            "hardJudgment": {
+              "locationMatch": true,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "activity_mismatch"
+          },
+          {
+            "candidateId": "candidate-dafa8f432c9031de936f",
+            "imageUrl": "https://www.safariventures.com/wp-content/themes/travelicious/gfx/404.jpg",
+            "localUrl": "/image-assets/simple-52025a1d-a41e-46ed-8bec-eb463cafe51a/dff35e8151bb29eb4ede.jpg",
+            "sourcePage": "https://www.safariventures.com/complete-photography-guide-maasai-mara-serengeti/",
+            "sourceTitle": "The Complete Photography Guide for Capturing Both Maasai Mara and Serengeti Wildlife",
+            "officialSource": false,
+            "width": 2500,
+            "height": 1667,
+            "sha256": "dff35e8151bb29eb4edef6c366f3a251112df7f14dd4961d509a0e75b7307c28",
+            "semanticScore": 0,
+            "semanticMatches": [],
+            "actualSubject": "手持指南针特写，背景为模糊道路，与马赛村落无关",
+            "matchReason": "主体为手持指南针，无马赛村落、无文化参访场景，活动与主体均不匹配",
+            "hardJudgment": {
+              "locationMatch": false,
+              "hotelIdentityMatch": true,
+              "activityMatch": false,
+              "subjectMatch": false,
+              "watermarkFree": true,
+              "nonAI": true,
+              "photographic": true,
+              "technicalUsable": true,
+              "eligible": false
+            },
+            "rejection": "place_mismatch"
+          }
+        ],
+        "queriesUsed": [
+          "Serengeti Tanzania Maasai village cultural visit travel photography",
+          "Serengeti Tanzania Maasai village cultural visit safari photos"
+        ],
+        "sourceEvidence": [
+          "https://www.safariventures.com/complete-photography-guide-maasai-mara-serengeti/",
+          "https://tanzania-specialist.com/what-to-expect-visiting-maasai-village/"
+        ],
+        "actualSubject": "坦桑尼亚游猎向导倚靠在印有 Tanzania Specialist 标识的游猎越野车旁，草原背景",
+        "matchReason": "首轮候选均有明确事实、技术或重复问题",
+        "technicalStatus": "no_eligible_candidate",
+        "pipelineEvidence": {
+          "searchPages": 6,
+          "searchPageUrls": [
+            "https://www.andbeyond.com/experiences/africa/tanzania/serengeti-national-park/maasai-cultural-tour-village-of-ololosokwan/",
+            "https://magicaltanzania.com/maasai-village-visit-tanzania/",
+            "https://www.serengetinationalpark.travel/maasai-village-visit.php",
+            "https://tanzania-specialist.com/what-to-expect-visiting-maasai-village/",
+            "https://commons.wikimedia.org/wiki/Category:Serengeti",
+            "https://www.safariventures.com/complete-photography-guide-maasai-mara-serengeti/"
+          ],
+          "extractedCandidates": 34,
+          "semanticRelevantCandidates": 0,
+          "downloadAttempts": 4,
+          "downloadedCandidates": 3,
+          "pageFailures": [
+            {
+              "pageUrl": "https://www.andbeyond.com/experiences/africa/tanzania/serengeti-national-park/maasai-cultural-tour-village-of-ololosokwan/",
+              "layer": "page_access",
+              "reason": "网页访问被站点拦截（403）"
+            },
+            {
+              "pageUrl": "https://commons.wikimedia.org/wiki/Category:Serengeti",
+              "layer": "page_fetch",
+              "reason": "fetch failed"
+            }
+          ],
+          "downloadFailures": [
+            {
+              "imageUrl": "https://www.safariventures.com/wp-content/uploads/26-years-safari-Final_Colours.jpg",
+              "layer": "size",
+              "reason": "图片分辨率不足"
+            }
+          ]
+        },
+        "warnings": [
+          "Commons 搜索失败：fetch failed",
+          "网页提图技术重试：https://www.andbeyond.com/experiences/africa/tanzania/serengeti-national-park/maasai-cultural-tour-village-of-ololosokwan/：fetch failed",
+          "网页提图技术重试：https://commons.wikimedia.org/wiki/Category:Serengeti：fetch failed",
+          "网页图片提取失败：https://www.andbeyond.com/experiences/africa/tanzania/serengeti-national-park/maasai-cultural-tour-village-of-ololosokwan/：网页访问被站点拦截（403）",
+          "网页图片提取失败：https://commons.wikimedia.org/wiki/Category:Serengeti：fetch failed",
+          "候选下载失败：图片分辨率不足"
+        ],
+        "constraints": {
+          "mustHave": [
+            "地点：Serengeti Tanzania",
+            "活动：Maasai village cultural visit",
+            "主体：Maasai village cultural visit"
+          ],
+          "prefer": [
+            "符合视觉职责：真实呈现塞伦盖蒂地区马赛村落文化参访，不以普通草原动物图替代",
+            "构图适配 16:9",
+            "真实自然、干净、有品质",
+            "与相邻 DAY 形成可辨识的视觉职责差异"
+          ],
+          "forbid": [
+            "错误地点",
+            "错误酒店身份",
+            "错误活动",
+            "错误主体",
+            "明显水印",
+            "破图或不可解码",
+            "AI 生成图",
+            "地图、示意图、信息图或截图",
+            "明显低质",
+            "摆拍影棚",
+            "其他地区无关部族"
+          ]
+        },
+        "durationMs": 68105
+      },
+      {
+        "slotId": "smoke:day:grumeti-anti-poaching",
+        "status": "not_found",
+        "selected": null,
+        "candidates": [],
+        "queriesUsed": [
+          "Singita Grumeti Serengeti Tanzania anti-poaching observation post visit travel photography",
+          "Singita Grumeti Serengeti Tanzania anti-poaching observation post visit safari photos"
+        ],
+        "sourceEvidence": [
+          "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFBjblIfmTdXteNZ04IvpMBYsWV9ZpN7uwSJg4NHX7zhTKYdOE85Jc9bhqVx2XZWHOzc2YLQ0zghGnkF1dtBb8shqIvjv6th5oGjurP2te_a1tZ7pK9oZ3vUgrLIhva6zcAba6IZeZ3H0YntD9shD-_cZjSrFK16OILzI8WoLKUb_Ldwu4JWhheNQ==",
+          "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGr8zHASbuJ89kxHt5rJFNRqI9c45kVbX1df2oLpCXJhFYpMcwjfKz4Dr81RihI_D_d0F30y4CEt4DIA7q_lHbCWN6gBko5DV3KxJESakO19Bq7QdpRcijcqxj7CEU8RkSqeV8fE8jwLWb8U8U8C3KL2VrrJZ_j60EJvm-9zw0==",
+          "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQELlD99t64TkkeACYaqAWEUIeD9dCCKT9Q5ohgZV6yue3f9QwisFP18OIkOE5A5bhTrvYhVJMSUKcCBIl3JQry-x0pQh6TH1cEIHzCn7I12p3owGu4-jb_2M0CI_uMzzao_oqN_SVO76Vx1D0VOy_4obgX0Ku4iEGOZ-WSbTEiD9u8_yxWGD6RvJXtaVfwXn5SzFXKtc3MSq4m8miLXNg==",
+          "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHD7dB_zqBM2mrvTnoUsF5tKpM60cP4I-KqfH3ERPsfrLKd7emCI52NOKU95M9WyBV1YYUXwpM3LoZICap2wDEdqoFrLT4UADR7dQaZfvw-Dz5_3xkXtxALz-7giOj4bVzrT_0xHm9mmPLWLvdOmxDqX27ftE3hR9u5skQfrrjEImfEDvqT7w==",
+          "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFbI0mL9RQWZ5XQ8DFUSNweE3PqtUtUQo2AK_moHBNukYeJuzbduSpaCvYq-Zwk8V_lPwhZ479d5zYG7UnuZanm7McsrgpovYcTp_xvy-nsYiOCTLW4YxJv7T5R_LnelMgGM0emZ4d1yctLqZR2yk03nl7WyPTGC6ZPAUfMoI2803j3hXWPmYUmFoD1BrEIh2Bl==",
+          "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYGtHvZMaTImnD5gAohkaSZip_R6SCnKJE_9TAn223moJrmKNsJWR8lasaNAhMppmdgFtyVigpVj9DwS9OaAELuG-GsswSlO1PctYBNFTU9UcyFBZ2Y90TC1CNQDrPxLXUQ=="
+        ],
+        "actualSubject": null,
+        "matchReason": "首轮业务批次未产出可下载解码且尺寸合格的候选",
+        "technicalStatus": "page_extraction_empty",
+        "pipelineEvidence": {
+          "searchPages": 6,
+          "searchPageUrls": [
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFBjblIfmTdXteNZ04IvpMBYsWV9ZpN7uwSJg4NHX7zhTKYdOE85Jc9bhqVx2XZWHOzc2YLQ0zghGnkF1dtBb8shqIvjv6th5oGjurP2te_a1tZ7pK9oZ3vUgrLIhva6zcAba6IZeZ3H0YntD9shD-_cZjSrFK16OILzI8WoLKUb_Ldwu4JWhheNQ==",
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGr8zHASbuJ89kxHt5rJFNRqI9c45kVbX1df2oLpCXJhFYpMcwjfKz4Dr81RihI_D_d0F30y4CEt4DIA7q_lHbCWN6gBko5DV3KxJESakO19Bq7QdpRcijcqxj7CEU8RkSqeV8fE8jwLWb8U8U8C3KL2VrrJZ_j60EJvm-9zw0==",
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQELlD99t64TkkeACYaqAWEUIeD9dCCKT9Q5ohgZV6yue3f9QwisFP18OIkOE5A5bhTrvYhVJMSUKcCBIl3JQry-x0pQh6TH1cEIHzCn7I12p3owGu4-jb_2M0CI_uMzzao_oqN_SVO76Vx1D0VOy_4obgX0Ku4iEGOZ-WSbTEiD9u8_yxWGD6RvJXtaVfwXn5SzFXKtc3MSq4m8miLXNg==",
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHD7dB_zqBM2mrvTnoUsF5tKpM60cP4I-KqfH3ERPsfrLKd7emCI52NOKU95M9WyBV1YYUXwpM3LoZICap2wDEdqoFrLT4UADR7dQaZfvw-Dz5_3xkXtxALz-7giOj4bVzrT_0xHm9mmPLWLvdOmxDqX27ftE3hR9u5skQfrrjEImfEDvqT7w==",
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFbI0mL9RQWZ5XQ8DFUSNweE3PqtUtUQo2AK_moHBNukYeJuzbduSpaCvYq-Zwk8V_lPwhZ479d5zYG7UnuZanm7McsrgpovYcTp_xvy-nsYiOCTLW4YxJv7T5R_LnelMgGM0emZ4d1yctLqZR2yk03nl7WyPTGC6ZPAUfMoI2803j3hXWPmYUmFoD1BrEIh2Bl==",
+            "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYGtHvZMaTImnD5gAohkaSZip_R6SCnKJE_9TAn223moJrmKNsJWR8lasaNAhMppmdgFtyVigpVj9DwS9OaAELuG-GsswSlO1PctYBNFTU9UcyFBZ2Y90TC1CNQDrPxLXUQ=="
+          ],
+          "extractedCandidates": 0,
+          "semanticRelevantCandidates": 0,
+          "downloadAttempts": 0,
+          "downloadedCandidates": 0,
+          "pageFailures": [
+            {
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGr8zHASbuJ89kxHt5rJFNRqI9c45kVbX1df2oLpCXJhFYpMcwjfKz4Dr81RihI_D_d0F30y4CEt4DIA7q_lHbCWN6gBko5DV3KxJESakO19Bq7QdpRcijcqxj7CEU8RkSqeV8fE8jwLWb8U8U8C3KL2VrrJZ_j60EJvm-9zw0==",
+              "layer": "page_fetch",
+              "reason": "fetch failed"
+            },
+            {
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFBjblIfmTdXteNZ04IvpMBYsWV9ZpN7uwSJg4NHX7zhTKYdOE85Jc9bhqVx2XZWHOzc2YLQ0zghGnkF1dtBb8shqIvjv6th5oGjurP2te_a1tZ7pK9oZ3vUgrLIhva6zcAba6IZeZ3H0YntD9shD-_cZjSrFK16OILzI8WoLKUb_Ldwu4JWhheNQ==",
+              "layer": "page_fetch",
+              "reason": "fetch failed"
+            },
+            {
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHD7dB_zqBM2mrvTnoUsF5tKpM60cP4I-KqfH3ERPsfrLKd7emCI52NOKU95M9WyBV1YYUXwpM3LoZICap2wDEdqoFrLT4UADR7dQaZfvw-Dz5_3xkXtxALz-7giOj4bVzrT_0xHm9mmPLWLvdOmxDqX27ftE3hR9u5skQfrrjEImfEDvqT7w==",
+              "layer": "page_fetch",
+              "reason": "fetch failed"
+            },
+            {
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQELlD99t64TkkeACYaqAWEUIeD9dCCKT9Q5ohgZV6yue3f9QwisFP18OIkOE5A5bhTrvYhVJMSUKcCBIl3JQry-x0pQh6TH1cEIHzCn7I12p3owGu4-jb_2M0CI_uMzzao_oqN_SVO76Vx1D0VOy_4obgX0Ku4iEGOZ-WSbTEiD9u8_yxWGD6RvJXtaVfwXn5SzFXKtc3MSq4m8miLXNg==",
+              "layer": "page_fetch",
+              "reason": "fetch failed"
+            },
+            {
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFbI0mL9RQWZ5XQ8DFUSNweE3PqtUtUQo2AK_moHBNukYeJuzbduSpaCvYq-Zwk8V_lPwhZ479d5zYG7UnuZanm7McsrgpovYcTp_xvy-nsYiOCTLW4YxJv7T5R_LnelMgGM0emZ4d1yctLqZR2yk03nl7WyPTGC6ZPAUfMoI2803j3hXWPmYUmFoD1BrEIh2Bl==",
+              "layer": "page_fetch",
+              "reason": "fetch failed"
+            },
+            {
+              "pageUrl": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYGtHvZMaTImnD5gAohkaSZip_R6SCnKJE_9TAn223moJrmKNsJWR8lasaNAhMppmdgFtyVigpVj9DwS9OaAELuG-GsswSlO1PctYBNFTU9UcyFBZ2Y90TC1CNQDrPxLXUQ==",
+              "layer": "page_fetch",
+              "reason": "fetch failed"
+            }
+          ],
+          "downloadFailures": []
+        },
+        "warnings": [
+          "Commons 搜索失败：fetch failed",
+          "网页提图技术重试：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGr8zHASbuJ89kxHt5rJFNRqI9c45kVbX1df2oLpCXJhFYpMcwjfKz4Dr81RihI_D_d0F30y4CEt4DIA7q_lHbCWN6gBko5DV3KxJESakO19Bq7QdpRcijcqxj7CEU8RkSqeV8fE8jwLWb8U8U8C3KL2VrrJZ_j60EJvm-9zw0==：fetch failed",
+          "网页提图技术重试：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQELlD99t64TkkeACYaqAWEUIeD9dCCKT9Q5ohgZV6yue3f9QwisFP18OIkOE5A5bhTrvYhVJMSUKcCBIl3JQry-x0pQh6TH1cEIHzCn7I12p3owGu4-jb_2M0CI_uMzzao_oqN_SVO76Vx1D0VOy_4obgX0Ku4iEGOZ-WSbTEiD9u8_yxWGD6RvJXtaVfwXn5SzFXKtc3MSq4m8miLXNg==：fetch failed",
+          "网页提图技术重试：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHD7dB_zqBM2mrvTnoUsF5tKpM60cP4I-KqfH3ERPsfrLKd7emCI52NOKU95M9WyBV1YYUXwpM3LoZICap2wDEdqoFrLT4UADR7dQaZfvw-Dz5_3xkXtxALz-7giOj4bVzrT_0xHm9mmPLWLvdOmxDqX27ftE3hR9u5skQfrrjEImfEDvqT7w==：fetch failed",
+          "网页提图技术重试：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFBjblIfmTdXteNZ04IvpMBYsWV9ZpN7uwSJg4NHX7zhTKYdOE85Jc9bhqVx2XZWHOzc2YLQ0zghGnkF1dtBb8shqIvjv6th5oGjurP2te_a1tZ7pK9oZ3vUgrLIhva6zcAba6IZeZ3H0YntD9shD-_cZjSrFK16OILzI8WoLKUb_Ldwu4JWhheNQ==：fetch failed",
+          "网页图片提取失败：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGr8zHASbuJ89kxHt5rJFNRqI9c45kVbX1df2oLpCXJhFYpMcwjfKz4Dr81RihI_D_d0F30y4CEt4DIA7q_lHbCWN6gBko5DV3KxJESakO19Bq7QdpRcijcqxj7CEU8RkSqeV8fE8jwLWb8U8U8C3KL2VrrJZ_j60EJvm-9zw0==：fetch failed",
+          "网页图片提取失败：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFBjblIfmTdXteNZ04IvpMBYsWV9ZpN7uwSJg4NHX7zhTKYdOE85Jc9bhqVx2XZWHOzc2YLQ0zghGnkF1dtBb8shqIvjv6th5oGjurP2te_a1tZ7pK9oZ3vUgrLIhva6zcAba6IZeZ3H0YntD9shD-_cZjSrFK16OILzI8WoLKUb_Ldwu4JWhheNQ==：fetch failed",
+          "网页图片提取失败：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQHD7dB_zqBM2mrvTnoUsF5tKpM60cP4I-KqfH3ERPsfrLKd7emCI52NOKU95M9WyBV1YYUXwpM3LoZICap2wDEdqoFrLT4UADR7dQaZfvw-Dz5_3xkXtxALz-7giOj4bVzrT_0xHm9mmPLWLvdOmxDqX27ftE3hR9u5skQfrrjEImfEDvqT7w==：fetch failed",
+          "网页图片提取失败：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQELlD99t64TkkeACYaqAWEUIeD9dCCKT9Q5ohgZV6yue3f9QwisFP18OIkOE5A5bhTrvYhVJMSUKcCBIl3JQry-x0pQh6TH1cEIHzCn7I12p3owGu4-jb_2M0CI_uMzzao_oqN_SVO76Vx1D0VOy_4obgX0Ku4iEGOZ-WSbTEiD9u8_yxWGD6RvJXtaVfwXn5SzFXKtc3MSq4m8miLXNg==：fetch failed",
+          "网页提图技术重试：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFbI0mL9RQWZ5XQ8DFUSNweE3PqtUtUQo2AK_moHBNukYeJuzbduSpaCvYq-Zwk8V_lPwhZ479d5zYG7UnuZanm7McsrgpovYcTp_xvy-nsYiOCTLW4YxJv7T5R_LnelMgGM0emZ4d1yctLqZR2yk03nl7WyPTGC6ZPAUfMoI2803j3hXWPmYUmFoD1BrEIh2Bl==：fetch failed",
+          "网页提图技术重试：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYGtHvZMaTImnD5gAohkaSZip_R6SCnKJE_9TAn223moJrmKNsJWR8lasaNAhMppmdgFtyVigpVj9DwS9OaAELuG-GsswSlO1PctYBNFTU9UcyFBZ2Y90TC1CNQDrPxLXUQ==：fetch failed",
+          "网页图片提取失败：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFbI0mL9RQWZ5XQ8DFUSNweE3PqtUtUQo2AK_moHBNukYeJuzbduSpaCvYq-Zwk8V_lPwhZ479d5zYG7UnuZanm7McsrgpovYcTp_xvy-nsYiOCTLW4YxJv7T5R_LnelMgGM0emZ4d1yctLqZR2yk03nl7WyPTGC6ZPAUfMoI2803j3hXWPmYUmFoD1BrEIh2Bl==：fetch failed",
+          "网页图片提取失败：https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYGtHvZMaTImnD5gAohkaSZip_R6SCnKJE_9TAn223moJrmKNsJWR8lasaNAhMppmdgFtyVigpVj9DwS9OaAELuG-GsswSlO1PctYBNFTU9UcyFBZ2Y90TC1CNQDrPxLXUQ==：fetch failed"
+        ],
+        "constraints": {
+          "mustHave": [
+            "地点：Singita Grumeti Serengeti Tanzania",
+            "活动：anti-poaching observation post visit",
+            "主体：anti-poaching observation post"
+          ],
+          "prefer": [
+            "符合视觉职责：真实呈现格鲁梅蒂反偷猎观察站或其现场工作场景，不以帐篷室内替代",
+            "构图适配 16:9",
+            "真实自然、干净、有品质",
+            "与相邻 DAY 形成可辨识的视觉职责差异"
+          ],
+          "forbid": [
+            "错误地点",
+            "错误酒店身份",
+            "错误活动",
+            "错误主体",
+            "明显水印",
+            "破图或不可解码",
+            "AI 生成图",
+            "地图、示意图、信息图或截图",
+            "明显低质",
+            "酒店室内",
+            "帐篷客房"
+          ]
+        },
+        "durationMs": 132085
+      }
+    ],
+    "warnings": [],
+    "metrics": {
+      "businessBatches": 1,
+      "automaticFollowupRounds": 0,
+      "slotCount": 3,
+      "searchCalls": 3,
+      "commonsCalls": 3,
+      "pageExtractionCalls": 26,
+      "downloadAttempts": 12,
+      "batchVisionCalls": 2,
+      "topConfirmationCalls": 0,
+      "technicalRetries": {
+        "search": 0,
+        "pageExtraction": 8,
+        "download": 0
+      },
+      "timingsMs": {
+        "searchProvider": 89663,
+        "commons": 35571,
+        "pageExtraction": 200176,
+        "download": 18953,
+        "batchVision": 43302,
+        "topConfirmation": 0
+      },
+      "timingsSemantics": "各阶段所有并发操作耗时累计；阶段间存在重叠，不应相加作为总耗时",
+      "concurrencyPeak": {
+        "slots": 3,
+        "search": 2,
+        "pages": 4,
+        "downloads": 3,
+        "vision": 1
+      },
+      "durationMs": 132087
+    }
+  },
+  "capabilityEvents": [
+    {
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "63b435cf-60ae-41c0-9ef5-af73c1729232",
+      "batchId": "52025a1d-a41e-46ed-8bec-eb463cafe51a",
+      "target": "smoke:day:grumeti-walking-night-safari:batch",
+      "durationMs": 7563,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "9a0c0b92-83e6-451c-b7bf-12baa96709fd",
+      "batchId": "52025a1d-a41e-46ed-8bec-eb463cafe51a",
+      "target": "smoke:day:maasai-village:batch",
+      "durationMs": 8951,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "833d2064-bd5f-413d-9fd4-08aeb2002821",
+      "batchId": "52025a1d-a41e-46ed-8bec-eb463cafe51a",
+      "target": "smoke:day:grumeti-walking-night-safari:batch",
+      "durationMs": 30689,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "96d85d62-746b-435f-83b0-d32b0e5e1ae2",
+      "batchId": "52025a1d-a41e-46ed-8bec-eb463cafe51a",
+      "target": "smoke:day:maasai-village:batch",
+      "durationMs": 12613,
+      "attemptCount": 1
+    },
+    {
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "d287cc85-dbca-4c11-91b1-832662ebb25d",
+      "batchId": "52025a1d-a41e-46ed-8bec-eb463cafe51a",
+      "target": "smoke:day:grumeti-anti-poaching:batch",
+      "durationMs": 73149,
+      "attemptCount": 1
+    }
+  ]
+}
