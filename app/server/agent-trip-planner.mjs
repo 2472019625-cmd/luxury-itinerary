@@ -35,6 +35,11 @@ export function buildAgentFactBasis(data = {}, report = {}) {
     nights: Number(hotel.nights) || null,
     region: cleanText(hotel.region) || null,
     currentCopy: cleanText(hotel.editorialCopy) || null,
+    status: hotel.status || hotel.confirmationStatus || null,
+    roomType: cleanText(hotel.roomType) || null,
+    mealPlan: cleanText(hotel.mealPlan) || null,
+    selectionReason: cleanText(hotel.selectionReason) || null,
+    signatureExperience: cleanText(hotel.signatureExperience) || null,
   })).filter((hotel) => hotel.name);
   return {
     destination: cleanText(data.destination) || "待确认目的地",
@@ -43,8 +48,8 @@ export function buildAgentFactBasis(data = {}, report = {}) {
     endDate: cleanText(data.endDate) || null,
     travelerCount: Number(data.travelers || data.adults) || null,
     hotels,
-    transport: (Array.isArray(data.transportSummary) ? data.transportSummary : []).map((item, index) => ({ id: cleanText(item.id) || `transport-${index + 1}`, category: cleanText(item.category || item.title || item.label), serviceLevel: cleanText(item.serviceLevel), currentCopy: cleanText(item.editorialCopy || item.description) })).filter((item) => item.category).slice(0, 20),
-    diningExperiences: (Array.isArray(data.diningExperiences) ? data.diningExperiences : []).map((item, index) => ({ id: cleanText(item.id) || `dining-${index + 1}`, name: cleanText(item.title || item.officialName), currentCopy: cleanText(item.editorialCopy) })).filter((item) => item.name).slice(0, 20),
+    transport: (Array.isArray(data.transportSummary) ? data.transportSummary : []).map((item, index) => ({ id: cleanText(item.id) || `transport-${index + 1}`, category: cleanText(item.category || item.title || item.label), serviceLevel: cleanText(item.serviceLevel), model: cleanText(item.model) || null, modelGuaranteed: item.modelGuaranteed === true, usageLabel: cleanText(item.usageLabel) || null, features: item.features || [], status: item.status || null, currentCopy: cleanText(item.editorialCopy || item.description) })).filter((item) => item.category).slice(0, 20),
+    diningExperiences: (Array.isArray(data.diningExperiences) ? data.diningExperiences : []).map((item, index) => ({ id: cleanText(item.id) || `dining-${index + 1}`, name: cleanText(item.title || item.officialName), officialName: cleanText(item.officialName) || null, location: cleanText(item.location) || null, status: item.status || item.feeBoundary || null, currentCopy: cleanText(item.editorialCopy) })).filter((item) => item.name).slice(0, 20),
     coreExperiences: unique([...(Array.isArray(data.highlights) ? data.highlights : []), ...days.map((day) => cleanText(day.title || day.route))]).slice(0, 24),
     days: days.map((day, index) => ({
       day: index + 1,
@@ -53,15 +58,20 @@ export function buildAgentFactBasis(data = {}, report = {}) {
       routeNodes: Array.isArray(day.routeNodes) ? day.routeNodes.map(cleanText).filter(Boolean) : [],
       hotel: cleanText(day.hotel) || null,
       meals: cleanText(day.meals) || null,
+      mealPlan: day.mealPlan || null,
       experience: cleanText(day.description || day.experience) || null,
+      vehicle: cleanText(day.vehicle) || null,
+      overnightType: day.overnightType || null,
+      spots: (day.spots || []).map((spot) => ({ id: spot.id || null, name: cleanText(spot.name), description: cleanText(spot.description || spot.experience), status: spot.status || null, statusLabel: spot.statusLabel || null, feeBoundary: spot.feeBoundary || null, reminder: cleanText(spot.reminder) || null })),
     })),
-    expenses: { included: (data.included || []).length, excluded: (data.excluded || []).length, cancellation: (data.cancellation || []).length },
+    expenses: { included: data.included || [], excluded: data.excluded || [], cancellation: data.cancellation || [], pendingConfirmations: data.pendingConfirmations || [], totalPrice: data.totalPrice ?? null, priceUnit: data.priceUnit || null },
     sourceCoverage: {
       workbookName: cleanText(report.workbookName),
       sheetCount: Array.isArray(report.sheetNames) ? report.sheetNames.length : null,
       warnings: (Array.isArray(report.warnings) ? report.warnings : []).map(cleanText).filter(Boolean),
       unrecognizedFields: (Array.isArray(report.unrecognizedFields) ? report.unrecognizedFields : []).map(cleanText).filter(Boolean).slice(0, 30),
     },
+    sourcePosterHighlights: (Array.isArray(data.sourcePosterHighlights) ? data.sourcePosterHighlights : []).map(cleanText).filter(Boolean).slice(0, 20),
   };
 }
 
@@ -87,6 +97,7 @@ function assemblePlan(raw, context, previousPlanId, callStats) {
     runtime: { port: 4174, namespace: "agent_v1" },
     globalRuleIds: [...GLOBAL_HARD_RULE_IDS],
     summary: raw?.summary,
+    selectedHighlights: Array.isArray(raw?.selectedHighlights) ? raw.selectedHighlights : [],
     factBasis: context.factBasis,
     dayRoles: Array.isArray(raw?.dayRoles) ? raw.dayRoles : [],
     contentPlacement: Array.isArray(raw?.contentPlacement) ? raw.contentPlacement : [],
@@ -103,7 +114,7 @@ function assemblePlan(raw, context, previousPlanId, callStats) {
   };
 }
 
-export async function generateAgentPlan({ project, apiKey, baseUrl, model, requestJson = requestDeepSeekJson, onStatus, signal }) {
+export async function generateAgentPlan({ project, apiKey, baseUrl, model, requestJson = requestDeepSeekJson, onStatus, signal, simpleSkillContract = false }) {
   const factBasis = project.factBasis;
   const context = { projectId: project.projectId, inputFingerprint: project.inputFingerprint, factBasis, previousPlanVersion: project.planIds?.length || 0 };
   const sharedInput = {
@@ -117,14 +128,16 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   };
   const callStats = { source_parser: 1, trip_planner: 0 };
   const attempts = [];
+  const simpleContractPrompt = "simple-skill-pipeline 额外接口：在原有 JSON 字段之外返回 selectedHighlights 数组。每项只含 sourceText、sourceType(source_designated|official_product|planner_derived)、sourceRefs、selectionReason，不写最终客户文案。你必须在本次规划中最终确定实际采用的亮点集合：优先来源指定亮点，其次正式产品级亮点，前两类不足目标时才补充整程级购买理由；目标5—7条，真实事实不足时允许少于5条并在 selectionReason 说明素材不足。不得把普通DAY细节拔高。";
   let raw;
   let firstErrors = [];
   for (let index = 0; index < 2; index += 1) {
     callStats.trip_planner += 1;
     onStatus?.({ status: "planning", message: index === 0 ? "正在制定轻量业务规划" : "正在按安全检查结果收敛业务规划" });
+    const systemMessages = [{ role: "system", content: prompt }, ...(simpleSkillContract ? [{ role: "system", content: simpleContractPrompt }] : [])];
     const messages = index === 0
-      ? [{ role: "system", content: prompt }, { role: "user", content: JSON.stringify(sharedInput) }]
-      : [{ role: "system", content: prompt }, { role: "user", content: JSON.stringify({ ...sharedInput, correctionRequest: { errors: compactValidationErrors(firstErrors), previousPlan: raw, instruction: "只修正列出的结构和安全问题；保留事实与仍然有效的动态规划。" } }) }];
+      ? [...systemMessages, { role: "user", content: JSON.stringify(sharedInput) }]
+      : [...systemMessages, { role: "user", content: JSON.stringify({ ...sharedInput, correctionRequest: { errors: compactValidationErrors(firstErrors), previousPlan: raw, instruction: "只修正列出的结构和安全问题；保留事实与仍然有效的动态规划。" } }) }];
     const attemptStartedAt = new Date().toISOString();
     let response;
     try {

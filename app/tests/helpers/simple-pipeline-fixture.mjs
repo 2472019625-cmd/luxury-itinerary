@@ -1,0 +1,101 @@
+import path from "node:path";
+import * as XLSX from "xlsx";
+
+export function createWorkbookFile() {
+  const rows = [
+    ["肯尼亚3日私享旅程"],
+    ["海报下方亮点"],
+    ["私家游猎｜以专属节奏深入草原"],
+    ["天数", "日期", "路线", "行程内容", "早餐", "午餐", "晚餐", "住宿", "交通"],
+    ["D1", "2026-10-15", "内罗毕→安博塞利", "抵达后乘草原飞机前往安博塞利，傍晚在营地周边游猎", "酒店早餐", "机上午餐", "营地晚餐", "Angama Amboseli", "草原飞机"],
+    ["D2", "2026-10-16", "安博塞利", "在安博塞利进行全天私人游猎", "营地早餐", "营地午餐", "营地晚餐", "Angama Amboseli", "4x4游猎车"],
+    ["D3", "2026-10-17", "安博塞利→内罗毕", "晨间短途游猎后乘草原飞机返回内罗毕", "营地早餐", "简餐", "自理", "飞机", "草原飞机"],
+    ["报价包含", "住宿、行程所列交通与游猎活动"],
+    ["报价不包含", "国际机票与个人消费"],
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "行程");
+  const buffer = Buffer.from(XLSX.write(workbook, { type: "array", bookType: "xlsx" }));
+  return { name: "simple-pipeline-integration.xlsx", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) };
+}
+
+export function plannerRequestJson({ delayMs = 5 } = {}) {
+  return async ({ messages }) => {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const shared = JSON.parse(messages.at(-1).content);
+    const facts = shared.factBasis;
+    const modules = [
+      ["global", "封面、亮点与行程总览", true],
+      ["hotels", "臻选下榻", facts.hotels.length > 0],
+      ["dining", "特色餐饮", facts.diningExperiences.length > 0],
+      ["transport", "全程交通", facts.transport.length > 0],
+      ["days", "每日行程", true],
+      ["notes", "旅行准备与注意事项", true],
+      ["expenses", "费用与退改", true],
+    ].map(([moduleId, label, show]) => ({ moduleId, label, decision: show ? "show" : "hide", contentAction: show ? "optimize" : "hide", reason: show ? "当前结构化事实需要展示" : "当前资料没有适用事实" }));
+    const imageSlots = [
+      { slotId: "legacy-cover", role: "cover", label: "封面", required: true, visualDuty: "目的地主视觉", differentiation: "整程总览", searchIntent: facts.destination, removable: false },
+      ...facts.hotels.map((hotel, index) => ({ slotId: `legacy-hotel-${index + 1}`, role: `hotel:${index + 1}`, label: hotel.name, required: true, visualDuty: "酒店真实空间", differentiation: "住宿品质", searchIntent: hotel.name, removable: false })),
+      ...facts.days.map((day, index) => ({ slotId: `legacy-day-${index + 1}`, role: `day:${index + 1}`, label: `DAY ${index + 1}`, required: true, visualDuty: "当日核心体验", differentiation: `第${index + 1}日地点与角色`, searchIntent: `${day.route || ""} ${day.experience || ""}`, removable: false })),
+    ];
+    return {
+      json: {
+        summary: { contentTheme: "以草原深入程度推进旅程", visualTheme: "从抵达到深入再到收束", planningRationale: "按真实地点、移动和每日角色形成差异" },
+        selectedHighlights: (facts.sourcePosterHighlights.length ? facts.sourcePosterHighlights : facts.coreExperiences.slice(0, 1)).map((sourceText) => ({ sourceText, sourceType: "source_designated", sourceRefs: ["sourcePosterHighlights"], selectionReason: "原始报价单明确指定" })),
+        modules,
+        dayRoles: facts.days.map((day, index) => ({ index, role: index === 0 ? "抵达与进入草原" : index === facts.days.length - 1 ? "晨间体验与返程收束" : "核心区域深度游猎", differenceFromAdjacent: `使用DAY ${index + 1}真实地点、移动与活动区分`, contentAction: "optimize", sourceRefs: [`days.${index}`] })),
+        contentPlacement: [],
+        webVerification: [],
+        imagePlan: { visualStory: "以目的地环境、酒店空间和每日行动形成递进", slots: imageSlots },
+        confirmations: [],
+        adjustments: [],
+      },
+      model: "planner-fixture",
+      usage: { input_tokens: 100, output_tokens: 100 },
+      attemptUsages: [{}],
+    };
+  };
+}
+
+export function copyRequestJson({ failTargetId = null, delayMs = 60 } = {}) {
+  return async ({ messages }) => {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const payload = JSON.parse(messages.at(-1).content);
+    const results = payload.tasks.filter((task) => task.targetId !== failTargetId).map((task) => {
+      let value = `已按${task.moduleType}真实事实完成的客户文案`;
+      if (task.moduleType === "cover") value = "肯尼亚草原私享之旅";
+      if (task.moduleType === "product_highlight") value = `私家游猎｜以专属节奏深入真实草原体验，让整条产品更从容。`;
+      if (task.moduleType === "hotel") value = "坐落于安博塞利核心景观区域，以真实开阔视野与完整营地空间构成值得期待的住宿体验。";
+      if (task.moduleType === "transport") value = "草原飞机与专属游猎车承担主要移动，在真实交通类别范围内兼顾跨区效率与游猎舒适度。";
+      if (task.moduleType === "day") value = `当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。`;
+      return { targetId: task.targetId, targetPath: task.targetPath, value, warnings: [] };
+    });
+    return { json: { results }, model: "copy-fixture", usage: { input_tokens: 100, output_tokens: 200 }, attemptUsages: [{}] };
+  };
+}
+
+export function imageAdapters({ appRoot, failMatcher = () => false, delayMs = 80 } = {}) {
+  const assets = Array.from({ length: 12 }, (_, index) => {
+    const number = String(index + 1).padStart(2, "0");
+    return { filePath: path.join(appRoot, "public", "assets", "placeholders", `destination-${number}.png`), publicUrl: `/assets/placeholders/destination-${number}.png` };
+  });
+  let cursor = 0;
+  const pageAssets = new Map();
+  return {
+    searchWebBatch: async ({ queries }) => {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      if (failMatcher(queries.join(" "))) return [];
+      const asset = assets[cursor++ % assets.length];
+      const pageUrl = `https://images.example.test/page-${cursor}`;
+      pageAssets.set(pageUrl, asset);
+      return [{ pageUrl, title: queries[0], summary: queries.join(" "), officialHint: true, searchRank: 0 }];
+    },
+    searchCommonsImages: async () => [],
+    extractPageImages: async (page) => {
+      const asset = pageAssets.get(page.pageUrl);
+      return [{ ...page, imageUrl: `${page.pageUrl}/image.jpg`, width: 1800, height: 1100, fixtureAsset: asset }];
+    },
+    downloadCandidate: async (candidate) => ({ ...candidate, filePath: candidate.fixtureAsset.filePath, publicUrl: candidate.fixtureAsset.publicUrl, sha256: `fixture-${candidate.fixtureAsset.publicUrl}` }),
+    judgeCandidatesBatch: async ({ slot, candidates }) => candidates.map((_candidate, index) => ({ index, pass: true, subjectMatch: true, placeMatch: true, watermark: false, actualSubject: slot.label || slot.subject || slot.slotId, reason: "结构化事实、主体、地点和来源均匹配", sourceSupportsIdentity: true, hardRejectCode: "none" })),
+  };
+}

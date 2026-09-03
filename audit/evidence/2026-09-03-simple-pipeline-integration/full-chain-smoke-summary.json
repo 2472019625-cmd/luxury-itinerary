@@ -1,0 +1,1193 @@
+{
+  "generatedAt": "2026-09-03T08:42:37.111Z",
+  "origin": "http://127.0.0.1:4175",
+  "result": {
+    "projectId": "dbb29872-f62f-49cc-a747-b17dd409bed5",
+    "pipelineStatus": "complete",
+    "plannerResult": {
+      "planId": "5faf6c02-086f-44e8-9944-8ef6714265b5",
+      "sourceAgentPlanId": "5c65ef86-8f98-47f2-bf75-a284bff70506",
+      "moduleVisibility": {
+        "global": true,
+        "hotels": true,
+        "dining": false,
+        "transport": true,
+        "days": true,
+        "notes": true,
+        "expenses": true
+      },
+      "copyTaskCount": 8,
+      "imageSlotCount": 7
+    },
+    "copyExecution": {
+      "batchId": "7a03a97e-6bf1-4de0-9474-2497f99726d7",
+      "status": "success",
+      "results": [
+        {
+          "targetId": "copy:cover:title",
+          "targetPath": "title",
+          "status": "success",
+          "value": "肯尼亚草原私享之旅",
+          "warnings": []
+        },
+        {
+          "targetId": "copy:highlight:1",
+          "targetPath": "highlights.0",
+          "status": "success",
+          "value": "私家游猎｜以专属节奏深入真实草原体验，让整条产品更从容。",
+          "warnings": []
+        },
+        {
+          "targetId": "copy:hotel:imported-hotel-1",
+          "targetPath": "hotels.0.editorialCopy",
+          "status": "success",
+          "value": "坐落于安博塞利核心景观区域，以真实开阔视野与完整营地空间构成值得期待的住宿体验。",
+          "warnings": []
+        },
+        {
+          "targetId": "copy:transport:imported-transport-1",
+          "targetPath": "transportSummary.0.editorialCopy",
+          "status": "success",
+          "value": "草原飞机与专属游猎车承担主要移动，在真实交通类别范围内兼顾跨区效率与游猎舒适度。",
+          "warnings": []
+        },
+        {
+          "targetId": "copy:transport:imported-transport-2",
+          "targetPath": "transportSummary.1.editorialCopy",
+          "status": "success",
+          "value": "草原飞机与专属游猎车承担主要移动，在真实交通类别范围内兼顾跨区效率与游猎舒适度。",
+          "warnings": []
+        },
+        {
+          "targetId": "copy:day:1",
+          "targetPath": "days.0.description",
+          "status": "success",
+          "value": "当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。",
+          "warnings": []
+        },
+        {
+          "targetId": "copy:day:2",
+          "targetPath": "days.1.description",
+          "status": "success",
+          "value": "当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。",
+          "warnings": []
+        },
+        {
+          "targetId": "copy:day:3",
+          "targetPath": "days.2.description",
+          "status": "success",
+          "value": "当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。",
+          "warnings": []
+        }
+      ],
+      "warnings": [],
+      "metrics": {
+        "businessBatches": 1,
+        "modelCalls": 1,
+        "transportAttempts": 1,
+        "reasoningEffort": "medium",
+        "modelMs": 71,
+        "durationMs": 72
+      }
+    },
+    "imageExecution": {
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "status": "success",
+      "results": [
+        {
+          "slotId": "image:cover:primary",
+          "status": "success",
+          "selected": {
+            "imageUrl": "https://images.example.test/page-1/image.jpg",
+            "localUrl": "/assets/placeholders/destination-01.png",
+            "sourcePage": "https://images.example.test/page-1",
+            "sourceTitle": "肯尼亚 肯尼亚 以目的地环境、酒店空间和每日行动形成递进 肯尼亚 从抵达到深入再到收束 travel photography",
+            "officialSource": true,
+            "width": 1800,
+            "height": 1100,
+            "sha256": "fixture-/assets/placeholders/destination-01.png",
+            "actualSubject": "肯尼亚",
+            "matchReason": "结构化事实、主体、地点和来源均匹配",
+            "rejection": null,
+            "dHash": "906967ad320e0fc0",
+            "aspectRatio": "5:3"
+          },
+          "candidates": [
+            {
+              "imageUrl": "https://images.example.test/page-1/image.jpg",
+              "localUrl": "/assets/placeholders/destination-01.png",
+              "sourcePage": "https://images.example.test/page-1",
+              "sourceTitle": "肯尼亚 肯尼亚 以目的地环境、酒店空间和每日行动形成递进 肯尼亚 从抵达到深入再到收束 travel photography",
+              "officialSource": true,
+              "width": 1800,
+              "height": 1100,
+              "sha256": "fixture-/assets/placeholders/destination-01.png",
+              "actualSubject": "肯尼亚",
+              "matchReason": "结构化事实、主体、地点和来源均匹配",
+              "rejection": null
+            }
+          ],
+          "queriesUsed": [
+            "肯尼亚 肯尼亚 以目的地环境、酒店空间和每日行动形成递进 肯尼亚 从抵达到深入再到收束 travel photography",
+            "肯尼亚 肯尼亚 肯尼亚 从抵达到深入再到收束 authentic high resolution photos"
+          ],
+          "sourceEvidence": [
+            "https://images.example.test/page-1"
+          ],
+          "actualSubject": "肯尼亚",
+          "matchReason": "结构化事实、主体、地点和来源均匹配",
+          "technicalStatus": "downloaded_decoded_and_judged",
+          "warnings": [],
+          "constraints": {
+            "mustHave": [
+              "地点：肯尼亚",
+              "主体：肯尼亚"
+            ],
+            "prefer": [
+              "符合视觉职责：以目的地环境、酒店空间和每日行动形成递进",
+              "构图适配 5:3",
+              "真实自然、干净、有品质",
+              "具有目的地代表性并留有标题空间"
+            ],
+            "forbid": [
+              "错误地点",
+              "错误酒店身份",
+              "错误活动",
+              "错误主体",
+              "明显水印",
+              "破图或不可解码",
+              "AI 生成图",
+              "明显低质"
+            ]
+          },
+          "durationMs": 96
+        },
+        {
+          "slotId": "image:hotel:imported-hotel-1:primary",
+          "status": "success",
+          "selected": {
+            "imageUrl": "https://images.example.test/page-2/image.jpg",
+            "localUrl": "/assets/placeholders/destination-02.png",
+            "sourcePage": "https://images.example.test/page-2",
+            "sourceTitle": "Angama Amboseli 肯尼亚 official gallery photos",
+            "officialSource": true,
+            "width": 1800,
+            "height": 1100,
+            "sha256": "fixture-/assets/placeholders/destination-02.png",
+            "actualSubject": "Angama Amboseli",
+            "matchReason": "结构化事实、主体、地点和来源均匹配",
+            "rejection": null,
+            "dHash": "08146b6bd01f0fc0",
+            "aspectRatio": "16:9"
+          },
+          "candidates": [
+            {
+              "imageUrl": "https://images.example.test/page-2/image.jpg",
+              "localUrl": "/assets/placeholders/destination-02.png",
+              "sourcePage": "https://images.example.test/page-2",
+              "sourceTitle": "Angama Amboseli 肯尼亚 official gallery photos",
+              "officialSource": true,
+              "width": 1800,
+              "height": 1100,
+              "sha256": "fixture-/assets/placeholders/destination-02.png",
+              "actualSubject": "Angama Amboseli",
+              "matchReason": "结构化事实、主体、地点和来源均匹配",
+              "rejection": null
+            }
+          ],
+          "queriesUsed": [
+            "Angama Amboseli 肯尼亚 official gallery photos",
+            "Angama Amboseli 确认并展示Angama Amboseli最能体现真实住宿品质的代表性空间 肯尼亚 official photography"
+          ],
+          "sourceEvidence": [
+            "https://images.example.test/page-2"
+          ],
+          "actualSubject": "Angama Amboseli",
+          "matchReason": "结构化事实、主体、地点和来源均匹配",
+          "technicalStatus": "downloaded_decoded_and_judged",
+          "warnings": [],
+          "constraints": {
+            "mustHave": [
+              "地点：肯尼亚",
+              "酒店身份：Angama Amboseli",
+              "主体：Angama Amboseli"
+            ],
+            "prefer": [
+              "符合视觉职责：确认并展示Angama Amboseli最能体现真实住宿品质的代表性空间",
+              "构图适配 16:9",
+              "真实自然、干净、有品质"
+            ],
+            "forbid": [
+              "错误地点",
+              "错误酒店身份",
+              "错误活动",
+              "错误主体",
+              "明显水印",
+              "破图或不可解码",
+              "AI 生成图",
+              "明显低质"
+            ]
+          },
+          "durationMs": 106
+        },
+        {
+          "slotId": "image:transport:imported-transport-1:primary",
+          "status": "success",
+          "selected": {
+            "imageUrl": "https://images.example.test/page-3/image.jpg",
+            "localUrl": "/assets/placeholders/destination-03.png",
+            "sourcePage": "https://images.example.test/page-3",
+            "sourceTitle": "草原飞机 准确展示草原飞机及其真实移动体验，不形成未确认车型承诺 草原飞机 境内轻型航空衔接 车型未保证 travel photography",
+            "officialSource": true,
+            "width": 1800,
+            "height": 1100,
+            "sha256": "fixture-/assets/placeholders/destination-03.png",
+            "actualSubject": "草原飞机",
+            "matchReason": "结构化事实、主体、地点和来源均匹配",
+            "rejection": null,
+            "dHash": "1cc3c12cd01f0fc0",
+            "aspectRatio": "16:9"
+          },
+          "candidates": [
+            {
+              "imageUrl": "https://images.example.test/page-3/image.jpg",
+              "localUrl": "/assets/placeholders/destination-03.png",
+              "sourcePage": "https://images.example.test/page-3",
+              "sourceTitle": "草原飞机 准确展示草原飞机及其真实移动体验，不形成未确认车型承诺 草原飞机 境内轻型航空衔接 车型未保证 travel photography",
+              "officialSource": true,
+              "width": 1800,
+              "height": 1100,
+              "sha256": "fixture-/assets/placeholders/destination-03.png",
+              "actualSubject": "草原飞机",
+              "matchReason": "结构化事实、主体、地点和来源均匹配",
+              "rejection": null
+            }
+          ],
+          "queriesUsed": [
+            "草原飞机 准确展示草原飞机及其真实移动体验，不形成未确认车型承诺 草原飞机 境内轻型航空衔接 车型未保证 travel photography",
+            "草原飞机 草原飞机 境内轻型航空衔接 车型未保证 authentic high resolution photos"
+          ],
+          "sourceEvidence": [
+            "https://images.example.test/page-3"
+          ],
+          "actualSubject": "草原飞机",
+          "matchReason": "结构化事实、主体、地点和来源均匹配",
+          "technicalStatus": "downloaded_decoded_and_judged",
+          "warnings": [],
+          "constraints": {
+            "mustHave": [
+              "活动：草原飞机",
+              "主体：草原飞机"
+            ],
+            "prefer": [
+              "符合视觉职责：准确展示草原飞机及其真实移动体验，不形成未确认车型承诺",
+              "构图适配 16:9",
+              "真实自然、干净、有品质"
+            ],
+            "forbid": [
+              "错误地点",
+              "错误酒店身份",
+              "错误活动",
+              "错误主体",
+              "明显水印",
+              "破图或不可解码",
+              "AI 生成图",
+              "明显低质"
+            ]
+          },
+          "durationMs": 116
+        },
+        {
+          "slotId": "image:transport:imported-transport-2:primary",
+          "status": "success",
+          "selected": {
+            "imageUrl": "https://images.example.test/page-4/image.jpg",
+            "localUrl": "/assets/placeholders/destination-04.png",
+            "sourcePage": "https://images.example.test/page-4",
+            "sourceTitle": "四驱开顶式越野车 准确展示四驱开顶式越野车及其真实移动体验，不形成未确认车型承诺 四驱开顶式越野车 4x4游猎车 园区与保护区游猎用车 travel photography",
+            "officialSource": true,
+            "width": 1800,
+            "height": 1100,
+            "sha256": "fixture-/assets/placeholders/destination-04.png",
+            "actualSubject": "四驱开顶式越野车",
+            "matchReason": "结构化事实、主体、地点和来源均匹配",
+            "rejection": null,
+            "dHash": "42392909d21e0fc0",
+            "aspectRatio": "16:9"
+          },
+          "candidates": [
+            {
+              "imageUrl": "https://images.example.test/page-4/image.jpg",
+              "localUrl": "/assets/placeholders/destination-04.png",
+              "sourcePage": "https://images.example.test/page-4",
+              "sourceTitle": "四驱开顶式越野车 准确展示四驱开顶式越野车及其真实移动体验，不形成未确认车型承诺 四驱开顶式越野车 4x4游猎车 园区与保护区游猎用车 travel photography",
+              "officialSource": true,
+              "width": 1800,
+              "height": 1100,
+              "sha256": "fixture-/assets/placeholders/destination-04.png",
+              "actualSubject": "四驱开顶式越野车",
+              "matchReason": "结构化事实、主体、地点和来源均匹配",
+              "rejection": null
+            }
+          ],
+          "queriesUsed": [
+            "四驱开顶式越野车 准确展示四驱开顶式越野车及其真实移动体验，不形成未确认车型承诺 四驱开顶式越野车 4x4游猎车 园区与保护区游猎用车 travel photography",
+            "四驱开顶式越野车 四驱开顶式越野车 4x4游猎车 园区与保护区游猎用车 authentic high resolution photos"
+          ],
+          "sourceEvidence": [
+            "https://images.example.test/page-4"
+          ],
+          "actualSubject": "四驱开顶式越野车",
+          "matchReason": "结构化事实、主体、地点和来源均匹配",
+          "technicalStatus": "downloaded_decoded_and_judged",
+          "warnings": [],
+          "constraints": {
+            "mustHave": [
+              "活动：四驱开顶式越野车",
+              "主体：四驱开顶式越野车"
+            ],
+            "prefer": [
+              "符合视觉职责：准确展示四驱开顶式越野车及其真实移动体验，不形成未确认车型承诺",
+              "构图适配 16:9",
+              "真实自然、干净、有品质"
+            ],
+            "forbid": [
+              "错误地点",
+              "错误酒店身份",
+              "错误活动",
+              "错误主体",
+              "明显水印",
+              "破图或不可解码",
+              "AI 生成图",
+              "明显低质"
+            ]
+          },
+          "durationMs": 93
+        },
+        {
+          "slotId": "image:day:1:primary",
+          "status": "success",
+          "selected": {
+            "imageUrl": "https://images.example.test/page-5/image.jpg",
+            "localUrl": "/assets/placeholders/destination-05.png",
+            "sourcePage": "https://images.example.test/page-5",
+            "sourceTitle": "Angama Amboseli 安博塞利游猎 内罗毕 · 安博塞利的核心体验；使用DAY 1真实地点、移动与活动区分 抵达与进入草原 内罗毕 安博塞利 travel photography",
+            "officialSource": true,
+            "width": 1800,
+            "height": 1100,
+            "sha256": "fixture-/assets/placeholders/destination-05.png",
+            "actualSubject": "安博塞利游猎",
+            "matchReason": "结构化事实、主体、地点和来源均匹配",
+            "rejection": null,
+            "dHash": "49a2b1bc491f07c0",
+            "aspectRatio": "16:9"
+          },
+          "candidates": [
+            {
+              "imageUrl": "https://images.example.test/page-5/image.jpg",
+              "localUrl": "/assets/placeholders/destination-05.png",
+              "sourcePage": "https://images.example.test/page-5",
+              "sourceTitle": "Angama Amboseli 安博塞利游猎 内罗毕 · 安博塞利的核心体验；使用DAY 1真实地点、移动与活动区分 抵达与进入草原 内罗毕 安博塞利 travel photography",
+              "officialSource": true,
+              "width": 1800,
+              "height": 1100,
+              "sha256": "fixture-/assets/placeholders/destination-05.png",
+              "actualSubject": "安博塞利游猎",
+              "matchReason": "结构化事实、主体、地点和来源均匹配",
+              "rejection": null
+            }
+          ],
+          "queriesUsed": [
+            "Angama Amboseli 安博塞利游猎 内罗毕 · 安博塞利的核心体验；使用DAY 1真实地点、移动与活动区分 抵达与进入草原 内罗毕 安博塞利 travel photography",
+            "Angama Amboseli 安博塞利游猎 抵达与进入草原 内罗毕 安博塞利 authentic high resolution photos"
+          ],
+          "sourceEvidence": [
+            "https://images.example.test/page-5"
+          ],
+          "actualSubject": "安博塞利游猎",
+          "matchReason": "结构化事实、主体、地点和来源均匹配",
+          "technicalStatus": "downloaded_decoded_and_judged",
+          "warnings": [],
+          "constraints": {
+            "mustHave": [
+              "地点：Angama Amboseli",
+              "活动：安博塞利游猎",
+              "主体：安博塞利游猎"
+            ],
+            "prefer": [
+              "符合视觉职责：内罗毕 · 安博塞利的核心体验；使用DAY 1真实地点、移动与活动区分",
+              "构图适配 16:9",
+              "真实自然、干净、有品质",
+              "与相邻 DAY 形成可辨识的视觉职责差异"
+            ],
+            "forbid": [
+              "错误地点",
+              "错误酒店身份",
+              "错误活动",
+              "错误主体",
+              "明显水印",
+              "破图或不可解码",
+              "AI 生成图",
+              "明显低质"
+            ]
+          },
+          "durationMs": 95
+        },
+        {
+          "slotId": "image:day:2:primary",
+          "status": "success",
+          "selected": {
+            "imageUrl": "https://images.example.test/page-6/image.jpg",
+            "localUrl": "/assets/placeholders/destination-06.png",
+            "sourcePage": "https://images.example.test/page-6",
+            "sourceTitle": "Angama Amboseli 安博塞利游猎 安博塞利的核心体验；使用DAY 2真实地点、移动与活动区分 核心区域深度游猎 安博塞利 Angama Amboseli travel photography",
+            "officialSource": true,
+            "width": 1800,
+            "height": 1100,
+            "sha256": "fixture-/assets/placeholders/destination-06.png",
+            "actualSubject": "安博塞利游猎",
+            "matchReason": "结构化事实、主体、地点和来源均匹配",
+            "rejection": null,
+            "dHash": "18666199d01f0fc0",
+            "aspectRatio": "16:9"
+          },
+          "candidates": [
+            {
+              "imageUrl": "https://images.example.test/page-6/image.jpg",
+              "localUrl": "/assets/placeholders/destination-06.png",
+              "sourcePage": "https://images.example.test/page-6",
+              "sourceTitle": "Angama Amboseli 安博塞利游猎 安博塞利的核心体验；使用DAY 2真实地点、移动与活动区分 核心区域深度游猎 安博塞利 Angama Amboseli travel photography",
+              "officialSource": true,
+              "width": 1800,
+              "height": 1100,
+              "sha256": "fixture-/assets/placeholders/destination-06.png",
+              "actualSubject": "安博塞利游猎",
+              "matchReason": "结构化事实、主体、地点和来源均匹配",
+              "rejection": null
+            }
+          ],
+          "queriesUsed": [
+            "Angama Amboseli 安博塞利游猎 安博塞利的核心体验；使用DAY 2真实地点、移动与活动区分 核心区域深度游猎 安博塞利 Angama Amboseli travel photography",
+            "Angama Amboseli 安博塞利游猎 核心区域深度游猎 安博塞利 Angama Amboseli authentic high resolution photos"
+          ],
+          "sourceEvidence": [
+            "https://images.example.test/page-6"
+          ],
+          "actualSubject": "安博塞利游猎",
+          "matchReason": "结构化事实、主体、地点和来源均匹配",
+          "technicalStatus": "downloaded_decoded_and_judged",
+          "warnings": [],
+          "constraints": {
+            "mustHave": [
+              "地点：Angama Amboseli",
+              "活动：安博塞利游猎",
+              "主体：安博塞利游猎"
+            ],
+            "prefer": [
+              "符合视觉职责：安博塞利的核心体验；使用DAY 2真实地点、移动与活动区分",
+              "构图适配 16:9",
+              "真实自然、干净、有品质",
+              "与相邻 DAY 形成可辨识的视觉职责差异"
+            ],
+            "forbid": [
+              "错误地点",
+              "错误酒店身份",
+              "错误活动",
+              "错误主体",
+              "明显水印",
+              "破图或不可解码",
+              "AI 生成图",
+              "明显低质"
+            ]
+          },
+          "durationMs": 95
+        },
+        {
+          "slotId": "image:day:3:primary",
+          "status": "success",
+          "selected": {
+            "imageUrl": "https://images.example.test/page-7/image.jpg",
+            "localUrl": "/assets/placeholders/destination-07.png",
+            "sourcePage": "https://images.example.test/page-7",
+            "sourceTitle": "内罗毕 内罗毕游猎 安博塞利 · 内罗毕的核心体验；使用DAY 3真实地点、移动与活动区分 晨间体验与返程收束 安博塞利 内罗毕 travel photography",
+            "officialSource": true,
+            "width": 1800,
+            "height": 1100,
+            "sha256": "fixture-/assets/placeholders/destination-07.png",
+            "actualSubject": "内罗毕游猎",
+            "matchReason": "结构化事实、主体、地点和来源均匹配",
+            "rejection": null,
+            "dHash": "50839ab0401f0fc0",
+            "aspectRatio": "16:9"
+          },
+          "candidates": [
+            {
+              "imageUrl": "https://images.example.test/page-7/image.jpg",
+              "localUrl": "/assets/placeholders/destination-07.png",
+              "sourcePage": "https://images.example.test/page-7",
+              "sourceTitle": "内罗毕 内罗毕游猎 安博塞利 · 内罗毕的核心体验；使用DAY 3真实地点、移动与活动区分 晨间体验与返程收束 安博塞利 内罗毕 travel photography",
+              "officialSource": true,
+              "width": 1800,
+              "height": 1100,
+              "sha256": "fixture-/assets/placeholders/destination-07.png",
+              "actualSubject": "内罗毕游猎",
+              "matchReason": "结构化事实、主体、地点和来源均匹配",
+              "rejection": null
+            }
+          ],
+          "queriesUsed": [
+            "内罗毕 内罗毕游猎 安博塞利 · 内罗毕的核心体验；使用DAY 3真实地点、移动与活动区分 晨间体验与返程收束 安博塞利 内罗毕 travel photography",
+            "内罗毕 内罗毕游猎 晨间体验与返程收束 安博塞利 内罗毕 authentic high resolution photos"
+          ],
+          "sourceEvidence": [
+            "https://images.example.test/page-7"
+          ],
+          "actualSubject": "内罗毕游猎",
+          "matchReason": "结构化事实、主体、地点和来源均匹配",
+          "technicalStatus": "downloaded_decoded_and_judged",
+          "warnings": [],
+          "constraints": {
+            "mustHave": [
+              "地点：内罗毕",
+              "活动：内罗毕游猎",
+              "主体：内罗毕游猎"
+            ],
+            "prefer": [
+              "符合视觉职责：安博塞利 · 内罗毕的核心体验；使用DAY 3真实地点、移动与活动区分",
+              "构图适配 16:9",
+              "真实自然、干净、有品质",
+              "与相邻 DAY 形成可辨识的视觉职责差异"
+            ],
+            "forbid": [
+              "错误地点",
+              "错误酒店身份",
+              "错误活动",
+              "错误主体",
+              "明显水印",
+              "破图或不可解码",
+              "AI 生成图",
+              "明显低质"
+            ]
+          },
+          "durationMs": 95
+        }
+      ],
+      "warnings": [],
+      "metrics": {
+        "businessBatches": 1,
+        "automaticFollowupRounds": 0,
+        "slotCount": 7,
+        "searchCalls": 7,
+        "commonsCalls": 6,
+        "pageExtractionCalls": 7,
+        "downloadAttempts": 7,
+        "batchVisionCalls": 7,
+        "topConfirmationCalls": 0,
+        "timingsMs": {
+          "searchProvider": 592,
+          "commons": 0,
+          "pageExtraction": 0,
+          "download": 0,
+          "batchVision": 0,
+          "topConfirmation": 0
+        },
+        "timingsSemantics": "各阶段所有并发操作耗时累计；阶段间存在重叠，不应相加作为总耗时",
+        "concurrencyPeak": {
+          "slots": 3,
+          "search": 3,
+          "pages": 1,
+          "downloads": 1,
+          "vision": 1
+        },
+        "durationMs": 286
+      }
+    },
+    "writeback": {
+      "copy": [
+        {
+          "targetId": "copy:cover:title",
+          "targetPath": "title",
+          "status": "written"
+        },
+        {
+          "targetId": "copy:highlight:1",
+          "targetPath": "highlights.0",
+          "status": "written"
+        },
+        {
+          "targetId": "copy:hotel:imported-hotel-1",
+          "targetPath": "hotels.0.editorialCopy",
+          "status": "written"
+        },
+        {
+          "targetId": "copy:transport:imported-transport-1",
+          "targetPath": "transportSummary.0.editorialCopy",
+          "status": "written"
+        },
+        {
+          "targetId": "copy:transport:imported-transport-2",
+          "targetPath": "transportSummary.1.editorialCopy",
+          "status": "written"
+        },
+        {
+          "targetId": "copy:day:1",
+          "targetPath": "days.0.description",
+          "status": "written"
+        },
+        {
+          "targetId": "copy:day:2",
+          "targetPath": "days.1.description",
+          "status": "written"
+        },
+        {
+          "targetId": "copy:day:3",
+          "targetPath": "days.2.description",
+          "status": "written"
+        }
+      ],
+      "images": [
+        {
+          "slotId": "image:cover:primary",
+          "fieldPath": "heroImage",
+          "status": "written",
+          "src": "/assets/placeholders/destination-01.png"
+        },
+        {
+          "slotId": "image:hotel:imported-hotel-1:primary",
+          "fieldPath": "hotels.0.images.0",
+          "status": "written",
+          "src": "/assets/placeholders/destination-02.png"
+        },
+        {
+          "slotId": "image:transport:imported-transport-1:primary",
+          "fieldPath": "transportSummary.0.images.0",
+          "status": "written",
+          "src": "/assets/placeholders/destination-03.png"
+        },
+        {
+          "slotId": "image:transport:imported-transport-2:primary",
+          "fieldPath": "transportSummary.1.images.0",
+          "status": "written",
+          "src": "/assets/placeholders/destination-04.png"
+        },
+        {
+          "slotId": "image:day:1:primary",
+          "fieldPath": "days.0.spots.0.images.0",
+          "status": "written",
+          "src": "/assets/placeholders/destination-05.png"
+        },
+        {
+          "slotId": "image:day:2:primary",
+          "fieldPath": "days.1.spots.0.images.0",
+          "status": "written",
+          "src": "/assets/placeholders/destination-06.png"
+        },
+        {
+          "slotId": "image:day:3:primary",
+          "fieldPath": "days.2.spots.0.images.0",
+          "status": "written",
+          "src": "/assets/placeholders/destination-07.png"
+        }
+      ]
+    },
+    "unresolvedItems": [],
+    "renderStatus": "success",
+    "outputPath": "D:\\奢游\\行程单报价单\\奢游行程单美化-智能体试验区\\app\\output\\simple-pipeline\\dbb29872-f62f-49cc-a747-b17dd409bed5\\dbb29872-f62f-49cc-a747-b17dd409bed5-itinerary-2000.png",
+    "timingsMs": {
+      "parser": 9,
+      "planner": 7,
+      "copySkill": 72,
+      "imageSkill": 286,
+      "programWriteback": 1,
+      "renderer": 3964,
+      "persistence": 23,
+      "total": 4292
+    },
+    "callCounts": {
+      "parserCalls": 1,
+      "plannerModelCalls": 1,
+      "copyBusinessBatches": 1,
+      "copyModelCalls": 1,
+      "imageBusinessBatches": 1,
+      "imageSearchCalls": 7,
+      "imageCommonsCalls": 6,
+      "imagePageExtractionCalls": 7,
+      "imageDownloadAttempts": 7,
+      "imageVisualJudgmentCalls": 7,
+      "rendererCalls": 1
+    },
+    "concurrency": {
+      "copyImage": {
+        "copyStartedAtMs": 1788424952848,
+        "imageStartedAtMs": 1788424952849,
+        "copyFinishedAtMs": 1788424952920,
+        "imageFinishedAtMs": 1788424953135,
+        "startDeltaMs": 1,
+        "overlapMs": 71,
+        "parallel": true
+      },
+      "imagePeak": {
+        "slots": 3,
+        "search": 3,
+        "pages": 1,
+        "downloads": 1,
+        "vision": 1
+      }
+    },
+    "legacyEvidence": {
+      "source": "executor_runtime_capability_events",
+      "observedEventCount": 30,
+      "invoked": [],
+      "automaticCopyRegenerationRounds": 0,
+      "automaticImageFollowupRounds": 0,
+      "clear": true,
+      "checked": [
+        "brand_reviewer",
+        "review_decision",
+        "finding_package",
+        "copy_regeneration",
+        "image_second_round",
+        "targeted_image_research",
+        "stage_budget"
+      ]
+    },
+    "callGraph": [
+      "importItineraryWorkbook",
+      "generateAgentPlan",
+      "materializeSimpleSkillPlan",
+      [
+        "runCopyWriterSkill",
+        "runImageSearchSkill"
+      ],
+      "applySimpleSkillResults",
+      "AgentPlanStore",
+      "runSimpleRenderer",
+      "renderer/render.mjs --width=2000"
+    ],
+    "finalResultRef": "execution-runs/b8c82efb-d2b6-4e13-a9bf-f940dbd79675/final-result.json"
+  },
+  "outputMetadata": {
+    "format": "png",
+    "mediaType": "image/png",
+    "width": 2000,
+    "height": 26876,
+    "space": "srgb",
+    "channels": 3,
+    "depth": "uchar",
+    "density": 72,
+    "isProgressive": false,
+    "isPalette": false,
+    "bitsPerSample": 8,
+    "hasProfile": false,
+    "hasAlpha": false,
+    "autoOrient": {
+      "width": 2000,
+      "height": 26876
+    }
+  },
+  "layoutQa": {
+    "width": 2000,
+    "height": 26876,
+    "overflows": [],
+    "brokenImages": [],
+    "largeGaps": [],
+    "footerPresent": true
+  },
+  "events": [
+    {
+      "at": "2026-09-03T08:42:32.818Z",
+      "stage": "parser",
+      "phase": "started"
+    },
+    {
+      "at": "2026-09-03T08:42:32.828Z",
+      "stage": "parser",
+      "phase": "finished",
+      "durationMs": 9,
+      "dayCount": 3
+    },
+    {
+      "at": "2026-09-03T08:42:32.835Z",
+      "stage": "planner",
+      "phase": "started",
+      "projectId": "dbb29872-f62f-49cc-a747-b17dd409bed5"
+    },
+    {
+      "at": "2026-09-03T08:42:32.835Z",
+      "stage": "planner",
+      "phase": "progress",
+      "detail": {
+        "status": "planning",
+        "message": "正在制定轻量业务规划"
+      }
+    },
+    {
+      "at": "2026-09-03T08:42:32.841Z",
+      "stage": "planner",
+      "phase": "progress",
+      "detail": {
+        "status": "checking",
+        "message": "正在检查规则、权限、依赖与图片位"
+      }
+    },
+    {
+      "at": "2026-09-03T08:42:32.843Z",
+      "stage": "planner",
+      "phase": "finished",
+      "durationMs": 7,
+      "copyTaskCount": 8,
+      "imageSlotCount": 7
+    },
+    {
+      "at": "2026-09-03T08:42:32.848Z",
+      "stage": "copy_skill",
+      "phase": "started",
+      "targetCount": 8,
+      "startedAtMs": 1788424952848
+    },
+    {
+      "at": "2026-09-03T08:42:32.849Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "copy_writer",
+      "callId": "20644da1-ec3c-4b86-bd4b-718596dba5c5",
+      "batchId": "7a03a97e-6bf1-4de0-9474-2497f99726d7",
+      "targetCount": 8
+    },
+    {
+      "at": "2026-09-03T08:42:32.849Z",
+      "stage": "image_skill",
+      "phase": "started",
+      "slotCount": 7,
+      "startedAtMs": 1788424952849
+    },
+    {
+      "at": "2026-09-03T08:42:32.850Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "image_search",
+      "callId": "432f496e-8030-46ea-bf19-a0774bfb8128",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:cover:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:32.850Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "image_search",
+      "callId": "84a0652a-7a92-450a-a8f6-5183dbe56cf7",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:hotel:imported-hotel-1:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:32.850Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "image_search",
+      "callId": "1739aa52-f836-4ec0-9c37-d689fac0190a",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:transport:imported-transport-1:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:32.920Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "copy_writer",
+      "callId": "20644da1-ec3c-4b86-bd4b-718596dba5c5",
+      "batchId": "7a03a97e-6bf1-4de0-9474-2497f99726d7",
+      "targetCount": 8,
+      "durationMs": 71,
+      "attemptCount": 1,
+      "usage": {
+        "input_tokens": 100,
+        "output_tokens": 200
+      }
+    },
+    {
+      "at": "2026-09-03T08:42:32.935Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "432f496e-8030-46ea-bf19-a0774bfb8128",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:cover:primary:batch",
+      "durationMs": 85,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:32.935Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "visual_judgment",
+      "callId": "f43da67f-b9f1-416e-a713-af9a65c2e9a6",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:cover:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:32.935Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "f43da67f-b9f1-416e-a713-af9a65c2e9a6",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:cover:primary:batch",
+      "durationMs": 0,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:32.936Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "84a0652a-7a92-450a-a8f6-5183dbe56cf7",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:hotel:imported-hotel-1:primary:batch",
+      "durationMs": 86,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:32.936Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "visual_judgment",
+      "callId": "584c058c-d9e5-478a-87d0-f1416333ef87",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:hotel:imported-hotel-1:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:32.936Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "584c058c-d9e5-478a-87d0-f1416333ef87",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:hotel:imported-hotel-1:primary:batch",
+      "durationMs": 0,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:32.936Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "1739aa52-f836-4ec0-9c37-d689fac0190a",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:transport:imported-transport-1:primary:batch",
+      "durationMs": 86,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:32.936Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "visual_judgment",
+      "callId": "3d611b7c-455e-44d7-a884-0e35abdc4246",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:transport:imported-transport-1:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:32.936Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "3d611b7c-455e-44d7-a884-0e35abdc4246",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:transport:imported-transport-1:primary:batch",
+      "durationMs": 0,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:32.947Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "image_search",
+      "callId": "2f9f5b0e-7a13-4be1-afd9-f46304ded07a",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:transport:imported-transport-2:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:32.956Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "image_search",
+      "callId": "678822a9-b39e-4279-8eaa-12c0ccbf93a6",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:1:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:32.966Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "image_search",
+      "callId": "736c6761-a25b-4809-bd43-a19cbef51d0e",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:2:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:33.029Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "2f9f5b0e-7a13-4be1-afd9-f46304ded07a",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:transport:imported-transport-2:primary:batch",
+      "durationMs": 82,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:33.030Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "visual_judgment",
+      "callId": "3db7a4a9-8615-4ead-a797-891c06cdab09",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:transport:imported-transport-2:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:33.030Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "3db7a4a9-8615-4ead-a797-891c06cdab09",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:transport:imported-transport-2:primary:batch",
+      "durationMs": 0,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:33.040Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "image_search",
+      "callId": "5810700c-105b-4e04-b6b3-7536ab683f9e",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:3:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:33.041Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "678822a9-b39e-4279-8eaa-12c0ccbf93a6",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:1:primary:batch",
+      "durationMs": 85,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:33.041Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "visual_judgment",
+      "callId": "ac979698-92dc-4ccf-8fb2-6e29603d42ef",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:1:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:33.041Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "ac979698-92dc-4ccf-8fb2-6e29603d42ef",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:1:primary:batch",
+      "durationMs": 0,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:33.051Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "736c6761-a25b-4809-bd43-a19cbef51d0e",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:2:primary:batch",
+      "durationMs": 85,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:33.051Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "visual_judgment",
+      "callId": "338ee093-bc7c-4071-b3a1-ced1af1f3a8a",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:2:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:33.051Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "338ee093-bc7c-4071-b3a1-ced1af1f3a8a",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:2:primary:batch",
+      "durationMs": 0,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:33.123Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "image_search",
+      "callId": "5810700c-105b-4e04-b6b3-7536ab683f9e",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:3:primary:batch",
+      "durationMs": 83,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:33.123Z",
+      "stage": "capability",
+      "phase": "started",
+      "capabilityId": "visual_judgment",
+      "callId": "5c1c58cc-3cc3-43a0-92f0-5f5157d84406",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:3:primary:batch"
+    },
+    {
+      "at": "2026-09-03T08:42:33.123Z",
+      "stage": "capability",
+      "phase": "finished",
+      "capabilityId": "visual_judgment",
+      "callId": "5c1c58cc-3cc3-43a0-92f0-5f5157d84406",
+      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "target": "image:day:3:primary:batch",
+      "durationMs": 0,
+      "attemptCount": 1
+    },
+    {
+      "at": "2026-09-03T08:42:33.135Z",
+      "stage": "skills",
+      "phase": "finished",
+      "parallelEvidence": {
+        "copyStartedAtMs": 1788424952848,
+        "imageStartedAtMs": 1788424952849,
+        "copyFinishedAtMs": 1788424952920,
+        "imageFinishedAtMs": 1788424953135,
+        "startDeltaMs": 1,
+        "overlapMs": 71,
+        "parallel": true
+      }
+    },
+    {
+      "at": "2026-09-03T08:42:33.136Z",
+      "stage": "program_writeback",
+      "phase": "finished",
+      "durationMs": 1,
+      "unresolvedCount": 0
+    },
+    {
+      "at": "2026-09-03T08:42:33.136Z",
+      "stage": "renderer",
+      "phase": "started"
+    },
+    {
+      "at": "2026-09-03T08:42:37.100Z",
+      "stage": "renderer",
+      "phase": "finished",
+      "durationMs": 3964,
+      "status": "success"
+    }
+  ]
+}

@@ -53,7 +53,7 @@ export class AgentPlanStore {
   updateProject(projectId, patch) {
     const current = this.getProject(projectId);
     if (!current) throw new Error("项目不存在");
-    const next = { ...current, ...patch, projectId: current.projectId, flowKind: "agent_v1", updatedAt: new Date().toISOString() };
+    const next = { ...current, ...patch, projectId: current.projectId, flowKind: current.flowKind || "agent_v1", updatedAt: new Date().toISOString() };
     writeJson(this.projectFile(projectId), next);
     return next;
   }

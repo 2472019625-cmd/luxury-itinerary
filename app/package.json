@@ -23,6 +23,8 @@
     "agent:evidence": "node scripts/agent-planner-evidence.mjs",
     "test:copy-generation": "node --test tests/deepseek-client.test.mjs tests/copy-generation.test.mjs",
     "test:simple-skills": "node --test tests/simple-copy-skill.test.mjs tests/simple-image-skill.test.mjs",
+    "test:simple-pipeline": "node --test tests/simple-pipeline.test.mjs tests/simple-pipeline-isolation.test.mjs",
+    "smoke:simple-pipeline": "node scripts/simple-pipeline-render-smoke.mjs",
     "smoke:simple-skills": "node scripts/simple-skills-live-smoke.mjs",
     "assets": "python renderer/build-assets.py && node renderer/trace-logo.mjs",
     "fonts": "python renderer/install-fonts.py",
