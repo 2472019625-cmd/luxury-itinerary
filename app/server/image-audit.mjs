@@ -66,6 +66,40 @@ export async function auditCandidates({ slot, candidates, apiKey, baseUrl, model
   return (Array.isArray(result.ranking) ? result.ranking : []).filter((item) => Number.isInteger(item.index) && candidates[item.index] && !rejected.has(item.index)).sort((a, b) => (b.score || 0) - (a.score || 0));
 }
 
+export async function judgeCandidatesBatch({ slot, candidates, apiKey, baseUrl, model, signal }) {
+  if (!candidates.length) return [];
+  if (!apiKey || !baseUrl || !model || process.env.IMAGE_VISUAL_AUDIT === "off") {
+    throw auditError("真实视觉判断未配置，不得默认通过", { code: "audit_unavailable" });
+  }
+  const judgedCandidates = candidates.slice(0, 4);
+  const sheet = await contactSheet(judgedCandidates);
+  const sourceContext = judgedCandidates.map((candidate, index) => `${index + 1}. 来源页面：${candidate.pageUrl || "未知"}；标题：${candidate.title || "未知"}；官方来源提示：${candidate.officialHint ? "是" : "否"}`).join("\n");
+  const prompt = `你是高端定制旅行图片事实与视觉判断员。请在一次判断中逐张核验编号候选，并完成排序。\n展示位：${slot.label}\n模块：${slot.module}\n地点/品牌与现有语境：${slot.context}\n目标主体：${slot.subject}\n视觉目标：${slot.visualGoal || ""}\nmustHave：${(slot.mustHave || []).join("；")}\nprefer：${(slot.prefer || []).join("；")}\nforbid：${(slot.forbid || []).join("；")}\n${sourceContext}\n\n事实匹配高于单纯好看。每张图必须先描述实际主体，再分别判断地点、酒店身份、活动、主体、水印、破图/明显低质和 AI 生成迹象。官方来源可以支持酒店身份，但不能替代对图片实际主体的判断。prefer 只影响排序，不作为硬拒绝。禁止因不确定而默认 pass。输出JSON：{"judgments":[{"index":从0开始的图片序号,"pass":true或false,"actualSubject":"实际主体","subjectMatch":true或false,"placeMatch":true或false,"sourceSupportsIdentity":true或false,"watermark":true或false,"hardRejectCode":"none|watermark|subject_mismatch|place_mismatch|broken|low_resolution|low_quality|forbid","relevance":0到100,"luxury":0到100,"cleanliness":0到100,"composition":0到100,"score":0到100,"reason":"事实化说明"}]}。judgments 按推荐顺序排列，但 index 必须对应原编号。`;
+  const response = await fetch(`${String(baseUrl).replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: [
+        { type: "image_url", image_url: { url: `data:image/jpeg;base64,${sheet.toString("base64")}` } },
+        { type: "text", text: prompt },
+      ] }],
+      stream: false,
+      do_sample: false,
+      reasoning_effort: "low",
+      max_tokens: 2200,
+      response_format: { type: "json_object" },
+    }),
+    signal,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw responseError(payload, response.status, "批量视觉判断失败");
+  const result = parseAuditJson(payload?.choices?.[0]?.message?.content, "批量视觉判断");
+  return (Array.isArray(result.judgments) ? result.judgments : [])
+    .filter((item) => Number.isInteger(item.index) && judgedCandidates[item.index])
+    .sort((a, b) => (b.score || 0) - (a.score || 0));
+}
+
 export async function validateCandidate({ slot, candidate, apiKey, baseUrl, model, signal }) {
   if (!apiKey || process.env.IMAGE_VISUAL_AUDIT === "off") return { pass: true, subjectMatch: true, placeMatch: true, sourceSupportsIdentity: Boolean(candidate.officialHint), watermark: false, hardRejectCode: "none", relevance: 80, luxury: 72, cleanliness: 80, composition: 70, reason: "未启用视觉复核" };
   const image = await sharp(await readFile(candidate.filePath)).resize({ width: 1100, height: 900, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 84 }).toBuffer();

@@ -105,6 +105,7 @@ export async function runCopyWriterSkill({
   apiKey,
   baseUrl,
   model,
+  reasoningEffort = "medium",
   requestJson = requestDeepSeekJson,
   signal,
   onStatus,
@@ -130,6 +131,7 @@ export async function runCopyWriterSkill({
 
   let modelCalls = 0;
   let transportAttempts = 0;
+  let modelMs = 0;
   const warnings = [];
   if (validTasks.length) {
     const callId = randomUUID();
@@ -137,6 +139,7 @@ export async function runCopyWriterSkill({
     onCapabilityCall?.({ phase: "started", capabilityId: "copy_writer", callId, batchId, targetCount: validTasks.length });
     try {
       modelCalls += 1;
+      const modelStartedAt = Date.now();
       const response = await copyTaskQueue.add(() => requestJson({
         apiKey,
         baseUrl,
@@ -145,12 +148,13 @@ export async function runCopyWriterSkill({
           { role: "system", content: `${skillPrompt}\n\n## Runtime response contract\n只处理输入 tasks，不新增、删除、重排或重新规划任务。只输出 JSON 对象：{"results":[{"targetId":"与输入一致","targetPath":"与输入一致","value":"严格符合该任务 outputSchema 的值","warnings":[]}]}。一个任务无法完成时仍保留其他任务结果；不得返回 Reviewer、finding 或 retry 决策。` },
           { role: "user", content: JSON.stringify({ itineraryContext, tasks: validTasks }) },
         ],
-        reasoningEffort: "high",
+        reasoningEffort,
         maxTokens: Math.min(20_000, Math.max(4_000, validTasks.length * 1_200)),
         emptyContentRetries: 0,
         signal,
         onStatus,
       }), { taskId: `simple-copy:${batchId}` });
+      modelMs += Date.now() - modelStartedAt;
       transportAttempts = response.attemptUsages?.length || response.usage?.attempt_count || 1;
       const returned = Array.isArray(response.json?.results) ? response.json.results : [];
       const returnedById = new Map(returned.map((item) => [item?.targetId, item]));
@@ -175,6 +179,7 @@ export async function runCopyWriterSkill({
       if (extraIds.length) warnings.push({ code: "unexpected_targets_ignored", message: `已忽略非 Planner 任务：${extraIds.join(", ")}` });
       onCapabilityCall?.({ phase: "finished", capabilityId: "copy_writer", callId, batchId, targetCount: validTasks.length, durationMs: Date.now() - callStartedAt, attemptCount: transportAttempts, usage: response.usage || null });
     } catch (error) {
+      modelMs += Date.now() - callStartedAt;
       transportAttempts = error?.attemptUsages?.length || Math.max(1, transportAttempts);
       for (const task of validTasks) resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: { code: error?.code || "copy_request_failed", message: error?.message || String(error) }, warnings: [] });
       onCapabilityCall?.({ phase: "finished", capabilityId: "copy_writer", callId, batchId, targetCount: validTasks.length, durationMs: Date.now() - callStartedAt, attemptCount: transportAttempts, failed: true, reason: error?.message || String(error) });
@@ -182,5 +187,5 @@ export async function runCopyWriterSkill({
   }
 
   const results = tasks.map((task, index) => resultById.get(task?.targetId || `invalid-${index}`)).filter(Boolean);
-  return { batchId, status: batchStatus(results), results, warnings, metrics: { businessBatches: 1, modelCalls, transportAttempts, durationMs: Date.now() - startedAt } };
+  return { batchId, status: batchStatus(results), results, warnings, metrics: { businessBatches: 1, modelCalls, transportAttempts, reasoningEffort, modelMs, durationMs: Date.now() - startedAt } };
 }

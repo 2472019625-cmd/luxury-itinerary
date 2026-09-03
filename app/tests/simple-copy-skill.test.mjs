@@ -20,9 +20,10 @@ test("批量 Copy 一次调用并按 targetId 隔离结构失败", async () => {
   const result = await runCopyWriterSkill({
     tasks: input,
     itineraryContext: { destination: "肯尼亚", dayCount: 2 },
-    requestJson: async ({ messages, emptyContentRetries }) => {
+    requestJson: async ({ messages, emptyContentRetries, reasoningEffort }) => {
       calls += 1;
       assert.equal(emptyContentRetries, 0);
+      assert.equal(reasoningEffort, "medium");
       assert.match(messages[0].content, /Copy Writer Skill/);
       return { json: { results: [
         { targetId: "highlight-1", targetPath: "highlights.0", value: "草原纵深｜以差异化区域串联完整观察体验。" },
@@ -35,6 +36,7 @@ test("批量 Copy 一次调用并按 targetId 隔离结构失败", async () => {
   assert.equal(calls, 1);
   assert.equal(result.metrics.modelCalls, 1);
   assert.equal(result.metrics.businessBatches, 1);
+  assert.equal(result.metrics.reasoningEffort, "medium");
   assert.equal(result.status, "partial_success");
   assert.deepEqual(result.results.map((item) => item.status), ["success", "success", "failed"]);
   assert.equal(result.results[2].error.code, "invalid_output_schema");

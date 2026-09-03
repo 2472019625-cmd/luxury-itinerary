@@ -1,56 +1,185 @@
 {
-  "date": "2026-09-03",
+  "date": "2026-09-03T08:08:53.004Z",
   "branch": "agent/simple-skill-pipeline-v1",
-  "scope": "Copy Skill 与 Image Skill 专业能力真实调用，不含 Planner、Executor、Renderer 或成品回归",
+  "mode": "all",
   "copy": {
     "status": "success",
-    "targetCount": 2,
-    "resultStatuses": ["success", "success"],
-    "businessBatches": 1,
-    "modelCalls": 1,
-    "transportAttempts": 1,
-    "durationMs": 8318
+    "targetCount": 3,
+    "resultStatuses": [
+      {
+        "targetId": "day-1",
+        "status": "success",
+        "errorCode": null
+      },
+      {
+        "targetId": "day-2",
+        "status": "success",
+        "errorCode": null
+      },
+      {
+        "targetId": "day-3",
+        "status": "success",
+        "errorCode": null
+      }
+    ],
+    "metrics": {
+      "businessBatches": 1,
+      "modelCalls": 1,
+      "transportAttempts": 1,
+      "reasoningEffort": "medium",
+      "modelMs": 24737,
+      "durationMs": 24738
+    },
+    "capabilityCalls": [
+      {
+        "capabilityId": "copy_writer",
+        "durationMs": 24737,
+        "attemptCount": 1,
+        "failed": false
+      }
+    ]
   },
   "image": {
     "status": "partial_success",
     "slotCount": 2,
-    "results": [
+    "resultStatuses": [
       {
         "slotId": "cover:hero",
         "status": "success",
         "queriesUsed": 2,
-        "technicalStatus": "downloaded_decoded_and_judged"
+        "technicalStatus": "downloaded_decoded_and_judged",
+        "durationMs": 59417
       },
       {
         "slotId": "hotel:gran-melia-arusha:primary",
         "status": "not_found",
         "queriesUsed": 2,
-        "technicalStatus": "no_eligible_candidate"
+        "technicalStatus": "no_eligible_candidate",
+        "durationMs": 27785
       }
     ],
-    "businessBatches": 1,
-    "searchCalls": 4,
-    "commonsCalls": 4,
-    "pageExtractionCalls": 14,
-    "downloadAttempts": 24,
-    "initialVisionCalls": 2,
-    "terminalVisionCalls": 1,
-    "concurrencyPeak": {
-      "slots": 2,
-      "search": 3,
-      "pages": 3,
-      "downloads": 3,
-      "vision": 2
+    "metrics": {
+      "businessBatches": 1,
+      "automaticFollowupRounds": 0,
+      "slotCount": 2,
+      "searchCalls": 2,
+      "commonsCalls": 1,
+      "pageExtractionCalls": 8,
+      "downloadAttempts": 12,
+      "batchVisionCalls": 2,
+      "topConfirmationCalls": 0,
+      "timingsMs": {
+        "searchProvider": 20045,
+        "commons": 10600,
+        "pageExtraction": 13760,
+        "download": 46055,
+        "batchVision": 35855,
+        "topConfirmation": 0
+      },
+      "timingsSemantics": "各阶段所有并发操作耗时累计；阶段间存在重叠，不应相加作为总耗时",
+      "concurrencyPeak": {
+        "slots": 2,
+        "search": 3,
+        "pages": 3,
+        "downloads": 3,
+        "vision": 1
+      },
+      "durationMs": 59418
     },
-    "durationMs": 228744
+    "capabilityCalls": [
+      {
+        "capabilityId": "image_search",
+        "target": "hotel:gran-melia-arusha:primary:batch",
+        "durationMs": 7795,
+        "attemptCount": 1,
+        "failed": false
+      },
+      {
+        "capabilityId": "image_search",
+        "target": "cover:hero:batch",
+        "durationMs": 12250,
+        "attemptCount": 1,
+        "failed": false
+      },
+      {
+        "capabilityId": "visual_judgment",
+        "target": "hotel:gran-melia-arusha:primary:batch",
+        "durationMs": 8279,
+        "attemptCount": 1,
+        "failed": false
+      },
+      {
+        "capabilityId": "visual_judgment",
+        "target": "cover:hero:batch",
+        "durationMs": 27576,
+        "attemptCount": 1,
+        "failed": false
+      }
+    ]
   },
-  "legacyPathsInvoked": {
-    "brandReviewer": false,
-    "reviewDecision": false,
-    "findingPackage": false,
-    "automaticCopyRegeneration": false,
-    "automaticSecondImageSearch": false,
-    "targetedImageResearch": false,
-    "stageBudgetBusinessLoop": false
+  "legacyPathVerification": {
+    "passed": true,
+    "method": "递归扫描两个新 Skill 入口的本地依赖图，并核对本次真实运行能力事件与批次计数",
+    "entryFiles": [
+      "server/simple-copy-skill.mjs",
+      "server/simple-image-skill.mjs"
+    ],
+    "checkedFiles": [
+      "config/copy-generation.mjs",
+      "server/commons-search.mjs",
+      "server/copy-task-queue.mjs",
+      "server/deepseek-client.mjs",
+      "server/image-audit.mjs",
+      "server/image-dedupe.mjs",
+      "server/image-download.mjs",
+      "server/image-search.mjs",
+      "server/page-images.mjs",
+      "server/simple-copy-skill.mjs",
+      "server/simple-image-skill.mjs"
+    ],
+    "staticMatches": {
+      "brandReviewer": [],
+      "reviewDecision": [],
+      "findingPackage": [],
+      "automaticCopyRegeneration": [],
+      "automaticSecondImageSearch": [],
+      "targetedImageResearch": [],
+      "stageBudgetBusinessLoop": []
+    },
+    "runtimeAssertions": {
+      "copySingleBusinessCall": true,
+      "copyNoBusinessRegeneration": true,
+      "imageSingleBusinessRound": true,
+      "imageOneProviderCallPerSlotAtMost": true,
+      "noUnexpectedCapabilities": true
+    },
+    "unexpectedCapabilities": [],
+    "legacyPathsInvoked": {
+      "brandReviewer": false,
+      "reviewDecision": false,
+      "findingPackage": false,
+      "automaticCopyRegeneration": false,
+      "automaticSecondImageSearch": false,
+      "targetedImageResearch": false,
+      "stageBudgetBusinessLoop": false
+    }
+  },
+  "beforeOptimization": {
+    "source": "2026-09-03 已记录真实基准",
+    "copy": {
+      "targetCount": 2,
+      "modelCalls": 1,
+      "durationMs": 8318
+    },
+    "image": {
+      "slotCount": 2,
+      "searchCalls": 4,
+      "commonsCalls": 4,
+      "pageExtractionCalls": 14,
+      "downloadAttempts": 24,
+      "initialVisionCalls": 2,
+      "terminalVisionCalls": 1,
+      "durationMs": 228744
+    }
   }
 }

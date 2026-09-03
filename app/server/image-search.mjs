@@ -53,7 +53,7 @@ async function resolveGroundingRedirect(value, signal) {
   return finalUrl;
 }
 
-export async function searchWeb({ query, apiKey, baseUrl, model, count = 10, signal }) {
+async function runSearchRequest({ userPrompt, apiKey, baseUrl, model, count, signal }) {
   if (!apiKey) throw new Error("尚未配置 Gemini 图片搜索 API 密钥");
   if (!model) throw new Error("尚未配置 Gemini 图片搜索模型");
   const response = await fetch(`${String(baseUrl).replace(/\/$/, "")}/chat/completions`, {
@@ -66,7 +66,7 @@ export async function searchWeb({ query, apiKey, baseUrl, model, count = 10, sig
           role: "system",
           content: `你是高端旅行图片资料搜索员。使用实时网络搜索，为后续网页图片提取寻找真实、可访问的来源页面。优先酒店、营地、航空公司、旅游局等官方网站及其图库，其次可信旅行媒体和 Wikimedia Commons。只返回 JSON：{"results":[{"title":"页面标题","url":"https://真实搜索结果页面","summary":"页面为什么可能包含所需图片"}]}。最多返回 ${Math.max(1, Math.min(12, count))} 条。URL 必须来自本次搜索结果，禁止编造 URL，禁止返回图片 data URI；尽量返回目标页面的 canonical URL，不要返回 vertexaisearch.cloud.google.com 中转跳转地址。`,
         },
-        { role: "user", content: `搜索包含高清照片或官方图库的页面：${String(query).slice(0, 180)}` },
+        { role: "user", content: userPrompt },
       ],
       max_tokens: 2400,
     }),
@@ -85,4 +85,28 @@ export async function searchWeb({ query, apiKey, baseUrl, model, count = 10, sig
     }
   }
   return resolved.filter(Boolean).filter((item, index, array) => array.findIndex((other) => other.pageUrl === item.pageUrl) === index);
+}
+
+export async function searchWeb({ query, apiKey, baseUrl, model, count = 10, signal }) {
+  return runSearchRequest({
+    userPrompt: `搜索包含高清照片或官方图库的页面：${String(query).slice(0, 180)}`,
+    apiKey,
+    baseUrl,
+    model,
+    count,
+    signal,
+  });
+}
+
+export async function searchWebBatch({ queries, apiKey, baseUrl, model, count = 6, signal }) {
+  const normalized = [...new Set((Array.isArray(queries) ? queries : []).map((item) => String(item || "").replace(/\s+/g, " ").trim()).filter(Boolean))].slice(0, 3);
+  if (!normalized.length) throw new Error("图片搜索至少需要一个 query");
+  return runSearchRequest({
+    userPrompt: `围绕同一个图片位执行一次完整搜索。以下是同一视觉目标的不同搜索表达，请合并搜索覆盖、去重后返回最有价值的来源页面，不要把它们当成多轮任务：\n${normalized.map((query, index) => `${index + 1}. ${query.slice(0, 180)}`).join("\n")}`,
+    apiKey,
+    baseUrl,
+    model,
+    count,
+    signal,
+  });
 }
