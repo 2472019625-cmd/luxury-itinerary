@@ -22,4 +22,5 @@ test("Simple Pipeline 调度图不导入或调用旧审核、重生成和业务�
   ];
   for (const symbol of forbiddenRuntimeSymbols) assert.equal(source.includes(symbol), false, `新调度图不应引用 ${symbol}`);
   assert.equal(/\.slice\(0,\s*48\)/.test(source), false, "图片位不得静默截断到48");
+  assert.equal(source.includes("127.0.0.1:4173"), false, "Simple Pipeline 不得默认连接冻结流程4173");
 });

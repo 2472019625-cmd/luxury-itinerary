@@ -10,6 +10,7 @@ import { runCopyWriterSkill } from "./simple-copy-skill.mjs";
 import { runImageSearchSkill } from "./simple-image-skill.mjs";
 import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
+import { applyApprovedFixedModules, SIMPLE_PIPELINE_DEFAULT_ORIGIN } from "./simple-fixed-modules.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const disabledLegacyCapabilities = new Set(["brand_reviewer", "review_decision", "finding_package", "copy_regeneration", "image_second_round", "targeted_image_research", "stage_budget"]);
@@ -59,7 +60,7 @@ export async function runSimplePipeline({
   baseData = {},
   root = appRoot,
   storeRoot = path.join(root, "output", "simple-pipeline", "projects"),
-  origin = "http://127.0.0.1:4173",
+  origin = SIMPLE_PIPELINE_DEFAULT_ORIGIN,
   plannerOptions = {},
   copyOptions = {},
   imageOptions = {},
@@ -90,7 +91,7 @@ export async function runSimplePipeline({
   const parserStartedAt = Date.now();
   let imported;
   try {
-    imported = await parse(sourceFile, baseData);
+    imported = await parse(sourceFile, applyApprovedFixedModules(baseData));
   } catch (error) {
     error.code ||= "source_parse_failed";
     throw error;
@@ -219,7 +220,8 @@ export async function runSimplePipeline({
   const result = {
     projectId,
     pipelineStatus,
-    plannerResult: { planId: simplePlan.planId, sourceAgentPlanId: simplePlan.sourceAgentPlanId, moduleVisibility: simplePlan.moduleVisibility, copyTaskCount: simplePlan.copyTasks.length, imageSlotCount: simplePlan.imageSlots.length },
+    plannerResult: { planId: simplePlan.planId, sourceAgentPlanId: simplePlan.sourceAgentPlanId, moduleVisibility: simplePlan.moduleVisibility, copyTaskCount: simplePlan.copyTasks.length, imageSlotCount: simplePlan.imageSlots.length, warnings: simplePlan.warnings || [] },
+    warnings: simplePlan.warnings || [],
     copyExecution,
     imageExecution,
     writeback: { copy: writeback.copyWriteback, images: writeback.imageWriteback },

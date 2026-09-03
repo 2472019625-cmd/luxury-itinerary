@@ -103,6 +103,12 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     throw error;
   }
   const selectedHighlights = agentPlan.selectedHighlights.map((item) => typeof item === "string" ? { sourceText: clean(item), sourceType: "source_designated", sourceRefs: [], selectionReason: "Planner已确定" } : item).filter((item) => clean(item?.sourceText));
+  const warnings = selectedHighlights.length < 5 ? [{
+    code: "product_highlight_material_insufficient",
+    message: `真实资料仅支持 ${selectedHighlights.length} 条产品亮点，少于目标范围 5—7 条；已保留真实亮点，不虚构补足。`,
+    actualCount: selectedHighlights.length,
+    targetRange: { min: 5, max: 7 },
+  }] : [];
   data.highlights = selectedHighlights.map((item) => clean(item.sourceText));
   selectedHighlights.forEach((selection, index) => copyTasks.push(copyTask({
     targetId: `copy:highlight:${index + 1}`, targetPath: `highlights.${index}`, moduleType: "product_highlight",
@@ -193,6 +199,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     createdAt: new Date().toISOString(),
     moduleVisibility,
     plannerSummary: agentPlan.summary || {},
+    warnings,
     dayRoles: agentPlan.dayRoles || [],
     copyTasks,
     imageSlots,

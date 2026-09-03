@@ -3,12 +3,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { runSimplePipeline } from "../server/simple-pipeline-executor.mjs";
+import { SIMPLE_PIPELINE_DEFAULT_ORIGIN } from "../server/simple-fixed-modules.mjs";
 import { copyRequestJson, createWorkbookFile, imageAdapters, plannerRequestJson } from "../tests/helpers/simple-pipeline-fixture.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = path.resolve(appRoot, "..");
 const evidenceDir = path.join(workspaceRoot, "audit", "evidence", "2026-09-03-simple-pipeline-integration");
-const origin = process.argv.find((item) => item.startsWith("--origin="))?.slice("--origin=".length) || "http://127.0.0.1:4173";
+const origin = process.argv.find((item) => item.startsWith("--origin="))?.slice("--origin=".length) || SIMPLE_PIPELINE_DEFAULT_ORIGIN;
 await mkdir(evidenceDir, { recursive: true });
 
 const events = [];

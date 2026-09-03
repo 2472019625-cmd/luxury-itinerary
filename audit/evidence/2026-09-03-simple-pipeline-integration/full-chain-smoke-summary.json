@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-09-03T08:42:37.111Z",
-  "origin": "http://127.0.0.1:4175",
+  "generatedAt": "2026-09-03T09:07:13.709Z",
+  "origin": "http://127.0.0.1:4174",
   "result": {
-    "projectId": "dbb29872-f62f-49cc-a747-b17dd409bed5",
+    "projectId": "b8c28290-5cee-4f54-9bd6-f8bd8a3cc47f",
     "pipelineStatus": "complete",
     "plannerResult": {
-      "planId": "5faf6c02-086f-44e8-9944-8ef6714265b5",
-      "sourceAgentPlanId": "5c65ef86-8f98-47f2-bf75-a284bff70506",
+      "planId": "2585b81a-7808-4e25-891f-fd8b096404a6",
+      "sourceAgentPlanId": "23b34c13-9a06-4000-90f5-423241fdde94",
       "moduleVisibility": {
         "global": true,
         "hotels": true,
@@ -17,10 +17,32 @@
         "expenses": true
       },
       "copyTaskCount": 8,
-      "imageSlotCount": 7
+      "imageSlotCount": 7,
+      "warnings": [
+        {
+          "code": "product_highlight_material_insufficient",
+          "message": "真实资料仅支持 1 条产品亮点，少于目标范围 5—7 条；已保留真实亮点，不虚构补足。",
+          "actualCount": 1,
+          "targetRange": {
+            "min": 5,
+            "max": 7
+          }
+        }
+      ]
     },
+    "warnings": [
+      {
+        "code": "product_highlight_material_insufficient",
+        "message": "真实资料仅支持 1 条产品亮点，少于目标范围 5—7 条；已保留真实亮点，不虚构补足。",
+        "actualCount": 1,
+        "targetRange": {
+          "min": 5,
+          "max": 7
+        }
+      }
+    ],
     "copyExecution": {
-      "batchId": "7a03a97e-6bf1-4de0-9474-2497f99726d7",
+      "batchId": "77bedf62-e6f1-4c4e-b6a1-8f8f8aed3941",
       "status": "success",
       "results": [
         {
@@ -86,12 +108,12 @@
         "modelCalls": 1,
         "transportAttempts": 1,
         "reasoningEffort": "medium",
-        "modelMs": 71,
-        "durationMs": 72
+        "modelMs": 69,
+        "durationMs": 71
       }
     },
     "imageExecution": {
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "status": "success",
       "results": [
         {
@@ -160,7 +182,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 96
+          "durationMs": 98
         },
         {
           "slotId": "image:hotel:imported-hotel-1:primary",
@@ -228,7 +250,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 106
+          "durationMs": 107
         },
         {
           "slotId": "image:transport:imported-transport-1:primary",
@@ -362,7 +384,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 93
+          "durationMs": 92
         },
         {
           "slotId": "image:day:1:primary",
@@ -431,7 +453,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 95
+          "durationMs": 94
         },
         {
           "slotId": "image:day:2:primary",
@@ -569,7 +591,7 @@
               "明显低质"
             ]
           },
-          "durationMs": 95
+          "durationMs": 94
         }
       ],
       "warnings": [],
@@ -584,7 +606,7 @@
         "batchVisionCalls": 7,
         "topConfirmationCalls": 0,
         "timingsMs": {
-          "searchProvider": 592,
+          "searchProvider": 587,
           "commons": 0,
           "pageExtraction": 0,
           "download": 0,
@@ -599,7 +621,7 @@
           "downloads": 1,
           "vision": 1
         },
-        "durationMs": 286
+        "durationMs": 284
       }
     },
     "writeback": {
@@ -692,16 +714,16 @@
     },
     "unresolvedItems": [],
     "renderStatus": "success",
-    "outputPath": "D:\\奢游\\行程单报价单\\奢游行程单美化-智能体试验区\\app\\output\\simple-pipeline\\dbb29872-f62f-49cc-a747-b17dd409bed5\\dbb29872-f62f-49cc-a747-b17dd409bed5-itinerary-2000.png",
+    "outputPath": "D:\\奢游\\行程单报价单\\奢游行程单美化-智能体试验区\\app\\output\\simple-pipeline\\b8c28290-5cee-4f54-9bd6-f8bd8a3cc47f\\b8c28290-5cee-4f54-9bd6-f8bd8a3cc47f-itinerary-2000.png",
     "timingsMs": {
       "parser": 9,
-      "planner": 7,
-      "copySkill": 72,
-      "imageSkill": 286,
+      "planner": 13,
+      "copySkill": 71,
+      "imageSkill": 284,
       "programWriteback": 1,
-      "renderer": 3964,
-      "persistence": 23,
-      "total": 4292
+      "renderer": 4655,
+      "persistence": 27,
+      "total": 4991
     },
     "callCounts": {
       "parserCalls": 1,
@@ -718,12 +740,12 @@
     },
     "concurrency": {
       "copyImage": {
-        "copyStartedAtMs": 1788424952848,
-        "imageStartedAtMs": 1788424952849,
-        "copyFinishedAtMs": 1788424952920,
-        "imageFinishedAtMs": 1788424953135,
+        "copyStartedAtMs": 1788426428752,
+        "imageStartedAtMs": 1788426428753,
+        "copyFinishedAtMs": 1788426428823,
+        "imageFinishedAtMs": 1788426429037,
         "startDeltaMs": 1,
-        "overlapMs": 71,
+        "overlapMs": 70,
         "parallel": true
       },
       "imagePeak": {
@@ -764,13 +786,13 @@
       "runSimpleRenderer",
       "renderer/render.mjs --width=2000"
     ],
-    "finalResultRef": "execution-runs/b8c82efb-d2b6-4e13-a9bf-f940dbd79675/final-result.json"
+    "finalResultRef": "execution-runs/153cd8b9-f802-4ff4-9269-dbe63eb28b9e/final-result.json"
   },
   "outputMetadata": {
     "format": "png",
     "mediaType": "image/png",
     "width": 2000,
-    "height": 26876,
+    "height": 29256,
     "space": "srgb",
     "channels": 3,
     "depth": "uchar",
@@ -782,38 +804,67 @@
     "hasAlpha": false,
     "autoOrient": {
       "width": 2000,
-      "height": 26876
+      "height": 29256
     }
   },
   "layoutQa": {
     "width": 2000,
-    "height": 26876,
+    "height": 29256,
     "overflows": [],
     "brokenImages": [],
     "largeGaps": [],
-    "footerPresent": true
+    "footerPresent": true,
+    "fixedModules": {
+      "booking": {
+        "present": true,
+        "complete": true,
+        "missingParts": []
+      },
+      "security": {
+        "present": true,
+        "complete": true,
+        "missingParts": []
+      },
+      "payment": {
+        "present": true,
+        "complete": true,
+        "missingParts": []
+      },
+      "notes": {
+        "present": false,
+        "complete": false,
+        "missingParts": [
+          "注意事项内容"
+        ]
+      },
+      "footer": {
+        "present": true,
+        "complete": true,
+        "missingParts": []
+      }
+    }
   },
   "events": [
     {
-      "at": "2026-09-03T08:42:32.818Z",
+      "at": "2026-09-03T09:07:08.716Z",
       "stage": "parser",
       "phase": "started"
     },
     {
-      "at": "2026-09-03T08:42:32.828Z",
+      "at": "2026-09-03T09:07:08.726Z",
       "stage": "parser",
       "phase": "finished",
       "durationMs": 9,
       "dayCount": 3
     },
     {
-      "at": "2026-09-03T08:42:32.835Z",
+      "at": "2026-09-03T09:07:08.733Z",
       "stage": "planner",
       "phase": "started",
-      "projectId": "dbb29872-f62f-49cc-a747-b17dd409bed5"
+      "projectId": "b8c28290-5cee-4f54-9bd6-f8bd8a3cc47f"
     },
     {
-      "at": "2026-09-03T08:42:32.835Z",
+      "at": "2026-09-03T09:07:08.733Z",
       "stage": "planner",
       "phase": "progress",
       "detail": {
@@ -822,7 +873,7 @@
       }
     },
     {
-      "at": "2026-09-03T08:42:32.841Z",
+      "at": "2026-09-03T09:07:08.744Z",
       "stage": "planner",
       "phase": "progress",
       "detail": {
@@ -831,72 +882,72 @@
       }
     },
     {
-      "at": "2026-09-03T08:42:32.843Z",
+      "at": "2026-09-03T09:07:08.747Z",
       "stage": "planner",
       "phase": "finished",
-      "durationMs": 7,
+      "durationMs": 13,
       "copyTaskCount": 8,
       "imageSlotCount": 7
     },
     {
-      "at": "2026-09-03T08:42:32.848Z",
+      "at": "2026-09-03T09:07:08.752Z",
       "stage": "copy_skill",
       "phase": "started",
       "targetCount": 8,
-      "startedAtMs": 1788424952848
+      "startedAtMs": 1788426428752
     },
     {
-      "at": "2026-09-03T08:42:32.849Z",
+      "at": "2026-09-03T09:07:08.753Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "copy_writer",
-      "callId": "20644da1-ec3c-4b86-bd4b-718596dba5c5",
-      "batchId": "7a03a97e-6bf1-4de0-9474-2497f99726d7",
+      "callId": "8ed37f0a-63d1-4360-809a-03bc24784eb8",
+      "batchId": "77bedf62-e6f1-4c4e-b6a1-8f8f8aed3941",
       "targetCount": 8
     },
     {
-      "at": "2026-09-03T08:42:32.849Z",
+      "at": "2026-09-03T09:07:08.753Z",
       "stage": "image_skill",
       "phase": "started",
       "slotCount": 7,
-      "startedAtMs": 1788424952849
+      "startedAtMs": 1788426428753
     },
     {
-      "at": "2026-09-03T08:42:32.850Z",
+      "at": "2026-09-03T09:07:08.754Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "432f496e-8030-46ea-bf19-a0774bfb8128",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "7be80734-651b-407e-bd87-b767a10e90c9",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:cover:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:32.850Z",
+      "at": "2026-09-03T09:07:08.754Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "84a0652a-7a92-450a-a8f6-5183dbe56cf7",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "7c4f044b-c8a7-4a82-857c-6baa266f3126",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:hotel:imported-hotel-1:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:32.850Z",
+      "at": "2026-09-03T09:07:08.754Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "1739aa52-f836-4ec0-9c37-d689fac0190a",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "7ae7b14a-087f-46da-b49d-4b773ec9eea0",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:transport:imported-transport-1:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:32.920Z",
+      "at": "2026-09-03T09:07:08.823Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "copy_writer",
-      "callId": "20644da1-ec3c-4b86-bd4b-718596dba5c5",
-      "batchId": "7a03a97e-6bf1-4de0-9474-2497f99726d7",
+      "callId": "8ed37f0a-63d1-4360-809a-03bc24784eb8",
+      "batchId": "77bedf62-e6f1-4c4e-b6a1-8f8f8aed3941",
       "targetCount": 8,
-      "durationMs": 71,
+      "durationMs": 70,
       "attemptCount": 1,
       "usage": {
         "input_tokens": 100,
@@ -904,289 +955,289 @@
       }
     },
     {
-      "at": "2026-09-03T08:42:32.935Z",
+      "at": "2026-09-03T09:07:08.838Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "432f496e-8030-46ea-bf19-a0774bfb8128",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "7be80734-651b-407e-bd87-b767a10e90c9",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:cover:primary:batch",
-      "durationMs": 85,
+      "durationMs": 84,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:32.935Z",
+      "at": "2026-09-03T09:07:08.839Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "f43da67f-b9f1-416e-a713-af9a65c2e9a6",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "457d2e7f-71a1-4791-ab7e-d6db72c38478",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:cover:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:32.935Z",
+      "at": "2026-09-03T09:07:08.839Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "f43da67f-b9f1-416e-a713-af9a65c2e9a6",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "457d2e7f-71a1-4791-ab7e-d6db72c38478",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:cover:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:32.936Z",
+      "at": "2026-09-03T09:07:08.840Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "84a0652a-7a92-450a-a8f6-5183dbe56cf7",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "7c4f044b-c8a7-4a82-857c-6baa266f3126",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:hotel:imported-hotel-1:primary:batch",
       "durationMs": 86,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:32.936Z",
+      "at": "2026-09-03T09:07:08.840Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "584c058c-d9e5-478a-87d0-f1416333ef87",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "85430e0c-6164-47d6-975c-2cc8af4d39fa",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:hotel:imported-hotel-1:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:32.936Z",
+      "at": "2026-09-03T09:07:08.840Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "584c058c-d9e5-478a-87d0-f1416333ef87",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "85430e0c-6164-47d6-975c-2cc8af4d39fa",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:hotel:imported-hotel-1:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:32.936Z",
+      "at": "2026-09-03T09:07:08.840Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "1739aa52-f836-4ec0-9c37-d689fac0190a",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "7ae7b14a-087f-46da-b49d-4b773ec9eea0",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:transport:imported-transport-1:primary:batch",
       "durationMs": 86,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:32.936Z",
+      "at": "2026-09-03T09:07:08.840Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "3d611b7c-455e-44d7-a884-0e35abdc4246",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "1c1e7fea-b755-472c-8751-3edcbdd661ef",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:transport:imported-transport-1:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:32.936Z",
+      "at": "2026-09-03T09:07:08.840Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "3d611b7c-455e-44d7-a884-0e35abdc4246",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "1c1e7fea-b755-472c-8751-3edcbdd661ef",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:transport:imported-transport-1:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:32.947Z",
+      "at": "2026-09-03T09:07:08.851Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "2f9f5b0e-7a13-4be1-afd9-f46304ded07a",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "3dbfb8c0-2a6f-4a31-88bc-82e12c5c1994",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:transport:imported-transport-2:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:32.956Z",
+      "at": "2026-09-03T09:07:08.860Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "678822a9-b39e-4279-8eaa-12c0ccbf93a6",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "228732cf-ed11-48a1-ab1e-85ec88b63b13",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:1:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:32.966Z",
+      "at": "2026-09-03T09:07:08.870Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "736c6761-a25b-4809-bd43-a19cbef51d0e",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "4f73ff32-38b7-4e41-a93f-a97cde4b6bf3",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:2:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:33.029Z",
+      "at": "2026-09-03T09:07:08.933Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "2f9f5b0e-7a13-4be1-afd9-f46304ded07a",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "3dbfb8c0-2a6f-4a31-88bc-82e12c5c1994",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:transport:imported-transport-2:primary:batch",
       "durationMs": 82,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:33.030Z",
+      "at": "2026-09-03T09:07:08.933Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "3db7a4a9-8615-4ead-a797-891c06cdab09",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "9d727f4b-d21b-48d3-a5fe-19c41ce93e00",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:transport:imported-transport-2:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:33.030Z",
+      "at": "2026-09-03T09:07:08.933Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "3db7a4a9-8615-4ead-a797-891c06cdab09",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "9d727f4b-d21b-48d3-a5fe-19c41ce93e00",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:transport:imported-transport-2:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:33.040Z",
+      "at": "2026-09-03T09:07:08.943Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "image_search",
-      "callId": "5810700c-105b-4e04-b6b3-7536ab683f9e",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "e7783c03-c508-40e9-baf0-8703debdb35f",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:3:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:33.041Z",
+      "at": "2026-09-03T09:07:08.943Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "678822a9-b39e-4279-8eaa-12c0ccbf93a6",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "228732cf-ed11-48a1-ab1e-85ec88b63b13",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:1:primary:batch",
-      "durationMs": 85,
+      "durationMs": 83,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:33.041Z",
+      "at": "2026-09-03T09:07:08.943Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "ac979698-92dc-4ccf-8fb2-6e29603d42ef",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "64f2ada7-ef62-4242-91be-5c835a1aa3a0",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:1:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:33.041Z",
+      "at": "2026-09-03T09:07:08.943Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "ac979698-92dc-4ccf-8fb2-6e29603d42ef",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "64f2ada7-ef62-4242-91be-5c835a1aa3a0",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:1:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:33.051Z",
+      "at": "2026-09-03T09:07:08.954Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "736c6761-a25b-4809-bd43-a19cbef51d0e",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "4f73ff32-38b7-4e41-a93f-a97cde4b6bf3",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:2:primary:batch",
-      "durationMs": 85,
+      "durationMs": 84,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:33.051Z",
+      "at": "2026-09-03T09:07:08.954Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "338ee093-bc7c-4071-b3a1-ced1af1f3a8a",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "544d2b55-9ded-4968-9535-7efdf015cbc0",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:2:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:33.051Z",
+      "at": "2026-09-03T09:07:08.954Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "338ee093-bc7c-4071-b3a1-ced1af1f3a8a",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "544d2b55-9ded-4968-9535-7efdf015cbc0",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:2:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:33.123Z",
+      "at": "2026-09-03T09:07:09.026Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "image_search",
-      "callId": "5810700c-105b-4e04-b6b3-7536ab683f9e",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "e7783c03-c508-40e9-baf0-8703debdb35f",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:3:primary:batch",
       "durationMs": 83,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:33.123Z",
+      "at": "2026-09-03T09:07:09.026Z",
       "stage": "capability",
       "phase": "started",
       "capabilityId": "visual_judgment",
-      "callId": "5c1c58cc-3cc3-43a0-92f0-5f5157d84406",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "72e9baf5-5164-4dad-a17b-ed057334891e",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:3:primary:batch"
     },
     {
-      "at": "2026-09-03T08:42:33.123Z",
+      "at": "2026-09-03T09:07:09.026Z",
       "stage": "capability",
       "phase": "finished",
       "capabilityId": "visual_judgment",
-      "callId": "5c1c58cc-3cc3-43a0-92f0-5f5157d84406",
-      "batchId": "9289768c-68d9-4814-aede-ef8730bee168",
+      "callId": "72e9baf5-5164-4dad-a17b-ed057334891e",
+      "batchId": "46e7b1c5-fd9d-42aa-9f0d-ee8e18dd767e",
       "target": "image:day:3:primary:batch",
       "durationMs": 0,
       "attemptCount": 1
     },
     {
-      "at": "2026-09-03T08:42:33.135Z",
+      "at": "2026-09-03T09:07:09.037Z",
       "stage": "skills",
       "phase": "finished",
       "parallelEvidence": {
-        "copyStartedAtMs": 1788424952848,
-        "imageStartedAtMs": 1788424952849,
-        "copyFinishedAtMs": 1788424952920,
-        "imageFinishedAtMs": 1788424953135,
+        "copyStartedAtMs": 1788426428752,
+        "imageStartedAtMs": 1788426428753,
+        "copyFinishedAtMs": 1788426428823,
+        "imageFinishedAtMs": 1788426429037,
         "startDeltaMs": 1,
-        "overlapMs": 71,
+        "overlapMs": 70,
         "parallel": true
       }
     },
     {
-      "at": "2026-09-03T08:42:33.136Z",
+      "at": "2026-09-03T09:07:09.038Z",
       "stage": "program_writeback",
       "phase": "finished",
       "durationMs": 1,
       "unresolvedCount": 0
     },
     {
-      "at": "2026-09-03T08:42:33.136Z",
+      "at": "2026-09-03T09:07:09.038Z",
       "stage": "renderer",
       "phase": "started"
     },
     {
-      "at": "2026-09-03T08:42:37.100Z",
+      "at": "2026-09-03T09:07:13.693Z",
       "stage": "renderer",
       "phase": "finished",
-      "durationMs": 3964,
+      "durationMs": 4655,
       "status": "success"
     }
   ]

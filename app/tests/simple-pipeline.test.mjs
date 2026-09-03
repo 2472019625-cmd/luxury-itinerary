@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { runSimplePipeline } from "../server/simple-pipeline-executor.mjs";
+import { APPROVED_PAYMENT } from "../server/simple-fixed-modules.mjs";
 import { copyRequestJson, createWorkbookFile, imageAdapters, plannerRequestJson } from "./helpers/simple-pipeline-fixture.mjs";
 
 const appRoot = path.resolve(import.meta.dirname, "..");
@@ -42,6 +43,7 @@ test("完整链路并行调用两个 Skill，隔离单项失败并阻止必需�
   assert.equal(rendererCalls, 0);
   assert.equal(result.legacyEvidence.clear, true);
   assert.equal(result.legacyEvidence.invoked.length, 0);
+  assert.ok(result.warnings.some((item) => item.code === "product_highlight_material_insufficient"));
   const saved = JSON.parse(await readFile(path.join(root, "projects", result.projectId, result.finalResultRef), "utf8"));
   assert.equal(saved.pipelineStatus, result.pipelineStatus);
   assert.equal(saved.data.days[0].description, "当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。");
@@ -69,4 +71,6 @@ test("全部必需单元满足时进入 Renderer，并只在真实渲染成功�
   assert.ok(receivedData.heroImage.startsWith("/assets/placeholders/"));
   assert.ok(receivedData.hotels.every((hotel) => hotel.images?.[0]?.src));
   assert.ok(receivedData.days.every((day) => day.spots?.[0]?.images?.[0]?.src));
+  assert.deepEqual(receivedData.payment, APPROVED_PAYMENT);
+  assert.ok(result.plannerResult.warnings.some((item) => item.code === "product_highlight_material_insufficient"));
 });

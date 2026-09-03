@@ -43,9 +43,11 @@ if (!browser) throw new Error(`Edge/Chrome 均无法启动：${launchErrors.join
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: Math.max(2000, width), height: 1200, deviceScaleFactor: 1 });
+  let renderedData = null;
   if (dataFile) {
     const parsedData = JSON.parse(fs.readFileSync(dataFile, "utf8"));
     const workspaceData = parsedData?.data?.days?.length ? parsedData.data : parsedData;
+    renderedData = workspaceData;
     await page.evaluateOnNewDocument((data) => {
       localStorage.setItem("sheyou-export-data-v1", JSON.stringify(data));
     }, workspaceData);
@@ -66,15 +68,33 @@ try {
   const box = await target.boundingBox();
   await target.screenshot({ path: output, type: "png", captureBeyondViewport: true });
 
-  const layoutQa = await page.evaluate(() => {
+  const expectedPayment = renderedData?.payment || null;
+  const layoutQa = await page.evaluate((expectedPayment) => {
     const root = document.querySelector('#itinerary');
     const selectorFor = (element) => element.id ? `#${element.id}` : element.dataset?.editPath ? `[data-edit-path="${element.dataset.editPath}"]` : `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 2).join('.')}`;
     const overflows = [...root.querySelectorAll('h1,h2,h3,h4,p,span,strong,li,section,article')].filter((element) => element.scrollWidth > element.clientWidth + 8 || element.scrollHeight - element.clientHeight > Math.max(24, element.clientHeight * 0.25)).slice(0, 50).map((element) => ({ selector: selectorFor(element), scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight }));
     const brokenImages = [...root.querySelectorAll('img')].filter((image) => !image.complete || image.naturalWidth === 0).map((image) => ({ selector: selectorFor(image), src: image.getAttribute('src') || '' }));
     const blocks = [...root.children].map((element) => ({ selector: selectorFor(element), top: element.offsetTop, bottom: element.offsetTop + element.offsetHeight })).sort((a, b) => a.top - b.top);
     const largeGaps = blocks.slice(1).map((item, index) => ({ after: blocks[index].selector, before: item.selector, gap: item.top - blocks[index].bottom })).filter((item) => item.gap > 900);
-    return { width: Math.round(root.getBoundingClientRect().width), height: Math.round(root.getBoundingClientRect().height), overflows, brokenImages, largeGaps, footerPresent: Boolean(root.querySelector('.brand-footer-fixed')) };
-  });
+    const module = (selector) => ({ present: Boolean(root.querySelector(selector)) });
+    const booking = root.querySelector('.booking-section');
+    const security = root.querySelector('.security-section');
+    const payment = root.querySelector('.payment-visual');
+    const notes = root.querySelector('.notes-section');
+    const footer = root.querySelector('.brand-footer-fixed');
+    const paymentText = payment?.innerText || '';
+    const expectedPaymentValues = expectedPayment ? ['accountTitle', 'companyName', 'alipayAccount', 'accountName', 'bankAccount', 'bankName'].map((key) => expectedPayment[key]).filter(Boolean) : [];
+    const missingPaymentValues = expectedPaymentValues.filter((value) => !paymentText.includes(value));
+    const paymentQr = payment?.querySelector('.payment-qr');
+    const fixedModules = {
+      booking: { ...module('.booking-section'), complete: Boolean(booking?.querySelectorAll('.booking-step').length === 6), missingParts: booking?.querySelectorAll('.booking-step').length === 6 ? [] : ['六步预订流程'] },
+      security: { ...module('.security-section'), complete: Boolean(security?.querySelector('.security-banner')), missingParts: security?.querySelector('.security-banner') ? [] : ['资金安全提醒文案'] },
+      payment: { ...module('.payment-visual'), complete: Boolean(payment && paymentQr && paymentQr.complete && paymentQr.naturalWidth > 0 && missingPaymentValues.length === 0), missingParts: [...(!payment ? ['收款账户板块'] : []), ...(!paymentQr || !paymentQr.complete || paymentQr.naturalWidth === 0 ? ['支付宝收款二维码'] : []), ...missingPaymentValues.map((value) => `账户字段:${value}`)] },
+      notes: { ...module('.notes-section'), complete: Boolean(notes?.querySelector('.notes-panel')), missingParts: notes?.querySelector('.notes-panel') ? [] : ['注意事项内容'] },
+      footer: { ...module('.brand-footer-fixed'), complete: Boolean(footer?.querySelector('img')), missingParts: footer?.querySelector('img') ? [] : ['品牌页脚图片'] },
+    };
+    return { width: Math.round(root.getBoundingClientRect().width), height: Math.round(root.getBoundingClientRect().height), overflows, brokenImages, largeGaps, footerPresent: fixedModules.footer.present, fixedModules };
+  }, expectedPayment);
   if (qaOutput) {
     fs.mkdirSync(path.dirname(qaOutput), { recursive: true });
     fs.writeFileSync(qaOutput, JSON.stringify(layoutQa, null, 2), 'utf8');
