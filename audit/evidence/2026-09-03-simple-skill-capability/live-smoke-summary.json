@@ -1,0 +1,56 @@
+{
+  "date": "2026-09-03",
+  "branch": "agent/simple-skill-pipeline-v1",
+  "scope": "Copy Skill 与 Image Skill 专业能力真实调用，不含 Planner、Executor、Renderer 或成品回归",
+  "copy": {
+    "status": "success",
+    "targetCount": 2,
+    "resultStatuses": ["success", "success"],
+    "businessBatches": 1,
+    "modelCalls": 1,
+    "transportAttempts": 1,
+    "durationMs": 8318
+  },
+  "image": {
+    "status": "partial_success",
+    "slotCount": 2,
+    "results": [
+      {
+        "slotId": "cover:hero",
+        "status": "success",
+        "queriesUsed": 2,
+        "technicalStatus": "downloaded_decoded_and_judged"
+      },
+      {
+        "slotId": "hotel:gran-melia-arusha:primary",
+        "status": "not_found",
+        "queriesUsed": 2,
+        "technicalStatus": "no_eligible_candidate"
+      }
+    ],
+    "businessBatches": 1,
+    "searchCalls": 4,
+    "commonsCalls": 4,
+    "pageExtractionCalls": 14,
+    "downloadAttempts": 24,
+    "initialVisionCalls": 2,
+    "terminalVisionCalls": 1,
+    "concurrencyPeak": {
+      "slots": 2,
+      "search": 3,
+      "pages": 3,
+      "downloads": 3,
+      "vision": 2
+    },
+    "durationMs": 228744
+  },
+  "legacyPathsInvoked": {
+    "brandReviewer": false,
+    "reviewDecision": false,
+    "findingPackage": false,
+    "automaticCopyRegeneration": false,
+    "automaticSecondImageSearch": false,
+    "targetedImageResearch": false,
+    "stageBudgetBusinessLoop": false
+  }
+}

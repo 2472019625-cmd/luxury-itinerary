@@ -9,6 +9,8 @@ description: 为奢游行程单批量生成封面、产品亮点、总览、酒�
 版本：当前确认版本  
 定位：按 Copy Skill 责任拆分后的运行输入与接口规范；内容业务规则仍追溯到 `rules/01—06`，不构成第二套并列业务规则。
 
+真实调用入口：`app/server/simple-copy-skill.mjs` 的 `runCopyWriterSkill()`。
+
 ## 1. Purpose
 
 在 Planner 已经确定模块、事实、正式状态和写作目标的前提下，生成符合奢游品牌要求的客户文案。只改写表达，不决定产品结构，不创造或改变事实。

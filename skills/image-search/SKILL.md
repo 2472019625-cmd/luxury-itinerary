@@ -9,6 +9,8 @@ description: 为奢游行程单的一批封面、酒店、餐饮、交通和 DAY
 版本：当前确认版本  
 定位：按 Image Skill 责任拆分后的运行输入与接口规范；内容业务规则仍追溯到 `rules/01—06`，不构成第二套并列业务规则。
 
+真实调用入口：`app/server/simple-image-skill.mjs` 的 `runImageSearchSkill()`。
+
 ## 1. Purpose
 
 根据 Planner 提供的一批图片 slot，搜索、筛选、排序并选择符合事实和视觉要求的真实图片。可以处理封面、酒店、特色餐饮、交通、DAY 和 Planner 已创建的可选增量图片位。
