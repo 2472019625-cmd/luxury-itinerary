@@ -17,14 +17,14 @@ function Icon({ name, size = 48, tone = "gold" }) {
   return <span className={`icon icon-${tone}`} style={{ width: size, height: size, WebkitMaskImage: `url(${ICON}${name}.svg)`, maskImage: `url(${ICON}${name}.svg)` }} aria-hidden="true" />;
 }
 
-function MissingImageState({ label = "图片待补充", compact = false, className = "" }) {
-  return <div className={`missing-image-state${compact ? " missing-image-state-compact" : ""} ${className}`.trim()} role="img" aria-label={label}><Icon name="itinerary" size={compact ? 34 : 54} /><span>{label}</span></div>;
+function MissingImageState({ label = "图片待补充", compact = false, className = "", ...props }) {
+  return <div className={`missing-image-state${compact ? " missing-image-state-compact" : ""} ${className}`.trim()} role="img" aria-label={label} {...props}><Icon name="itinerary" size={compact ? 34 : 54} /><span>{label}</span></div>;
 }
 
 function SafeImage({ src, alt, fallbackLabel, ...props }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [src]);
-  if (!isUsableFinalImageSource(src) || failed) return <MissingImageState label={fallbackLabel || `${alt || "图片"}暂缺`} />;
+  if (!isUsableFinalImageSource(src) || failed) return <MissingImageState label={fallbackLabel || `${alt || "图片"}暂缺`} {...props} />;
   return <img {...props} src={src} alt={alt} onError={() => setFailed(true)} />;
 }
 
@@ -118,7 +118,7 @@ function DiningOverview({ items = [], policy, title = "特色餐饮", introTitle
     const isWide = item.layout === "wide";
     const images = (item.images?.length ? item.images : item.image ? [item.image] : []).slice(0, 2);
     return <article className={`dining-card${isWide ? " dining-card-wide" : ""}`} key={item.id || item.title} data-edit-path={`dining.${itemIndex}`}>
-    {images.length > 0 ? <div className={`dining-image dining-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${item.id || item.title}-${imageIndex}`} src={image.src || image} alt={image.label || `${item.title}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`dining.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="餐饮图片待补充" compact className="card-missing-image" />}
+    {images.length > 0 ? <div className={`dining-image dining-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${item.id || item.title}-${imageIndex}`} src={image.src || image} alt={image.label || `${item.title}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`dining.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="餐饮图片待补充" compact className="card-missing-image" data-edit-path={`dining.${itemIndex}`} data-edit-image="0" />}
     <div className="dining-copy"><small>{item.location}</small><h3>{item.title}</h3>{item.officialName && <p className="dining-official-name">{item.officialName}</p>}<p>{item.editorialCopy}</p></div>
   </article>;
   })}</div>{policy && <p className="feature-footnote">{policy}</p>}</section>;
@@ -147,7 +147,7 @@ function HotelsOverview({ hotels = [], policy, title = "臻选下榻", introTitl
   const isOdd = hotels.length % 2 === 1;
   const hasFeatured = hotels.some((hotel) => hotel.layout === "wide");
   return <section className="journey-feature-section hotels-section" data-edit-path="hotels"><SectionTitle en="SIGNATURE STAYS" zh={title} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`hotel-grid${isOdd ? " hotel-grid-odd" : ""}${hasFeatured ? " hotel-grid-featured" : ""}`}>{hotels.map((hotel, hotelIndex) => <article className={`hotel-card${hotel.layout === "wide" ? " hotel-card-wide" : ""}${hotel.images?.[0] ? "" : " hotel-card-no-image"}`} key={hotel.id || hotel.officialName} data-edit-path={`hotels.${hotelIndex}`}>
-    {hotel.images?.[0] ? <div className="hotel-image"><SafeImage src={hotel.images[0].src || hotel.images[0]} alt={hotel.shortName || hotel.officialName} fallbackLabel="酒店图片待补充" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" style={{ objectPosition: hotel.images[0].focus || "50% 50%" }} /></div> : <MissingImageState label="酒店图片待补充" compact className="card-missing-image" />}
+    {hotel.images?.[0] ? <div className="hotel-image"><SafeImage src={hotel.images[0].src || hotel.images[0]} alt={hotel.shortName || hotel.officialName} fallbackLabel="酒店图片待补充" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" style={{ objectPosition: hotel.images[0].focus || "50% 50%" }} /></div> : <MissingImageState label="酒店图片待补充" compact className="card-missing-image" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" />}
     <div className="hotel-copy"><div className="hotel-kicker"><span>{hotel.region}</span><em>{hotel.nights}晚</em></div><h3>{hotel.shortName || hotel.officialName}</h3>{hotel.shortName && <p className="hotel-official-name">{hotel.officialName}</p>}
       {hotel.editorialCopy && <p className="hotel-editorial">{hotel.editorialCopy}</p>}
       {hotel.proofPoints?.length > 0 && <div className="hotel-proof-points">{hotel.proofPoints.map((point) => <span key={point}>{point}</span>)}</div>}
@@ -162,7 +162,7 @@ function TransportOverview({ items = [], disclaimer, title = "全程交通", int
   return <section className="journey-feature-section transport-section" data-edit-path="transport"><SectionTitle en="TRAVEL IN COMFORT" zh={title} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`transport-grid${isOdd ? " transport-grid-odd" : ""}${hasFeatured ? " transport-grid-featured" : ""}`}>{items.map((item, itemIndex) => {
     const isWide = item.layout === "wide";
     return <article className={`transport-card${isWide ? " transport-card-wide" : ""}`} key={item.id || item.category} data-edit-path={`transport.${itemIndex}`}>
-    {item.images?.length > 0 ? <div className={`transport-image transport-image-count-${Math.min(item.images.length, 2)}`}>{item.images.slice(0, 2).map((image, imageIndex) => <SafeImage key={`${item.id}-${imageIndex}`} src={image.src || image} alt={`${item.category}${imageIndex ? "内部空间" : "出行场景"}`} data-edit-path={`transport.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="交通图片待补充" compact className="card-missing-image" />}
+    {item.images?.length > 0 ? <div className={`transport-image transport-image-count-${Math.min(item.images.length, 2)}`}>{item.images.slice(0, 2).map((image, imageIndex) => <SafeImage key={`${item.id}-${imageIndex}`} src={image.src || image} alt={`${item.category}${imageIndex ? "内部空间" : "出行场景"}`} data-edit-path={`transport.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="交通图片待补充" compact className="card-missing-image" data-edit-path={`transport.${itemIndex}`} data-edit-image="0" />}
     <div className="transport-copy"><div className="transport-heading"><span className="transport-icon"><Icon name="vehicle" size={44} tone="light" /></span><div><small>{transportUsageLabel(item)}</small><h3>{item.category}</h3></div></div>
       <div className="transport-specs">{item.serviceLevel && <span>{item.serviceLevel}</span>}{item.seatCount && <span>{item.seatCount}座</span>}{item.model && <span>{item.modelGuaranteed ? "指定车型" : "参考车型"} · {item.model}</span>}</div>
       {item.editorialCopy && <p className="transport-editorial">{item.editorialCopy}</p>}
@@ -215,7 +215,7 @@ function SpotCard({ spot, dayIndex, spotIndex }) {
   const statusLabels = { included: "已包含", optional_paid: "自费可选", reservation_required: "需提前预约", pending: "待确认" };
   const status = spot.statusLabel || statusLabels[spot.status] || spot.status || null;
   const images = (spot.images?.length ? spot.images : spot.image ? [{ src: spot.image, focus: spot.focus, fit: spot.fit }] : []).slice(0, 2);
-  return <article className="spot-card" data-edit-path={`days.${dayIndex}.spots.${spotIndex}`}>{images.length > 0 ? <div className={`spot-image spot-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${spot.name}-${imageIndex}`} src={image.src || image} alt={image.label || `${spot.name}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`days.${dayIndex}.spots.${spotIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="体验图片待补充" compact className="card-missing-image" />}<div className="spot-copy"><h4>{spot.name}</h4>{status && <div className="experience-status">{status}</div>}<p>{spot.experience || spot.description}</p>{spot.reminder && <small>{spot.reminder}</small>}</div></article>;
+  return <article className="spot-card" data-edit-path={`days.${dayIndex}.spots.${spotIndex}`}>{images.length > 0 ? <div className={`spot-image spot-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${spot.name}-${imageIndex}`} src={image.src || image} alt={image.label || `${spot.name}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`days.${dayIndex}.spots.${spotIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="体验图片待补充" compact className="card-missing-image" data-edit-path={`days.${dayIndex}.spots.${spotIndex}`} data-edit-image="0" />}<div className="spot-copy"><h4>{spot.name}</h4>{status && <div className="experience-status">{status}</div>}<p>{spot.experience || spot.description}</p>{spot.reminder && <small>{spot.reminder}</small>}</div></article>;
 }
 
 function SpotGallery({ spots = [], dayIndex }) {
@@ -345,7 +345,7 @@ function StyleProofA({ data }) {
 }
 
 export function App() {
-  if (window.location.pathname.startsWith("/agent-diagnostics") || window.location.pathname.startsWith("/agent/projects/")) return <AgentWorkspace />;
+  if (window.location.pathname.startsWith("/agent-diagnostics") || window.location.pathname.startsWith("/agent/projects/") || window.location.pathname.startsWith("/simple/projects/")) return <AgentWorkspace ItineraryComponent={Itinerary} />;
   if (window.location.pathname.startsWith("/agent-planner")) return <AgentPlanner />;
   const params = new URLSearchParams(window.location.search);
   const exportMode = params.get("export") === "1";

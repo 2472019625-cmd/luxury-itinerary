@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { importItineraryWorkbook } from "./lib/itineraryImport.js";
 import { createProductionDefaultData } from "./lib/itineraryRules.js";
 import { PlanView } from "./AgentPlanner.jsx";
+import { Editor, VersionsStep } from "./Workspace.jsx";
 
 const labels = { preparing:"正在准备", awaiting_confirmation:"等待确认", planning:"正在制定计划", ready_for_execution:"执行准备完成", planning_failed:"生成中断", cancelled:"已取消" };
 async function digest(file) { const hash = await crypto.subtle.digest("SHA-256", await file.arrayBuffer()); return [...new Uint8Array(hash)].map((item) => item.toString(16).padStart(2,"0")).join(""); }
@@ -39,4 +40,74 @@ function Landing() {
   return <div className="agent-shell"><header className="agent-topbar"><div><span className="agent-mark">奢游</span><div><b>智能体内部诊断</b><small>管理员与开发使用 · 非员工正式入口</small></div></div><div className="agent-mode"><i/>执行能力尚未开放</div></header><section className="agent-hero"><div><p className="agent-eyebrow">AGENT DIAGNOSTICS</p><h1>查看智能体项目内部记录</h1><p>这里保留确认、唯一计划和执行运行记录用于开发诊断；员工正式入口已经接回原五步行程美化工作台。</p><div className="agent-actions"><button disabled={busy} onClick={()=>input.current?.click()}>{busy?"正在读取资料":"创建诊断项目"}</button><input hidden ref={input} type="file" accept=".xlsx,.xls" onChange={upload}/></div>{error&&<div className="agent-error">{error}</div>}</div><aside><strong>诊断边界</strong><ul><li>不作为员工工作台</li><li>只读同一智能体项目</li><li>计划与执行状态分离</li><li>下游真实调用保持为零</li></ul></aside></section></div>;
 }
 
-export function AgentWorkspace(){const match=window.location.pathname.match(/^\/(?:agent\/projects|agent-diagnostics\/projects)\/([^/]+)/);return match?<ProjectPage projectId={match[1]}/>:<Landing/>;}
+function editorSelectionForSlot(project, slotId) {
+  const fieldPath = project.data.simpleImageSlotBindings?.[slotId]?.fieldPath || "heroImage";
+  if (fieldPath === "heroImage") return { module:"cover", itemIndex:null, subItemIndex:null, imageIndex:0 };
+  let match = fieldPath.match(/^hotels\.(\d+)\.images\.(\d+)$/);
+  if (match) return { module:"hotels", itemIndex:Number(match[1]), subItemIndex:null, imageIndex:Number(match[2]) };
+  match = fieldPath.match(/^transportSummary\.(\d+)\.images\.(\d+)$/);
+  if (match) return { module:"transport", itemIndex:Number(match[1]), subItemIndex:null, imageIndex:Number(match[2]) };
+  match = fieldPath.match(/^days\.(\d+)\.spots\.(\d+)\.images\.(\d+)$/);
+  if (match) return { module:"days", itemIndex:Number(match[1]), subItemIndex:Number(match[2]), imageIndex:Number(match[3]) };
+  return { module:"cover", itemIndex:null, subItemIndex:null, imageIndex:0 };
+}
+
+function SimpleManualImagePage({ projectId, ItineraryComponent }) {
+  const [payload, setPayload] = useState(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [screen, setScreen] = useState("editor");
+  const load = async () => {
+    try { setPayload(await readJson(await fetch(`/api/simple/projects/${projectId}/manual-images`))); setError(""); }
+    catch (failure) { setError(failure.message); }
+  };
+  useEffect(() => { load(); }, [projectId]);
+  const request = async (slotId, action, body) => {
+    setBusy(`${slotId}:${action}`); setError("");
+    try {
+      const response = await fetch(`/api/simple/projects/${projectId}/manual-images/${encodeURIComponent(slotId)}/${action}`, body);
+      setPayload(await readJson(response));
+    } catch (failure) { setError(failure.message); }
+    finally { setBusy(""); }
+  };
+  const choose = async (candidate, targetSlot) => {
+    const slotId = targetSlot.pipelineSlotId || candidate.pipelineSlotId;
+    if (!slotId) throw new Error("当前位置没有对应的 Simple Pipeline 图片位");
+    return request(slotId, "select", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ candidateId:candidate.candidateId }) });
+  };
+  const upload = async (slotId, file) => request(slotId, "upload", { method:"POST", headers:{ "content-type":file.type || "application/octet-stream", "x-file-name":encodeURIComponent(file.name) }, body:file });
+  const uploadFromEditor = async (file, targetSlot) => {
+    const slotId = targetSlot.pipelineSlotId;
+    if (!slotId) throw new Error("当前位置没有对应的 Simple Pipeline 图片位");
+    return upload(slotId, file);
+  };
+  const research = async (slotId) => {
+    if (!window.confirm(`只为 ${slotId} 再搜索一次？不会重跑 Planner、Copy 或其他图片位。`)) return;
+    return request(slotId, "research", { method:"POST" });
+  };
+  if (!payload) return <div className="agent-shell"><div className="agent-status"><span className="agent-spinner"/><b>{error || "正在读取当前 Simple Pipeline 项目"}</b></div></div>;
+  if (screen === "versions" && payload.canEnterFinal) return <VersionsStep project={payload.project} existingOnly onBack={() => setScreen("editor")} />;
+  const firstUnresolved = payload.unresolvedRequiredSlotIds?.[0] || "image:cover:primary";
+  return <><Editor
+    project={payload.project}
+    ItineraryComponent={ItineraryComponent}
+    onProject={(project) => setPayload((current) => ({ ...current, project }))}
+    onChooseImage={choose}
+    onUploadImage={uploadFromEditor}
+    onResearchSlot={research}
+    onVersions={() => payload.canEnterFinal && setScreen("versions")}
+    openPickerOnImageClick
+    canOpenVersions={payload.canEnterFinal}
+    initialSelection={editorSelectionForSlot(payload.project, firstUnresolved)}
+    initialTab="image"
+    defaultDesigner={payload.project.data.designer || { avatar:"", name:"", role:"", bio:"" }}
+    statusNotice={payload.canEnterFinal ? { title:"必需图片已补齐", message:"required gate 已通过，可以进入 Step 5 查看正式版本。" } : { title:`当前为 partial · 还缺 ${payload.unresolvedRequiredCount} 个 required 项`, message:"可以在画布里点击具体图片槽位补图；required 图片未齐前 Step 5 和最终 2000px 成品保持关闭。" }}
+  />{busy && <div className="agent-execution-notice">正在处理 {busy.split(":").slice(0, -1).join(":")}，只会更新当前图片位。</div>}{error && <div className="agent-error">{error}</div>}</>;
+}
+
+export function AgentWorkspace({ ItineraryComponent }) {
+  const simpleMatch = window.location.pathname.match(/^\/simple\/projects\/([^/]+)/);
+  if (simpleMatch) return <SimpleManualImagePage projectId={simpleMatch[1]} ItineraryComponent={ItineraryComponent} />;
+  const match = window.location.pathname.match(/^\/(?:agent\/projects|agent-diagnostics\/projects)\/([^/]+)/);
+  return match ? <ProjectPage projectId={match[1]} /> : <Landing />;
+}

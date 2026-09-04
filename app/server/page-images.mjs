@@ -61,6 +61,22 @@ function imageLike(value) {
   return /\.(?:avif|jpe?g|png|webp)(?:[?#]|$)/i.test(text) || /(?:image|photo|media|gallery|cdn|asset)/i.test(text);
 }
 
+export function canonicalImageAssetKey(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    for (const key of ["w", "width", "imwidth", "wid", "h", "height", "imheight", "hei", "q", "quality", "fm", "format", "fl", "fit", "crop", "dpr"]) parsed.searchParams.delete(key);
+    parsed.hash = "";
+    return parsed.href;
+  } catch { return String(value || "").trim(); }
+}
+
+function imageUrlSemanticText(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    return decodeURIComponent(parsed.pathname.split("/").pop() || "").replace(/[_-]+/g, " ");
+  } catch { return String(value || "").replace(/[_-]+/g, " "); }
+}
+
 function highResolutionVariants(value, baseUrl) {
   const resolved = absolute(value, baseUrl);
   if (!resolved) return [];
@@ -160,9 +176,9 @@ export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.
   const candidates = [];
   const lexicon = semanticLexicon(semanticTerms);
   const push = (rawUrl, kind, alt = "", highResHint = false, semanticContext = "") => {
-    const semanticText = compactText([alt, semanticContext].filter(Boolean).join(" | "));
-    const semantic = semanticAssessment(semanticText, lexicon);
     for (const imageUrl of highResolutionVariants(rawUrl, responseUrl)) {
+      const semanticText = compactText([alt, imageUrlSemanticText(imageUrl), semanticContext].filter(Boolean).join(" | "));
+      const semantic = semanticAssessment(semanticText, lexicon);
       if (!imageLike(imageUrl) || candidates.some((item) => item.imageUrl === imageUrl)) continue;
       candidates.push({ ...page, imageUrl, kind, alt: String(alt).trim().slice(0, 240), highResHint, semanticText, semanticScore: semantic.score, semanticMatches: semantic.matches, genericActivityPenalty: semantic.genericPenalty });
     }
@@ -193,7 +209,7 @@ export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.
       if (value) push(value, attr === 'src' ? 'page-image' : `lazy-${attr}`, alt, attr !== 'src', context);
     }
     const anchor = node.closest('a').attr('href');
-    if (anchor && imageLike(anchor)) push(anchor, 'gallery-link', alt, true, context);
+    if (anchor && /\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(anchor)) push(anchor, 'gallery-link', alt, true, context);
   });
   $('[style*="background"], style').each((_, element) => {
     const css = $(element).attr('style') || $(element).text() || '';
@@ -228,7 +244,16 @@ export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.
     const context = nodeSemanticContext($, element);
     for (const [name, value] of Object.entries(attributes)) if (/^data-/i.test(name) && imageLike(value)) scriptImageUrls(value).forEach((url) => push(url, `gallery-${name}`, '', true, `${context} ${objectSemanticText(attributes)}`));
   });
-  return candidates.sort((a, b) => (b.semanticScore - b.genericActivityPenalty) - (a.semanticScore - a.genericActivityPenalty)).slice(0, maxImages);
+  const seenAssets = new Set();
+  return candidates
+    .sort((a, b) => (b.semanticScore - b.genericActivityPenalty) - (a.semanticScore - a.genericActivityPenalty))
+    .filter((candidate) => {
+      const key = canonicalImageAssetKey(candidate.imageUrl);
+      if (!key || seenAssets.has(key)) return false;
+      seenAssets.add(key);
+      return true;
+    })
+    .slice(0, maxImages);
 }
 
 export async function extractPageImages(page, { signal, maxImages = 36, semanticTerms = [] } = {}) {

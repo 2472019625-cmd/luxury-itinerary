@@ -13,6 +13,8 @@ import { cancelExecutionRun, createExecutionRun, EXECUTION_CONFIG_VERSION, EXECU
 import { AgentExecutionEngine } from "./agent-execution-engine.mjs";
 import { applyRuntimeImageConfirmations, enrichPendingImageConfirmations, imageConfirmationChoices } from "./agent-image-confirmation.mjs";
 import { evaluateAgentImageCompletion } from "./agent-image-plan.mjs";
+import { runImageSearchSkill } from "./simple-image-skill.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, uploadSimpleImage } from "./simple-manual-images.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const clientDir = path.join(root, "dist", "client");
@@ -42,6 +44,17 @@ async function requestBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
+async function requestBuffer(request) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > 14 * 1024 * 1024) throw new Error("图片超过14MB限制");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 const contentTypes = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".otf": "font/otf", ".ttf": "font/ttf" };
 function streamFile(response, file) {
   response.writeHead(200, { "content-type": contentTypes[path.extname(file).toLowerCase()] || "application/octet-stream" });
@@ -54,6 +67,7 @@ export function createAgentPlannerServer(options = {}) {
   const workspaceRoot = path.resolve(options.workspaceRoot || path.join(root, "workspace", "agent-v1", "projects"));
   mkdirSync(workspaceRoot, { recursive: true });
   const store = options.store || new AgentPlanStore(workspaceRoot);
+  const simpleStore = options.simpleStore || new AgentPlanStore(path.join(root, "output", "simple-pipeline", "projects"));
   const jobs = new Map();
   const controllers = new Map();
   const planner = options.planner || generateAgentPlan;
@@ -146,6 +160,71 @@ export function createAgentPlannerServer(options = {}) {
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${port}`);
+    const simpleManualMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images$/);
+    if (request.method === "GET" && simpleManualMatch) {
+      try { return json(response, 200, buildSimpleManualImagePayload(simpleStore, decodeURIComponent(simpleManualMatch[1]))); }
+      catch (failure) { return json(response, failure.code === "simple_project_incomplete" ? 409 : 404, { error: failure.message, code: failure.code || "simple_project_not_found" }); }
+    }
+    const simpleCandidateMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images\/([^/]+)\/(select|reject)$/);
+    if (request.method === "POST" && simpleCandidateMatch) {
+      try {
+        const payload = await requestBody(request);
+        const input = { store: simpleStore, root, projectId: decodeURIComponent(simpleCandidateMatch[1]), slotId: decodeURIComponent(simpleCandidateMatch[2]), candidateId: String(payload.candidateId || "") };
+        const result = simpleCandidateMatch[3] === "select" ? await chooseSimpleImageCandidate(input) : await rejectSimpleImageCandidate(input);
+        return json(response, 200, result);
+      } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_decision_failed" }); }
+    }
+    const simpleUploadMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images\/([^/]+)\/upload$/);
+    if (request.method === "POST" && simpleUploadMatch) {
+      try {
+        const contentType = String(request.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+        const buffer = await requestBuffer(request);
+        const dataUrl = `data:${contentType};base64,${buffer.toString("base64")}`;
+        const result = await uploadSimpleImage({ store: simpleStore, root, projectId: decodeURIComponent(simpleUploadMatch[1]), slotId: decodeURIComponent(simpleUploadMatch[2]), dataUrl, fileName: decodeURIComponent(String(request.headers["x-file-name"] || "用户上传图片")) });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_upload_failed" }); }
+    }
+    const simpleResearchMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images\/([^/]+)\/research$/);
+    if (request.method === "POST" && simpleResearchMatch) {
+      try {
+        const result = await researchSimpleImageSlot({
+          store: simpleStore,
+          root,
+          projectId: decodeURIComponent(simpleResearchMatch[1]),
+          slotId: decodeURIComponent(simpleResearchMatch[2]),
+          runImage: runImageSearchSkill,
+          imageOptions: {
+            searchApiKey: searchModelConfig.apiKey,
+            searchBaseUrl: searchModelConfig.baseUrl,
+            searchModel: searchModelConfig.imageSearchModel,
+            visionApiKey: visionModelConfig.apiKey,
+            visionBaseUrl: visionModelConfig.baseUrl,
+            visionModel: visionModelConfig.model,
+            maxQueriesPerSlot: 3,
+            sourcePagesPerSlot: 8,
+            downloadsPerSlot: 12,
+            visionCandidatesPerSlot: 4,
+            concurrency: { slots: 1, search: 1, pages: 4, downloads: 3, vision: 1 },
+          },
+        });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_research_failed" }); }
+    }
+    const simpleOutputMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/output$/);
+    if (["GET", "HEAD"].includes(request.method) && simpleOutputMatch) {
+      try {
+        const projectId = decodeURIComponent(simpleOutputMatch[1]);
+        const project = simpleStore.getProject(projectId);
+        const activeRun = project?.activeExecutionRunId ? simpleStore.getExecutionRun(projectId, project.activeExecutionRunId) : null;
+        const result = activeRun ? simpleStore.getFinalResult(projectId, activeRun.executionRunId) : null;
+        const outputRoot = path.resolve(root, "output");
+        const file = result?.pipelineStatus === "complete" && result.outputPath ? path.resolve(result.outputPath) : null;
+        if (!file || !file.startsWith(`${outputRoot}${path.sep}`) || !existsSync(file)) return json(response, 404, { error: "正式成品文件不存在" });
+        response.writeHead(200, { "content-type": "image/png", "content-disposition": `attachment; filename="itinerary-${projectId}.png"` });
+        if (request.method === "HEAD") return response.end();
+        return createReadStream(file).pipe(response);
+      } catch (failure) { return json(response, 404, { error: failure.message || "正式成品文件不存在" }); }
+    }
     if (request.method === "GET" && url.pathname === "/api/agent/health") return json(response, 200, { ok: true, flowKind: "agent_v1", port, executionEnabled: EXECUTION_ENABLED, executionConfigVersion: EXECUTION_CONFIG_VERSION, plannerConfigured: Boolean(modelConfig.apiKey), factSearchConfigured: Boolean(searchModelConfig.apiKey), imageSearchConfigured: Boolean(searchModelConfig.apiKey), visualAuditConfigured: Boolean(visionModelConfig.apiKey) });
     if (request.method === "POST" && url.pathname === "/api/agent/projects") {
       try {

@@ -25,6 +25,8 @@
 .image-picker-grid { min-height: 280px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; overflow: auto; padding: 22px 28px; }
 .image-picker-grid > button { overflow: hidden; padding: 0; border: 1px solid #dfd4c4; border-radius: 12px; background: #fff; text-align: left; cursor: pointer; }
 .image-picker-grid > button:hover { border-color: var(--ws-gold); box-shadow: 0 8px 22px #5a432018; }
+.image-picker-grid > button:disabled { opacity: .68; cursor: not-allowed; }
+.image-picker-grid > button:disabled:hover { border-color: #dfd4c4; box-shadow: none; }
 .image-picker-grid img { width: 100%; aspect-ratio: 16 / 9; display: block; object-fit: cover; background: #eee7dc; }
 .image-picker-grid button > span { display: grid; gap: 4px; padding: 11px 12px; }
 .image-picker-grid small { color: var(--ws-muted); }

@@ -6,7 +6,7 @@ import { judgeCandidatesBatch } from "./image-audit.mjs";
 import { ImageDeduper } from "./image-dedupe.mjs";
 import { downloadCandidate } from "./image-download.mjs";
 import { searchWebBatch } from "./image-search.mjs";
-import { extractPageImages } from "./page-images.mjs";
+import { canonicalImageAssetKey, extractPageImages } from "./page-images.mjs";
 import { searchCommonsImages } from "./commons-search.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -129,7 +129,50 @@ function controlledFallbackRejection(plan, audit = {}) {
 }
 
 function layerEvidence() {
-  return { searchPages: 0, searchPageUrls: [], groundingRedirectUnresolved: [], extractedCandidates: 0, semanticRelevantCandidates: 0, downloadAttempts: 0, downloadedCandidates: 0, pageFailures: [], downloadFailures: [], searchCompleted: false, semanticExtractionCompleted: false, visualJudgmentCompleted: false };
+  return { searchPages: 0, searchPageUrls: [], officialSourcePages: 0, extractedCandidates: 0, officialExtractedCandidates: 0, semanticRelevantCandidates: 0, downloadAttempts: 0, downloadedCandidates: 0, pageFailures: [], downloadFailures: [], groundingRedirectUnresolved: [], searchCompleted: false, semanticExtractionCompleted: false, visualJudgmentCompleted: false };
+}
+
+const hotelSpacePattern = /\b(?:tented? (?:suite|room|interior|exterior)|suite|guest ?room|bedroom|interior|exterior|villa|salon|lounge|restaurant|dining|lunch|deck|terrace|pool|spa|bath(?:room|tub)?|pavilion|reception|living|fire ?pit|design)\b|帐篷(?:外观|内部|套房)|套房|客房|卧室|室内|外观|公共空间|休息区|餐厅|露台|泳池|水疗|浴室|浴缸|火塘/i;
+const weakHotelIdentityPattern = /\b(?:moon|lill(?:y|ies)|reflection|wildlife|zebra|lion|elephant|bird|flower|sunset|sunrise|landscape|savanna|water)\b|月亮|睡莲|倒影|野生动物|斑马|狮子|大象|鸟类|花卉|日落|日出|纯风景|水面/i;
+
+function hotelCandidateScore(candidate, slot) {
+  if (!String(slot.moduleType || "").toLowerCase().includes("hotel")) return 0;
+  const words = `${candidate.imageUrl || ""} ${candidate.alt || ""} ${candidate.semanticText || ""}`.toLowerCase().replace(/[_-]+/g, " ");
+  const identityTokens = text(slot.hotel).toLowerCase().split(/[^a-z0-9\u4e00-\u9fff]+/).filter((token) => token.length >= 4 && !/^(?:singita|hotel|lodge|camp|tented|resort)$/.test(token));
+  const identityMatches = identityTokens.filter((token) => words.includes(token)).length;
+  const hasHotelSpace = hotelSpacePattern.test(words);
+  const weakOnly = !hasHotelSpace && weakHotelIdentityPattern.test(words);
+  return identityMatches * 16 + (hasHotelSpace ? 52 : 0) - (weakOnly ? 64 : 0);
+}
+
+function expandHotelSourcePages(pages, slot) {
+  if (!String(slot.moduleType || "").toLowerCase().includes("hotel")) return pages;
+  const expanded = [];
+  for (const page of pages) {
+    try {
+      const parsed = new URL(page.pageUrl);
+      const match = parsed.pathname.match(/^(\/lodge\/[^/]+)\/gallery\/?$/i);
+      if (match) {
+        const landing = new URL(parsed.href);
+        landing.pathname = `${match[1]}/`;
+        landing.search = "";
+        landing.hash = "";
+        expanded.push({ ...page, pageUrl: landing.href, title: `${text(slot.hotel) || page.title} official lodge page`, derivedFromPageUrl: page.pageUrl, sourceKind: "derived_official_lodge_page", searchRank: Math.max(0, Number(page.searchRank || 1) - 0.5) });
+      }
+    } catch { /* Keep the original search result below. */ }
+    expanded.push(page);
+  }
+  return expanded.filter((page, index, array) => page?.pageUrl && array.findIndex((other) => other.pageUrl === page.pageUrl) === index);
+}
+
+function uniqueImageAssets(candidates) {
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    const key = canonicalImageAssetKey(candidate?.imageUrl);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function basicScore(candidate, slot) {
@@ -140,7 +183,12 @@ function basicScore(candidate, slot) {
   const pageMatch = anchors.filter((anchor) => pageWords.includes(anchor)).length;
   const pixels = Number(candidate.width || 0) * Number(candidate.height || 0);
   const extractionQuality = /og:image|image-srcset|picture-srcset|gallery-link|media-link|json-ld/i.test(candidate.kind || "") ? 12 : candidate.highResHint ? 6 : 0;
-  return (candidate.officialHint ? 40 : 0) + extractionQuality + Number(candidate.semanticScore || 0) - Number(candidate.genericActivityPenalty || 0) + localMatch * 8 + pageMatch * 2 + Math.min(20, Math.round(pixels / 500_000)) - Number(candidate.searchRank || 0);
+  return (candidate.officialHint ? 40 : 0) + extractionQuality + hotelCandidateScore(candidate, slot) + Number(candidate.semanticScore || 0) - Number(candidate.genericActivityPenalty || 0) + localMatch * 8 + pageMatch * 2 + Math.min(20, Math.round(pixels / 500_000)) - Number(candidate.searchRank || 0);
+}
+
+function candidateRankScore(candidate, slot) {
+  const officialHotelPriority = String(slot.moduleType || "").toLowerCase().includes("hotel") && candidate.officialHint ? 1000 : 0;
+  return officialHotelPriority + basicScore(candidate, slot);
 }
 
 function stableCandidateId(slotId, candidate = {}) {
@@ -186,7 +234,9 @@ function failedHardRequirement(slot, audit) {
   if (audit.watermarkFree !== true) return "watermark";
   if (audit.nonAI !== true) return "ai_generated";
   if (audit.photographic !== true || /地图|示意图|信息图|截图|\bmap\b|diagram|infographic|screenshot/i.test(`${audit.actualSubject || ""} ${audit.reason || ""}`)) return "non_photographic";
-  if (/徒步|walking safari/i.test(`${text(slot.activity)} ${text(slot.subject)}`) && /泳池|客房|酒店|服务员|室内|pool|guest room|hotel interior|lodge deck/i.test(`${audit.actualSubject || ""} ${audit.reason || ""}`)) return "activity_mismatch";
+  const explicitDayActivity = /游猎|safari|game drive|草原飞机|bush plane|light aircraft|airstrip|徒步|walking|bush walk|夜游|night game|文化|maasai|masai|反偷猎|anti[- ]?poaching|ranger|conservation|observation post|热气球|hot air balloon/i.test(`${text(slot.activity)} ${text(slot.subject)}`);
+  const genericHotelSpace = /酒店泳池|泳池|躺椅|客房|卧室|餐厅|酒廊|酒店空间|酒店室内|营地室内|帐篷室内|pool|sun lounger|guest room|bedroom|restaurant|dining room|lounge|hotel interior|lodge interior|room interior|tent interior/i.test(`${audit.actualSubject || ""} ${audit.reason || ""}`);
+  if (isDayPrimarySlot(slot) && explicitDayActivity && genericHotelSpace) return "activity_mismatch";
   const expectedEastAfrica = /坦桑尼亚|塞伦盖蒂|格鲁梅蒂|乞力马扎罗|tanzania|serengeti|grumeti|kilimanjaro/i.test(text(slot.location));
   const conflictingChina = /呼伦贝尔|内蒙古|中国|hulunbuir|inner mongolia|\bchina\b/i.test(`${audit.actualSubject || ""} ${audit.reason || ""}`);
   if (expectedEastAfrica && conflictingChina) return "place_mismatch";
@@ -226,7 +276,7 @@ function failureLayer(error) {
 export async function runImageSearchSkill({
   slots = [], root = appRoot, searchApiKey, searchBaseUrl, searchModel, visionApiKey, visionBaseUrl, visionModel,
   maxQueriesPerSlot = 2, sourcePagesPerSlot = 4, downloadsPerSlot = 6, visionCandidatesPerSlot = 4,
-  concurrency = {}, signal, adapters = {}, onCapabilityCall,
+  concurrency = {}, existingImages = [], signal, adapters = {}, onCapabilityCall,
 } = {}) {
   const startedAt = Date.now();
   const batchId = randomUUID();
@@ -241,6 +291,7 @@ export async function runImageSearchSkill({
   const downloadQueue = new TaskQueue(concurrency.downloads || 3);
   const visionQueue = new TaskQueue(concurrency.vision || 2);
   const deduper = new ImageDeduper();
+  deduper.seed(existingImages);
   let dedupeTail = Promise.resolve();
   const withDedupeLock = (candidate) => { const operation = dedupeTail.then(() => deduper.accept(candidate)); dedupeTail = operation.catch(() => undefined); return operation; };
   const timingsMs = { searchProvider: 0, commons: 0, pageExtraction: 0, download: 0, batchVision: 0, topConfirmation: 0 };
@@ -289,11 +340,13 @@ export async function runImageSearchSkill({
         evidence.groundingRedirectUnresolved = pagesResult.value.diagnostics.filter((item) => item?.code === "grounding_redirect_unresolved");
         for (const item of evidence.groundingRedirectUnresolved) warnings.push(`${layerName} 搜索来源未解析：grounding_redirect_unresolved：${item.title || item.pageUrl}`);
       }
-      const allPages = (pagesResult.status === "fulfilled" ? pagesResult.value : []).filter((item, index, array) => item?.pageUrl && array.findIndex((other) => other.pageUrl === item.pageUrl) === index).sort((a, b) => basicScore(b, layerSlot) - basicScore(a, layerSlot)).slice(0, sourcePagesPerSlot);
+      const searchedPages = (pagesResult.status === "fulfilled" ? pagesResult.value : []).filter((item, index, array) => item?.pageUrl && array.findIndex((other) => other.pageUrl === item.pageUrl) === index);
+      const allPages = expandHotelSourcePages(searchedPages, layerSlot).sort((a, b) => basicScore(b, layerSlot) - basicScore(a, layerSlot)).slice(0, sourcePagesPerSlot);
       evidence.searchPages = allPages.length;
       evidence.searchPageUrls = allPages.map((item) => item.pageUrl);
+      evidence.officialSourcePages = allPages.filter((item) => item.officialHint).length;
       const directCandidates = commonsResult.status === "fulfilled" ? commonsResult.value : [];
-      const semanticTerms = unique([text(layerSlot.activity), text(layerSlot.subject), text(layerSlot.location), ...(Array.isArray(layerSlot.searchKeywords) ? layerSlot.searchKeywords : []), ...layerQueries]);
+      const semanticTerms = unique([text(layerSlot.activity), text(layerSlot.subject), text(layerSlot.location), ...(isHotel ? [text(layerSlot.hotel), "hotel lodge camp tented suite guest room interior exterior public space lounge restaurant dining deck pool spa accommodation"] : []), ...(Array.isArray(layerSlot.searchKeywords) ? layerSlot.searchKeywords : []), ...layerQueries]);
       const extractedGroups = await Promise.all(allPages.map((page) => pageQueue.add(async () => {
         try {
           return await withOneTechnicalRetry(async () => { metrics.pageExtractionCalls += 1; return measure("pageExtraction", () => extractFn(page, { signal, maxImages: 24, semanticTerms })); }, (error) => { metrics.technicalRetries.pageExtraction += 1; warnings.push(`${layerName} 网页提图技术重试：${page.pageUrl}：${error?.message || error}`); });
@@ -302,9 +355,10 @@ export async function runImageSearchSkill({
       })));
       evidence.semanticExtractionCompleted = true;
       const perPageCap = Math.max(2, Math.ceil(downloadsPerSlot / Math.max(1, allPages.length)));
-      const diverseExtracted = extractedGroups.flatMap((group) => [...group].sort((a, b) => basicScore(b, layerSlot) - basicScore(a, layerSlot)).slice(0, perPageCap));
-      const rawCandidates = [...diverseExtracted, ...directCandidates].filter((item, index, array) => item?.imageUrl && array.findIndex((other) => other.imageUrl === item.imageUrl) === index).sort((a, b) => basicScore(b, layerSlot) - basicScore(a, layerSlot)).slice(0, downloadsPerSlot);
+      const diverseExtracted = extractedGroups.flatMap((group, index) => [...group].sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot)).slice(0, isHotel && allPages[index]?.officialHint ? Math.max(4, downloadsPerSlot) : perPageCap));
+      const rawCandidates = uniqueImageAssets([...diverseExtracted, ...directCandidates].filter((item) => item?.imageUrl).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot))).slice(0, downloadsPerSlot);
       evidence.extractedCandidates = extractedGroups.flat().length + directCandidates.length;
+      evidence.officialExtractedCandidates = extractedGroups.reduce((sum, group, index) => sum + (allPages[index]?.officialHint ? group.length : 0), 0);
       evidence.semanticRelevantCandidates = extractedGroups.flat().filter((item) => Number(item.semanticScore || 0) > 0).length + directCandidates.filter((item) => Number(item.semanticScore || 0) > 0).length;
       const downloadedResults = await Promise.all(rawCandidates.map((candidate) => downloadQueue.add(async () => {
         try {
@@ -313,7 +367,7 @@ export async function runImageSearchSkill({
         catch (error) { const failure = failureLayer(error); evidence.downloadFailures.push({ imageUrl: candidate.imageUrl, layer: failure, reason: error?.message || String(error) }); warnings.push(`${layerName} 候选下载失败：${error?.message || error}`); return null; }
       })));
       const contentSeen = new Set();
-      const downloaded = downloadedResults.filter((item) => item?.filePath && item?.sha256 && !contentSeen.has(item.sha256) && contentSeen.add(item.sha256)).sort((a, b) => basicScore(b, layerSlot) - basicScore(a, layerSlot)).map((item) => ({ ...item, candidateId: stableCandidateId(slot.slotId, item) }));
+      const downloaded = downloadedResults.filter((item) => item?.filePath && item?.sha256 && !contentSeen.has(item.sha256) && contentSeen.add(item.sha256)).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot)).map((item) => ({ ...item, candidateId: stableCandidateId(slot.slotId, item) }));
       evidence.downloadedCandidates = downloaded.length;
       if (!downloaded.length) {
         evidence.visualJudgmentCompleted = true;

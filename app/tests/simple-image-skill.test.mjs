@@ -239,6 +239,48 @@ test("酒店 slot 不搜索 Commons，普通 slot 每批最多一次", async () 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("官方 Gallery 命中后补取酒店落地页，并优先下载可确认酒店身份的主体图", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-image-hotel-gallery-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const extractedPages = [];
+  const downloadedUrls = [];
+  let index = 0;
+  const result = await runImageSearchSkill({
+    root,
+    slots: [slot("image:hotel:sabora:primary", { moduleType:"hotel", location:"Grumeti Reserve Tanzania", hotel:"Singita Sabora Tented Camp", activity:"", subject:"可确认 Singita Sabora Tented Camp 身份的帐篷营地、客房或公共空间" })],
+    searchApiKey:"search-key", searchModel:"search-model", visionApiKey:"vision-key", visionBaseUrl:"https://vision.example/v1", visionModel:"vision-model",
+    sourcePagesPerSlot:2, downloadsPerSlot:2, visionCandidatesPerSlot:2,
+    adapters: {
+      searchWebBatch: async () => [{ title:"Singita Sabora Gallery", pageUrl:"https://singita.com/lodge/singita-sabora-tented-camp/gallery", officialHint:true, searchRank:1 }],
+      searchCommonsImages: async () => [],
+      extractPageImages: async (page) => {
+        extractedPages.push(page.pageUrl);
+        if (/gallery\/?$/.test(page.pageUrl)) return [{ ...page, imageUrl:"https://images.ctfassets.net/demo/moon-with-lilies.jpg?w=2400", alt:"Moon with lilies", semanticText:"moon with lilies atmosphere" }];
+        return [
+          { ...page, imageUrl:"https://images.ctfassets.net/demo/moon-with-lilies.jpg?w=2400", alt:"Moon with lilies", semanticText:"moon with lilies atmosphere" },
+          { ...page, imageUrl:"https://images.ctfassets.net/demo/sabora-tented-suite-exterior.jpg?w=2400", alt:"Singita Sabora tented suite exterior", semanticText:"Singita Sabora Tented Camp guest tent exterior" },
+          { ...page, imageUrl:"https://images.ctfassets.net/demo/sabora-lounge.jpg?w=2400", alt:"Singita Sabora lounge", semanticText:"Singita Sabora Tented Camp public lounge interior" },
+        ];
+      },
+      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+        downloadedUrls.push(candidate.imageUrl);
+        index += 1;
+        const filePath = path.join(directory, `hotel-${index}.jpg`);
+        await sharp({ create:{ width:1600, height:1000, channels:3, background:{ r:60 * index, g:90, b:110 } } }).jpeg().toFile(filePath);
+        return { ...candidate, filePath, publicUrl:`${publicPrefix}/hotel-${index}.jpg`, sha256:`hotel-${index}`, width:1600, height:1000 };
+      },
+      judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate) => ({ candidateId:candidate.candidateId, actualSubject:candidate.alt, locationMatch:true, hotelIdentityMatch:true, activityMatch:true, subjectMatch:true, watermarkFree:true, nonAI:true, photographic:true, technicalUsable:true, eligible:true, hardRejectCode:"none", score:95, reason:"官方酒店主体空间" })),
+    },
+  });
+  assert.deepEqual(extractedPages, ["https://singita.com/lodge/singita-sabora-tented-camp/", "https://singita.com/lodge/singita-sabora-tented-camp/gallery"]);
+  assert.equal(result.results[0].pipelineEvidence.officialSourcePages, 2);
+  assert.ok(result.results[0].pipelineEvidence.officialExtractedCandidates >= 4);
+  assert.equal(downloadedUrls.length, 2);
+  assert.ok(downloadedUrls.every((url) => /suite|lounge/.test(url)));
+  assert.equal(result.results[0].status, "success");
+  assert.match(result.results[0].selected.imageUrl, /suite|lounge/);
+});
+
 test("DAY2酒店室内与DAY6帐篷室内均不能通过游猎视觉职责", async (t) => {
   for (const [id, actualSubject] of [["day-2", "Faru Faru 酒店室内休息区"], ["day-6", "Sabora 帐篷内部客厅"]]) {
     const result = await runAuditedFixture(t, slot(id, { activity: id === "day-6" ? "反偷猎观察站参访" : "塞伦盖蒂西部游猎", subject: id === "day-6" ? "反偷猎观察站参访" : "塞伦盖蒂西部游猎" }), {
@@ -349,6 +391,21 @@ test("徒步游猎不能被酒店泳池木栈道人物照冒充", async (t) => {
   });
   assert.equal(result.results[0].status, "not_found");
   assert.equal(result.results[0].candidates[0].rejection, "activity_mismatch");
+});
+
+test("DAY primary 明确活动不能被模型误判为合格的酒店空间冒充", async (t) => {
+  for (const [activity, actualSubject] of [
+    ["塞伦盖蒂西部游猎", "酒店泳池躺椅与遮阳伞休闲区"],
+    ["草原飞机返程", "营地 lounge 与餐厅"],
+    ["马赛文化体验", "豪华客房与卧室"],
+    ["反偷猎观察站参访", "帐篷室内起居空间"],
+  ]) {
+    const result = await runAuditedFixture(t, slot(`guard-${activity}`, { activity, subject: activity }), {
+      judgments: (candidates) => candidates.map((candidate) => ({ candidateId: candidate.candidateId, actualSubject, locationMatch: true, hotelIdentityMatch: true, activityMatch: true, subjectMatch: true, watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true, eligible: true, hardRejectCode: "none", score: 99, reason: "模型误判为可用" })),
+    });
+    assert.equal(result.results[0].status, "not_found", activity);
+    assert.equal(result.results[0].candidates[0].rejection, "activity_mismatch", activity);
+  }
 });
 
 test("活动语义相关候选优先消耗有限下载名额", async (t) => {

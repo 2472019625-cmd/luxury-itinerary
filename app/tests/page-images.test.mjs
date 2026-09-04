@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractImageCandidatesFromHtml } from "../server/page-images.mjs";
+import { canonicalImageAssetKey, extractImageCandidatesFromHtml } from "../server/page-images.mjs";
 
 test("网页提图覆盖 og、srcset、lazy、CSS、gallery、JSON-LD 并恢复高清 URL", () => {
   const html = `<!doctype html><html><head>
@@ -45,4 +45,17 @@ test("活动文本区域邻近图片获得语义分，通用酒店图片在活�
   assert.ok(pool.genericActivityPenalty > 0);
   assert.ok(results.indexOf(walking) < results.indexOf(pool));
   assert.ok(results.indexOf(ranger) < results.indexOf(pool));
+});
+
+test("Contentful 同一原图的尺寸和格式变体只占一个候选名额", () => {
+  const html = `<!doctype html><html><body>
+    <img src="https://images.ctfassets.net/demo/sabora-suite.jpg?w=600&fm=webp" alt="Sabora tented suite">
+    <img src="https://images.ctfassets.net/demo/sabora-suite.jpg?w=2400&fm=jpg" alt="Sabora tented suite">
+    <img src="https://images.ctfassets.net/demo/sabora-lounge.jpg?w=2400&fm=jpg" alt="Sabora lounge">
+  </body></html>`;
+  const results = extractImageCandidatesFromHtml(html, { pageUrl:"https://singita.com/lodge/singita-sabora-tented-camp/", officialHint:true }, { maxImages:10, semanticTerms:["Singita Sabora Tented Camp", "tented suite lounge"] });
+  assert.equal(results.length, 2);
+  assert.equal(new Set(results.map((item) => canonicalImageAssetKey(item.imageUrl))).size, 2);
+  assert.ok(results.some((item) => item.imageUrl.includes("sabora-suite.jpg")));
+  assert.ok(results.some((item) => item.imageUrl.includes("sabora-lounge.jpg")));
 });
