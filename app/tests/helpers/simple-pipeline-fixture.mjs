@@ -67,10 +67,14 @@ export function copyRequestJson({ failTargetId = null, delayMs = 60 } = {}) {
     const results = payload.tasks.filter((task) => task.targetId !== failTargetId).map((task) => {
       let value = `已按${task.moduleType}真实事实完成的客户文案`;
       if (task.moduleType === "cover") value = "肯尼亚草原私享之旅";
-      if (task.moduleType === "product_highlight") value = `私家游猎｜以专属节奏深入真实草原体验，让整条产品更从容。`;
+      if (task.moduleType === "cover_subtitle") value = "从草原飞机进入安博塞利，以私家游猎展开完整自然旅程";
+      if (task.moduleType === "product_highlight") value = `${task.facts.selectedByPlanner}｜解释这项已确认配置对客户的具体价值。`;
       if (task.moduleType === "hotel") value = "坐落于安博塞利核心景观区域，以真实开阔视野与完整营地空间构成值得期待的住宿体验。";
+      if (task.moduleType === "hotel_proof_points") value = ["开阔景观中的居停空间", "贴近自然环境的住宿体验"];
       if (task.moduleType === "transport") value = "草原飞机与专属游猎车承担主要移动，在真实交通类别范围内兼顾跨区效率与游猎舒适度。";
+      if (task.moduleType === "day_theme") value = `DAY ${Number(task.layoutHints?.dayIndex || 0) + 1} 的独立旅行主题`;
       if (task.moduleType === "day") value = `当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。`;
+      if (task.moduleType === "day_spot") value = "围绕这一项真实活动说明体验方式与客户价值。";
       if (task.moduleType === "notes") value = [
         { title: "行前准备", icon: "calendar", tone: "gold", items: ["请根据本次目的地与活动安排准备合适衣物和随身用品，具体清单由定制师在出发前协助复核。"] },
         { title: "活动与安全", icon: "security", tone: "gold", items: ["参加游猎与营地活动时请遵循现场人员指引，相关时效要求以出发前正式通知为准。"] },
@@ -78,6 +82,15 @@ export function copyRequestJson({ failTargetId = null, delayMs = 60 } = {}) {
       return { targetId: task.targetId, targetPath: task.targetPath, value, warnings: [] };
     });
     return { json: { results }, model: "copy-fixture", usage: { input_tokens: 100, output_tokens: 200 }, attemptUsages: [{}] };
+  };
+}
+
+export async function copyResearchFacts({ researchRequest }) {
+  return {
+    researchType: researchRequest.researchType,
+    entityName: researchRequest.entityName,
+    status: "success",
+    verifiedFacts: [{ category: researchRequest.categories[0], fact: "官方页面确认该住宿以自然环境与空间体验为核心。", sourceUrl: "https://official.example.test/hotel", sourceExcerpt: "nature and space", checkedAt: "2026-09-04T00:00:00.000Z" }],
   };
 }
 

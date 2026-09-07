@@ -6,7 +6,7 @@ import test from "node:test";
 import { runSimplePipeline, statusFor } from "../server/simple-pipeline-executor.mjs";
 import { materializeSimpleSkillPlan } from "../server/simple-plan-adapter.mjs";
 import { APPROVED_PAYMENT } from "../server/simple-fixed-modules.mjs";
-import { copyRequestJson, createWorkbookFile, imageAdapters, plannerRequestJson } from "./helpers/simple-pipeline-fixture.mjs";
+import { copyRequestJson, copyResearchFacts, createWorkbookFile, imageAdapters, plannerRequestJson } from "./helpers/simple-pipeline-fixture.mjs";
 
 const appRoot = path.resolve(import.meta.dirname, "..");
 
@@ -19,7 +19,7 @@ test("完整链路并行调用两个 Skill，隔离单项失败并阻止必需�
     root: appRoot,
     storeRoot: path.join(root, "projects"),
     plannerOptions: { apiKey: "fixture", baseUrl: "https://planner.invalid", model: "fixture", requestJson: plannerRequestJson() },
-    copyOptions: { apiKey: "fixture", baseUrl: "https://copy.invalid", model: "fixture", requestJson: copyRequestJson({ failTargetId: "copy:day:2" }) },
+    copyOptions: { apiKey: "fixture", baseUrl: "https://copy.invalid", model: "fixture", requestJson: copyRequestJson({ failTargetId: "copy:day:2" }), researchFacts: copyResearchFacts },
     imageOptions: {
       visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture",
       sourcePagesPerSlot: 1, downloadsPerSlot: 1, visionCandidatesPerSlot: 1,
@@ -61,7 +61,7 @@ test("全部必需单元满足时进入 Renderer，并只在真实渲染成功�
     root: appRoot,
     storeRoot: path.join(root, "projects"),
     plannerOptions: { apiKey: "fixture", baseUrl: "https://planner.invalid", model: "fixture", requestJson: plannerRequestJson() },
-    copyOptions: { apiKey: "fixture", baseUrl: "https://copy.invalid", model: "fixture", requestJson: copyRequestJson() },
+    copyOptions: { apiKey: "fixture", baseUrl: "https://copy.invalid", model: "fixture", requestJson: copyRequestJson(), researchFacts: copyResearchFacts },
     imageOptions: { visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture", sourcePagesPerSlot: 1, downloadsPerSlot: 1, visionCandidatesPerSlot: 1, adapters: imageAdapters({ appRoot }) },
     adapters: { render: async ({ data }) => { receivedData = data; await writeFile(outputPath, "2000px-render-fixture"); return { status: "success", outputPath, rendererCalls: 1, durationMs: 5 }; } },
   });
@@ -93,7 +93,7 @@ test("原始资料没有 notes 且必需生成失败时不得渲染或完成", a
     root: appRoot,
     storeRoot: path.join(root, "projects"),
     plannerOptions: { apiKey: "fixture", baseUrl: "https://planner.invalid", model: "fixture", requestJson: plannerRequestJson() },
-    copyOptions: { apiKey: "fixture", baseUrl: "https://copy.invalid", model: "fixture", requestJson: copyRequestJson({ failTargetId: "copy:notes:travel-preparation" }) },
+    copyOptions: { apiKey: "fixture", baseUrl: "https://copy.invalid", model: "fixture", requestJson: copyRequestJson({ failTargetId: "copy:notes:travel-preparation" }), researchFacts: copyResearchFacts },
     imageOptions: { visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture", sourcePagesPerSlot: 1, downloadsPerSlot: 1, visionCandidatesPerSlot: 1, adapters: imageAdapters({ appRoot }) },
     adapters: { render: async () => { rendererCalls += 1; return { status: "success", outputPath: "should-not-render.png", rendererCalls: 1 }; } },
   });

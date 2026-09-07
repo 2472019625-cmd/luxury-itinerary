@@ -5,6 +5,11 @@ const RESERVATION_REQUIRED = /需(?:要)?提前预约|须提前预约|预约后|
 const PENDING_CONFIRMATION = /待确认|尚未确认|以最终确认|视情况|按.*安排/i;
 const INTERNAL_CONTENT = /成本|利润|毛利|供应商底价|采购价|结算价|内部报价|基本房型报价|报价测算逻辑|加价倍率|内部备注/i;
 const TIME_SENSITIVE = /签证|疫苗|健康申报|入境|海关|检疫|黄热病|安全政策/i;
+const TRAVEL_TIME_PLACEHOLDER = /^(?:待确认|以最终确认(?:安排)?为准|未知|暂无)$/;
+const SUMMARY_ACTIVITY_NODE = /(?:全天|半日|上午|下午|清晨|傍晚)?(?:私人|专属|核心区)?(?:游猎|观光|参观|活动|自由活动|休整)$/i;
+const TERMINAL_ROUTE_NODE = /送机|离境|返程|行程结束|登机/i;
+const HOTEL_NODE = /hotel|resort|lodge|camp|villa|营地|酒店|度假村|山庄/i;
+const INDEPENDENT_EXPERIENCE = /夜间游猎|夜游|徒步游猎|步行\s*safari|丛林徒步|热气球|观星|星空床|村庄|部落|博物馆|中心|观景台|购物中心|国家公园|保护区|机场|airport|hill|museum|center|centre/i;
 
 export const EXPERIENCE_STATUS = Object.freeze({
   INCLUDED: "included",
@@ -140,10 +145,10 @@ export function isUsableFinalImageSource(value) {
 
 export function splitRouteNodes(value) {
   const withoutTravel = cleanText(value)
-    .replace(/(?:大门间)?(?:车程|飞行|航程|乘车|用时|预计)\s*(?:约)?\s*\d+(?:\.\d+)?\s*(?:小时|分钟)/gi, " ")
+    .replace(/(?:大门间)?(?:车程|飞行|航程|乘车|用时|预计)?\s*(?:约)?\s*\d+(?:\.\d+)?(?:\s*(?:-|–|—|~|～|至|到)\s*\d+(?:\.\d+)?)?\s*(?:小时|分钟)/gi, " ")
     .replace(/\(.*?(?:车程|飞行|航程|小时|分钟).*?\)/gi, " ");
   return unique(withoutTravel
-    .split(/(?:→|—|－|-|至|✈|\/|\||｜|\n)+/)
+    .split(/(?:→|—|－|✈|🚗|🚙|🚌|\/|\||｜|\n|\s+-\s+|(?<=[\u3400-\u9fff])-(?=[\u3400-\u9fff])|至)+/u)
     .map((item) => item.replace(/^(?:抵达|前往|乘车前往|飞往|返回)\s*/, "").replace(/[，,；;。]+$/g, "").trim())
     .filter((item) => item && !/^(?:车程|飞行|航程|约?\d)/.test(item)))
     .slice(0, 6);
@@ -151,15 +156,228 @@ export function splitRouteNodes(value) {
 
 export function extractTravelTime(...values) {
   const source = values.map(cleanText).join(" ");
-  const match = source.match(/(?:大门间)?(?:车程|飞行|航程|乘车|用时|预计)\s*(?:约)?\s*\d+(?:\.\d+)?\s*(?:小时|分钟)/i);
-  return match ? match[0].replace(/\s+/g, "") : "待确认";
+  const duration = "\\d+(?:\\.\\d+)?(?:\\s*(?:-|–|—|~|～|至|到)\\s*\\d+(?:\\.\\d+)?)?";
+  const explicit = source.match(new RegExp(`(?:大门间)?(车程|飞行|航程|乘车|用时|预计)\\s*(?:约)?\\s*(${duration})\\s*(小时|分钟)`, "i"));
+  const standalone = source.match(new RegExp(`约\\s*(${duration})\\s*(小时|分钟)`, "i"));
+  const match = explicit || standalone;
+  if (!match) return "";
+  const amount = (explicit ? explicit[2] : standalone[1]).replace(/\s*(?:-|–|—|~|～|至|到)\s*/g, "–");
+  const unit = explicit ? explicit[3] : standalone[2];
+  let mode = explicit?.[1] || "";
+  if (mode === "乘车") mode = "车程";
+  if (!mode) {
+    const before = source.slice(Math.max(0, match.index - 80), match.index);
+    if (/飞机|航班|飞往|飞行|航程|航空/i.test(before)) mode = "飞行";
+    else if (/驱车|乘车|车程|用车|汽车|接机|送机/i.test(before)) mode = "车程";
+  }
+  return `${mode}${mode === "预计" ? "" : "约"}${amount}${unit}`;
 }
 
 export function inferActivityLevel(day = {}) {
-  const source = cleanText(`${day.theme || ""} ${day.description || ""} ${(day.routeNodes || []).join(" ")}`);
-  if (/登山|攀登|长距离徒步|全天徒步|高强度/.test(source)) return "较高";
-  if (/全天游猎|游猎|迁徙|追踪|浮潜|潜水|骑行|徒步|热气球|博物馆|参观/.test(source)) return "适中";
+  const spots = Array.isArray(day.spots) ? day.spots : [];
+  const source = cleanText(`${day.theme || ""} ${day.city || ""} ${day.description || ""} ${(day.routeNodes || []).join(" ")} ${spots.flatMap((spot) => [spot.name, spot.description]).join(" ")}`);
+  const departureOnly = /送机|离境|登机|国际航班时间/.test(source) && !/游猎|徒步|热气球|参观|博物馆|中心|观景台|村庄|部落/.test(source);
+  const resting = /全天休整|酒店休息|营地休整|自由休息/.test(source) && spots.length <= 1;
+  if (departureOnly || resting) return "轻松";
+
+  const fullDaySafari = /全天(?:[^。；\n]{0,8})?游猎|每日两次游猎/.test(source);
+  const walking = /徒步|步行\s*safari/i.test(source);
+  const balloon = /热气球/.test(source);
+  const nightActivity = /夜间游猎|夜游|观星|星空床/.test(source);
+  const earlyActivity = /清晨|日出|凌晨/.test(source);
+  const visitActivity = /参观|拜访|博物馆|中心|观景台|村庄|部落|购物中心/.test(source);
+  const highParticipation = /登山|攀登|长距离徒步|全天徒步|高强度|潜水|骑行/.test(source);
+  const durationMinutes = travelMinutes(day.estimatedTravelTime);
+  const longTransfer = durationMinutes >= 240 || /长距离转场|长途移动/.test(source);
+  const experienceNodeCount = (day.routeNodes || []).filter((node) => INDEPENDENT_EXPERIENCE.test(node) && !AIRPORT.test(node)).length;
+  const regionalTransfer = /→|✈|转场|飞机|飞行|航班/.test(source) && (day.routeNodes || []).length >= 2;
+  const distinctSignals = [fullDaySafari, walking, balloon, nightActivity, visitActivity].filter(Boolean).length;
+  const busyCombination = (fullDaySafari && (spots.length >= 2 || distinctSignals >= 2))
+    || (earlyActivity && nightActivity)
+    || (balloon && (walking || nightActivity))
+    || (longTransfer && distinctSignals >= 2)
+    || (regionalTransfer && experienceNodeCount >= 2)
+    || distinctSignals >= 3
+    || spots.length >= 3;
+  if (highParticipation || busyCombination) return "充实";
+  if (longTransfer || /游猎|迁徙|追踪|浮潜|徒步|热气球|博物馆|参观|中心|观景台|村庄|部落/.test(source) || spots.length > 0) return "适中";
   return "轻松";
+}
+
+function daySource(day = {}) {
+  const source = day.sourceEvidence && !Array.isArray(day.sourceEvidence) ? day.sourceEvidence : {};
+  return {
+    route: cleanText(source.route || day.city || day.route || ""),
+    description: cleanText(source.description || day.description || day.experience || ""),
+    hotel: cleanText(source.hotel || day.hotel || day.hotelShortName || ""),
+    vehicle: cleanText(source.vehicle || day.vehicle || ""),
+  };
+}
+
+function routeNodeKey(value) {
+  return normalizeName(value).replace(/(?:国家公园|自然保护区|私人保护区|保护区)$/, "");
+}
+
+function cleanExtractedRouteNode(value) {
+  return cleanText(value)
+    .replace(/^.*?(?:驱车前往|乘车前往|专人接机后|前往|飞往|转至|位于|抵达|到达|进入|深入|参观|拜访|打卡|登上?|送往|返回|入住|回到)\s*/i, "")
+    .replace(/^(?:亦可|可自费|可选择|当地|著名|景点|取景地|核心区内的?)/, "")
+    .replace(/(?:中心地带|核心地带)$/, "")
+    .replace(/[（(].*$/, "")
+    .replace(/[，,；;。]+$/g, "")
+    .trim();
+}
+
+function summaryLocation(value) {
+  const node = cleanText(value);
+  if (!SUMMARY_ACTIVITY_NODE.test(node)) return node;
+  return node.replace(/(?:全天|半日|上午|下午|清晨|傍晚)?(?:私人|专属|核心区)?(?:游猎|观光|参观|活动|自由活动|休整)$/i, "").trim();
+}
+
+function extractDetailedRouteNodes(description, baseLocations = []) {
+  const candidates = [];
+  const addMatches = (pattern, normalize = cleanExtractedRouteNode) => {
+    for (const match of description.matchAll(pattern)) {
+      const value = normalize(match[0], match);
+      if (value) candidates.push({ value, index: match.index || 0, raw: match[0] });
+    }
+  };
+  addMatches(/[\u3400-\u9fffA-Za-z·'’.-]{2,30}(?:国际机场|机场|国家公园|私人保护区|自然保护区|保护区|观景台|博物馆|购物中心|中心|村庄|部落)/gu);
+  addMatches(/\b[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*\s+(?:购物中心|酒店|营地)/g);
+  addMatches(/\b(?:[A-Z][A-Za-z'’.-]*\s+){0,5}(?:International\s+Airport|Airport|Observation\s+Hill|National\s+Park|Game\s+Reserve|Nature\s+Reserve|Museum|Centre|Center)\b/g);
+  addMatches(/夜间游猎|徒步游猎|步行\s*(?:Safari|游猎)|丛林徒步|热气球(?:之旅|\s*Safari)?|营地观星|观星/gi, (value) => {
+    if (/步行/i.test(value)) return "步行 Safari";
+    if (/热气球/i.test(value)) return "热气球";
+    return cleanText(value);
+  });
+  const corePattern = /(?:进入|深入)(?:公园|保护区)?核心区/g;
+  for (const match of description.matchAll(corePattern)) {
+    const anchor = baseLocations.find((item) => item && !HOTEL_NODE.test(item));
+    candidates.push({ value: anchor ? `${anchor}核心区` : "保护区核心区", index: match.index || 0, raw: match[0] });
+  }
+  for (const match of description.matchAll(/深入([\u3400-\u9fffA-Za-z·'’.-]{2,20})核心区/gu)) {
+    const namedArea = cleanText(match[1]);
+    const anchor = baseLocations.find((item) => item.includes(namedArea) || namedArea.includes(item));
+    candidates.push({ value: `${anchor || namedArea}核心区`, index: match.index || 0, raw: match[0] });
+  }
+  return candidates
+    .sort((left, right) => left.index - right.index)
+    .filter((candidate) => {
+      const sentenceStart = Math.max(description.lastIndexOf("。", candidate.index - 1), description.lastIndexOf("；", candidate.index - 1), description.lastIndexOf("\n", candidate.index - 1));
+      const prefix = description.slice(sentenceStart + 1, candidate.index);
+      return candidate.value.length >= 2 && candidate.value.length <= 60 && !/(?:可自费|亦可|可选择|可选|或可|视情况)/.test(`${prefix} ${candidate.raw || ""}`);
+    });
+}
+
+function extractNamedAirports(value) {
+  const source = cleanText(value);
+  const airports = [];
+  for (const match of source.matchAll(/[\u3400-\u9fffA-Za-z·'’.-]{2,30}(?:国际机场|机场|航站楼)/gu)) {
+    const airport = cleanExtractedRouteNode(match[0]);
+    if (airport.length > 2) airports.push(airport);
+  }
+  for (const match of source.matchAll(/\b(?:[A-Z][A-Za-z'’.-]*\s+){1,5}(?:International\s+Airport|Airport)\b/g)) airports.push(cleanText(match[0]));
+  return unique(airports);
+}
+
+function independentSpotNodes(day, description) {
+  return (day.spots || []).map((spot, index) => {
+    let name = cleanText(spot.name);
+    if (spot.optional || spot.status === EXPERIENCE_STATUS.OPTIONAL_PAID || spot.status === EXPERIENCE_STATUS.PENDING) return null;
+    if (/热气球/.test(name)) name = "热气球";
+    if (/步行\s*(?:Safari|游猎)/i.test(name)) name = "步行 Safari";
+    if (/营地观星/.test(name)) {
+      if (/观星/.test(description)) name = "营地观星";
+      else if (/星空床/.test(description)) name = "星空床";
+      else return null;
+    }
+    const evidence = cleanText((spot.sourceEvidence || [])[0] || spot.description);
+    const at = Math.max(description.indexOf(name), description.indexOf(evidence));
+    return { value: name, index: at >= 0 ? at : description.length + index };
+  }).filter((item) => item?.value && INDEPENDENT_EXPERIENCE.test(item.value) && !SUMMARY_ACTIVITY_NODE.test(item.value));
+}
+
+function pushUniqueRouteNode(nodes, value) {
+  const node = cleanExtractedRouteNode(value);
+  if (!node) return;
+  const key = routeNodeKey(node);
+  if (!key || nodes.some((item) => {
+    const current = routeNodeKey(item);
+    return current === key || (current.length >= 5 && key.length >= 5 && (current.includes(key) || key.includes(current)));
+  })) return;
+  nodes.push(node);
+}
+
+export function buildRouteNodes(day = {}, context = {}) {
+  const source = daySource(day);
+  const rawNodes = source.route
+    ? splitRouteNodes(source.route)
+    : Array.isArray(day.routeNodes) ? unique(day.routeNodes) : [];
+  const summaryNodes = rawNodes.filter((node) => SUMMARY_ACTIVITY_NODE.test(node));
+  let baseLocations = rawNodes.map(summaryLocation).filter(Boolean);
+  const description = source.description;
+  const detailed = [...extractDetailedRouteNodes(description, baseLocations), ...independentSpotNodes(day, description)]
+    .sort((left, right) => left.index - right.index);
+  const previousHotel = cleanText(context.previousDay?.hotelShortName || context.previousDay?.hotel || "");
+  const currentHotel = cleanText(day.hotelShortName || source.hotel || day.hotel || "");
+  const sameStay = previousHotel && currentHotel && normalizeName(previousHotel) === normalizeName(currentHotel);
+  const explicitTransition = /→|—|－|✈|🚗|🚙|🚌|\s+-\s+|至/.test(source.route);
+  const startsAtHotel = Boolean(previousHotel && (
+    /^(?:酒店|营地)早餐后|早餐后由|从[^。；\n]*(?:酒店|营地)|由[^。；\n]*(?:酒店|营地)转至/.test(description)
+    || (sameStay && summaryNodes.length > 0 && !explicitTransition)
+  ));
+  const departureDay = /送机|离境|国际航班|登机/.test(`${source.route} ${description}`);
+  if (departureDay && !detailed.some((item) => AIRPORT.test(item.value)) && context.knownAirports?.length === 1) {
+    detailed.push({ value: context.knownAirports[0], index: description.length });
+  }
+  const hasNamedAirport = detailed.some((item) => AIRPORT.test(item.value));
+  const terminalNodes = baseLocations.filter((node) => TERMINAL_ROUTE_NODE.test(node));
+  baseLocations = baseLocations.filter((node) => !TERMINAL_ROUTE_NODE.test(node));
+  if (departureDay && startsAtHotel && hasNamedAirport) baseLocations = baseLocations.filter((node) => AIRPORT.test(node));
+
+  const nodes = [];
+  if (startsAtHotel) pushUniqueRouteNode(nodes, previousHotel);
+  const arrivalAirport = detailed.find((item) => AIRPORT.test(item.value) && /^(?:抵达|到达)/.test(description));
+  if (arrivalAirport) pushUniqueRouteNode(nodes, arrivalAirport.value);
+  for (const location of baseLocations) {
+    if (detailed.some((item) => routeNodeKey(item.value).startsWith(routeNodeKey(location)) && routeNodeKey(item.value) !== routeNodeKey(location))) continue;
+    pushUniqueRouteNode(nodes, location);
+  }
+  for (const item of detailed) pushUniqueRouteNode(nodes, item.value);
+
+  const overnightType = inferOvernightType(day, context.index || 0, context.dayCount || 1);
+  const endsAtHotel = overnightType === "hotel" && currentHotel && (
+    !previousHotel || !sameStay || /入住|返回[^。；\n]*(?:酒店|营地)|回到?[^。；\n]*(?:酒店|营地)|抵达[^。；\n]*(?:酒店|营地)/.test(description)
+  );
+  if (endsAtHotel) pushUniqueRouteNode(nodes, currentHotel);
+  for (const terminal of terminalNodes) pushUniqueRouteNode(nodes, terminal);
+  if (!nodes.length && summaryNodes.length) summaryNodes.forEach((node) => pushUniqueRouteNode(nodes, node));
+  if (!nodes.length) pushUniqueRouteNode(nodes, `第${(context.index || 0) + 1}天`);
+  if (nodes.length <= 6) return nodes;
+  const last = nodes.at(-1);
+  return unique([nodes[0], ...nodes.slice(1, 5), last]);
+}
+
+function travelMinutes(value) {
+  const match = cleanText(value).match(/(\d+(?:\.\d+)?)(?:–(\d+(?:\.\d+)?))?\s*(小时|分钟)/);
+  if (!match) return 0;
+  const amount = Number(match[2] || match[1]);
+  return match[3] === "小时" ? amount * 60 : amount;
+}
+
+export function inferMovementPaceDescriptor(day = {}, context = {}) {
+  if (cleanText(day.estimatedTravelTime) && !TRAVEL_TIME_PLACEHOLDER.test(cleanText(day.estimatedTravelTime))) return "";
+  const source = daySource(day);
+  const textValue = cleanText(`${source.route} ${source.description} ${source.vehicle} ${(day.routeNodes || []).join(" ")} ${(day.spots || []).map((spot) => spot.name).join(" ")}`);
+  if (/送机|离境|国际航班时间|登机/.test(textValue)) return "按国际航班时间安排";
+  if (/全天(?:[^。；\n]{0,8})?游猎|每日两次游猎/.test(textValue)) return "区域内游猎";
+  if (/保护区|国家公园/.test(textValue) && /游猎|徒步|参观|活动/.test(textValue)) return "保护区内活动";
+  if (/营地活动|酒店活动|营地休整|酒店休整|观星|星空床/.test(textValue) && !/→|✈|\s+-\s+|至/.test(source.route)) return "营地活动为主";
+  if (/博物馆|购物中心|城市|市区|古城|街区|中心/.test(textValue) && !/保护区|国家公园/.test(textValue)) return "城市活动为主";
+  if (/飞机|航班|飞往|飞行|航空/.test(`${source.route} ${source.vehicle}`)) return "区域间飞行";
+  if (/→|✈|\s+-\s+|至/.test(source.route) && (day.routeNodes || []).length >= 2) return "跨区域移动";
+  if ((day.routeNodes || []).length <= 1 && !(day.spots || []).length) return "无长距离转场";
+  return source.vehicle ? "当地短途移动" : "无长距离转场";
 }
 
 function sentenceFor(source, pattern) {
@@ -216,13 +434,12 @@ export function inferOvernightType(day = {}, index = 0, dayCount = 1) {
   return "hotel";
 }
 
-export function normalizeDayFacts(day = {}, index = 0, dayCount = 1) {
-  const routeNodes = splitRouteNodes(day.routeNodes?.length ? day.routeNodes.join(" → ") : day.city || "");
+export function normalizeDayFacts(day = {}, index = 0, dayCount = 1, context = {}) {
+  const source = daySource(day);
+  const initialRouteNodes = source.route ? splitRouteNodes(source.route) : Array.isArray(day.routeNodes) ? unique(day.routeNodes) : [];
   const next = {
     ...day,
-    routeNodes,
-    estimatedTravelTime: day.estimatedTravelTime || extractTravelTime(day.city, day.description),
-    activityLevel: day.activityLevel || inferActivityLevel({ ...day, routeNodes }),
+    routeNodes: initialRouteNodes,
   };
   next.overnightType = inferOvernightType(next, index, dayCount);
   if (next.overnightType !== "hotel") {
@@ -233,10 +450,14 @@ export function normalizeDayFacts(day = {}, index = 0, dayCount = 1) {
   }
   if (!next.spots?.length) next.spots = buildCoreSpots(next);
   next.spots = (next.spots || []).map((spot, spotIndex) => normalizeExperienceSpot(spot, index, spotIndex));
-  if (next.overnightType === "hotel" && next.hotel && routeNodes.length < 6) {
-    const hotelName = cleanText(next.hotelShortName || next.hotel);
-    if (hotelName && !routeNodes.some((node) => normalizeName(node) === normalizeName(hotelName))) next.routeNodes = [...routeNodes, hotelName];
-  }
+  next.routeNodes = buildRouteNodes(next, { ...context, index, dayCount });
+  const currentTravelTime = cleanText(day.estimatedTravelTime);
+  const extractedTravelTime = extractTravelTime(source.route, source.description, source.vehicle, day.rawText, day.sourceText);
+  next.estimatedTravelTime = extractedTravelTime || (currentTravelTime && !TRAVEL_TIME_PLACEHOLDER.test(currentTravelTime) ? currentTravelTime : "");
+  next.movementPaceDescriptor = next.estimatedTravelTime
+    ? ""
+    : inferMovementPaceDescriptor(next, { ...context, index, dayCount });
+  next.activityLevel = inferActivityLevel(next);
   return next;
 }
 
@@ -247,7 +468,15 @@ function normalizeName(value) {
 export function normalizeItineraryFacts(data = {}, { mapDates = true } = {}) {
   let next = structuredClone(data);
   const dayCount = next.days?.length || 0;
-  next.days = (next.days || []).map((day, index) => normalizeDayFacts(day, index, dayCount));
+  const sourceDays = next.days || [];
+  const knownAirports = unique(sourceDays.flatMap((day) => {
+    const source = daySource(day);
+    return extractNamedAirports(`${source.route} ${source.description}`);
+  }));
+  next.days = [];
+  sourceDays.forEach((day, index) => {
+    next.days.push(normalizeDayFacts(day, index, dayCount, { previousDay: next.days[index - 1], nextDay: sourceDays[index + 1], knownAirports }));
+  });
   next.hotels = (next.hotels || []).map((hotel) => {
     const stayDays = next.days.map((day, index) => ({ day, index })).filter(({ day }) => {
       const names = [day.hotel, day.hotelShortName, day.hotelOfficialName].map(normalizeName).filter(Boolean);
@@ -269,7 +498,7 @@ export function normalizeItineraryFacts(data = {}, { mapDates = true } = {}) {
   const pendingConfirmations = Array.isArray(next.pendingConfirmations) ? next.pendingConfirmations : [];
   for (const [dayIndex, day] of next.days.entries()) {
     for (const spot of day.spots || []) {
-      if (spot.status === EXPERIENCE_STATUS.OPTIONAL_PAID && !excluded.some((item) => cleanText(typeof item === "string" ? item : item?.name || item?.text).includes(spot.name))) {
+      if (spot.status === EXPERIENCE_STATUS.OPTIONAL_PAID && !containsRelatedExcludedItem(excluded, spot.name)) {
         excluded.push(`${spot.name}：自费可选，费用以最终预订确认为准`);
       }
       if (spot.status === EXPERIENCE_STATUS.PENDING && !pendingConfirmations.some((item) => cleanText(typeof item === "string" ? item : item?.name || item?.text).includes(spot.name))) {
@@ -296,6 +525,16 @@ function containsItem(list, name) {
   return (list || []).some((item) => {
     const value = normalizeName(itemText(item).split(/[：:]/)[0]);
     return target && value && value === target;
+  });
+}
+
+function containsRelatedExcludedItem(list, name) {
+  const target = normalizeName(name).replace(/^(?:清晨|晨间|上午|午后|傍晚|夜间|前往|参加|体验)/, "");
+  return (list || []).some((item) => {
+    const raw = itemText(item);
+    if (/各种列明的自费活动|自费活动项目/.test(raw)) return true;
+    const value = normalizeName(raw).replace(/^(?:清晨|晨间|上午|午后|傍晚|夜间|前往|参加|体验)/, "");
+    return target.length >= 3 && value.length >= 3 && (value.includes(target) || target.includes(value));
   });
 }
 

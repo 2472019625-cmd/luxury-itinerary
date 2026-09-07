@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { copyTaskQueue } from "./copy-task-queue.mjs";
 import { requestDeepSeekJson } from "./deepseek-client.mjs";
+import { COPY_FACTS_RESEARCH_MODEL, runCopyFactsResearch, validateCopyResearchRequest } from "./simple-copy-facts-research.mjs";
 
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const skillPrompt = readFileSync(path.join(workspaceRoot, "skills", "copy-writer", "SKILL.md"), "utf8");
@@ -67,6 +68,96 @@ export function validateCopyValue(value, schema = {}, pathLabel = "value") {
   return errors;
 }
 
+export function normalizeCopyValueForSchema(value, schema = {}) {
+  const normalized = structuredClone(value);
+  const warnings = [];
+  if (!Array.isArray(normalized) || schema?.type !== "array" || schema?.items?.type !== "object" || schema.items.additionalProperties !== false || Object.hasOwn(schema.items.properties || {}, "warnings")) {
+    return { value: normalized, warnings };
+  }
+  for (const item of normalized) {
+    if (!item || typeof item !== "object" || Array.isArray(item) || !Object.hasOwn(item, "warnings")) continue;
+    const itemWarnings = Array.isArray(item.warnings) ? item.warnings : [item.warnings];
+    warnings.push(...itemWarnings.map((entry) => String(entry || "").trim()).filter(Boolean));
+    delete item.warnings;
+  }
+  const toneEnum = schema.items.properties?.tone?.enum;
+  if (Array.isArray(toneEnum) && toneEnum.length) {
+    for (const item of normalized) {
+      if (!item || typeof item !== "object" || Array.isArray(item) || !Object.hasOwn(item, "tone") || toneEnum.includes(item.tone)) continue;
+      const invalidTone = String(item.tone || "").trim() || "空值";
+      item.tone = toneEnum.includes("gold") ? "gold" : toneEnum[0];
+      warnings.push(`Notes tone“${invalidTone}”不在字段契约中，已使用展示默认值“${item.tone}”。`);
+    }
+  }
+  return { value: normalized, warnings: [...new Set(warnings)] };
+}
+
+function copyText(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(copyText).join("\n");
+  return "";
+}
+
+function clean(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function sourceIncludes(source, value) {
+  return clean(source).toLowerCase().includes(clean(value).toLowerCase());
+}
+
+export function validateCopyCommitments(value, task = {}) {
+  const output = copyText(value);
+  if (!output) return [];
+  const source = JSON.stringify({
+    facts: task.facts || {},
+    factStatuses: task.factStatuses || {},
+    verifiedFacts: task.verifiedFacts || task.facts?.verifiedFacts || [],
+  });
+  const errors = [];
+  for (const match of output.matchAll(/(?:^|[^\d])((?:[01]?\d|2[0-3])[:：][0-5]\d)[^，。；]{0,12}(?:准时|固定|必须|安排|出发|集合)/g)) {
+    const hasConfirmedTime = sourceIncludes(source, match[1]) && /confirmed|已确认|确定|固定|准时|departureTime|startTime/i.test(source);
+    if (!hasConfirmedTime) errors.push(`固定钟点承诺“${match[1]}”没有订单或已核验依据`);
+  }
+  for (const match of output.matchAll(/(?:必须|务必|至少)?\s*(提前\s*\d+\s*(?:天|日|小时|个月|月|周))[^，。；]{0,12}(?:预约|预订|确认|申请)/g)) {
+    const hasMandatoryLeadTime = sourceIncludes(source, match[1]) && /reservation_required|必须|务必|至少|required|mandatory/i.test(source);
+    if (!hasMandatoryLeadTime) errors.push(`强制预约时限“${clean(match[1])}”没有订单或已核验依据`);
+  }
+  for (const match of output.matchAll(/(?:必须|务必|需|需要)\s*(?:提前)?[^，。；]{0,8}(?:预约|预订|确认|申请)/g)) {
+    const claim = clean(match[0]);
+    if (!sourceIncludes(source, claim) && !/reservation_required|mandatory|required|必须预约|需预约/i.test(source)) errors.push(`强制预约要求“${claim}”没有订单或已核验依据`);
+  }
+  const guaranteedOutcome = /(?:保证|确保|一定|必然|百分之百|100%)[^，。；]{0,28}(?:看到|遇到|观察到|出现|狮子|花豹|猎豹|大象|动物|迁徙|渡河|晴天|升级|包场)|(?:看到|遇到|观察到)[^，。；]{0,20}(?:是必然|有保证|百分之百|100%)/g;
+  for (const match of output.matchAll(guaranteedOutcome)) if (!sourceIncludes(source, match[0])) errors.push(`保证性结果“${clean(match[0])}”没有订单或已核验依据`);
+  for (const match of output.matchAll(/(?:零距离|近距离接触)[^，。；]{0,16}(?:动物|野生环境|自然|生命)/g)) if (!sourceIncludes(source, match[0])) errors.push(`具体接近程度承诺“${clean(match[0])}”没有订单或已核验依据`);
+  const credentialClaim = /(?:国家|国际|官方|协会|机构)?(?:认证|持证|注册)?\s*(?:特级|高级|一级|二级|金牌|首席|专家级)[^，。；]{0,8}(?:向导|导览员|追踪员|领队|司机|专家)/g;
+  for (const match of output.matchAll(credentialClaim)) if (!sourceIncludes(source, match[0])) errors.push(`具体人员资质承诺“${clean(match[0])}”没有订单或已核验依据`);
+  const pricedClaim = /(?:费用|价格|售价|需支付|加价)[^，。；]{0,12}(\d[\d,.]*\s*(?:元|美元|美金|USD|CNY|RMB))/gi;
+  for (const match of output.matchAll(pricedClaim)) if (!sourceIncludes(source, match[1])) errors.push(`具体金额承诺“${clean(match[1])}”没有订单或已核验依据`);
+  if (String(task.moduleType || "").toLowerCase() === "day_notice") {
+    const sensitiveNumber = /\d+(?:\.\d+)?\s*(?:公斤|千克|kg|厘米|cm|毫米|mm|英寸|寸|个月|月有效期|页空白页)/gi;
+    for (const match of output.matchAll(sensitiveNumber)) if (!sourceIncludes(source, match[0])) errors.push(`今日贴士中的具体政策或规格数字“${clean(match[0])}”没有原始或权威事实依据`);
+  }
+  const orderIncludedClaim = /(?:本次|此行|该活动|当前报价|行程)[^，。；]{0,18}(?:已包含|已含|免费|已预订|已确认|保证提供|保证使用)[^，。；]{0,24}/g;
+  for (const match of output.matchAll(orderIncludedClaim)) {
+    const claim = clean(match[0]);
+    const isIncludedClaim = /已包含|已含|免费/.test(claim);
+    const hasExactClaim = sourceIncludes(source, claim);
+    const committedObject = clean(claim.replace(/^.*?(?:已包含|已含|免费|已预订|已确认|保证提供|保证使用)/, ""));
+    const hasObjectEvidence = !committedObject || sourceIncludes(source, committedObject);
+    const hasMatchingStatus = isIncludedClaim
+      ? /"status":"included"|"included":true|已包含|已含/i.test(source)
+      : /"status":"(?:confirmed|booked)"|"booked":true|已预订|guaranteed/i.test(source);
+    if (!hasExactClaim && !(hasMatchingStatus && hasObjectEvidence)) errors.push(`订单包含或确认承诺“${claim}”没有确定性订单依据`);
+  }
+  const bookedRoomOrVehicle = /(?:本次|此行|客人|您|为您)[^，。；]{0,12}(?:已安排|将入住|升级为|保证使用)[^，。；]{0,24}(?:房|套房|帐篷|车型|车辆|飞机|船)/g;
+  for (const match of output.matchAll(bookedRoomOrVehicle)) if (!sourceIncludes(source, match[0])) errors.push(`具体房型或交通履约承诺“${clean(match[0])}”没有确定性订单依据`);
+  return errors;
+}
+
+// 保留旧导出名，避免已有调用方中断；语义已收窄为“承诺边界检查”。
+export const validateCopyGrounding = validateCopyCommitments;
+
 export function validateCopyTask(task = {}) {
   const missing = requiredTaskFields.filter((field) => !present(task[field]));
   const errors = missing.map((field) => `缺少 ${field}`);
@@ -77,6 +168,7 @@ export function validateCopyTask(task = {}) {
     if (!/^highlights\.\d+$/.test(String(task.targetPath || ""))) errors.push("产品亮点 targetPath 必须指向 highlights.<index>");
     if (!present(task.facts) || !present(task.plannerGoal)) errors.push("产品亮点缺少 Planner 已确定的卖点事实或写作目标");
   }
+  if (task.researchRequest) errors.push(...validateCopyResearchRequest(task.researchRequest).map((error) => `researchRequest: ${error}`));
   return errors;
 }
 
@@ -119,6 +211,12 @@ export async function runCopyWriterSkill({
   model,
   reasoningEffort = "medium",
   requestJson = requestDeepSeekJson,
+  researchApiKey = apiKey,
+  researchBaseUrl = baseUrl,
+  researchModel = COPY_FACTS_RESEARCH_MODEL,
+  researchFacts = runCopyFactsResearch,
+  requestResearch,
+  fetchResearchSource,
   signal,
   onStatus,
   onCapabilityCall,
@@ -126,7 +224,7 @@ export async function runCopyWriterSkill({
   const startedAt = Date.now();
   const batchId = randomUUID();
   if (!Array.isArray(tasks) || !tasks.length) {
-    return { batchId, status: "needs_input", results: [], warnings: [{ code: "tasks_required", message: "Copy Skill 需要非空 tasks[]" }], metrics: { businessBatches: 0, physicalBatches: 0, modelCalls: 0, transportAttempts: 0, automaticBusinessRetryRounds: 0, durationMs: Date.now() - startedAt } };
+    return { batchId, status: "needs_input", results: [], researchResults: [], warnings: [{ code: "tasks_required", message: "Copy Skill 需要非空 tasks[]" }], metrics: { businessBatches: 0, physicalBatches: 0, modelCalls: 0, transportAttempts: 0, researchCalls: 0, researchTransportAttempts: 0, automaticBusinessRetryRounds: 0, durationMs: Date.now() - startedAt } };
   }
 
   const seen = new Set();
@@ -144,8 +242,80 @@ export async function runCopyWriterSkill({
   let modelCalls = 0;
   let transportAttempts = 0;
   let modelMs = 0;
+  let researchCalls = 0;
+  let researchTransportAttempts = 0;
+  let researchMs = 0;
   const warnings = [];
-  const physicalBatches = partitionCopyTasks(validTasks);
+  const researchResultById = new Map();
+  const researchCache = new Map();
+  const writerTaskById = new Map();
+  const researchWarningById = new Map();
+  await Promise.all(validTasks.map(async (task) => {
+    if (!task.researchRequest) {
+      writerTaskById.set(task.targetId, task);
+      return;
+    }
+    const cacheKey = JSON.stringify(task.researchRequest);
+    let researchPromise = researchCache.get(cacheKey);
+    if (!researchPromise) {
+      researchCalls += 1;
+      researchPromise = (async () => {
+        const callId = randomUUID();
+        const callStartedAt = Date.now();
+        onCapabilityCall?.({ phase: "started", capabilityId: "copy_facts_research", callId, batchId, researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName });
+        try {
+          const result = await researchFacts({
+            researchRequest: task.researchRequest,
+            apiKey: researchApiKey,
+            baseUrl: researchBaseUrl,
+            model: researchModel,
+            requestResearch,
+            fetchSource: fetchResearchSource,
+            signal,
+          });
+          researchTransportAttempts += result.attemptUsages?.length || 1;
+          researchMs += Date.now() - callStartedAt;
+          onCapabilityCall?.({ phase: "finished", capabilityId: "copy_facts_research", callId, batchId, researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, status: result.status, verifiedFactCount: result.verifiedFacts?.length || 0, durationMs: Date.now() - callStartedAt, usage: result.usage || null });
+          return result;
+        } catch (error) {
+          researchTransportAttempts += error?.attemptUsages?.length || 1;
+          researchMs += Date.now() - callStartedAt;
+          onCapabilityCall?.({ phase: "finished", capabilityId: "copy_facts_research", callId, batchId, researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, failed: true, reason: error?.message || String(error), durationMs: Date.now() - callStartedAt });
+          throw error;
+        }
+      })();
+      researchCache.set(cacheKey, researchPromise);
+    }
+    try {
+      const research = await researchPromise;
+      researchResultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, ...research });
+      writerTaskById.set(task.targetId, {
+        ...task,
+        facts: {
+          ...task.facts,
+          verifiedFacts: research.verifiedFacts || [],
+          factsResearchOutcome: {
+            status: research.status,
+            verifiedFactCount: research.verifiedFacts?.length || 0,
+            zeroFactBoundary: research.verifiedFacts?.length ? null : "禁止依赖模型常识新增酒店设施、设计、景观或服务；只能选择当前 task 中已有的供应商事实，资料不足时保持克制或返回事实不足 warning。",
+          },
+        },
+        factStatuses: { ...task.factStatuses, externalFacts: research.status, externalFactCount: research.verifiedFacts?.length || 0 },
+        verifiedFacts: { researchType: research.researchType, entityName: research.entityName, verifiedFacts: research.verifiedFacts || [] },
+      });
+      if (research.status !== "success") {
+        const message = `${research.entityName} 酒店官方事实研究未成功；Copy 只能使用原始供应商资料中明确属于该酒店的事实，资料不足时保持克制，不以产品角色或泛化酒店介绍填充。`;
+        researchWarningById.set(task.targetId, message);
+        warnings.push({ code: "copy_facts_not_found", targetId: task.targetId, message });
+      }
+    } catch (error) {
+      researchResultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, status: "failed", verifiedFacts: [], error: { code: error?.code || "copy_facts_research_failed", message: error?.message || String(error) } });
+      resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: { code: error?.code || "copy_facts_research_failed", message: error?.message || String(error) }, warnings: [] });
+    }
+  }));
+
+  const writerTasks = validTasks.map((task) => writerTaskById.get(task.targetId)).filter(Boolean);
+  const physicalBatches = partitionCopyTasks(writerTasks);
   await Promise.all(physicalBatches.map(async ({ batchKind, tasks: batchTasks }) => {
     const callId = randomUUID();
     const callStartedAt = Date.now();
@@ -157,7 +327,7 @@ export async function runCopyWriterSkill({
         baseUrl,
         model,
         messages: [
-          { role: "system", content: `${skillPrompt}\n\n## Runtime response contract\n只处理输入 tasks，不新增、删除、重排或重新规划任务。只输出 JSON 对象：{"results":[{"targetId":"与输入一致","targetPath":"与输入一致","value":"严格符合该任务 outputSchema 的值","warnings":[]}]}。一个任务无法完成时仍保留其他任务结果；不得返回 Reviewer、finding 或 retry 决策。` },
+          { role: "system", content: `${skillPrompt}\n\n## Runtime response contract\n只处理输入 tasks，不新增、删除、重排或重新规划任务。只输出 JSON 对象：{"results":[{"targetId":"与输入一致","targetPath":"与输入一致","value":"严格符合该任务 outputSchema 的值","warnings":[]}]}；targetId 与 targetPath 必须和输入完全一致，一个任务无法完成时仍保留其他任务结果。\nverifiedFacts 只能支持实体客观事实，不能推断本订单房型、包含项、价格、保证车型、已预订服务或正式状态。\n固定钟点、保证性结果、明确人员资质等级、强制预约要求或期限、具体金额、订单包含或已预订状态，以及具体房型或车型履约，必须有当前 task 的订单事实或 verifiedFacts 支持。\n不得返回 Reviewer、finding、自动改写或 retry 决策。` },
           { role: "user", content: JSON.stringify({ itineraryContext, batchKind, tasks: batchTasks }) },
         ],
         reasoningEffort,
@@ -182,12 +352,19 @@ export async function runCopyWriterSkill({
           resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: { code: "target_path_mismatch", message: "返回 targetPath 与 Planner 任务不一致" }, warnings: item.warnings || [] });
           continue;
         }
-        const schemaErrors = validateCopyValue(item.value, task.outputSchema);
+        const normalized = normalizeCopyValueForSchema(item.value, task.outputSchema);
+        const resultWarnings = [...new Set([...(Array.isArray(item.warnings) ? item.warnings : []), ...normalized.warnings, researchWarningById.get(task.targetId)].filter(Boolean))];
+        const schemaErrors = validateCopyValue(normalized.value, task.outputSchema);
         if (schemaErrors.length) {
-          resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: { code: "invalid_output_schema", message: schemaErrors.join("；"), fields: schemaErrors }, warnings: item.warnings || [] });
+          resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: { code: "invalid_output_schema", message: schemaErrors.join("；"), fields: schemaErrors }, warnings: resultWarnings });
           continue;
         }
-        resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: item.value, warnings: Array.isArray(item.warnings) ? item.warnings : [] });
+        const commitmentErrors = validateCopyCommitments(normalized.value, task);
+        if (commitmentErrors.length) {
+          resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: { code: "unsupported_copy_commitment", message: commitmentErrors.join("；"), fields: commitmentErrors }, warnings: resultWarnings });
+          continue;
+        }
+        resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: normalized.value, warnings: resultWarnings });
       }
       const extraIds = returned.map((item) => item?.targetId).filter((id) => id && !seen.has(id));
       if (extraIds.length) warnings.push({ code: "unexpected_targets_ignored", message: `已忽略非 Planner 任务：${extraIds.join(", ")}` });
@@ -203,5 +380,6 @@ export async function runCopyWriterSkill({
   }));
 
   const results = tasks.map((task, index) => resultById.get(task?.targetId || `invalid-${index}`)).filter(Boolean);
-  return { batchId, status: batchStatus(results), results, warnings, metrics: { businessBatches: physicalBatches.length, physicalBatches: physicalBatches.length, modelCalls, transportAttempts, automaticBusinessRetryRounds: 0, reasoningEffort, modelMs, durationMs: Date.now() - startedAt } };
+  const researchResults = tasks.map((task) => researchResultById.get(task?.targetId)).filter(Boolean);
+  return { batchId, status: batchStatus(results), results, researchResults, warnings, metrics: { businessBatches: physicalBatches.length, physicalBatches: physicalBatches.length, modelCalls, transportAttempts, researchCalls, researchTransportAttempts, automaticBusinessRetryRounds: 0, reasoningEffort, modelMs, researchMs, durationMs: Date.now() - startedAt } };
 }

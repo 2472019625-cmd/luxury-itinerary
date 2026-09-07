@@ -8,6 +8,10 @@ const INTERNAL_PATTERNS = [
   /基本房型报价|报价测算逻辑|补差价明细/i,
 ];
 
+const INTERNAL_COLUMN_HEADER = /^(?:成本|利润|毛利|底价|采购价|内部结算价|结算价|内部备注)$/i;
+const EXPENSE_SECTION_BOUNDARY = /^(?:注明|说明|备注|报价参考|价格明细|行程安排|每日行程|酒店安排|交通安排)$/i;
+const ORDINARY_MEAL = /^(?:酒店|营地|机上|当地|中式|西式)?(?:普通)?(?:早餐|午餐|晚餐|早午餐|午餐盒|简餐|自理|全餐|用餐)$/i;
+
 const DESTINATIONS = [
   "肯尼亚", "坦桑尼亚", "南非", "博茨瓦纳", "纳米比亚", "摩洛哥", "埃及",
   "土耳其", "希腊", "意大利", "法国", "瑞士", "冰岛", "挪威", "芬兰",
@@ -101,6 +105,7 @@ function dayFromRow(row, map, index) {
   const lunch = get("lunch") || (/午餐|午餐盒/.test(combinedMeals) ? combinedMeals.match(/[^，,；;\s]*午餐(?:盒)?[^，,；;\s]*/)?.[0] || "午餐" : "");
   const dinner = get("dinner") || (/晚餐/.test(combinedMeals) ? combinedMeals.match(/[^，,；;\s]*晚餐[^，,；;\s]*/)?.[0] || "晚餐" : "");
   const hotel = get("hotel");
+  const vehicle = get("vehicle");
   const nodes = splitRouteNodes(route);
   return {
     date: excelDate(map.date === undefined ? "" : row[map.date]),
@@ -109,9 +114,10 @@ function dayFromRow(row, map, index) {
     city: route || nodes.join(" → ") || `第${index + 1}天`,
     mealPlan: { breakfast: breakfast || "以最终确认安排为准", lunch: lunch || "以最终确认安排为准", dinner: dinner || "以最终确认安排为准" },
     hotel: hotel || "以最终确认安排为准",
-    vehicle: get("vehicle"),
+    vehicle,
     description: description || "当日行程将由定制师结合最终确认信息完善。",
-    dayNotices: [],
+    sourceEvidence: { route, description, meals: combinedMeals || unique([breakfast, lunch, dinner]).join("\n"), hotel, vehicle },
+    dayNotices: explicitDayNotices(description, index),
     spots: [],
   };
 }
@@ -156,7 +162,13 @@ function extractDays(sheets) {
         mealPlan: { breakfast: "以最终确认安排为准", lunch: "以最终确认安排为准", dinner: "以最终确认安排为准" },
         hotel: content.find((item) => HOTEL_PATTERN.test(item)) || "以最终确认安排为准",
         description: content.slice(markerIndex + 1).join("；") || "当日行程将由定制师结合最终确认信息完善。",
-        dayNotices: [],
+        sourceEvidence: {
+          route: content.find((item) => /→|—|至|✈|\s+-\s+|(?<=[\u3400-\u9fff])-(?=[\u3400-\u9fff])/.test(item)) || "",
+          description: content.slice(markerIndex + 1).join("；"),
+          hotel: content.find((item) => HOTEL_PATTERN.test(item)) || "",
+          vehicle: "",
+        },
+        dayNotices: explicitDayNotices(content.slice(markerIndex + 1).join("；"), Math.max(0, number - 1)),
         spots: [],
       });
     }
@@ -172,39 +184,372 @@ function sourceHighlights(lines) {
 }
 
 function cleanListItem(value) {
-  return text(value).replace(/^\s*\d{1,2}\s*[、.．)）-]?\s*/, "").trim();
+  return text(value).replace(/^\s*(?:[•·▪◦*-]\s*)?(?:\d{1,2}\s*[、.．)）-]?\s*)?/, "").trim();
+}
+
+function expenseHeading(value) {
+  const source = text(value).replace(/^[✅❌☑☒✔✘✓×]\s*/u, "").trim();
+  if (!source) return null;
+  if (/(?:报价|费用)?\s*包含\s*[\/／]\s*(?:报价|费用)?\s*(?:不包含|不含)/.test(source)) return { container: true, source };
+  const match = source.match(/^(?:报价|费用)?\s*(不包含|不含|包含|退改(?:政策)?|取消(?:政策)?|included|excluded|cancellation)\s*(?:[：:]\s*([\s\S]*))?$/i);
+  if (!match) return null;
+  const label = match[1];
+  return {
+    section: /不包含|不含|excluded/i.test(label) ? "excluded" : /退改|取消|cancellation/i.test(label) ? "cancellation" : "included",
+    inline: text(match[2]),
+    source,
+  };
+}
+
+function splitExpenseCell(value) {
+  const source = text(value);
+  if (!source) return [];
+  return source
+    .split(/\n+|(?=\s*(?:\d{1,2}\s*[、.．)）-]|[•·▪◦*-]\s+))/u)
+    .map(text)
+    .filter(Boolean);
+}
+
+function isNumberedListItem(value) {
+  return /^\s*(?:\d{1,2}\s*[、.．)）-]|[•·▪◦*-]\s+)\s*\S+/u.test(text(value));
 }
 
 function extractExpenseSections(sheets) {
-  const result = { included: [], excluded: [], cancellation: [] };
-  const sectionPattern = /^(?:报价|费用)?\s*(包含|不包含|不含|退改(?:政策)?|取消(?:政策)?)\s*[：:]?$/;
+  const result = { included: [], excluded: [], cancellation: [], coverageTargets: [] };
   for (const sheet of sheets) {
     let active = null;
     for (let rowIndex = 0; rowIndex < sheet.rows.length; rowIndex += 1) {
       const row = sheet.rows[rowIndex] || [];
       const values = row.map(text);
-      const headingIndex = values.findIndex((value) => sectionPattern.test(value));
-      let itemStart = 0;
-      if (headingIndex >= 0) {
-        const label = values[headingIndex].match(sectionPattern)?.[1] || "";
-        active = /不包含|不含/.test(label) ? "excluded" : /退改|取消/.test(label) ? "cancellation" : "included";
-        itemStart = headingIndex + 1;
+      const headingIndex = values.findIndex((value) => expenseHeading(value));
+      const heading = headingIndex >= 0 ? expenseHeading(values[headingIndex]) : null;
+      if (heading?.container) {
+        result.coverageTargets.push({ sheet: sheet.name, address: XLSX.utils.encode_cell({ r: rowIndex, c: headingIndex }), target: "expenses" });
+        continue;
+      }
+      if (heading?.section) {
+        active = heading.section;
+        result.coverageTargets.push({ sheet: sheet.name, address: XLSX.utils.encode_cell({ r: rowIndex, c: headingIndex }), target: active });
+      } else if (values.some((value) => EXPENSE_SECTION_BOUNDARY.test(value))) {
+        active = null;
       }
       if (!active) continue;
-      const candidates = values.slice(itemStart).map((value, offset) => ({ value, columnIndex: itemStart + offset })).filter(({ value }) => value);
-      for (const { value, columnIndex } of candidates) {
-        if (headingIndex < 0 && !/^\s*\d{1,2}\s*[、.．)）-]?\s*\S+/.test(value)) continue;
-        const item = cleanListItem(value);
-        if (!item || sectionPattern.test(item)) continue;
-        result[active].push({
-          text: item,
-          sheet: sheet.name,
-          address: XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex }),
-        });
+      const candidates = [];
+      if (heading?.inline) candidates.push({ value: heading.inline, columnIndex: headingIndex, force: true });
+      const itemStart = heading?.section ? headingIndex + 1 : 0;
+      values.slice(itemStart).forEach((value, offset) => {
+        if (value) candidates.push({ value, columnIndex: itemStart + offset, force: Boolean(heading?.section) });
+      });
+      const nonEmptyCount = values.filter(Boolean).length;
+      for (const { value, columnIndex, force } of candidates) {
+        const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+        for (const part of splitExpenseCell(value)) {
+          if (!force && !isNumberedListItem(part) && nonEmptyCount > 2) continue;
+          const item = cleanListItem(part);
+          if (!item || expenseHeading(item) || EXPENSE_SECTION_BOUNDARY.test(item) || INTERNAL_PATTERNS.some((pattern) => pattern.test(item)) || /^\d[\d,.]*$/.test(item)) continue;
+          if (result[active].some((entry) => text(entry.text) === item)) continue;
+          result[active].push({ text: item, sheet: sheet.name, address });
+        }
       }
     }
   }
   return result;
+}
+
+function numericAmount(value) {
+  const source = text(value).replace(/[,，\s]/g, "");
+  if (!/^\d+(?:\.\d+)?$/.test(source)) return null;
+  const amount = Number(source);
+  return Number.isFinite(amount) && amount >= 1000 ? Math.round(amount) : null;
+}
+
+function priceFrom(source) {
+  const poster = source.match(/(?:海报价格(?:写|为)?|起售价|最低售价)\s*[：:]?\s*([\d,]{4,}(?:\.\d+)?)\s*元\s*\/?\s*人(?:\s*起)?/i);
+  if (poster) return Number(poster[1].replace(/,/g, ""));
+  const exact = source.match(/([\d,]{4,}(?:\.\d+)?)\s*元\s*\/?\s*人\s*起/i);
+  if (exact) return Number(exact[1].replace(/,/g, ""));
+  const short = source.match(/(\d+(?:\.\d+)?)\s*[wW万]\s*起/);
+  return short ? Math.round(Number(short[1]) * 10000) : null;
+}
+
+function extractPriceFacts(sheets, joined) {
+  const result = { totalPrice: null, priceUnit: "元 / 人起", priceNotes: [], priceOffers: [], coverageTargets: [], warnings: [] };
+  for (const sheet of sheets) {
+    for (let rowIndex = 0; rowIndex < sheet.rows.length; rowIndex += 1) {
+      const row = sheet.rows[rowIndex] || [];
+      const values = row.map(text);
+      values.forEach((value, columnIndex) => {
+        if (!value || INTERNAL_PATTERNS.some((pattern) => pattern.test(value))) return;
+        const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+        if (/(?:海报价格|起售价|[\d,]{4,}\s*元\s*\/?\s*人\s*起|\d+(?:\.\d+)?\s*[wW万]\s*起)/i.test(value)) {
+          result.coverageTargets.push({ sheet: sheet.name, address, target: "totalPrice" });
+          const note = value.match(/(\d{1,2}[.月\/-]\d{1,2}\s*(?:-|—|–|至|到)\s*\d{1,2}[.月\/-]\d{1,2}\s*出发[^。；\n]*(?:补差|加价)[^。；\n]*)/i)?.[1];
+          if (note) result.priceNotes.push(text(note));
+        }
+      });
+
+      const priceColumn = values.findIndex((value) => /^(?:价格|报价|售价)\s*(?:[（(]元[）)])?$/i.test(value));
+      if (priceColumn < 0) continue;
+      const periodColumn = values.findIndex((value) => /^(?:有效期|日期|出发日期|档期)$/i.test(value));
+      const publicColumns = values.map((value, index) => ({ value, index })).filter(({ value }) => value && !INTERNAL_COLUMN_HEADER.test(value));
+      publicColumns.forEach(({ index }) => result.coverageTargets.push({ sheet: sheet.name, address: XLSX.utils.encode_cell({ r: rowIndex, c: index }), target: "sourceImportCoverage.priceOffers" }));
+      for (let dataRowIndex = rowIndex + 1; dataRowIndex < sheet.rows.length; dataRowIndex += 1) {
+        const dataRow = sheet.rows[dataRowIndex] || [];
+        const dataValues = dataRow.map(text);
+        if (dataValues.some((value) => /^(?:注明|说明|报价包含|费用包含|报价不包含|费用不含|退改|取消)/.test(value.replace(/^[✅❌]\s*/u, "")))) break;
+        const amount = numericAmount(dataValues[priceColumn]);
+        if (!amount) continue;
+        const offerIndex = result.priceOffers.length;
+        const period = periodColumn >= 0 ? text(dataValues[periodColumn]) : "";
+        const evidence = dataValues.filter(Boolean).filter((value, index) => !INTERNAL_COLUMN_HEADER.test(values[index]) && !INTERNAL_PATTERNS.some((pattern) => pattern.test(value)));
+        result.priceOffers.push({ amount, period, sheet: sheet.name, address: XLSX.utils.encode_cell({ r: dataRowIndex, c: priceColumn }), sourceEvidence: evidence });
+        dataValues.forEach((value, columnIndex) => {
+          if (!value || INTERNAL_COLUMN_HEADER.test(values[columnIndex])) return;
+          result.coverageTargets.push({ sheet: sheet.name, address: XLSX.utils.encode_cell({ r: dataRowIndex, c: columnIndex }), target: `sourceImportCoverage.priceOffers.${offerIndex}` });
+        });
+      }
+    }
+  }
+  result.priceNotes = unique(result.priceNotes);
+  const distinctOffers = unique(result.priceOffers.map((offer) => String(offer.amount))).map(Number);
+  result.totalPrice = priceFrom(joined);
+  if (distinctOffers.length) result.totalPrice = Math.min(...distinctOffers, ...(result.totalPrice ? [result.totalPrice] : []));
+  if (distinctOffers.length > 1) result.warnings.push(`原文件存在 ${distinctOffers.length} 个不同档期价格；现有 totalPrice 仅展示起售价，逐档金额与有效期已保留在原始价格证据中，当前 schema 无法完整承载多档价格。`);
+  return result;
+}
+
+function sentenceAround(source, index) {
+  const start = Math.max(source.lastIndexOf("。", index - 1), source.lastIndexOf("；", index - 1), source.lastIndexOf("，", index - 1), source.lastIndexOf(",", index - 1), source.lastIndexOf("\n", index - 1)) + 1;
+  const endings = [source.indexOf("。", index), source.indexOf("；", index), source.indexOf("，", index), source.indexOf(",", index), source.indexOf("\n", index)].filter((value) => value >= 0);
+  const end = endings.length ? Math.min(...endings) : source.length;
+  return text(source.slice(start, end));
+}
+
+function fullSentenceAround(source, index) {
+  const start = Math.max(source.lastIndexOf("。", index - 1), source.lastIndexOf("；", index - 1), source.lastIndexOf("\n", index - 1)) + 1;
+  const endings = [source.indexOf("。", index), source.indexOf("；", index), source.indexOf("\n", index)].filter((value) => value >= 0);
+  const end = endings.length ? Math.min(...endings) : source.length;
+  return text(source.slice(start, end));
+}
+
+function diningLocation(day = {}) {
+  const raw = text(day.sourceEvidence?.route || day.city || "");
+  const nodes = splitRouteNodes(raw).map((node) => node.replace(/(?:全天|半日)?(?:私人)?游猎$/i, "").trim()).filter(Boolean);
+  return nodes.at(-1) || raw || "";
+}
+
+function diningStatus(evidence) {
+  if (/可自费|自费参加|另行付费|费用不含|(?:本项|该体验|此体验|整项)[^。；]{0,10}(?:额外收费|另行收费)/i.test(evidence)) return "optional_paid";
+  if (/需(?:要)?提前预约|须提前预约|预约制/i.test(evidence)) return "reservation_required";
+  if (/待确认|以最终确认/i.test(evidence)) return "pending";
+  return "included";
+}
+
+function statusPresentation(status) {
+  return {
+    statusLabel: status === "optional_paid" ? "自费可选" : status === "reservation_required" ? "需提前预约" : status === "pending" ? "待确认" : "已包含",
+    feeBoundary: status === "optional_paid" ? "excluded" : status === "pending" ? "pending" : "included",
+  };
+}
+
+function diningSubordination(source, matchIndex) {
+  const before = source.slice(0, matchIndex);
+  const openIndex = Math.max(before.lastIndexOf("（"), before.lastIndexOf("("));
+  if (openIndex < 0) return null;
+  const closing = source[openIndex] === "（" ? "）" : ")";
+  const closeIndex = source.indexOf(closing, matchIndex);
+  if (closeIndex < matchIndex) return null;
+  const inside = text(source.slice(openIndex + 1, closeIndex));
+  if (!/^(?:含|包含|包括|配有|附带)/.test(inside)) return null;
+  const parentText = text(source.slice(Math.max(source.lastIndexOf("。", openIndex - 1), source.lastIndexOf("；", openIndex - 1), source.lastIndexOf("\n", openIndex - 1)) + 1, openIndex));
+  if (!parentText) return null;
+  return { parentExperience: parentText, evidence: text(source.slice(openIndex, closeIndex + 1)) };
+}
+
+function explicitlyIndependentDining(source, matchIndex) {
+  const start = Math.max(source.lastIndexOf("。", matchIndex - 1), source.lastIndexOf("；", matchIndex - 1), source.lastIndexOf("\n", matchIndex - 1)) + 1;
+  const endings = [source.indexOf("。", matchIndex), source.indexOf("；", matchIndex), source.indexOf("\n", matchIndex)].filter((value) => value >= 0);
+  const end = endings.length ? Math.min(...endings) : source.length;
+  const around = text(source.slice(start, end));
+  return /(?:特别体验|特色餐饮|特色早餐|特色午餐|特色晚餐|独立安排|专门安排)/.test(around)
+    && !diningSubordination(source, matchIndex);
+}
+
+function diningEmphasisScore(candidate) {
+  const evidence = candidate.sourceEvidence.join(" ");
+  const sentence = evidence.replace(/DAY\s*\d+\s*(?:详细行程|用餐)[：:]/gi, "");
+  const sceneCount = (sentence.match(/天际甲板|甲板|观景台|野外|草原|丛林|海边|沙滩|篝火|酒窖|营地|餐厅/gi) || []).length;
+  const actionCount = (sentence.match(/游猎结束后|返回营地|乘船|徒步结束后|现场烤制|品尝|享用|安排/gi) || []).length;
+  return (candidate.explicitlyHighlighted ? 8 : 0)
+    + Math.min(8, Math.floor(sentence.length / 12))
+    + Math.min(6, sceneCount * 2)
+    + Math.min(4, actionCount)
+    + (candidate.status === "included" ? 2 : candidate.status === "reservation_required" ? 1 : 0)
+    - (candidate.bundledWithOtherDining ? 14 : 0);
+}
+
+function diningDistinctionTags(candidate) {
+  const source = candidate.sourceEvidence.join(" ");
+  const definitions = [
+    ["on_water", /乘船|船上|游船|水上/],
+    ["after_walk", /徒步(?:结束|之后|后)/],
+    ["after_game_drive", /游猎(?:结束|之后|后)/],
+    ["deck_setting", /天际甲板|屋顶|观景台|露台/],
+    ["fireside", /篝火|营火|boma/i],
+    ["beach_setting", /海边|沙滩|海滩/],
+    ["cellar_tasting", /私人酒窖|酒窖品酒|品鉴/],
+    ["live_cooking", /现场(?:烤制|烹饪)|现烤/],
+  ];
+  return definitions.filter(([, pattern]) => pattern.test(source)).map(([tag]) => tag);
+}
+
+function meaningfullyDistinctDining(left, right) {
+  if (!left.explicitlyHighlighted || !right.explicitlyHighlighted || left.bundledWithOtherDining || right.bundledWithOtherDining) return false;
+  const leftTags = diningDistinctionTags(left);
+  const rightTags = diningDistinctionTags(right);
+  return leftTags.length > 0 && rightTags.length > 0 && leftTags.every((tag) => !rightTags.includes(tag)) && rightTags.every((tag) => !leftTags.includes(tag));
+}
+
+function selectDiningRepresentatives(candidates) {
+  const selected = [];
+  const excluded = [];
+  const independent = candidates.filter((candidate) => {
+    if (!candidate.isSubordinate) return true;
+    excluded.push({ ...candidate, selectionDisposition: "excluded", exclusionReason: "attached_to_primary_experience" });
+    return false;
+  });
+  const grouped = new Map();
+  independent.forEach((candidate) => grouped.set(candidate.semanticType, [...(grouped.get(candidate.semanticType) || []), candidate]));
+  for (const group of grouped.values()) {
+    const ranked = [...group].sort((left, right) => diningEmphasisScore(right) - diningEmphasisScore(left) || left.sourceDay - right.sourceDay);
+    const representatives = [];
+    for (const candidate of ranked) {
+      const sameTypeRepresentative = representatives.find((representative) => !meaningfullyDistinctDining(candidate, representative));
+      if (sameTypeRepresentative) {
+        excluded.push({
+          ...candidate,
+          selectionDisposition: "excluded",
+          exclusionReason: "same_type_less_representative",
+          selectedRepresentativeId: sameTypeRepresentative.id,
+        });
+      } else {
+        representatives.push(candidate);
+      }
+    }
+    selected.push(...representatives.map((candidate) => ({ ...candidate, selectionDisposition: "selected", selectionScore: diningEmphasisScore(candidate) })));
+  }
+  selected.sort((left, right) => left.sourceDay - right.sourceDay || left.discoveryOrder - right.discoveryOrder);
+  excluded.sort((left, right) => left.sourceDay - right.sourceDay || left.discoveryOrder - right.discoveryOrder);
+  return { selected, excluded };
+}
+
+function extractDiningExperiences(days) {
+  const experiences = new Map();
+  let discoveryOrder = 0;
+  const add = ({ key, title, officialName = "", day, dayIndex, sourceLabel, source, matchIndex, evidenceText: suppliedEvidenceText = "" }) => {
+    if (!title || ORDINARY_MEAL.test(title)) return;
+    const evidenceText = suppliedEvidenceText || sentenceAround(source, matchIndex);
+    const evidence = `DAY ${dayIndex + 1} ${sourceLabel}：${evidenceText || text(source)}`;
+    const status = diningStatus(evidenceText || source);
+    const priority = { included: 0, pending: 1, reservation_required: 2, optional_paid: 3 };
+    const instanceKey = `${key}-day-${dayIndex + 1}`;
+    const current = experiences.get(instanceKey);
+    const geographicLocation = diningLocation(day);
+    const useHotelLocation = text(day.hotel) && !/最终确认|待确认|飞机/.test(text(day.hotel)) && !/^restaurant-|champagne-breakfast/.test(key);
+    const subordination = diningSubordination(source, matchIndex);
+    const independentEmphasis = explicitlyIndependentDining(source, matchIndex);
+    const otherDiningMatches = [
+      /Bush\s*Breakfast|丛林早餐/i,
+      /Sundowner|落日酒会/i,
+      /星空(?:晚宴|晚餐)/i,
+      /私人酒窖|酒窖品酒/i,
+      /香槟早餐/i,
+    ].filter((pattern) => pattern.test(evidenceText || "")).length;
+    const next = current || {
+      id: `imported-dining-${instanceKey}`,
+      semanticType: key,
+      title,
+      officialName,
+      location: useHotelLocation ? text(day.hotel) : geographicLocation,
+      status,
+      ...statusPresentation(status),
+      dayRefs: [],
+      sourceDay: dayIndex,
+      discoveryOrder: discoveryOrder++,
+      sourceEvidence: [],
+      subordinateEvidence: [],
+      independentEvidence: [],
+      explicitlyHighlighted: false,
+      bundledWithOtherDining: false,
+      partialFeeEvidence: [],
+      editorialCopy: "特色餐饮价值将在内容生成阶段依据原始事实完成客户表达。",
+      images: [],
+    };
+    next.dayRefs = unique([...next.dayRefs.map(String), String(dayIndex + 1)]).map(Number).sort((a, b) => a - b);
+    next.sourceEvidence = unique([...next.sourceEvidence, evidence]);
+    if (subordination) next.subordinateEvidence = unique([...next.subordinateEvidence, `${subordination.parentExperience}${subordination.evidence}`]);
+    if (independentEmphasis) next.independentEvidence = unique([...next.independentEvidence, evidence]);
+    next.explicitlyHighlighted ||= independentEmphasis;
+    next.bundledWithOtherDining ||= otherDiningMatches > 1;
+    if (/(?:高档|高级|指定|升级)[^。；]{0,12}(?:额外收费|另行收费)/i.test(evidenceText || source)) {
+      next.partialFeeEvidence = unique([...next.partialFeeEvidence, evidence]);
+    }
+    if (priority[status] > priority[next.status]) {
+      next.status = status;
+      Object.assign(next, statusPresentation(status));
+    }
+    experiences.set(instanceKey, next);
+  };
+
+  days.forEach((day, dayIndex) => {
+    const sources = [
+      { label: "详细行程", value: text(day.sourceEvidence?.description || day.description) },
+      { label: "用餐", value: text(day.sourceEvidence?.meals || Object.values(day.mealPlan || {}).join("\n")) },
+    ];
+    for (const { label, value } of sources) {
+      if (!value) continue;
+      const definitions = [
+        { key: "bush-breakfast", title: "Bush Breakfast 丛林早餐", officialName: "Bush Breakfast", pattern: /Bush\s*Breakfast(?:\s*丛林早餐)?|丛林早餐(?:\s*Bush\s*Breakfast)?/gi },
+        { key: "sundowner", title: "Sundowner 落日酒会", officialName: "Sundowner", pattern: /Sundowner(?:\s*落日酒会)?|落日酒会(?:\s*Sundowner)?/gi },
+        { key: "starlit-dinner", title: "星空晚宴", pattern: /星空(?:晚宴|晚餐)/g },
+        { key: "private-wine-cellar", title: "私人酒窖品酒", pattern: /私人酒窖(?:品酒|品尝美酒)?|酒窖品酒/g },
+        { key: "champagne-breakfast", title: "香槟早餐", pattern: /香槟早餐/g },
+        { key: "special-dinner", title: "特别晚宴", pattern: /特别晚宴/g },
+        { key: "outdoor-breakfast", title: "野外早餐", pattern: /野外早餐/g },
+      ];
+      for (const definition of definitions) {
+        for (const match of value.matchAll(definition.pattern)) add({ ...definition, day, dayIndex, sourceLabel: label, source: value, matchIndex: match.index || 0 });
+      }
+      for (const match of value.matchAll(/(?:特色晚餐|晚餐(?:品尝|前往))\s*([^，。；\n]{0,24}?)(\b(?:The\s+)?[A-Z][A-Za-z'’&.-]+(?:\s+[A-Z][A-Za-z'’&.-]+){0,4}\b)/g)) {
+        const officialName = text(match[2]);
+        if (/^(?:Safari|Bush|Sundowner|Breakfast)$/i.test(officialName)) continue;
+        const chineseName = text(match[1]);
+        const title = text(`${chineseName} ${officialName}`);
+        const matchIndex = (match.index || 0) + match[0].indexOf(officialName);
+        add({ key: `restaurant-${officialName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, title, officialName, day, dayIndex, sourceLabel: label, source: value, matchIndex, evidenceText: fullSentenceAround(value, matchIndex) });
+      }
+    }
+  });
+  const candidates = [...experiences.values()].map((candidate) => ({
+    ...candidate,
+    isSubordinate: candidate.subordinateEvidence.length > 0 && candidate.independentEvidence.length === 0,
+  }));
+  const selection = selectDiningRepresentatives(candidates);
+  const customerExperiences = selection.selected.map((candidate) => {
+    const { semanticType, discoveryOrder: _discoveryOrder, subordinateEvidence: _subordinateEvidence, independentEvidence: _independentEvidence, explicitlyHighlighted: _explicitlyHighlighted, bundledWithOtherDining: _bundledWithOtherDining, isSubordinate: _isSubordinate, partialFeeEvidence: _partialFeeEvidence, selectionDisposition: _selectionDisposition, selectionScore: _selectionScore, ...customer } = candidate;
+    return customer;
+  });
+  return { candidates, selection, customerExperiences };
+}
+
+function explicitDayNotices(description, dayIndex) {
+  const candidates = text(description)
+    .split(/[。；;!?！？\n]+/)
+    .map(text)
+    .filter((item) => /(?:建议|可提前准备|提前准备|请提前|需提前|注意|携带|穿着|穿适合|准备.*(?:鞋|外套|衣物|装备|随身用品|雨具|防晒)|行李.*确认)/.test(item));
+  if (!candidates.length) return [];
+  const source = candidates[0];
+  return [{ type: "tip", text: source, sourceKind: "source_explicit", sourceEvidence: [`DAY ${dayIndex + 1} 详细行程：${source}`] }];
 }
 
 function buildTransportSummary(days) {
@@ -246,17 +591,10 @@ function hotelNames(days, lines) {
     .slice(0, 8);
 }
 
-function priceFrom(source) {
-  const exact = source.match(/([\d,]{4,})\s*元\s*\/?\s*人\s*起/i);
-  if (exact) return Number(exact[1].replace(/,/g, ""));
-  const short = source.match(/(\d+(?:\.\d+)?)\s*[wW万]\s*起/);
-  return short ? Math.round(Number(short[1]) * 10000) : null;
-}
-
 function parseWorkbook(buffer) {
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true, dense: true });
   const sheets = workbook.SheetNames.map((name) => {
-    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "", raw: false, blankrows: false });
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "", raw: false, blankrows: true });
     const merges = (workbook.Sheets[name]['!merges'] || []).map((range) => XLSX.utils.encode_range(range));
     return { name, rows, merges };
   });
@@ -268,8 +606,11 @@ function buildCellCoverage(sheets, explicitTargets = new Map()) {
   const coverage = [];
   for (const sheet of sheets) {
     let activeMap = null;
+    const internalColumns = new Set();
     for (let rowIndex = 0; rowIndex < sheet.rows.length; rowIndex += 1) {
       const row = sheet.rows[rowIndex] || [];
+      row.forEach((value, columnIndex) => { if (INTERNAL_COLUMN_HEADER.test(text(value))) internalColumns.add(columnIndex); });
+      if (activeMap && row.some((value) => /(?:海报价格|起售价|报价参考|报价包含|费用包含|报价不包含|费用不含|退改|取消|注明)/.test(text(value).replace(/^[✅❌]\s*/u, "")))) activeMap = null;
       const candidateMap = headerMap(row);
       if ((candidateMap.day !== undefined || candidateMap.date !== undefined) && (candidateMap.description !== undefined || candidateMap.route !== undefined) && mapScore(candidateMap) >= 3) activeMap = candidateMap;
       const reverseMap = activeMap ? Object.fromEntries(Object.entries(activeMap).map(([key, column]) => [column, key])) : {};
@@ -278,7 +619,7 @@ function buildCellCoverage(sheets, explicitTargets = new Map()) {
         if (!value) return;
         const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
         const explicitTarget = explicitTargets.get(`${sheet.name}!${address}`);
-        const internal = INTERNAL_PATTERNS.some((pattern) => pattern.test(value));
+        const internal = INTERNAL_PATTERNS.some((pattern) => pattern.test(value)) || (internalColumns.has(columnIndex) && !INTERNAL_COLUMN_HEADER.test(value));
         const mapped = reverseMap[columnIndex];
         let disposition = explicitTarget ? 'customer_field' : internal ? 'internal_retained' : mapped ? 'customer_field' : 'unrecognized';
         let target = explicitTarget || (internal ? 'audit.importCoverage' : mapped ? `days[].${mapped}` : '');
@@ -298,9 +639,12 @@ export async function importItineraryWorkbook(file, baseData) {
   const { sheets, lines } = parseWorkbook(await file.arrayBuffer());
   const expenses = extractExpenseSections(sheets);
   const explicitTargets = new Map();
-  Object.entries(expenses).forEach(([section, items]) => items.forEach((item, index) => explicitTargets.set(`${item.sheet}!${item.address}`, `${section}.${index}`)));
-  const cellCoverage = buildCellCoverage(sheets, explicitTargets);
+  expenses.coverageTargets.forEach((item) => explicitTargets.set(`${item.sheet}!${item.address}`, item.target));
+  ["included", "excluded", "cancellation"].forEach((section) => expenses[section].forEach((item, index) => explicitTargets.set(`${item.sheet}!${item.address}`, `${section}.${index}`)));
   const joined = lines.join("\n");
+  const priceFacts = extractPriceFacts(sheets, joined);
+  priceFacts.coverageTargets.forEach((item) => explicitTargets.set(`${item.sheet}!${item.address}`, item.target));
+  const cellCoverage = buildCellCoverage(sheets, explicitTargets);
   const days = extractDays(sheets);
   const inferredCount = days.length || Number(joined.match(/(\d{1,2})\s*(?:日|天)(?:\d{1,2}\s*晚)?/)?.[1]) || 0;
   const destination = destinationFrom(joined) || "";
@@ -314,19 +658,27 @@ export async function importItineraryWorkbook(file, baseData) {
     nights: Math.max(1, days.filter((day) => day.hotel.includes(name) || name.includes(day.hotel)).length),
     editorialCopy: "住宿价值与对应体验将在内容生成阶段依据原始行程完整重写。",
     proofPoints: [],
-    sourceEvidence: unique(days.filter((day) => day.hotel.includes(name) || name.includes(day.hotel)).flatMap((day, dayIndex) => [`DAY ${dayIndex + 1} 住宿：${day.hotel}`, day.description])).slice(0, 6),
+    sourceEvidence: unique(days.flatMap((day, dayIndex) => day.hotel.includes(name) || name.includes(day.hotel) ? [`DAY ${dayIndex + 1} 住宿：${day.hotel}`, day.description] : [])).slice(0, 6),
     images: [],
   }));
   const highlights = sourceHighlights(lines);
   const internalMatches = unique(lines.filter((line) => INTERNAL_PATTERNS.some((pattern) => pattern.test(line))));
-  const totalPrice = priceFrom(joined);
+  const diningExtraction = extractDiningExperiences(days);
+  const diningExperiences = diningExtraction.customerExperiences;
+  const totalPrice = priceFacts.totalPrice;
   const transportSummary = buildTransportSummary(days);
   const sourceImportCoverage = {
     workbookName: file.name,
     included: expenses.included,
     excluded: expenses.excluded,
     cancellation: expenses.cancellation,
+    priceOffers: priceFacts.priceOffers,
     dailyTransport: days.map((day, dayIndex) => ({ dayIndex, text: text(day.vehicle), sourceEvidence: day.vehicle ? [`DAY ${dayIndex + 1} 用车：${text(day.vehicle)}`] : [] })).filter((item) => item.text),
+    diningCandidates: diningExtraction.candidates,
+    diningSelection: {
+      selected: diningExtraction.selection.selected.map((item) => ({ id: item.id, title: item.title, semanticType: item.semanticType, dayRefs: item.dayRefs, sourceEvidence: item.sourceEvidence, selectionScore: item.selectionScore })),
+      excluded: diningExtraction.selection.excluded.map((item) => ({ id: item.id, title: item.title, semanticType: item.semanticType, dayRefs: item.dayRefs, sourceEvidence: item.sourceEvidence, exclusionReason: item.exclusionReason, selectedRepresentativeId: item.selectedRepresentativeId || null, subordinateEvidence: item.subordinateEvidence })),
+    },
   };
   const nextData = normalizeItineraryFacts({
     designer: baseData?.designer,
@@ -351,7 +703,7 @@ export async function importItineraryWorkbook(file, baseData) {
     highlights: highlights.slice(0, 6),
     hotels,
     diningSectionTitle: "特色餐饮",
-    diningExperiences: [],
+    diningExperiences,
     transportSummary,
     days,
     included: expenses.included.map((item) => item.text),
@@ -359,7 +711,8 @@ export async function importItineraryWorkbook(file, baseData) {
     cancellation: expenses.cancellation.map((item) => item.text),
     sourceImportCoverage,
     totalPrice,
-    priceUnit: "元 / 人起",
+    priceUnit: priceFacts.priceUnit,
+    priceNotes: priceFacts.priceNotes,
   });
   return {
     data: nextData,
@@ -371,6 +724,12 @@ export async function importItineraryWorkbook(file, baseData) {
       highlightCount: highlights.length,
       includedCount: expenses.included.length,
       excludedCount: expenses.excluded.length,
+      cancellationCount: expenses.cancellation.length,
+      diningCandidateCount: diningExtraction.candidates.length,
+      diningSubordinateExcludedCount: diningExtraction.selection.excluded.filter((item) => item.exclusionReason === "attached_to_primary_experience").length,
+      diningRepresentativeExcludedCount: diningExtraction.selection.excluded.filter((item) => item.exclusionReason === "same_type_less_representative").length,
+      diningCount: diningExperiences.length,
+      diningSelection: sourceImportCoverage.diningSelection,
       transportCount: transportSummary.length,
       internalFilteredCount: internalMatches.length,
       cellCoverage,
@@ -387,6 +746,7 @@ export async function importItineraryWorkbook(file, baseData) {
         !startDate && "原文件未识别到明确出发日期。",
         !hotels.length && "没有识别到住宿名称。",
         expenses.included.length === 0 && "原文件未识别到费用包含条目；如源文件实际存在，该状态会阻止生成。",
+        ...priceFacts.warnings,
         sourceImportCoverage.dailyTransport.length > 0 && transportSummary.length === 0 && "原文件存在每日交通，但未形成交通汇总，生成已被阻止。",
         "图片将在内容生成阶段按图文对应与全图不重复规则补充。",
       ]).filter(Boolean),

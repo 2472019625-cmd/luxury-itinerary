@@ -33,6 +33,7 @@ function callCounts({ agentPlan, copyExecution, imageExecution, renderExecution 
     plannerModelCalls: plannerCalls,
     copyBusinessBatches: copyExecution?.metrics?.businessBatches || 0,
     copyModelCalls: copyExecution?.metrics?.modelCalls || 0,
+    copyFactsResearchCalls: copyExecution?.metrics?.researchCalls || 0,
     imageBusinessBatches: imageExecution?.metrics?.businessBatches || 0,
     imageSearchCalls: imageExecution?.metrics?.searchCalls || 0,
     imageCommonsCalls: imageExecution?.metrics?.commonsCalls || 0,
@@ -180,7 +181,7 @@ export async function runSimplePipeline({
       render: { status: "not_started", outputPath: null, rendererCalls: 0, durationMs: 0 },
       outputPath: null,
       timingsMs,
-      callCounts: { parserCalls: 1, plannerModelCalls: Math.max(plannerAttemptFiles.length, Number(error.attemptUsages?.length || 0)), copyBusinessBatches: 0, copyModelCalls: 0, imageBusinessBatches: 0, imageSearchCalls: 0, imageCommonsCalls: 0, imagePageExtractionCalls: 0, imageDownloadAttempts: 0, imageVisualJudgmentCalls: 0, rendererCalls: 0 },
+      callCounts: { parserCalls: 1, plannerModelCalls: Math.max(plannerAttemptFiles.length, Number(error.attemptUsages?.length || 0)), copyBusinessBatches: 0, copyModelCalls: 0, copyFactsResearchCalls: 0, imageBusinessBatches: 0, imageSearchCalls: 0, imageCommonsCalls: 0, imagePageExtractionCalls: 0, imageDownloadAttempts: 0, imageVisualJudgmentCalls: 0, rendererCalls: 0 },
       plannerAttemptFiles,
     };
     const failedRun = { executionRunId, projectId, planId: null, inputFingerprint, flowKind: "simple_skill_v1", status: "failed", progress: 10, executionEnabled: false, currentStage: "Planner failure", error: errorRecord, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };

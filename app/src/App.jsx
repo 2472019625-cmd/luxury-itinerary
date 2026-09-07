@@ -8,7 +8,7 @@ import { createProductionDefaultData, formatTravelerCount, inferOvernightType, i
 import { AgentPlanner } from "./AgentPlanner.jsx";
 import { AgentWorkspace } from "./AgentWorkspace.jsx";
 import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
-import { transportUsageLabel } from './lib/transportPresentation.js';
+import { transportConfigurationLabels, transportProductName, transportUsageLabel } from './lib/transportPresentation.js';
 
 const ICON = "/assets/icons/";
 const SLOGAN = "高品质度假管家，懂度假，更懂你";
@@ -110,11 +110,13 @@ function Cover({ data }) {
   );
 }
 
-function DiningOverview({ items = [], policy, title = "特色餐饮", introTitle = "风味不是行程注脚，而是抵达一地的另一种方式", introCopy = "从火山口边缘的景观餐桌，到星空下的旷野晚宴与印度洋畔的海风午餐，让味觉也拥有属于这段旅程的记忆。" }) {
+function DiningOverview({ items = [], policy, title = "特色餐饮", introTitle, introCopy }) {
   if (!items.length) return null;
   const isOdd = items.length % 2 === 1;
   const hasFeatured = items.some((item) => item.layout === "wide");
-  return <section className="journey-feature-section dining-section" data-edit-path="dining"><SectionTitle en="CULINARY JOURNEY" zh={title} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`dining-grid${isOdd ? " dining-grid-odd" : ""}${hasFeatured ? " dining-grid-featured" : ""}`}>{items.map((item, itemIndex) => {
+  const resolvedIntroTitle = introTitle || "值得专门期待的特色用餐";
+  const resolvedIntroCopy = introCopy || "从特色美食、品饮体验到不同的用餐方式，每一项都以清楚的餐饮重点和体验差异，说明它为什么值得期待。";
+  return <section className="journey-feature-section dining-section" data-edit-path="dining"><SectionTitle en="CULINARY JOURNEY" zh={title} /><div className="feature-intro"><span>{resolvedIntroTitle}</span><p>{resolvedIntroCopy}</p></div><div className={`dining-grid${isOdd ? " dining-grid-odd" : ""}${hasFeatured ? " dining-grid-featured" : ""}`}>{items.map((item, itemIndex) => {
     const isWide = item.layout === "wide";
     const images = (item.images?.length ? item.images : item.image ? [item.image] : []).slice(0, 2);
     return <article className={`dining-card${isWide ? " dining-card-wide" : ""}`} key={item.id || item.title} data-edit-path={`dining.${itemIndex}`}>
@@ -161,10 +163,11 @@ function TransportOverview({ items = [], disclaimer, title = "全程交通", int
   const hasFeatured = items.some((item) => item.layout === "wide");
   return <section className="journey-feature-section transport-section" data-edit-path="transport"><SectionTitle en="TRAVEL IN COMFORT" zh={title} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`transport-grid${isOdd ? " transport-grid-odd" : ""}${hasFeatured ? " transport-grid-featured" : ""}`}>{items.map((item, itemIndex) => {
     const isWide = item.layout === "wide";
+    const configurationLabels = transportConfigurationLabels(item);
     return <article className={`transport-card${isWide ? " transport-card-wide" : ""}`} key={item.id || item.category} data-edit-path={`transport.${itemIndex}`}>
     {item.images?.length > 0 ? <div className={`transport-image transport-image-count-${Math.min(item.images.length, 2)}`}>{item.images.slice(0, 2).map((image, imageIndex) => <SafeImage key={`${item.id}-${imageIndex}`} src={image.src || image} alt={`${item.category}${imageIndex ? "内部空间" : "出行场景"}`} data-edit-path={`transport.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="交通图片待补充" compact className="card-missing-image" data-edit-path={`transport.${itemIndex}`} data-edit-image="0" />}
-    <div className="transport-copy"><div className="transport-heading"><span className="transport-icon"><Icon name="vehicle" size={44} tone="light" /></span><div><small>{transportUsageLabel(item)}</small><h3>{item.category}</h3></div></div>
-      <div className="transport-specs">{item.serviceLevel && <span>{item.serviceLevel}</span>}{item.seatCount && <span>{item.seatCount}座</span>}{item.model && <span>{item.modelGuaranteed ? "指定车型" : "参考车型"} · {item.model}</span>}</div>
+    <div className="transport-copy"><div className="transport-heading"><span className="transport-icon"><Icon name="vehicle" size={44} tone="light" /></span><div><small>{transportUsageLabel(item)}</small><h3>{transportProductName(item)}</h3></div></div>
+      {configurationLabels.length > 0 && <div className="transport-specs">{configurationLabels.map((label) => <span key={label}>{label}</span>)}</div>}
       {item.editorialCopy && <p className="transport-editorial">{item.editorialCopy}</p>}
       {item.features?.length > 0 && <ul>{item.features.map((feature) => <li key={feature}>{feature}</li>)}</ul>}
     </div>
@@ -186,7 +189,7 @@ function RoutePreview({ day }) {
 
 function DayFacts({ day }) {
   const meal = day.mealPlan;
-  const rhythm = [day.vehicle, day.estimatedTravelTime, day.activityLevel && `活动强度：${day.activityLevel}`, day.restStops].filter(Boolean);
+  const rhythm = [day.vehicle, day.estimatedTravelTime || day.movementPaceDescriptor, day.activityLevel && `活动强度：${day.activityLevel}`, day.restStops].filter(Boolean);
   return <div className="day-facts">
     <RoutePreview day={day} />
     {rhythm.length > 0 && <div className="day-fact day-rhythm"><span className="fact-icon"><Icon name="vehicle" size={64} tone="light" /></span><div><span>今日节奏</span><div className="rhythm-chips">{rhythm.map((item) => <b key={item}>{item}</b>)}</div></div></div>}

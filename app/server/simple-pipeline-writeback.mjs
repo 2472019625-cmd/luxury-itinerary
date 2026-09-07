@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { getSlotImage, setSlotImage } from "../src/lib/imageSlots.js";
 import { validateCopyValue } from "./simple-copy-skill.mjs";
 
-const COPY_PATH = /^(?:title|subtitle|notes|highlights\.\d+|hotels\.\d+\.editorialCopy|diningExperiences\.\d+\.editorialCopy|transportSummary\.\d+\.editorialCopy|days\.\d+\.description)$/;
+const COPY_PATH = /^(?:title|subtitle|notes|highlights\.\d+|hotels\.\d+\.(?:editorialCopy|proofPoints)|diningExperiences\.\d+\.editorialCopy|transportSummary\.\d+\.(?:usageLabel|editorialCopy|features)|days\.\d+\.(?:theme|description)|days\.\d+\.dayNotices\.0\.text|days\.\d+\.spots\.\d+\.description)$/;
 
 function protectedFacts(data = {}) {
   return {
@@ -21,7 +21,7 @@ function protectedFacts(data = {}) {
     pendingConfirmations: data.pendingConfirmations,
     hotels: (data.hotels || []).map(({ id, officialName, shortName, region, nights, roomType, status, mealPlan, replacementPolicy }) => ({ id, officialName, shortName, region, nights, roomType, status, mealPlan, replacementPolicy })),
     transportSummary: (data.transportSummary || []).map(({ id, category, serviceLevel, seatCount, model, modelGuaranteed, usageSegments }) => ({ id, category, serviceLevel, seatCount, model, modelGuaranteed, usageSegments })),
-    days: (data.days || []).map((day) => ({ date: day.date, routeNodes: day.routeNodes, city: day.city, mealPlan: day.mealPlan, hotel: day.hotel, vehicle: day.vehicle, estimatedTravelTime: day.estimatedTravelTime, overnightType: day.overnightType, spots: (day.spots || []).map(({ id, name, status, statusLabel, feeBoundary, sourceEvidence }) => ({ id, name, status, statusLabel, feeBoundary, sourceEvidence })) })),
+    days: (data.days || []).map((day) => ({ date: day.date, routeNodes: day.routeNodes, city: day.city, mealPlan: day.mealPlan, hotel: day.hotel, vehicle: day.vehicle, estimatedTravelTime: day.estimatedTravelTime, movementPaceDescriptor: day.movementPaceDescriptor, activityLevel: day.activityLevel, overnightType: day.overnightType, dayNotices: (day.dayNotices || []).map(({ type, sourceKind, basisType, sourceEvidence }) => ({ type, sourceKind, basisType, sourceEvidence })), spots: (day.spots || []).map(({ id, name, status, statusLabel, feeBoundary, optional, sourceEvidence }) => ({ id, name, status, statusLabel, feeBoundary, optional, sourceEvidence })) })),
   };
 }
 

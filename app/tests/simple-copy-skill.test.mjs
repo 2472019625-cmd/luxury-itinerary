@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runCopyWriterSkill, validateCopyValue } from "../server/simple-copy-skill.mjs";
+import { normalizeCopyValueForSchema, runCopyWriterSkill, validateCopyCommitments, validateCopyValue } from "../server/simple-copy-skill.mjs";
 
 const task = (targetId, targetPath, moduleType = "day") => ({
   targetId,
@@ -28,9 +28,17 @@ test("Copy 按全局、DAY、notes形成三个物理批次并按 targetId 隔离
       assert.equal(reasoningEffort, "medium");
       assert.match(messages[0].content, /Copy Writer Skill/);
       assert.match(messages[0].content, /不是只能逐字复述 Excel/);
-      assert.match(messages[0].content, /真实常见野生动物语境/);
+      assert.match(messages[0].content, /高端定制旅行产品内容营销写作者/);
+      assert.match(messages[0].content, /真实事实 \+ 合理体验化展开 \+ 客户价值/);
       assert.match(messages[0].content, /不得把“可能看到”写成“保证\/必然看到”/);
       assert.match(messages[0].content, /禁止修改价格、交通承诺、接待等级/);
+      assert.match(messages[0].content, /而不是检查某个词是否出现在 Excel/);
+      assert.match(messages[0].content, /只有固定钟点、保证看到具体动物或获得某结果/);
+      assert.match(messages[0].content, /同名 Spot 有真实区别时写区别/);
+      const runtimeContract = messages[0].content.split("## Runtime response contract").at(-1);
+      assert.doesNotMatch(runtimeContract, /荒野注解|同名 spot|酒店 editorialCopy/);
+      assert.match(runtimeContract, /只输出 JSON 对象/);
+      assert.match(runtimeContract, /禁止 Reviewer|不得返回 Reviewer/);
       const payload = JSON.parse(messages.at(-1).content);
       seenBatchKinds.push(payload.batchKind);
       return { json: { results: payload.tasks.map((item) => ({ targetId: item.targetId, targetPath: item.targetPath, value: item.targetId === "day-2" ? 123 : item.targetId === "notes" ? ["行前准备"] : "草原纵深｜以差异化区域串联完整观察体验。" })) }, attemptUsages: [{ attempt: 1 }] };
@@ -50,6 +58,125 @@ test("Copy 按全局、DAY、notes形成三个物理批次并按 targetId 隔离
   assert.equal(result.results[0].targetPath, "highlights.0");
   assert.deepEqual([...new Set(events.map((event) => event.capabilityId))], ["copy_writer"]);
   assert.deepEqual([...new Set(events.map((event) => event.batchKind))].sort(), ["days", "global", "notes"]);
+});
+
+test("无 researchRequest 不触发联网，合理体验化表达不要求 Excel 原句", async () => {
+  let researchCalls = 0;
+  const result = await runCopyWriterSkill({
+    tasks: [task("day-experience", "days.0.description")],
+    researchFacts: async () => { researchCalls += 1; throw new Error("不应调用"); },
+    requestJson: async ({ messages }) => {
+      const payload = JSON.parse(messages.at(-1).content);
+      return { json: { results: [{ targetId: payload.tasks[0].targetId, targetPath: payload.tasks[0].targetPath, value: "把车程留给观察地貌渐变，抵达后以更从容的节奏进入当天体验。" }] }, attemptUsages: [{}] };
+    },
+  });
+  assert.equal(researchCalls, 0);
+  assert.equal(result.metrics.researchCalls, 0);
+  assert.equal(result.results[0].status, "success");
+});
+
+test("研究结果只注入当前 target，研究失败不拖垮无请求任务", async () => {
+  const researched = { ...task("hotel", "hotels.0.editorialCopy", "hotel"), researchRequest: { researchType: "official_entity_facts", entityName: "Example Lodge", categories: ["空间"] } };
+  const direct = task("transport", "transportSummary.0.editorialCopy", "transport");
+  const result = await runCopyWriterSkill({
+    tasks: [researched, direct],
+    researchFacts: async () => { throw Object.assign(new Error("官方来源暂不可用"), { code: "copy_facts_research_failed" }); },
+    requestJson: async ({ messages }) => {
+      const payload = JSON.parse(messages.at(-1).content);
+      assert.deepEqual(payload.tasks.map((item) => item.targetId), ["transport"]);
+      return { json: { results: [{ targetId: "transport", targetPath: direct.targetPath, value: "以已确认交通类别组织整程移动体验。" }] }, attemptUsages: [{}] };
+    },
+  });
+  assert.equal(result.results.find((item) => item.targetId === "hotel").status, "failed");
+  assert.equal(result.results.find((item) => item.targetId === "transport").status, "success");
+  assert.equal(result.metrics.researchCalls, 1);
+  assert.equal(result.metrics.modelCalls, 1);
+});
+
+test("hotel editorialCopy 和 proofPoints 共用研究结果并读取 verifiedFacts", async () => {
+  const request = { researchType: "official_entity_facts", entityName: "Faru Faru Lodge", categories: ["空间与设计", "景观与环境"] };
+  const editorial = { ...task("hotel-copy", "hotels.0.editorialCopy", "hotel"), researchRequest: request };
+  const proofPoints = { ...task("hotel-proof", "hotels.0.proofPoints", "hotel"), researchRequest: request, outputSchema: { type: "array", minItems: 2, maxItems: 3, items: { type: "string", minLength: 2 } } };
+  let researchCalls = 0;
+  const result = await runCopyWriterSkill({
+    tasks: [editorial, proofPoints],
+    researchFacts: async () => {
+      researchCalls += 1;
+      return {
+        researchType: request.researchType,
+        entityName: request.entityName,
+        status: "success",
+        verifiedFacts: [{ category: "景观与环境", fact: "临近 Grumeti River。", sourceUrl: "https://singita.com/lodge/singita-faru-faru-lodge/", sourceExcerpt: "located on the Grumeti River", checkedAt: "2026-09-04T00:00:00.000Z" }],
+        attemptUsages: [{}],
+      };
+    },
+    requestJson: async ({ messages }) => {
+      const payload = JSON.parse(messages.at(-1).content);
+      for (const item of payload.tasks) assert.equal(item.verifiedFacts.verifiedFacts[0].fact, "临近 Grumeti River。");
+      return { json: { results: payload.tasks.map((item) => ({ targetId: item.targetId, targetPath: item.targetPath, value: item.targetId === "hotel-proof" ? ["临近 Grumeti River", "以河岸景观构成住宿环境"] : "Faru Faru Lodge 临近 Grumeti River，河岸环境让住宿本身成为草原体验的一部分。" })) }, attemptUsages: [{}] };
+    },
+  });
+  assert.equal(researchCalls, 1);
+  assert.equal(result.metrics.researchCalls, 1);
+  assert.deepEqual(result.results.map((item) => item.status), ["success", "success"]);
+});
+
+test("酒店 verifiedFacts 为零时显式注入事实边界且 proofPoints 可按真实数量留空", async () => {
+  const request = { researchType: "official_entity_facts", entityName: "Sparse Lodge", categories: ["空间与设计"] };
+  const editorial = { ...task("sparse-copy", "hotels.0.editorialCopy", "hotel"), facts: { officialName: "Sparse Lodge", region: "保护区", nights: 1, supplierHotelContext: [] }, researchRequest: request };
+  const proofPoints = { ...task("sparse-proof", "hotels.0.proofPoints", "hotel_proof_points"), facts: editorial.facts, researchRequest: request, outputSchema: { type: "array", minItems: 0, maxItems: 3, items: { type: "string" } } };
+  const result = await runCopyWriterSkill({
+    tasks: [editorial, proofPoints],
+    researchFacts: async () => ({ researchType: request.researchType, entityName: request.entityName, status: "not_found", verifiedFacts: [], rejected: [], attemptUsages: [{}] }),
+    requestJson: async ({ messages }) => {
+      const payload = JSON.parse(messages.at(-1).content);
+      for (const item of payload.tasks) {
+        assert.equal(item.facts.factsResearchOutcome.status, "not_found");
+        assert.equal(item.facts.factsResearchOutcome.verifiedFactCount, 0);
+        assert.match(item.facts.factsResearchOutcome.zeroFactBoundary, /禁止依赖模型常识/);
+      }
+      return { json: { results: payload.tasks.map((item) => ({ targetId: item.targetId, targetPath: item.targetPath, value: item.targetId === "sparse-proof" ? [] : "本次行程将在 Sparse Lodge 停留一晚；现有资料未提供更多可核验住宿事实。" })) }, attemptUsages: [{}] };
+    },
+  });
+  assert.deepEqual(result.results.map((item) => item.status), ["success", "success"]);
+  assert.deepEqual(result.results[1].value, []);
+  assert.ok(result.results.every((item) => item.warnings.some((warning) => /酒店官方事实研究未成功/.test(warning))));
+});
+
+test("门禁允许合理体验展开，只拒绝无依据的新具体承诺和订单边界", async () => {
+  const sourceTask = {
+    ...task("day-commitment", "days.0.description"),
+    facts: { activity: "已确认夜间游猎；guided walking safari / 导览员带领" },
+  };
+  const result = await runCopyWriterSkill({
+    tasks: [sourceTask],
+    requestJson: async () => ({ json: { results: [{ targetId: sourceTask.targetId, targetPath: sourceTask.targetPath, value: "傍晚回到营地；夜间游猎会借助探照设备观察夜间环境，也有机会观察夜行动物。" }] }, attemptUsages: [{}] }),
+  });
+  assert.equal(result.results[0].status, "success");
+
+  const allowed = [
+    "傍晚回到营地。",
+    "夜间游猎会借助探照设备观察夜间环境。",
+    "跟随专业向导进入荒野徒步。",
+    "有机会观察夜行动物。",
+    "建议提前预约，以实际确认结果为准。",
+  ];
+  for (const value of allowed) assert.deepEqual(validateCopyCommitments(value, sourceTask), []);
+
+  assert.match(validateCopyCommitments("19:30 准时出发。", sourceTask)[0], /固定钟点承诺/);
+  assert.match(validateCopyCommitments("保证看到狮子和花豹。", sourceTask)[0], /保证性结果/);
+  assert.match(validateCopyCommitments("零距离感受野生动物。", sourceTask)[0], /具体接近程度承诺/);
+  assert.match(validateCopyCommitments("由国家一级专家全程陪同。", sourceTask)[0], /具体人员资质承诺/);
+  assert.match(validateCopyCommitments("该活动必须提前30天预约。", sourceTask)[0], /强制预约时限/);
+  assert.match(validateCopyCommitments("该活动需提前预约。", sourceTask)[0], /强制预约要求/);
+  assert.match(validateCopyCommitments("本次已包含河景套房。", sourceTask)[0], /订单包含或确认承诺/);
+  assert.deepEqual(validateCopyCommitments("夜间游猎会借助探照设备观察夜间环境。", { facts: { activity: "城市观光" } }), []);
+  assert.deepEqual(validateCopyCommitments("白天跟随向导追踪兽群。", { moduleType: "hotel", facts: { verifiedFacts: [{ fact: "酒店采用现代有机设计。" }] } }), []);
+  assert.deepEqual(validateCopyCommitments("客房露台面向水塘，公共空间设有泳池与管家服务。", { moduleType: "hotel", facts: { verifiedFacts: [{ fact: "酒店采用现代有机设计。" }] } }), []);
+  assert.deepEqual(validateCopyCommitments("套房设有私人露台。", { moduleType: "hotel", facts: { verifiedFacts: [{ fact: "全部套房设有私人露台。" }] } }), []);
+
+  assert.deepEqual(validateCopyCommitments("19:30 准时出发。", { facts: { departureTime: "19:30", timingStatus: "confirmed" } }), []);
+  assert.deepEqual(validateCopyCommitments("该活动必须提前30天预约。", { facts: { reservationLeadTime: "提前30天", status: "reservation_required" } }), []);
 });
 
 test("单个物理批次技术重试耗尽只影响该批 targets", async () => {
@@ -92,4 +219,44 @@ test("outputSchema 校验对象和数组结构", () => {
   assert.deepEqual(validateCopyValue({ title: "证件", items: ["检查护照"] }, { type: "object", required: ["title", "items"], properties: { title: { type: "string" }, items: { type: "array", items: { type: "string" } } }, additionalProperties: false }), []);
   assert.ok(validateCopyValue({ title: "证件", items: [3] }, { type: "object", required: ["title", "items"], properties: { title: { type: "string" }, items: { type: "array", items: { type: "string" } } } }).length > 0);
   assert.deepEqual(validateCopyValue({ title: "证件", items: ["检查护照"] }, { oneOf: [{ type: "string" }, { type: "object", required: ["title", "items"], properties: { title: { type: "string" }, items: { type: "array", items: { type: "string" } } } }] }), []);
+});
+
+test("notes item 的 warnings 被确定性移到结果级且不触发额外模型调用", async () => {
+  const notesSchema = { type: "array", minItems: 1, items: { type: "object", required: ["title", "items"], properties: { title: { type: "string" }, items: { type: "array", items: { type: "string" } } }, additionalProperties: false } };
+  const direct = normalizeCopyValueForSchema([{ title: "行前准备", items: ["核对证件"], warnings: ["时效信息需核验"] }], notesSchema);
+  assert.deepEqual(direct.value, [{ title: "行前准备", items: ["核对证件"] }]);
+  assert.deepEqual(direct.warnings, ["时效信息需核验"]);
+  let calls = 0;
+  const result = await runCopyWriterSkill({
+    tasks: [{ ...task("notes", "notes", "notes"), outputSchema: notesSchema }],
+    requestJson: async ({ messages }) => {
+      calls += 1;
+      const input = JSON.parse(messages.at(-1).content).tasks[0];
+      return { json: { results: [{ targetId: input.targetId, targetPath: input.targetPath, value: [{ title: "行前准备", items: ["核对证件"], warnings: ["时效信息需核验"] }], warnings: ["未识别日期"] }] }, attemptUsages: [{ attempt: 1 }] };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.results[0].status, "success");
+  assert.deepEqual(result.results[0].value, [{ title: "行前准备", items: ["核对证件"] }]);
+  assert.deepEqual(result.results[0].warnings, ["未识别日期", "时效信息需核验"]);
+});
+
+test("Notes 非法 tone 使用字段契约默认展示值且保留 warning", () => {
+  const notesSchema = { type: "array", minItems: 1, items: { type: "object", required: ["title", "items"], properties: { title: { type: "string" }, tone: { enum: ["gold", "warning"] }, items: { type: "array", items: { type: "string" } } }, additionalProperties: false } };
+  const normalized = normalizeCopyValueForSchema([{ title: "行前准备", tone: "info", items: ["核对证件"] }], notesSchema);
+  assert.equal(normalized.value[0].tone, "gold");
+  assert.match(normalized.warnings[0], /tone“info”.*默认值“gold”/);
+  assert.deepEqual(validateCopyValue(normalized.value, notesSchema), []);
+});
+
+test("Notes 非法 tone 不再导致整个 Copy target 失败", async () => {
+  const notesSchema = { type: "array", minItems: 1, items: { type: "object", required: ["title", "items"], properties: { title: { type: "string" }, tone: { enum: ["gold", "warning"] }, items: { type: "array", items: { type: "string" } } }, additionalProperties: false } };
+  const notesTask = { ...task("notes-tone", "notes", "notes"), outputSchema: notesSchema };
+  const result = await runCopyWriterSkill({
+    tasks: [notesTask],
+    requestJson: async () => ({ json: { results: [{ targetId: notesTask.targetId, targetPath: notesTask.targetPath, value: [{ title: "行前准备", tone: "info", items: ["核对证件"] }], warnings: [] }] }, attemptUsages: [{ attempt: 1 }] }),
+  });
+  assert.equal(result.results[0].status, "success");
+  assert.equal(result.results[0].value[0].tone, "gold");
+  assert.match(result.results[0].warnings[0], /tone“info”/);
 });

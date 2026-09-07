@@ -60,7 +60,32 @@ test("recognizes compact Chinese headers without treating meals as hotels", asyn
   assert.equal(result.report.highlightCount, 1);
   assert.ok(result.data.days.every((day) => day.spots.length >= 1));
   assert.equal(result.data.days[3].overnightType, "inflight");
+  assert.ok(result.data.hotels[0].sourceEvidence.some((item) => item.startsWith("DAY 1 住宿")));
+  assert.ok(result.data.hotels[1].sourceEvidence.some((item) => item.startsWith("DAY 3 住宿")));
+  assert.ok(!result.data.hotels[1].sourceEvidence.some((item) => item.startsWith("DAY 1 住宿")));
   assert.ok(!result.report.warnings.includes("false"));
+});
+
+test("酒店 sourceEvidence 保留过滤前的真实 DAY 4—DAY 6 编号", async () => {
+  const rows = [
+    ["坦桑尼亚6日行程"],
+    ["日期", "简要行程", "详细", "用餐", "参考酒店", "用车"],
+    ["DAY 1", "塞伦盖蒂", "Faru 入住", "晚餐", "Singita Faru Faru Lodge", "游猎车"],
+    ["DAY 2", "塞伦盖蒂", "Faru 游猎", "全餐", "Singita Faru Faru Lodge", "游猎车"],
+    ["DAY 3", "塞伦盖蒂", "Faru 游猎", "全餐", "Singita Faru Faru Lodge", "游猎车"],
+    ["DAY 4", "塞伦盖蒂", "Sabora 入住", "全餐", "Singita Sabora Tented Camp", "游猎车"],
+    ["DAY 5", "塞伦盖蒂", "Sabora 游猎", "全餐", "Singita Sabora Tented Camp", "游猎车"],
+    ["DAY 6", "塞伦盖蒂", "Sabora 收束", "早餐", "Singita Sabora Tented Camp", "草原飞机"],
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "行程");
+  const buffer = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+  const result = await importItineraryWorkbook(new File([buffer], "酒店日期编号.xlsx"), { days: [] });
+  const sabora = result.data.hotels.find((hotel) => hotel.officialName === "Singita Sabora Tented Camp");
+  assert.ok(sabora.sourceEvidence.some((item) => item.startsWith("DAY 4 住宿")));
+  assert.ok(sabora.sourceEvidence.some((item) => item.startsWith("DAY 5 住宿")));
+  assert.ok(sabora.sourceEvidence.some((item) => item.startsWith("DAY 6 住宿")));
+  assert.ok(!sabora.sourceEvidence.some((item) => /^DAY [123] 住宿/.test(item)));
 });
 
 test("preserves nine source inclusions and daily transport with coverage evidence", async () => {

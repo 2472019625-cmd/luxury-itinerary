@@ -175,7 +175,7 @@ function checkDining(data, sourceData, issues) {
   if (list(data.diningExperiences).some((item) => !Number.isInteger(item.sourceDay) && !list(item.sourceEvidence).length)) issues.push(issue('COPY-008','dining_without_evidence','diningExperiences','特色餐饮缺少原始事实依据','block','fact'));
   list(data.diningExperiences).forEach((item, index) => {
     const copy = text(item.editorialCopy);
-    if (copy && chars(copy) < 20) issues.push(issue('COPY-008','dining_thin',`diningExperiences.${index}.editorialCopy`,'特色餐饮须说明场景、氛围或旅程记忆点'));
+    if (copy && chars(copy) < 20) issues.push(issue('COPY-008','dining_thin',`diningExperiences.${index}.editorialCopy`,'特色餐饮须先让客户看懂餐饮本身及味觉、品饮或用餐方式；场景应服务于餐饮，并说明一个直接客户价值'));
     if (/普通早餐|午餐盒|酒店晚餐/.test(`${item.title || ''}${item.officialName || ''}`)) issues.push(issue('COPY-008','ordinary_meal_promoted',`diningExperiences.${index}`,'普通餐食不得包装成特色餐饮','block','fact'));
   });
 }
