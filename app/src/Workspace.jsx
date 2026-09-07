@@ -7,6 +7,7 @@ import { recordImageDecision } from './lib/imageDecisions.js';
 import { humanReviewReady, recordHumanReview } from './lib/humanReview.js';
 import { collectCopyIssues, copyExportEligibility, generationStateLabel, groupCopyIssueTargets, groupCopyIssues } from './lib/copyIssuePresentation.js';
 import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
+import { AGENT_DESIGNER_STAGES, SIMPLE_DESIGNER_STAGES, getDesignerCurrentAction, getDesignerHighlights, getDesignerSummary, getDesignerTripTitle } from './lib/agentProgressView.js';
 import { PlanView } from "./AgentPlanner.jsx";
 
 const STORAGE_USERS = "sheyou-workspace-users-v1";
@@ -274,23 +275,6 @@ function GenerationStep({ project, progress, status, error, onStart, onEdit, onR
   </section></main>;
 }
 
-const AGENT_PROGRESS_STAGES = [
-  { key: "planning", label: "整程规划" },
-  { key: "verification", label: "事实核验" },
-  { key: "copy", label: "文案生成" },
-  { key: "brand_review", label: "品牌审查" },
-  { key: "images", label: "图片处理" },
-  { key: "render", label: "成品渲染" },
-  { key: "final_checks", label: "最终检查" },
-];
-const SIMPLE_PROGRESS_STAGES = [
-  { key: "parser", label: "资料解析" },
-  { key: "planner", label: "整程规划" },
-  { key: "copy_skill", label: "文案生成" },
-  { key: "image_skill", label: "图片处理" },
-  { key: "program_writeback", label: "结果合并" },
-  { key: "renderer", label: "成品渲染" },
-];
 function buildAgentProgress(snapshot) {
   const project = snapshot?.project;
   const plan = snapshot?.plan;
@@ -299,7 +283,7 @@ function buildAgentProgress(snapshot) {
     const activeJob = snapshot?.activeJob;
     const backend = new Map((activeJob?.stages || []).map((stage) => [stage.id, stage]));
     const states = { complete: "complete", running: "active", failed: "failed", cancelled: "cancelled", pending: "pending" };
-    const stages = SIMPLE_PROGRESS_STAGES.map((definition) => {
+    const stages = SIMPLE_DESIGNER_STAGES.map((definition) => {
       const actual = backend.get(definition.key);
       return { ...definition, state: states[actual?.status] || (project.status === "complete" ? "complete" : "pending"), progress: actual?.status === "complete" ? 1 : 0 };
     });
@@ -309,14 +293,14 @@ function buildAgentProgress(snapshot) {
   if (run?.progress?.stages?.length) {
     const backend = new Map(run.progress.stages.map((stage) => [stage.id, stage]));
     const states = { complete: "complete", running: "active", waiting_confirmation: "waiting", failed: "failed", pending: "pending" };
-    const stages = AGENT_PROGRESS_STAGES.map((definition) => {
+    const stages = AGENT_DESIGNER_STAGES.map((definition) => {
       const actual = backend.get(definition.key);
       return { ...definition, state: states[actual?.status] || "pending", progress: actual?.totalTasks ? actual.completedTasks / actual.totalTasks : actual?.status === "complete" ? 1 : 0 };
     });
     if (project?.status === "cancelled") stages.forEach((stage) => { if (!["complete", "failed"].includes(stage.state)) stage.state = "cancelled"; });
     return { stages, percent: Number(run.progress.percent || 0), planActive };
   }
-  const stages = AGENT_PROGRESS_STAGES.map((definition) => {
+  const stages = AGENT_DESIGNER_STAGES.map((definition) => {
     if (definition.key === "planning") {
       if (planActive) return { ...definition, state: "complete", progress: 1 };
       if (project?.status === "planning_failed") return { ...definition, state: "failed", progress: 0 };
@@ -330,12 +314,13 @@ function buildAgentProgress(snapshot) {
   return { stages, percent, planActive };
 }
 
-function AgentProgressOverview({ snapshot, taskCount, executed, elapsed, action }) {
+function AgentProgressOverview({ snapshot, elapsed }) {
   const progress = buildAgentProgress(snapshot);
   const labels = { complete: "已完成", active: "进行中", waiting: "等待确认", failed: "已中断", cancelled: "已取消", pending: "未开始" };
   const latestEvent = snapshot?.executionRun?.events?.at(-1);
-  const waitingReason = latestEvent?.waitingReason ? `等待：${latestEvent.waitingReason}` : snapshot?.project?.status === "awaiting_confirmation" ? "等待：需要你确认关键业务问题" : snapshot?.project?.status === "awaiting_user_action" ? "等待：需要补充必需图片" : "";
-  return <aside className="agent-progress-overview"><header><small>REAL-TIME PROGRESS</small><h2>实时进度总览</h2></header><div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress.percent} aria-label="智能体真实总进度"><strong>{progress.percent}<sup>%</sup></strong><div><span style={{ width: `${progress.percent}%` }} /></div><p>{action}</p></div><ol>{progress.stages.map((stage) => <li className={`agent-progress-${stage.state}`} key={stage.key}><i /> <span>{stage.label}</span><em>{labels[stage.state]}</em></li>)}</ol>{waitingReason && <p className="agent-progress-wait">{waitingReason}</p>}<footer><div><strong>{executed}/{taskCount}</strong><span>完成任务</span></div><div><strong>{Math.floor(elapsed / 60)}分{elapsed % 60}秒</strong><span>实际用时</span></div></footer></aside>;
+  const waitingReason = latestEvent?.waitingReason ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_confirmation" ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_user_action" ? "部分内容需要在编辑页补充或确认，不影响你先查看和调整草稿。" : "";
+  const action = getDesignerCurrentAction(snapshot);
+  return <section className="agent-progress-overview" aria-labelledby="designer-progress-title"><header><small>TRIP PRODUCTION STATUS</small><h2 id="designer-progress-title">客户行程制作进度</h2><p>系统会按已确认资料继续制作，完成后仍可调整文案、图片和版式。</p></header><div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress.percent} aria-label="客户行程制作进度"><strong>{progress.percent}<sup>%</sup></strong><div><span style={{ width: `${progress.percent}%` }} /></div><p aria-live="polite">{action}</p></div><ol>{progress.stages.map((stage) => <li className={`agent-progress-${stage.state}`} key={stage.key}><i /> <span>{stage.label}</span><em>{labels[stage.state]}</em></li>)}</ol>{waitingReason && <p className="agent-progress-wait">{waitingReason}</p>}<footer><div><strong>{Math.floor(elapsed / 60)}分{elapsed % 60}秒</strong><span>已用时间</span></div><div><strong>可继续调整</strong><span>完成后进入编辑页</span></div></footer></section>;
 }
 
 function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, onEdit, decisions, onDecision, onConfirm, onRetryImage }) {
@@ -349,22 +334,26 @@ function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, onE
   const taskCount = simpleMode ? Number(activeJob?.totalWorkItems || ((plan?.copyTasks?.length || 0) + (plan?.imageSlots?.length || 0))) : plan?.tasks?.length || 0;
   const elapsed = agentProject?.createdAt ? Math.max(0, Math.floor((Date.now() - new Date(agentProject.createdAt).getTime()) / 1000)) : 0;
   const waiting = ["awaiting_confirmation", "awaiting_user_action"].includes(agentProject?.status);
-  const failed = ["planning_failed", "execution_failed", "failed", "partial"].includes(agentProject?.status);
+  const draft = agentProject?.status === "partial";
+  const failed = ["planning_failed", "execution_failed", "failed"].includes(agentProject?.status);
   const cancelled = agentProject?.status === "cancelled";
   const ready = ["ready_for_editor", "complete"].includes(agentProject?.status);
-  const intakeFinished = Boolean(agentProject && !["preparing", "awaiting_confirmation"].includes(agentProject.status));
-  const activeTitle = ready ? "行程成品已完成" : waiting ? "需要你的确认" : failed ? "生成任务已中断" : cancelled ? "生成任务已取消" : "正在生成行程成品";
   const latestEvent = run?.events?.at(-1);
-  const action = waiting ? (simpleMode ? "等待补充必需图片" : "等待你确认关键业务问题") : activeJob?.currentAction || latestEvent?.message || activeJob?.message || agentProject?.currentStage || "正在读取智能体项目";
-  const latestResult = ready ? "新版 Simple Pipeline 已完成文案、图片、合并和实际 2000px 渲染。" : plan ? (simpleMode ? `整程规划已完成，Copy Skill 与 Image Skill 正在按 ${taskCount} 个责任单元执行。` : `智能规划已完成并通过检查，已建立 ${taskCount} 个执行任务。`) : intakeFinished ? "资料检查已经完成，正在建立本次唯一任务计划。" : "正在读取并检查本次上传资料。";
+  const tripTitle = getDesignerTripTitle(snapshot, project);
+  const highlights = getDesignerHighlights(snapshot, project);
+  const summary = getDesignerSummary(snapshot);
+  const rawAction = activeJob?.currentAction || latestEvent?.message || activeJob?.message || agentProject?.currentStage || "正在读取智能体项目";
   return <main className="flow-page"><StepRail active={2} /><section className="generation-page agent-workspace-generation">
-    <div className="generation-main"><header><small>STEP 03 · AGENT GENERATION</small><h1>{activeTitle}</h1><p>{waiting ? "保存选择后会从受影响的当前任务继续，不会整份重跑。" : failed ? agentProject?.lastError || "当前阶段没有通过安全检查。" : cancelled ? "项目、计划和已经形成的证据都已保留。" : latestResult}</p></header>
+    <div className="generation-main agent-designer-summary"><header><small>本次定制摘要</small><h1>{ready ? `「${tripTitle}」已完成` : draft ? `「${tripTitle}」可编辑草稿已生成` : waiting ? `「${tripTitle}」需要你的确认` : failed ? `「${tripTitle}」制作暂时中断` : cancelled ? `「${tripTitle}」已取消` : `正在制作「${tripTitle}」`}</h1><p>{summary}</p></header>
+      <section className="agent-fact-assurance" aria-label="已保护的重要信息"><div><small>已按你的确认制作</small><strong>日期、酒店、路线和费用不会被擅自改动</strong></div><span>确认信息优先</span></section>
+      {highlights.length > 0 && <section className="agent-custom-priorities" aria-labelledby="custom-priorities-title"><header><small>本次定制重点</small><p id="custom-priorities-title">系统会围绕这些体验重点组织客户版表达和配图。</p></header><ul>{highlights.map((highlight) => <li key={highlight}>{highlight}</li>)}</ul></section>}
+      <p className="agent-editable-note">完成后可进入编辑页继续调整文案、图片和版式，系统不会把生成结果锁死。</p>
       {waiting && <div className="agent-runtime-confirm"><AgentConfirmationPanel confirmations={snapshot?.confirmations || []} decisions={decisions} onDecision={onDecision} onRetryImage={onRetryImage} /><Button tone="primary" onClick={onConfirm}>保存选择并从当前任务继续</Button></div>}
       {error && <p className="generation-error"><UiIcon name="warning" />{error}</p>}
-      {plan && <details className="agent-plan-details workspace-agent-plan"><summary><small>查看本次规划 / 技术详情</small></summary><section className="agent-technical-summary"><span>计划 {plan.planId.slice(0, 8)}</span><span>{taskCount} 个责任单元</span><span>{executed} 个实时能力动作完成</span><span>{simpleMode ? "Simple Pipeline" : `${run?.capabilityCallStats?.reduce((sum, item) => sum + item.actualCalls, 0) || 0} 次下游调用`}</span><span>版本 {plan.planVersion}</span></section>{!simpleMode && <PlanView project={agentProject} plan={plan} embedded />}</details>}
+      {plan && <details className="agent-plan-details workspace-agent-plan agent-admin-runtime"><summary><span>管理员运行详情</span><small>用于排查任务，定制师无需处理</small></summary><section className="agent-technical-summary"><span>projectId {agentProject?.projectId}</span><span>executionRunId {agentProject?.activeExecutionRunId || run?.executionRunId || "未创建"}</span><span>计划 {plan.planId}</span><span>{taskCount} 个责任单元</span><span>{executed} 个实时能力动作完成</span><span>{simpleMode ? "Simple Pipeline" : `${run?.capabilityCallStats?.reduce((sum, item) => sum + item.actualCalls, 0) || 0} 次下游调用`}</span><span>版本 {plan.planVersion || "未标注"}</span></section><p className="agent-raw-action"><strong>当前内部动作</strong><code>{rawAction}</code></p>{!simpleMode && <PlanView project={agentProject} plan={plan} embedded />}</details>}
     </div>
-    <AgentProgressOverview snapshot={snapshot} taskCount={taskCount} executed={executed} elapsed={elapsed} action={action} />
-    <footer className="generation-footer">{!waiting && !ready && <Button onClick={onReview}>查看确认信息</Button>}{ready && <Button tone="primary" onClick={onEdit}>进入原编辑器</Button>}{!["cancelled", "ready_for_editor"].includes(agentProject?.status) && <Button onClick={onCancel}>取消任务</Button>}</footer>
+    <AgentProgressOverview snapshot={snapshot} elapsed={elapsed} />
+    <footer className="generation-footer">{!waiting && !ready && !draft && <Button onClick={onReview}>查看确认信息</Button>}{(ready || draft) && <Button tone="primary" onClick={onEdit}>进入编辑页</Button>}{!waiting && !ready && !draft && !cancelled && <Button onClick={onCancel}>取消任务</Button>}</footer>
   </section></main>;
 }
 
@@ -1055,7 +1044,7 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   const logout = () => { localStorage.removeItem(storageKeys.session); setUser(null); setProjectId(null); setScreen("list"); };
   if (!user) return <AuthScreen storageKeys={storageKeys} onAuth={(nextUser) => { setUsers(readStorage(storageKeys.users, [])); setUser(nextUser); }} />;
   return <div className={`workspace-shell${agentMode ? " workspace-agent-mode" : ""}`}><AppHeader user={user} project={currentProject && !["list", "admin"].includes(screen) ? currentProject : null} saved={saveState} canGenerate={agentMode ? false : copyExportEligibility(currentProject || {}).allowed} onHome={() => setScreen("list")} onLogout={logout} onAdmin={() => setAdminOpen(true)} onProfile={() => setProfileOpen(true)} onGenerate={() => setScreen('versions')} />
-    {agentMode && <div className="agent-mode-strip"><span>智能体试验版 · 独立项目数据</span><strong>六项真实能力 · 通过全部门禁才进入编辑器</strong></div>}
+    {agentMode && <div className="agent-mode-strip"><span>定制师智能工作台 · 独立项目数据</span><strong>确认信息优先 · 完成后可继续调整</strong></div>}
     {screen === "list" && <ProjectList user={user} projects={projects} onCreate={createProject} onOpen={openProject} onDelete={agentMode ? undefined : setDeleteProject} />}
     {screen === "upload" && currentProject && <UploadStep project={currentProject} onFiles={async (files, recognition, sourceSha256) => agentMode ? attachAgentProject(currentProject, files, recognition, sourceSha256) : updateProject({ ...currentProject, workflowStage: "uploaded", title: recognition.data.title || currentProject.title, data: { ...recognition.data, designer: currentProject.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type })) }, true)} onContinue={() => setScreen("confirm")} />}
     {screen === "confirm" && currentProject && <ConfirmStep project={currentProject} agentMode={agentMode} agentSnapshot={agentSnapshot} agentDecisions={agentDecisions} onAgentDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onChange={(data, metadata = {}) => updateProject({ ...currentProject, ...metadata, data })} onBack={() => setScreen("upload")} onContinue={() => agentMode ? continueAgent().catch((error) => setGenerationError(error?.message || "无法继续")) : (() => { setProgress(0); setGenerationError(""); setGenerationStatus({ phase: "queued", status: "idle", currentAction: "尚未开始", stats: {}, elapsedMs: 0 }); setScreen("generate"); })()} />}

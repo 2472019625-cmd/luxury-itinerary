@@ -20,14 +20,18 @@ test("智能体浏览器存储使用独立命名空间且首批项目不显示�
   assert.match(workspace, /onDelete=\{agentMode \? undefined : setDeleteProject\}/);
 });
 
-test("生成步骤直接消费真实执行事件并把计划技术信息默认折叠", () => {
+test("生成步骤默认使用定制师视角并把管理员运行信息折叠", () => {
   const generation = workspace.slice(workspace.indexOf("function AgentGenerationStep"), workspace.indexOf("function CandidatePreview"));
   assert.match(generation, /PlanView project=\{agentProject\} plan=\{plan\}/);
-  assert.match(workspace, /整程规划[\s\S]+事实核验[\s\S]+文案生成[\s\S]+品牌审查[\s\S]+图片处理[\s\S]+成品渲染[\s\S]+最终检查/);
+  assert.match(workspace, /SIMPLE_DESIGNER_STAGES/);
   assert.match(workspace, /run\.progress\.stages/);
   assert.match(workspace, /run\?\.events\?\.at\(-1\)/);
   assert.match(workspace, /aria-valuenow=\{progress\.percent\}/);
-  assert.match(generation, /查看本次规划 \/ 技术详情/);
+  assert.match(generation, /本次定制摘要/);
+  assert.match(generation, /已按你的确认制作/);
+  assert.match(generation, /本次定制重点/);
+  assert.match(generation, /管理员运行详情/);
+  assert.doesNotMatch(generation, /<details[^>]+open/);
   assert.match(generation, /次下游调用/);
   assert.doesNotMatch(generation, /mini-itinerary|当前项目/);
   assert.match(workspace, /screen === "editor" && currentProject/);
@@ -38,6 +42,6 @@ test("生成步骤直接消费真实执行事件并把计划技术信息默认�
 test("等待确认保留在生成页并从当前任务继续", () => {
   assert.match(workspace, /agent-runtime-confirm/);
   assert.match(workspace, /保存选择并从当前任务继续/);
-  assert.match(workspace, /waiting \? "需要你的确认"/);
+  assert.match(workspace, /waiting \? `「\$\{tripTitle\}」需要你的确认`/);
   assert.doesNotMatch(workspace.slice(workspace.indexOf("function AgentGenerationStep"), workspace.indexOf("function CandidatePreview")), /返回处理确认/);
 });
