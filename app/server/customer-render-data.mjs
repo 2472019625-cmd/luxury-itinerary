@@ -1,3 +1,5 @@
+import { dayVisualCards } from '../src/lib/dayVisualCards.js';
+
 const ROOT_FIELDS = new Set([
   'title','subtitle','destination','travelers','adults','children','startDate','endDate','dayCount','heroImage','heroFocus',
   'travelStyle','serviceMode','tripRhythm','hotelReplacementPolicy','transportDisclaimer','sourcePosterHighlights','highlights',
@@ -16,5 +18,7 @@ function clean(value) {
 }
 
 export function selectCustomerRenderData(data = {}) {
-  return Object.fromEntries(Object.entries(data).filter(([key]) => ROOT_FIELDS.has(key)).map(([key, value]) => [key, clean(value)]));
+  const result = Object.fromEntries(Object.entries(data).filter(([key]) => ROOT_FIELDS.has(key)).map(([key, value]) => [key, clean(value)]));
+  if (data.simpleImageSlotBindings) result.days = (data.days || []).map((day, index) => ({ ...result.days[index], spots: dayVisualCards(day, index, data.simpleImageSlotBindings).map(({ spot }) => clean(spot)) }));
+  return result;
 }

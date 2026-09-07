@@ -67,13 +67,13 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     try {
       const response = await fetch(`/api/simple/projects/${projectId}/manual-images/${encodeURIComponent(slotId)}/${action}`, body);
       setPayload(await readJson(response));
-    } catch (failure) { setError(failure.message); }
+    } catch (failure) { setError(failure.message); return false; }
     finally { setBusy(""); }
   };
   const choose = async (candidate, targetSlot) => {
     const slotId = targetSlot.pipelineSlotId || candidate.pipelineSlotId;
     if (!slotId) throw new Error("当前位置没有对应的 Simple Pipeline 图片位");
-    return request(slotId, "select", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ candidateId:candidate.candidateId }) });
+    return request(slotId, "select", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ candidateId:candidate.candidateId, manualConfirmed:candidate.manualConfirmed === true }) });
   };
   const upload = async (slotId, file) => request(slotId, "upload", { method:"POST", headers:{ "content-type":file.type || "application/octet-stream", "x-file-name":encodeURIComponent(file.name) }, body:file });
   const uploadFromEditor = async (file, targetSlot) => {

@@ -1,6 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildAgentFactBasis, validateSimpleHighlightSelection } from "../server/agent-trip-planner.mjs";
+import { buildAgentFactBasis, validateSimpleHighlightSelection, generateAgentPlan } from "../server/agent-trip-planner.mjs";
+import { plannerRequestJson } from './helpers/simple-pipeline-fixture.mjs';
+
+test('Planner请求统一视觉覆盖规则和一基DAY编号，保留丰富日辅助槽', async () => {
+  const factBasis = buildAgentFactBasis({ destination: '肯尼亚', days: [{ description: '大象雪山，Observation Hill，步行Safari，夜间游猎' }, { description: '简单送机' }] });
+  const result = await generateAgentPlan({ project: { projectId: 'visual-contract', inputFingerprint: 'test', factBasis }, simpleSkillContract: true, requestJson: async options => {
+    const system = options.messages.filter(m => m.role === 'system');
+    assert.equal(system.length, 1);
+    assert.match(system[0].content, /多个明确、差异化、高价值体验时必须选择2—4个/);
+    assert.match(system[0].content, /DAY2: dayRoles.index=1; imagePlan主图role=day:2/);
+    const response = await plannerRequestJson({ delayMs: 0 })(options);
+    response.json.imagePlan.slots.push(...['Observation Hill', '步行Safari', '夜间游猎'].map((subject, i) => ({ slotId: `extra-${i}`, role: `day:1:supporting:${i+1}`, required: false, removable: true, primaryVisualSubject: subject, label: subject, visualDuty: '当天独立体验', differentiation: subject, searchIntent: subject })));
+    return response;
+  } });
+  assert.equal(result.plan.imagePlan.slots.filter(s => /^day:1(?:$|:)/.test(s.role)).length, 4);
+  assert.equal(result.plan.imagePlan.slots.filter(s => /^day:2(?:$|:)/.test(s.role)).length, 1);
+});
 
 test("Planner 事实基座拆分原海报亮点并注入已确认奢游产品价值", () => {
   const facts = buildAgentFactBasis({

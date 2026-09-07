@@ -316,7 +316,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "POST" && simpleCandidateMatch) {
       try {
         const payload = await requestBody(request);
-        const input = { store: simpleStore, root, projectId: decodeURIComponent(simpleCandidateMatch[1]), slotId: decodeURIComponent(simpleCandidateMatch[2]), candidateId: String(payload.candidateId || "") };
+        const input = { store: simpleStore, root, projectId: decodeURIComponent(simpleCandidateMatch[1]), slotId: decodeURIComponent(simpleCandidateMatch[2]), candidateId: String(payload.candidateId || ""), manualConfirmed: payload.manualConfirmed === true };
         const result = simpleCandidateMatch[3] === "select" ? await chooseSimpleImageCandidate(input) : await rejectSimpleImageCandidate(input);
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_decision_failed" }); }

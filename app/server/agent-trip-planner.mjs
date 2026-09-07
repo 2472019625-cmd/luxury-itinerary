@@ -114,6 +114,21 @@ export function buildAgentFactBasis(data = {}, report = {}) {
   };
 }
 
+export function validateSimpleDayVisuals(plan) {
+  const errors = [];
+  const counts = new Map();
+  for (const slot of plan.imagePlan?.slots || []) {
+    const match = /^day:(\d+)(?::supporting:\d+)?$/.exec(slot.role || "");
+    if (!match) continue;
+    const day = match[1];
+    counts.set(day, (counts.get(day) || 0) + 1);
+    if (/或|\bor\b|\//i.test(slot.primaryVisualSubject || "")) errors.push({ code: "ambiguous_visual_subject", path: "imagePlan.slots", message: `${slot.role}.primaryVisualSubject 当前值“${slot.primaryVisualSubject}”仍然含有二选一主体。必须实际改写此字段，选定其中一个有当天事实支持的场景，不能原样返回；另一个若值得展示则另建optional supporting slot。不得从其他DAY借用事实。` });
+    if (slot.role.includes("supporting") && (slot.required !== false || slot.removable !== true)) errors.push({ code: "invalid_supporting_visual", path: "imagePlan.slots", message: `${slot.role} 辅助图必须可移除且非必需` });
+  }
+  for (const [day, count] of counts) if (count > 4) errors.push({ code: "day_visual_overflow", path: "imagePlan.slots", message: `DAY ${day} 最多4个视觉点，不得平均覆盖所有Spot` });
+  return errors;
+}
+
 function assemblePlan(raw, context, previousPlanId, callStats) {
   const now = new Date().toISOString();
   const compiled = compileAgentExecutionPlan(raw, context);
@@ -169,11 +184,14 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   const attempts = [];
   const simpleContractPrompt = "simple-skill-pipeline 额外接口：在原有 JSON 字段之外返回 selectedHighlights 数组。每项只含 sourceText、sourceType(source_designated|official_product|planner_derived)、sourceRefs、selectionReason，不写最终客户文案。你必须在本次规划中最终确定实际采用的亮点集合：第一优先逐条读取 factBasis.sourcePosterHighlights；第二优先只能从 factBasis.officialProductValues 选择奢游已确认服务/产品价值，sourceText 必须原样引用对应候选；前两类仍不足5条时才补充整程级购买理由。目标5—7条，真实事实不足时允许少于5条并在 selectionReason 说明素材不足。不得把普通DAY细节拔高，也不得把 DAY 中的自费热气球标成 official_product。图片规划必须读取每个 DAY 的完整 experience 与全部 spots：dayRoles.primaryVisualSubject 只能选已有真实活动并结合 differenceFromAdjacent，不能机械取 spots[0] 或虚构差异；徒步/夜游、马赛部落、反偷猎观察站和真实存在的热气球都可以承担 DAY 主视觉，自费/可选/待确认体验成为视觉重点时必须保留状态。封面 imagePlan cover slot 的 primaryVisualSubject 只能是一个核心焦点，DAY 地点不得以酒店名代替。原始资料明确写有游猎时不得判断为无游猎。";
   let raw;
+  const dayVisualPrompt = "DAY 图片继续只使用 imagePlan.slots。每个 DAY 保留一个 required:true/removable:false 主视觉，role 为 day:N；允许0—3个 required:false/removable:true 辅助视觉，role 为 day:N:supporting:1 等。普通体验日根据真实视觉价值选择2—4个不同视觉点，内容少则1—2个，纯返程日只保留一个收尾主视觉；不得为凑数给所有Spot建图。每个slot的 primaryVisualSubject 必须是一个明确场景，禁止‘A或B’或‘A/B’表示二选一；同一真实画面可包含象群与雪山。两个不同场景值得展示时拆成两个slot。主题可以来自完整experience，不要求与Spot同名。主视觉与dayRoles的主线一致，辅助图只能补充主线。searchIntent 给出该场景的明确搜索表达，sourceRefs 指向当天原始事实；不改变任何DAY角色或文案职责。";
+  const visualCoveragePrompt = '输出前逐日复核视觉覆盖，不得把允许辅助图误解为默认每天仅一个主图。只有一个真正高价值视觉点可选1个；普通体验日通常1—2个；完整experience中存在多个明确、差异化、高价值体验时必须选择2—4个，分别写成primary与supporting，而非合并进一个泛化游猎主题。若当日真实资料同时有象群与雪山、Observation Hill、步行Safari、夜间游猎，这四种画面应分别规划；示例不是事实，其他线路不得照搬。纯返程或简单送机只需一个收尾视觉，不强迫补足。禁止以接送、入住或重复场景凑数。用现有visualDuty/differentiation说明选择价值和覆盖范围；sourceRefs优先精确引用对应days.N.spots.M或当日事实摘录，便于保留原费用状态，不新增schema。';
   let firstErrors = [];
   for (let index = 0; index < 2; index += 1) {
     callStats.trip_planner += 1;
     onStatus?.({ status: "planning", message: index === 0 ? "正在制定轻量业务规划" : "正在按安全检查结果收敛业务规划" });
-    const systemMessages = [{ role: "system", content: prompt }, ...(simpleSkillContract ? [{ role: "system", content: simpleContractPrompt }] : [])];
+    const dayNumbering = (project.factBasis?.days || []).map((day, i) => `DAY${i + 1}: dayRoles.index=${i}; imagePlan主图role=day:${i + 1}; 辅助role=day:${i + 1}:supporting:1等；只消费factBasis.days[${i}]。`).join('\n');
+    const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering] : [])].join('\n\n') }];
     const messages = index === 0
       ? [...systemMessages, { role: "user", content: JSON.stringify(sharedInput) }]
       : [...systemMessages, { role: "user", content: JSON.stringify({ ...sharedInput, correctionRequest: { errors: compactValidationErrors(firstErrors), previousPlan: raw, instruction: "只修正列出的结构和安全问题；保留事实与仍然有效的动态规划。" } }) }];
@@ -194,6 +212,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
     if (simpleSkillContract) {
       const highlightErrors = validateSimpleHighlightSelection(raw, factBasis);
       validation.errors.push(...highlightErrors);
+      validation.errors.push(...validateSimpleDayVisuals(raw));
       validation.valid = validation.errors.length === 0;
     }
     attempts.push({ attemptId: randomUUID(), index: index + 1, createdAt: new Date().toISOString(), rawModelPlan: raw, parseResult: response.parseResult || null, validation, model: response.model, usage: response.usage || null });

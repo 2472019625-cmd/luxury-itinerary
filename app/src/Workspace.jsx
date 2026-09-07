@@ -444,7 +444,7 @@ function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, on
   const uploaded = placements.filter(({ image }) => image.userProvided).map(({ slot, image }) => ({ candidateId: 'user-' + slot.slotId, localPreviewUrl: image.src, sourceTitle: '本地上传', slotId: slot.slotId, userProvided: true }));
   const all = [...savedCandidates, ...uploaded].filter((item, index, array) => array.findIndex((other) => other.localPreviewUrl === item.localPreviewUrl && other.pipelineSlotId === item.pipelineSlotId) === index);
   const matchesTarget = (candidate) => candidate.fieldPath ? candidate.fieldPath === targetSlot.fieldPath : candidate.slotId === targetSlot.slotId;
-  const canChoose = (candidate) => candidate.userProvided || candidate.libraryEligible === true && (!candidate.pipelineSlotId || matchesTarget(candidate));
+  const canChoose = (candidate) => candidate.manualSelectable === true || candidate.userProvided || candidate.libraryEligible === true && (!candidate.pipelineSlotId || matchesTarget(candidate));
   const visible = tab === 'recommended' ? all.filter((item) => matchesTarget(item) || !item.pipelineSlotId && item.terminalAudit?.subjectMatch === true).sort((a, b) => Number(matchesTarget(b)) - Number(matchesTarget(a))) : all;
   return <div className="modal-backdrop image-picker-backdrop" role="dialog" aria-modal="true" aria-label="更换图片"><section className="image-picker-modal">
     <header><div><small>更换图片</small><h2>{targetSlot.label}</h2><p>选择已使用图片时会移动到这里，原位置自动留空。</p></div><button onClick={onClose}>关闭</button></header>
@@ -679,8 +679,12 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
   };
   const chooseLibraryImage = async (candidate, usedSlot) => {
     if (!currentSlot) return;
+    if (candidate.manualSelectable) {
+      if (!window.confirm(`确认将这张图片用于「${currentSlot.label}」？\n\n原判断：${candidate.reason || '请自行确认图片内容'}\n\n请确认内容和使用权。人工采用会保留原审核结论；已使用的图片会移动到这里，原位置留空。`)) return;
+      candidate = { ...candidate, manualConfirmed: true };
+    }
     if (onChooseImage) {
-      await onChooseImage(candidate, currentSlot, usedSlot);
+      if (await onChooseImage(candidate, currentSlot, usedSlot) === false) return;
       setPickerOpen(false);
       return;
     }

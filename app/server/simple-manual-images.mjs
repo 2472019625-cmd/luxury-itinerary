@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
@@ -66,6 +66,7 @@ function moduleName(slotId) {
 
 function candidatePool(imageResult = {}) {
   return uniqueCandidates([
+    ...(imageResult.selected ? [imageResult.selected] : []),
     ...(imageResult.manualAction?.rejectedCandidates || []),
     ...(imageResult.manualAction?.selectableCandidates || []),
     ...(imageResult.candidates || []),
@@ -91,6 +92,7 @@ function frontendCandidate(candidate, slotId, binding, canSelect) {
     status: canSelect ? "manual_review" : "hard_rejected",
     adoptable: canSelect,
     libraryEligible: canSelect,
+    manualSelectable: Boolean(candidate.localUrl?.startsWith('/image-assets/')),
     reason: candidate.rejectionReason || candidate.matchReason || candidate.reason || "暂无审核说明",
     terminalAudit: {
       relevance: hard.subjectMatch === true && hard.activityMatch !== false ? "主体相符" : "主体不符",
@@ -159,7 +161,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
       currentStage: project.currentStage,
       progress: project.progress,
       versions: outputUrl ? [{ id: `simple-${run.executionRunId}`, name: `${result.data?.title || "行程"} · 2000px 正式成品`, createdAt: Date.parse(result.completedAt || result.updatedAt || project.updatedAt || new Date().toISOString()), downloadUrl: outputUrl }] : [],
-      data: { ...result.data, imageCandidates, imageReview: { slots }, simpleImageSlotBindings: plan.slotBindings || {}, generationIssues: result.unresolvedItems || [], requiredImageGate: { unresolvedSlotIds: unresolvedRequired.filter((item) => item.kind === "image").map((item) => item.id), passed: unresolvedRequired.filter((item) => item.kind === "image").length === 0 } },
+      data: { ...result.data, imageCandidates, imageReview: { slots }, simpleImageSlotBindings: result.data?.simpleImageSlotBindings || plan.slotBindings || {}, generationIssues: result.unresolvedItems || [], requiredImageGate: { unresolvedSlotIds: unresolvedRequired.filter((item) => item.kind === "image").map((item) => item.id), passed: unresolvedRequired.filter((item) => item.kind === "image").length === 0 } },
     },
     executionRunId: run.executionRunId,
     pipelineStatus: result.pipelineStatus,
@@ -240,28 +242,49 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
   return buildSimpleManualImagePayload(store, project.projectId);
 }
 
-export async function chooseSimpleImageCandidate({ store, root, projectId, slotId, candidateId, render } = {}) {
+export async function chooseSimpleImageCandidate({ store, root, projectId, slotId, candidateId, manualConfirmed = false, render } = {}) {
   const context = projectContext(store, projectId);
   assertPlannedImageSlot(context, slotId);
   const imageResults = context.result.imageExecution?.results || [];
   const current = imageResults.find((item) => item.slotId === slotId);
   if (!current) throw Object.assign(new Error("该图片位没有已保存结果"), { code: "slot_result_missing" });
-  const candidate = selectedCandidate(current, candidateId);
-  if (!candidateCanBeSelected(context.result, current, candidate)) throw Object.assign(new Error("该候选存在硬拒绝或未列入人工可选范围，不能采用"), { code: "candidate_not_selectable" });
-  if (!candidate?.localUrl) throw Object.assign(new Error("候选缺少已保存的本地图片"), { code: "candidate_file_missing" });
+  const source = imageResults.find((item) => selectedCandidate(item, candidateId));
+  const candidate = source && selectedCandidate(source, candidateId);
+  if (!candidate) throw Object.assign(new Error("当前项目中找不到该候选"), { code: "candidate_not_found" });
+  const overridesAutomaticJudgment = source.slotId !== slotId || !candidateCanBeSelected(context.result, current, candidate);
+  if (overridesAutomaticJudgment && !manualConfirmed) throw Object.assign(new Error("未确认图片风险，不能采用"), { code: "manual_confirmation_required" });
+  try {
+    if (!candidate.localUrl?.startsWith('/image-assets/')) throw new Error('missing local asset');
+    const assets = await realpath(path.join(root, 'output', 'image-assets'));
+    const file = await realpath(path.resolve(assets, decodeURIComponent(candidate.localUrl.slice('/image-assets/'.length))));
+    const relative = path.relative(assets, file);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('outside assets');
+    const info = await stat(file);
+    if (!info.isFile() || !info.size || info.size > 14 * 1024 * 1024) throw new Error('invalid size');
+    const options = { failOn: 'warning', limitInputPixels: 40000000 };
+    const metadata = await sharp(file, options).metadata();
+    if (!['jpeg', 'png', 'webp'].includes(metadata.format)) throw new Error('invalid format');
+    await sharp(file, options).raw().toBuffer();
+  } catch {
+    throw Object.assign(new Error('图片文件缺失、损坏或无法安全解码，请重新上传'), { code: 'candidate_file_unusable' });
+  }
+  const movedFrom = imageResults.filter((item) => item.slotId !== slotId && item.selected?.localUrl === candidate.localUrl).map((item) => item.slotId);
+  const humanDecision = { action: movedFrom.length ? 'move' : 'adopt', decidedAt: new Date().toISOString(), targetSlotId: slotId, sourceSlotId: source.slotId, movedFrom, riskConfirmed: manualConfirmed, overridesAutomaticJudgment, originalRejection: candidate.rejection || null, originalRisk: candidate.rejectionReason || candidate.matchReason || candidate.reason || '' };
   const nextCurrent = {
     ...current,
     status: "success",
     matchLevel: "user_selected_candidate",
-    selected: { ...candidate, localUrl: candidate.localUrl, userSelected: true, selectedAt: new Date().toISOString() },
+    selected: { ...candidate, localUrl: candidate.localUrl, userSelected: true, humanDecision, selectedAt: new Date().toISOString() },
     actualSubject: candidate.actualSubject || current.actualSubject,
     matchReason: "用户从已保存候选中明确采用",
     technicalStatus: "user_selected_existing_candidate",
     manualAction: { ...(current.manualAction || {}), resolvedBy: "choose_existing_candidate", selectedCandidateId: candidateId, resolvedAt: new Date().toISOString() },
   };
-  const imageExecution = { ...context.result.imageExecution, results: imageResults.map((item) => item.slotId === slotId ? nextCurrent : item), metrics: { ...(context.result.imageExecution?.metrics || {}), automaticFollowupRounds: 0 } };
+  const nextResults = imageResults.map((item) => item.slotId === slotId ? nextCurrent : movedFrom.includes(item.slotId) ? { ...item, status: 'needs_user_action', selected: null, candidates: candidatePool(item), matchReason: '图片已由用户移动至其他位置', manualAction: { ...item.manualAction, movedTo: slotId, humanDecision } } : item);
+  const imageExecution = { ...context.result.imageExecution, results: nextResults, metrics: { ...(context.result.imageExecution?.metrics || {}), automaticFollowupRounds: 0 } };
+  for (const item of nextResults.filter((item) => movedFrom.includes(item.slotId))) store.saveTaskResult(projectId, context.run.executionRunId, `image-${item.slotId.replace(/[^a-zA-Z0-9_-]/g, '-')}`, item);
   store.saveTaskResult(projectId, context.run.executionRunId, `image-${slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, nextCurrent);
-  return persistResult({ ...context, store, root, imageExecution, render, action: { type: "choose_existing_candidate", slotId, candidateId } });
+  return persistResult({ ...context, store, root, imageExecution, render, action: { type: "choose_existing_candidate", slotId, candidateId, humanDecision } });
 }
 
 export async function rejectSimpleImageCandidate({ store, root, projectId, slotId, candidateId, render } = {}) {

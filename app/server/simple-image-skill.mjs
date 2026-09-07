@@ -51,12 +51,12 @@ export function buildImageConstraints(slot = {}) {
   const location = text(slot.location);
   const hotel = text(slot.hotel);
   const activity = text(slot.activity);
-  const subject = text(slot.subject);
+  const subject = text(slot.primaryVisualSubject) || text(slot.subject);
   const mustHave = unique([location && `地点：${location}`, hotel && `酒店身份：${hotel}`, activity && `活动：${activity}`, subject && `主体：${subject}`]);
   const visualContext = slot.visualContext && typeof slot.visualContext === "object" ? slot.visualContext : {};
   const avoid = Array.isArray(visualContext.avoid) ? visualContext.avoid : Array.isArray(visualContext.avoidVisuals) ? visualContext.avoidVisuals : [];
   const prefer = unique([`符合视觉职责：${text(slot.visualGoal)}`, slot.aspectRatio && `构图适配 ${slot.aspectRatio}`, "真实自然、干净、有品质", String(slot.moduleType).toLowerCase().includes("cover") && "具有目的地代表性并留有标题空间", String(slot.moduleType).toLowerCase().includes("day") && "与相邻 DAY 形成可辨识的视觉职责差异"]);
-  const forbid = unique(["错误地点", "错误酒店身份", "错误活动", "错误主体", "明显水印", "破图或不可解码", "AI 生成图", "地图、示意图、信息图或截图", "明显低质", ...avoid]);
+  const forbid = unique(["错误地点", "错误酒店身份", "错误活动", "错误主体", "明显水印", "破图或不可解码", "AI 生成图", "地图、示意图、信息图或截图", "明显低质", ...(slot.moduleType === "day" ? ["地点exact必须由当前候选来源及实际主体支持，类似草原或湿地不能证明地点；安博塞利不得采用博茨瓦纳等其他国家图片，无法确认地点不得自动采用", "DAY活动主体优先于地点相近；游猎或豹类追踪不得用其他品牌营地、帐篷、客房、泳池或普通建筑替代", "Masai Mara是地理实体，不代表Maasai文化活动"] : []), ...avoid]);
   return { mustHave, prefer, forbid };
 }
 
@@ -64,16 +64,17 @@ export function buildImageQueries(slot = {}, maxQueries = 3) {
   const location = text(slot.location);
   const hotel = text(slot.hotel);
   const activity = text(slot.activity);
-  const subject = text(slot.subject);
+  const subject = text(slot.primaryVisualSubject) || text(slot.subject);
   const moduleType = String(slot.moduleType || "").toLowerCase();
   const identity = hotel || activity || subject;
-  const coreSubject = activity || subject;
+  const coreSubject = text(slot.primaryVisualSubject) || activity || subject;
   const candidates = moduleType.includes("hotel")
     ? [`${identity} ${location} official gallery`, `${identity} official photography`]
     : moduleType.includes("transport")
       ? [`${location} ${coreSubject} travel photography`, `${location} ${coreSubject} official photos`]
       : [`${location} ${coreSubject} travel photography`, `${location} ${coreSubject} safari photos`];
-  return unique(candidates.map((query) => query.replace(/\s+/g, " ").trim().slice(0, 120))).slice(0, Math.max(1, Math.min(3, maxQueries)));
+  const intent = Array.isArray(slot.searchIntent) ? slot.searchIntent.map(text) : [text(slot.searchIntent)];
+  return unique([...intent.filter(Boolean).map((query) => `${location} ${coreSubject} ${query}`), ...candidates].map((query) => query.replace(/\s+/g, " ").trim())).slice(0, Math.max(1, Math.min(3, maxQueries)));
 }
 
 function isDayPrimarySlot(slot = {}) {
@@ -100,7 +101,7 @@ export function buildControlledFallbackPlan(slot = {}, maxQueries = 2) {
     fallbackTheme = "ranger-led wilderness walking or night reserve activity";
     subjectPattern = /walking|bush walk|guided walk|wilderness walk|ranger|guide|outdoor exploration|night (?:game|safari|reserve)|徒步|步行|向导|巡护员|荒野探索|夜游|夜间.*(?:游猎|保护区|活动)/i;
     candidates = [`${location} ranger led wilderness walking photography`, `${location} night reserve activity ranger photography`];
-  } else if (/maasai|masai|马赛/.test(target)) {
+  } else if (/(?:maasai|masai)\s+(?:culture|cultural|people|village|community)|马赛(?:文化|部落|村|人)|马萨伊(?:文化|部落|村|人)/.test(target)) {
     fallbackTarget = "同地区真实 Maasai 人物、文化互动或村落环境";
     fallbackTheme = "Maasai cultural experience and village environment";
     subjectPattern = /maasai|masai|马赛|cultural interaction|culture|village|community|文化互动|文化体验|村落|部族/i;
@@ -229,14 +230,19 @@ function completeVisualJudgment(audit) {
   return audit && typeof audit.candidateId === "string" && audit.candidateId.trim() && hardBooleanFields.every((field) => typeof audit[field] === "boolean") && typeof audit.actualSubject === "string" && audit.actualSubject.trim();
 }
 
-function failedHardRequirement(slot, audit) {
+export function failedHardRequirement(slot, audit) {
   if (audit.technicalUsable !== true) return "technical_unusable";
   if (audit.watermarkFree !== true) return "watermark";
   if (audit.nonAI !== true) return "ai_generated";
   if (audit.photographic !== true || /地图|示意图|信息图|截图|\bmap\b|diagram|infographic|screenshot/i.test(`${audit.actualSubject || ""} ${audit.reason || ""}`)) return "non_photographic";
-  const explicitDayActivity = /游猎|safari|game drive|草原飞机|bush plane|light aircraft|airstrip|徒步|walking|bush walk|夜游|night game|文化|maasai|masai|反偷猎|anti[- ]?poaching|ranger|conservation|observation post|热气球|hot air balloon/i.test(`${text(slot.activity)} ${text(slot.subject)}`);
+  const explicitDayActivity = /游猎|safari|game drive|象群|大象|花豹|狮群|角马|鬣狗|猎豹|长颈鹿|elephant|leopard|lion|wildebeest|wildlife|giraffe|草原飞机|bush plane|light aircraft|airstrip|徒步|walking|bush walk|夜游|night game|文化|maasai|masai|反偷猎|anti[- ]?poaching|ranger|conservation|observation post|热气球|hot air balloon/i.test(`${text(slot.activity)} ${text(slot.subject)}`);
   const genericHotelSpace = /酒店泳池|泳池|躺椅|客房|卧室|餐厅|酒廊|酒店空间|酒店室内|营地室内|帐篷室内|pool|sun lounger|guest room|bedroom|restaurant|dining room|lounge|hotel interior|lodge interior|room interior|tent interior/i.test(`${audit.actualSubject || ""} ${audit.reason || ""}`);
-  if (isDayPrimarySlot(slot) && explicitDayActivity && genericHotelSpace) return "activity_mismatch";
+  const dayActivity = String(slot.moduleType).toLowerCase() === "day" && explicitDayActivity;
+  const lodgingSubject = /酒店外观|营地帐篷|营地外观|帐篷营地|客房|泳池|建筑|\b(?:lodge|camp|tents?|building|accommodation)\b/i.test(audit.actualSubject || "");
+  const plannedLodging = /酒店|入住|客房|营地空间|lodge|hotel|room|camp architecture/i.test(text(slot.primaryVisualSubject) || text(slot.subject));
+  if (dayActivity && !plannedLodging && (genericHotelSpace || lodgingSubject)) return "activity_mismatch";
+  const expectedKenya = /肯尼亚|安博塞利|马赛马拉|纳博伊绍|kenya|amboseli|ma[as]*sai mara|naboisho/i.test(text(slot.location));
+  if (expectedKenya && /博茨瓦纳|奥卡万戈|南非|纳米比亚|坦桑尼亚|botswana|okavango|south africa|namibia|tanzania/i.test(audit.actualSubject || "")) return "place_mismatch";
   const expectedEastAfrica = /坦桑尼亚|塞伦盖蒂|格鲁梅蒂|乞力马扎罗|tanzania|serengeti|grumeti|kilimanjaro/i.test(text(slot.location));
   const conflictingChina = /呼伦贝尔|内蒙古|中国|hulunbuir|inner mongolia|\bchina\b/i.test(`${audit.actualSubject || ""} ${audit.reason || ""}`);
   if (expectedEastAfrica && conflictingChina) return "place_mismatch";
@@ -438,9 +444,15 @@ export async function runImageSearchSkill({
     return { slotId: slot.slotId, status: fallbackNeedsUser ? "needs_user_action" : "not_found", matchLevel: null, fallbackReason: "exact_activity_image_not_found", originalExactTarget: fallbackPlan.originalExactTarget, fallbackTarget: fallbackPlan.fallbackTarget, fallbackTheme: fallbackPlan.fallbackTheme, selected: null, candidates: allCandidates, queriesUsed: allQueries, sourceEvidence: allSources, actualSubject: fallback.actualSubject || exact.actualSubject, matchReason: fallbackNeedsUser ? "controlled_fallback 视觉判断未完成" : "精确层与 controlled_fallback 均无合格候选", technicalStatus: fallback.technicalStatus, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
   }
 
-  const results = await Promise.all(slots.map((slot) => slotQueue.add(async () => {
+  const results = await Promise.all([...slots].sort((a, b) => imageSlotPriority(a) - imageSlotPriority(b)).map((slot) => slotQueue.add(async () => {
     try { return await processSlot(slot); }
     catch (error) { return { slotId: slot?.slotId || null, status: "failed", selected: null, candidates: [], queriesUsed: [], sourceEvidence: [], actualSubject: null, matchReason: error?.message || String(error), technicalStatus: "slot_failed", warnings: [], constraints: null, durationMs: 0 }; }
   })));
   return { batchId, status: resultStatus(results), results, warnings: [], metrics: { ...metrics, concurrencyPeak: { slots: slotQueue.peak, search: searchQueue.peak, pages: pageQueue.peak, downloads: downloadQueue.peak, vision: visionQueue.peak }, durationMs: Date.now() - startedAt } };
+}
+
+export function imageSlotPriority(slot) {
+  if (slot.moduleType === "day" && slot.required) return 0;
+  if (slot.required) return 1;
+  return slot.moduleType === "day" ? 2 : 3;
 }

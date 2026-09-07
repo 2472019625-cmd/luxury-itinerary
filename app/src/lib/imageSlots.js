@@ -11,6 +11,17 @@ function definition(base, imageIndex, role, ratio = "16:9") {
 }
 
 export function buildLayoutImageSlots(data = {}) {
+  if (data.simpleImageSlotBindings) {
+    const { simpleImageSlotBindings, ...legacyData } = data;
+    const existing = new Map(buildLayoutImageSlots(legacyData).map(slot => [slot.fieldPath, slot]));
+    return Object.entries(simpleImageSlotBindings).map(([slotId, binding]) => ({
+      ...existing.get(binding.fieldPath), ...binding, slotId,
+      label: binding.visualSubject || existing.get(binding.fieldPath)?.label || '行程图片',
+      purpose: binding.visualSubject || existing.get(binding.fieldPath)?.purpose || '',
+      itemIndex: binding.module === "day" ? binding.dayIndex : binding.itemIndex,
+      ratio: existing.get(binding.fieldPath)?.ratio || "16:9", maxImages: 1, allowEmpty: true,
+    }));
+  }
   const slots = [definition({ slotBase: "cover", module: "cover", fieldPath: "heroImage", dayIndex: null, adjacentText: `${data.title || ""} ${data.subtitle || ""} ${data.destination || ""}`.trim(), label: "封面主图", purpose: "代表整趟旅程的目的地主视觉" }, 0, "hero", "5:3")];
   (data.hotels || []).forEach((item, index) => {
     const id = cleanId(item.id, `hotel-${index + 1}`);
@@ -68,8 +79,14 @@ export function setSlotImage(data, slot, image) {
   const item = slot.module === "day" ? data.days?.[slot.dayIndex]?.spots?.[slot.spotIndex] : collections[slot.module]?.[slot.itemIndex];
   if (!item) return;
   const images = imageArray(item).map((value) => typeof value === "string" ? { src: value } : value);
-  if (image?.src) images[slot.imageIndex] = image; else images.splice(slot.imageIndex, 1);
-  item.images = images.filter((value) => value?.src);
+  if (data.simpleImageSlotBindings && slot.module === "day") {
+    // Stable indices are part of the persisted binding, including empty optional slots.
+    images[slot.imageIndex] = image?.src ? image : null;
+    item.images = images;
+  } else {
+    if (image?.src) images[slot.imageIndex] = image; else images.splice(slot.imageIndex, 1);
+    item.images = images.filter((value) => value?.src);
+  }
   delete item.image; delete item.focus;
 }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,6 +9,9 @@ import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, researchSimp
 
 async function fixture({ hardOnly = false, oneSlot = false } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-manual-images-"));
+  await mkdir(path.join(root, 'output/image-assets/test'), { recursive: true });
+  const jpeg = await sharp({ create: { width: 1000, height: 600, channels: 3, background: '#61754b' } }).jpeg().toBuffer();
+  for (const name of ['selectable.jpg', 'hard.jpg']) await writeFile(path.join(root, 'output/image-assets/test', name), jpeg);
   const store = new AgentPlanStore(path.join(root, "output", "simple-pipeline", "projects"));
   const projectId = "project-manual-images";
   const planId = "plan-manual-images";
@@ -59,7 +62,7 @@ test("前端载荷展示人工图片位，并只开放明确可选候选", async
   assert.equal(candidates.find((item) => item.candidateId === value.hardCandidate.candidateId).status, "hard_rejected");
 });
 
-test("硬拒绝候选不能人工采用", async (t) => {
+test("硬拒绝候选未经风险确认不能人工采用", async (t) => {
   const value = await fixture({ hardOnly: true }); t.after(() => rm(value.root, { recursive: true, force: true }));
   await assert.rejects(() => chooseSimpleImageCandidate({ ...value, slotId: "image:cover:primary", candidateId: value.hardCandidate.candidateId, render: async () => assert.fail("不应启动 Renderer") }), /不能采用/);
 });
@@ -75,6 +78,29 @@ test("人工采用只写回目标 slot，剩余 required 未清零时更新可�
   assert.equal(payload.project.data.heroImage, value.candidate.localUrl);
   assert.equal(payload.imageReview.slots.find((item) => item.slotId === "image:cover:primary").status, "human_selected");
   assert.deepEqual(payload.project.data.days[0].spots[0].images, []);
+});
+
+test("人工确认可覆盖审核判断，跨位移动并保留证据", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const render = async ({ mode }) => ({ status: 'success', mode, outputPath: 'draft.png' });
+  assert.equal(buildSimpleManualImagePayload(value.store, value.projectId).project.data.imageCandidates.find(c => c.candidateId === value.hardCandidate.candidateId).manualSelectable, true);
+  await chooseSimpleImageCandidate({ ...value, slotId: 'image:cover:primary', candidateId: value.hardCandidate.candidateId, manualConfirmed: true, render });
+  await assert.rejects(() => chooseSimpleImageCandidate({ ...value, slotId: 'image:day:1:primary', candidateId: value.hardCandidate.candidateId, render }), /未确认/);
+  const payload = await chooseSimpleImageCandidate({ ...value, slotId: 'image:day:1:primary', candidateId: value.hardCandidate.candidateId, manualConfirmed: true, render });
+  assert.equal(payload.project.data.heroImage, '');
+  assert.equal(payload.project.data.days[0].spots[0].images[0].src, value.hardCandidate.localUrl);
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId).imageExecution.results[1].selected;
+  assert.equal(saved.rejection, 'subject_mismatch');
+  assert.equal(saved.userSelected, true);
+  assert.equal(saved.humanDecision.riskConfirmed, true);
+  assert.deepEqual(saved.humanDecision.movedFrom, ['image:cover:primary']);
+});
+
+test("人工确认不能使用损坏文件且不修改项目", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  await writeFile(path.join(value.root, 'output/image-assets/test/hard.jpg'), 'not an image');
+  await assert.rejects(() => chooseSimpleImageCandidate({ ...value, slotId: 'image:cover:primary', candidateId: value.hardCandidate.candidateId, manualConfirmed: true, render: async () => assert.fail('不可渲染') }), /损坏/);
+  assert.equal(value.store.getFinalResult(value.projectId, value.executionRunId).imageExecution.results[0].selected, null);
 });
 
 test("最后一个 required 上传补齐后直接启动 Renderer 并完成", async (t) => {

@@ -192,6 +192,7 @@ function interfaceFailure(task, errors) {
 }
 
 function copyBatchKind(task = {}) {
+  if (task.moduleType === 'visual_card') return 'days';
   if (String(task.moduleType || "").toLowerCase() === "notes" || String(task.targetPath || "") === "notes") return "notes";
   if (String(task.moduleType || "").toLowerCase() === "day" || /^days\.\d+\./.test(String(task.targetPath || ""))) return "days";
   return "global";

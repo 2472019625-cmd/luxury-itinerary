@@ -23,7 +23,7 @@
 - `dayRoles`: 每项含 `index/role/differenceFromAdjacent/primaryVisualSubject/contentAction/sourceRefs`，`index`必须从0开始并与输入DAY顺序一一对应，不得包含完整成品正文。`primaryVisualSubject` 必须从该 DAY 已有真实活动中选择，并结合 `differenceFromAdjacent` 形成可区分职责；不得为制造差异虚构活动。自费、可选、需预约或待确认体验可以成为主视觉，但角色与差异说明必须保留其真实状态，不能暗示已包含。用户明确满意或来源文案已经可直接使用时标记`contentAction:preserve`。
 - `contentPlacement`: 只列容易混放的原始内容，每项含 `sourceRef/targetModule/targetField/reason`，不复制大段原文。
 - `webVerification`: 只针对已有实体列出未来核验项；每项含 `subject/field/reason/preferredSource/blockingTaskIds`。当前不联网。
-- `imagePlan`: 含 `visualStory` 和 `slots`。封面、每个显示酒店、每个DAY各有一个 `required:true` 主图，role 分别为 `cover`、`hotel:1`、`day:1` 等；每项含 `slotId/role/label/required/primaryVisualSubject/visualDuty/differentiation/searchIntent/removable`。封面 `primaryVisualSubject` 只能有一个核心视觉焦点，不能要求一张图同时表现整程多个场景。DAY 的地理地点只能使用真实地区/城市/保护区，不能用酒店名代替。必需位不可移除，补充位才可移除。
+- `imagePlan`: 含 `visualStory` 和 `slots`。封面、每个显示酒店有一个 `required:true` 主图，role 分别为 `cover`、`hotel:1` 等。DAY 按真实视觉价值选择完整集合：只有一个高价值点可选1个，普通日1—2个，多种差异化高价值体验日2—4个，简单返程1个。每组第一个是 `role:day:N, required:true, removable:false`；其余是 `role:day:N:supporting:1` 等、`required:false, removable:true`。不能只列主图而漏掉已识别的高价值辅助体验，也不得给所有Spot平均出图或用接送入住凑数。每项含 `slotId/role/label/required/primaryVisualSubject/visualDuty/differentiation/searchIntent/removable/sourceRefs`。封面 `primaryVisualSubject` 只能有一个核心视觉焦点，不能要求一张图同时表现整程多个场景。DAY 的地理地点只能使用真实地区/城市/保护区，不能用酒店名代替。必需位不可移除，补充位才可移除。
 - `confirmations`: 只放事实、费用、履约、安全问题；含 `confirmationId/category/question/reason/affectedTaskIds/status`，status 固定 `anticipated`。资料完整时返回空数组。
 - `adjustments`: 首次输出为空数组；修正时逐条说明校验问题和具体修正，不得披露内部推理。
 

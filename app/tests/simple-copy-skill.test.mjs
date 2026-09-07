@@ -13,6 +13,24 @@ const task = (targetId, targetPath, moduleType = "day") => ({
   outputSchema: { type: "string", minLength: 2 },
 });
 
+test('visual_card 与 DAY 同批并明确支持内部描述路径，不新增调用或重试', async () => {
+  let calls = 0;
+  const input = [task('day', 'days.0.description'), task('copy:visual:image:day:1:primary', 'simpleImageSlotBindings.image_day_1_primary.description', 'visual_card')];
+  const result = await runCopyWriterSkill({ tasks: input, requestJson: async ({ messages }) => {
+    calls++;
+    assert.match(messages[0].content, /moduleType=visual_card/);
+    assert.match(messages[0].content, /是合法的内部文案写回位置/);
+    assert.match(messages[0].content, /每一个 visual_card target 都有独立结果/);
+    const payload = JSON.parse(messages.at(-1).content);
+    assert.equal(payload.batchKind, 'days');
+    assert.deepEqual(payload.tasks.map(item => item.targetId), input.map(item => item.targetId));
+    return { json: { results: payload.tasks.map(item => ({targetId: item.targetId, targetPath: item.targetPath, value: '沿已确认路线观察草原，从不同视角感受当天的自然景观。'})) } };
+  }});
+  assert.equal(calls, 1);
+  assert.equal(result.results.every(item => item.status === 'success'), true);
+  assert.equal(result.metrics.automaticBusinessRetryRounds, 0);
+});
+
 test("Copy 按全局、DAY、notes形成三个物理批次并按 targetId 隔离结构失败", async () => {
   let calls = 0;
   const events = [];

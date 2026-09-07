@@ -252,6 +252,17 @@ function geographicDayLocation(day = {}, hotelNames = [], fallback = "") {
   return clean(geographic.at(-1) || nodes.at(-1) || day.city || fallback);
 }
 
+// Image geography deliberately does not change Copy's existing context.
+function imageDayLocation(day, hotels, fallback) {
+  const lodging = hotels.find((hotel) => [hotel.officialName, hotel.shortName].some((name) => name && [day.hotel, day.hotelOfficialName, day.hotelShortName].includes(name)));
+  const hotelNames = new Set(hotels.flatMap(hotel => [hotel.officialName, hotel.shortName]).filter(Boolean));
+  const isPlace = (value) => value && !hotelNames.has(value) && !/夜间|游猎|星空|观星|入住|退房|接送|送机|离境|sundowner|westgate|safari|酒店|营地|hotel|lodge|camp|体验|晚宴|早餐|热气球|观景台|博物馆|长颈鹿中心|机场/i.test(value);
+  const nodes = unique(day.routeNodes || []).filter(isPlace);
+  const regions = nodes.filter(value => /公园|保护区|核心区|地区|national park|reserve|conservancy/i.test(value));
+  const cities = unique(String(day.city || '').split(/[\n·→✈🚗-]+/u).map(value => clean(value).replace(/^抵达/, '').replace(/全天游猎$/, ''))).filter(isPlace);
+  return clean(regions.at(-1) || cities.at(-1) || nodes.at(-1) || (isPlace(lodging?.region) && lodging.region) || fallback);
+}
+
 function plannedImageSlot(agentPlan = {}, role) {
   return (agentPlan.imagePlan?.slots || []).find((item) => item.role === role) || {};
 }
@@ -582,22 +593,57 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
   });
   data.days.forEach((day, index) => {
     const role = dayRole(effectiveAgentPlan, index);
-    const dayPlan = plannedImageSlot(effectiveAgentPlan, `day:${index + 1}`);
-    const { spot: primarySpot, spotIndex } = selectPrimaryDaySpot(day, role, dayPlan);
-    const primarySubject = clean(primarySpot?.name || role.primaryVisualSubject || day.theme);
-    const location = geographicDayLocation(day, data.hotels.flatMap((hotel) => [hotel.officialName, hotel.shortName]), data.destination);
-    const status = clean(primarySpot?.status || primarySpot?.feeBoundary || "included");
-    const statusLabel = clean(primarySpot?.statusLabel || (status === "optional_paid" ? "自费可选" : status === "included" ? "已包含" : "待确认"));
+    const planned = (effectiveAgentPlan.imagePlan?.slots || []).filter((item) => item.role === `day:${index + 1}` || String(item.role || "").startsWith(`day:${index + 1}:`));
+    const ordered = [...planned].sort((a, b) => Number(b.required === true) - Number(a.required === true));
+    if (ordered.length > 4) throw new Error(`DAY ${index + 1} 图片位超过4个，请在 Planner 中收敛辅助视觉`);
+    const imageIndices = new Map();
+    (ordered.length ? ordered : [{}]).forEach((dayPlan, visualIndex) => {
+    const primarySubject = clean(dayPlan.primaryVisualSubject) || clean(role.primaryVisualSubject) || clean(selectPrimaryDaySpot(day, role, {}).spot?.name || day.theme);
+    // A storage binding is not a semantic fallback: never replace the planned subject.
+    const normalizedSubject = primarySubject.toLowerCase().replace(/\s+/g, '');
+    const matchedIndex = (day.spots || []).findIndex((spot) => clean(spot.name).toLowerCase().replace(/\s+/g, '') === normalizedSubject);
+    const spotIndex = matchedIndex >= 0 ? matchedIndex : 0;
+    const referencedIndices = [...new Set((dayPlan.sourceRefs || []).flatMap(ref => {
+      const match = String(ref).replace(/^factBasis\./, '').replace(/\[(\d+)\]/g, '.$1').match(/^days\.(\d+)\.spots\.(\d+)(?:\.|$)/);
+      return match && Number(match[1]) === index && day.spots?.[Number(match[2])] ? [Number(match[2])] : [];
+    }))];
+    const primarySpot = matchedIndex >= 0 ? day.spots[matchedIndex] : referencedIndices.length === 1 ? day.spots[referencedIndices[0]] : null;
+    const imageIndex = imageIndices.get(spotIndex) || 0;
+    imageIndices.set(spotIndex, imageIndex + 1);
+    const location = imageDayLocation(day, data.hotels, data.destination);
+    const status = clean(primarySpot?.status || primarySpot?.feeBoundary);
+    const statusLabel = clean(primarySpot?.statusLabel || (status === "optional_paid" ? "自费可选" : status === "included" ? "已包含" : status ? "待确认" : ""));
     const optionalBoundary = ["optional_paid", "reservation_required", "pending"].includes(status) ? `；该视觉重点为${statusLabel}，不得暗示已包含` : "";
-    const slotId = `image:day:${index + 1}:primary`;
-    addSlot(slot({
-      slotId, moduleType: "day", required: true,
+    const required = visualIndex === 0;
+    const slotId = `image:day:${index + 1}:${required ? "primary" : `supporting:${visualIndex}`}`;
+    const visualCopyPath = `simpleImageSlotBindings.${slotId.replace(/:/g, '_')}.description`;
+    if (matchedIndex < 0) copyTasks.push(copyTask({
+      targetId: `copy:visual:${slotId}`, targetPath: visualCopyPath, moduleType: 'visual_card',
+      facts: { visualSubject: primarySubject, daySourceFacts: dayFactText(day), sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], experiences: (day.spots || []).map(spotCopyFacts) },
+      plannerGoal: '只为当前 visualSubject 写1—2句简短体验介绍：怎么体验、为什么值得。只使用本日真实事实和来源依据，不总结整天，不借其他视觉卡内容，不复制泛化Spot全文，不新增设施、动物保证或费用承诺。卡片不显示状态标签，但文案不得暗示未购买体验已包含。',
+      relevantContext: { dayRole: role.role, visualSubject: primarySubject, otherVisualSubjects: ordered.map(item => item.primaryVisualSubject).filter(item => item !== primarySubject) },
+      layoutHints: { placement: 'visual_card', slotId }, outputSchema: { type: 'string', minLength: 12, maxLength: 160 }, required,
+    }));
+    addSlot({ ...slot({
+      slotId, moduleType: "day", required,
       location, activity: primarySubject, subject: primarySubject,
-      visualGoal: `以${primarySubject}作为 DAY ${index + 1} 的真实主要视觉职责；${role.differenceFromAdjacent || "与相邻 DAY 保持真实差异"}${optionalBoundary}`,
+      visualGoal: unique([dayPlan.visualDuty, dayPlan.differentiation || role.differenceFromAdjacent, primarySubject]).join("；") + optionalBoundary,
       visualContext: { dayIndex: index, dayRole: role.role || "", differenceFromAdjacent: role.differenceFromAdjacent || "", routeNodes: day.routeNodes || [], geographicLocation: location, primaryVisualSubject: primarySubject, allActivities: (day.spots || []).map((spot) => ({ name: spot.name, description: spot.description, status: spot.status, statusLabel: spot.statusLabel, feeBoundary: spot.feeBoundary })), experienceStatus: status, statusLabel, feeBoundary: primarySpot?.feeBoundary || "", sourceExperience: primarySpot?.description || day.description, daySourceFacts: dayFactText(day), adjacentVisualResponsibilities: [dayRole(effectiveAgentPlan, index - 1).role, dayRole(effectiveAgentPlan, index + 1).role].filter(Boolean), avoid: [] },
       copyTargetId: `copy:day:${index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]),
-    }), { module: "day", dayIndex: index, spotIndex, fieldPath: `days.${index}.spots.${spotIndex}.images.0`, imageIndex: 0, required: true });
+    }), primaryVisualSubject: primarySubject, searchIntent: dayPlan.searchIntent || "", sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], visualTier: required ? "primary" : "supporting", removable: !required }, { module: "day", dayIndex: index, itemIndex: index, spotIndex, fieldPath: `days.${index}.spots.${spotIndex}.images.${imageIndex}`, imageIndex, required, visualSubject: primarySubject, useSpotCopy: matchedIndex >= 0 });
+    });
   });
+
+  data.simpleImageSlotBindings = structuredClone(slotBindings);
+  for (const binding of Object.values(data.simpleImageSlotBindings)) {
+    if (binding.module !== 'day' || binding.useSpotCopy !== false) continue;
+    binding.description = '';
+    const context = imageSlots.find(item => item.moduleType === 'day' && item.visualContext.dayIndex === binding.dayIndex && item.subject === binding.visualSubject)?.visualContext;
+    binding.status = context?.experienceStatus || 'pending';
+    binding.statusLabel = context?.statusLabel || '待确认';
+    binding.feeBoundary = context?.feeBoundary || binding.status;
+    binding.reminder = '';
+  }
 
   if (imageSlots.length > 48) {
     const error = new Error(`图片位共 ${imageSlots.length} 个，超过技术安全上限 48；不得静默截断`);

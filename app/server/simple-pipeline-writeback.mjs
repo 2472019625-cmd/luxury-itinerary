@@ -63,7 +63,10 @@ export function applySimpleSkillResults({ preparedData, copyTasks = [], copyExec
       copyWriteback.push({ targetId: task.targetId, targetPath: task.targetPath, status });
       continue;
     }
-    if (result.targetPath !== task.targetPath || !COPY_PATH.test(task.targetPath)) {
+    const visualSlotId = task.layoutHints?.placement === 'visual_card' ? task.layoutHints.slotId : null;
+    const visualBinding = visualSlotId && data.simpleImageSlotBindings?.[visualSlotId];
+    const visualPathAllowed = visualBinding?.module === 'day' && visualBinding.useSpotCopy === false && task.targetPath === `simpleImageSlotBindings.${visualSlotId.replace(/:/g, '_')}.description`;
+    if (result.targetPath !== task.targetPath || !(COPY_PATH.test(task.targetPath) || visualPathAllowed)) {
       unresolvedItems.push(unresolved("copy", task.targetId, "failed", task.required !== false, { targetPath: task.targetPath, error: { code: "unauthorized_target_path", message: "Copy 返回路径不一致或不在授权文案字段中" } }));
       copyWriteback.push({ targetId: task.targetId, targetPath: task.targetPath, status: "failed" });
       continue;
@@ -75,7 +78,8 @@ export function applySimpleSkillResults({ preparedData, copyTasks = [], copyExec
       continue;
     }
     try {
-      writeAtPath(data, task.targetPath, result.value);
+      if (visualPathAllowed) visualBinding.description = result.value;
+      else writeAtPath(data, task.targetPath, result.value);
       copyWriteback.push({ targetId: task.targetId, targetPath: task.targetPath, status: "written" });
     } catch (error) {
       unresolvedItems.push(unresolved("copy", task.targetId, "failed", task.required !== false, { targetPath: task.targetPath, error: { code: "writeback_failed", message: error.message } }));

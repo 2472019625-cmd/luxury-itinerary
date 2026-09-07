@@ -9,6 +9,9 @@ import { AgentPlanner } from "./AgentPlanner.jsx";
 import { AgentWorkspace } from "./AgentWorkspace.jsx";
 import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
 import { transportConfigurationLabels, transportProductName, transportUsageLabel } from './lib/transportPresentation.js';
+import { dayVisualCards } from './lib/dayVisualCards.js';
+import { coverLayout } from './lib/coverLayout.js';
+const VisualBindingsContext = React.createContext(undefined);
 
 const ICON = "/assets/icons/";
 const SLOGAN = "高品质度假管家，懂度假，更懂你";
@@ -79,6 +82,17 @@ function SloganLockup() {
   return <div className="slogan-lockup"><span>{SLOGAN}</span></div>;
 }
 
+function CoverVisual({ src, focus, alt }) {
+  const [layout, setLayout] = useState(() => coverLayout());
+  return <div className={`cover-visual${layout.aspectRatio ? " cover-visual-adaptive" : ""}`}>
+    <SloganLockup />
+    <div className={`hero-frame hero-frame-${layout.displayMode}`} data-display-mode={layout.displayMode} style={layout.aspectRatio ? { aspectRatio: layout.aspectRatio, height: "auto", boxSizing: "content-box" } : undefined}>
+      <SafeImage src={src} alt={alt} fallbackLabel="行程图片待补充" data-edit-path="cover" data-edit-image="0" onLoad={(event) => setLayout(coverLayout(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight))} style={{ objectPosition: focus || "50% 50%" }} />
+      <div className="hero-overlay" />
+    </div>
+  </div>;
+}
+
 function Cover({ data }) {
   const defaultDesigner = {
     name: "定制师名字",
@@ -93,8 +107,7 @@ function Cover({ data }) {
     <section className="cover" data-edit-path="cover">
       <img className="brand-logo brand-logo-cover" src="/assets/logos/logo-gold.png" alt="奢游国际 Luxury Travel" />
       <div className="cover-copy"><span className="eyebrow">PRIVATE JOURNEY · {data.destination}</span><AutoFitTitle>{data.title}</AutoFitTitle><p>{data.subtitle}</p></div>
-      <SloganLockup />
-      <div className="hero-frame"><SafeImage src={data.heroImage} alt={data.destination || "封面主图"} fallbackLabel="行程图片待补充" data-edit-path="cover" data-edit-image="0" style={{ objectPosition: data.heroFocus || "50% 50%" }} /><div className="hero-overlay" /></div>
+      <CoverVisual key={data.heroImage || "missing-cover"} src={data.heroImage} focus={data.heroFocus} alt={data.destination || "封面主图"} />
       <div className={`designer-card${hasDesigner ? "" : " designer-card-placeholder"}${metrics.length ? " designer-card-has-metrics" : " designer-card-no-metrics"}`}>
         <img src={designer.avatar} alt={designer.name} />
         <div className="designer-heading"><strong>{designer.name}</strong><span>{designer.role || "资深定制师"}</span><p>{String(designer.bio || "").split("\n").map((line, index) => <span className="designer-bio-line" key={`${line}-${index}`}>{line}</span>)}</p></div>
@@ -214,18 +227,19 @@ function DayNotices({ notices }) {
   return <div className="day-notices"><div className="day-notice day-notice-tip"><Icon name="warning" size={34} tone="gold" /><div><strong>今日贴士</strong><p>{notice.text}</p></div></div></div>;
 }
 
-function SpotCard({ spot, dayIndex, spotIndex }) {
-  const statusLabels = { included: "已包含", optional_paid: "自费可选", reservation_required: "需提前预约", pending: "待确认" };
-  const status = spot.statusLabel || statusLabels[spot.status] || spot.status || null;
+function SpotCard({ spot, dayIndex, spotIndex, imageIndexBase = 0 }) {
+  // DAY cards do not show status badges; keep the underlying business facts intact.
   const images = (spot.images?.length ? spot.images : spot.image ? [{ src: spot.image, focus: spot.focus, fit: spot.fit }] : []).slice(0, 2);
-  return <article className="spot-card" data-edit-path={`days.${dayIndex}.spots.${spotIndex}`}>{images.length > 0 ? <div className={`spot-image spot-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${spot.name}-${imageIndex}`} src={image.src || image} alt={image.label || `${spot.name}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`days.${dayIndex}.spots.${spotIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="体验图片待补充" compact className="card-missing-image" data-edit-path={`days.${dayIndex}.spots.${spotIndex}`} data-edit-image="0" />}<div className="spot-copy"><h4>{spot.name}</h4>{status && <div className="experience-status">{status}</div>}<p>{spot.experience || spot.description}</p>{spot.reminder && <small>{spot.reminder}</small>}</div></article>;
+  return <article className="spot-card" data-edit-path={`days.${dayIndex}.spots.${spotIndex}`}>{images.length > 0 ? <div className={`spot-image spot-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${spot.name}-${imageIndex}`} src={image.src || image} alt={image.label || `${spot.name}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`days.${dayIndex}.spots.${spotIndex}`} data-edit-image={imageIndexBase + imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="体验图片待补充" compact className="card-missing-image" data-edit-path={`days.${dayIndex}.spots.${spotIndex}`} data-edit-image={imageIndexBase} />}<div className="spot-copy"><h4>{spot.name}</h4><p>{spot.experience || spot.description}</p>{spot.reminder && <small>{spot.reminder}</small>}</div></article>;
 }
 
 function SpotGallery({ spots = [], dayIndex }) {
-  if (!spots.length) return null;
+  const bindings = React.useContext(VisualBindingsContext);
+  const cards = dayVisualCards({ spots }, dayIndex, bindings);
+  if (!cards.length) return null;
   const groups = [];
-  for (let index = 0; index < spots.length; index += 4) groups.push(spots.slice(index, index + 4));
-  return <div className="spot-galleries">{groups.map((group, groupIndex) => <div className={`spot-gallery spot-count-${group.length}`} key={groupIndex}>{group.map((spot, localIndex) => { const spotIndex = groupIndex * 4 + localIndex; return <SpotCard spot={spot} dayIndex={dayIndex} spotIndex={spotIndex} key={`${spot.name}-${spot.image || spot.images?.[0]?.src || "no-image"}`} />; })}</div>)}</div>;
+  for (let index = 0; index < cards.length; index += 4) groups.push(cards.slice(index, index + 4));
+  return <div className="spot-galleries">{groups.map((group, groupIndex) => <div className={`spot-gallery spot-count-${group.length}`} key={groupIndex}>{group.map(({ spot, spotIndex, imageIndex, slotId }) => <SpotCard key={slotId || spotIndex} spot={spot} dayIndex={dayIndex} spotIndex={spotIndex} imageIndexBase={imageIndex} />)}</div>)}</div>;
 }
 
 function DaySection({ day, index }) {
@@ -330,6 +344,10 @@ function buildScenario(data, scenario) {
 }
 
 export function Itinerary({ data, scale = 1 }) {
+  return <VisualBindingsContext.Provider value={data.simpleImageSlotBindings}><ItineraryContent data={data} scale={scale} /></VisualBindingsContext.Provider>;
+}
+
+function ItineraryContent({ data, scale = 1 }) {
   return <div className="export-frame" style={{ width: `${2000 * scale}px` }}><main id="itinerary" className="itinerary-canvas" style={{ transform: scale === 1 ? undefined : `scale(${scale})` }}><Cover data={data} /><div className="page-content intro-content"><Highlights items={data.highlights} title={data.highlightsSectionTitle} />{data.showOverviewSection !== false && <Overview days={data.days} title={data.overviewSectionTitle} />}<HotelsOverview hotels={data.hotels} policy={data.hotelReplacementPolicy} title={data.hotelSectionTitle} introTitle={data.hotelIntroTitle} introCopy={data.hotelIntroCopy} /><DiningOverview items={data.diningExperiences} policy={data.diningPolicy} title={data.diningSectionTitle} introTitle={data.diningIntroTitle} introCopy={data.diningIntroCopy} /><TransportOverview items={data.transportSummary} disclaimer={data.transportDisclaimer} title={data.transportSectionTitle} introTitle={data.transportIntroTitle} introCopy={data.transportIntroCopy} /><SectionTitle en="HOLIDAY MEET" zh="行程细节" /></div><div className="days-wrap">{data.days.map((day, index) => <DaySection day={day} index={index} key={`${day.date}-${index}`} />)}</div><div className="page-content closing-content"><Expenses data={data} />{data.showBookingSection !== false && <BookingFlow />}<SecurityAndPayment payment={data.payment} showSecuritySection={data.showSecuritySection !== false} showPaymentSection={data.showPaymentSection !== false} /><Notes notes={data.notes} title={data.notesSectionTitle} intro={data.notesIntro} /></div><Footer contact={data.contact} /></main></div>;
 }
 
