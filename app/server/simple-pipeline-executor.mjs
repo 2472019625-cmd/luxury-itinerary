@@ -252,19 +252,30 @@ export async function runSimplePipeline({
   timingsMs.programWriteback = elapsed(writebackStartedAt);
   emit({ stage: "program_writeback", phase: "finished", durationMs: timingsMs.programWriteback, unresolvedCount: writeback.unresolvedItems.length });
 
-  let renderExecution = { status: "not_started", outputPath: null, rendererCalls: 0, durationMs: 0 };
-  if (!writeback.requiredUnresolved.length) {
-    emit({ stage: "renderer", phase: "started" });
-    const rendererStartedAt = Date.now();
-    try { renderExecution = await render({ data: writeback.data, projectId, root, origin }); }
-    catch (error) { renderExecution = { status: "failed", outputPath: null, rendererCalls: 1, error: { code: "renderer_failed", message: error.message } }; }
-    timingsMs.renderer = elapsed(rendererStartedAt);
-    renderExecution.durationMs ||= timingsMs.renderer;
-    if (renderExecution.status !== "success") writeback.unresolvedItems.push(unresolvedRender(renderExecution));
-    emit({ stage: "renderer", phase: "finished", durationMs: timingsMs.renderer, status: renderExecution.status });
-  } else {
-    renderExecution = { status: "blocked_by_required_items", outputPath: null, rendererCalls: 0, durationMs: 0 };
+  const renderMode = writeback.requiredUnresolved.length ? "draft" : "final";
+  emit({ stage: "renderer", phase: "started", mode: renderMode });
+  const rendererStartedAt = Date.now();
+  let renderExecution;
+  try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: renderMode }); }
+  catch (error) { renderExecution = { status: "failed", mode: renderMode, outputPath: null, rendererCalls: 1, error: { code: "renderer_failed", message: error.message } }; }
+  if (renderMode === "final" && renderExecution.status !== "success") {
+    const finalAttempt = renderExecution;
+    writeback.unresolvedItems.push(unresolvedRender(finalAttempt));
+    emit({ stage: "renderer", phase: "draft_fallback_started" });
+    try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: "draft" }); }
+    catch (error) { renderExecution = { status: "failed", mode: "draft", outputPath: null, rendererCalls: 1, error: { code: "renderer_failed", message: error.message } }; }
+    renderExecution = {
+      ...renderExecution,
+      mode: "draft",
+      rendererCalls: Number(finalAttempt.rendererCalls || 0) + Number(renderExecution.rendererCalls || 0),
+      finalAttempt,
+    };
   }
+  timingsMs.renderer = elapsed(rendererStartedAt);
+  renderExecution.durationMs ||= timingsMs.renderer;
+  renderExecution.mode ||= renderMode;
+  if (renderExecution.status !== "success" && !writeback.unresolvedItems.some((item) => item.kind === "renderer")) writeback.unresolvedItems.push(unresolvedRender(renderExecution));
+  emit({ stage: "renderer", phase: "finished", mode: renderExecution.mode, durationMs: timingsMs.renderer, status: renderExecution.status });
 
   const pipelineStatus = statusFor(writeback.unresolvedItems, renderExecution.status);
   const progress = pipelineStatus === "complete" ? 100 : pipelineStatus === "awaiting_user_action" ? 85 : 75;
@@ -281,6 +292,7 @@ export async function runSimplePipeline({
     writeback: { copy: writeback.copyWriteback, images: writeback.imageWriteback },
     unresolvedItems: writeback.unresolvedItems,
     renderStatus: renderExecution.status,
+    render: renderExecution,
     outputPath: renderExecution.outputPath || null,
     timingsMs,
     callCounts: callCounts({ agentPlan: agentPlanning.plan || agentPlanning, copyExecution, imageExecution, renderExecution }),

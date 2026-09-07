@@ -64,13 +64,14 @@ test("硬拒绝候选不能人工采用", async (t) => {
   await assert.rejects(() => chooseSimpleImageCandidate({ ...value, slotId: "image:cover:primary", candidateId: value.hardCandidate.candidateId, render: async () => assert.fail("不应启动 Renderer") }), /不能采用/);
 });
 
-test("人工采用只写回目标 slot，剩余 required 未清零时不启动 Renderer", async (t) => {
+test("人工采用只写回目标 slot，剩余 required 未清零时更新可编辑草稿", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
   let rendererCalls = 0;
-  const payload = await chooseSimpleImageCandidate({ ...value, slotId: "image:cover:primary", candidateId: value.candidate.candidateId, render: async () => { rendererCalls += 1; return { status: "success", outputPath: "unused", rendererCalls: 1 }; } });
-  assert.equal(rendererCalls, 0);
+  const payload = await chooseSimpleImageCandidate({ ...value, slotId: "image:cover:primary", candidateId: value.candidate.candidateId, render: async ({ mode }) => { rendererCalls += 1; assert.equal(mode, "draft"); return { status: "success", mode, outputPath: "editable-draft.png", rendererCalls: 1 }; } });
+  assert.equal(rendererCalls, 1);
   assert.equal(payload.pipelineStatus, "partial");
   assert.equal(payload.unresolvedRequiredCount, 1);
+  assert.equal(payload.draftRendered, true);
   assert.equal(payload.project.data.heroImage, value.candidate.localUrl);
   assert.equal(payload.imageReview.slots.find((item) => item.slotId === "image:cover:primary").status, "human_selected");
   assert.deepEqual(payload.project.data.days[0].spots[0].images, []);
@@ -78,11 +79,12 @@ test("人工采用只写回目标 slot，剩余 required 未清零时不启动 R
 
 test("最后一个 required 上传补齐后直接启动 Renderer 并完成", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
-  await chooseSimpleImageCandidate({ ...value, slotId: "image:cover:primary", candidateId: value.candidate.candidateId, render: async () => assert.fail("首槽不应启动 Renderer") });
+  const modes = [];
+  const render = async ({ mode }) => { modes.push(mode); return { status: "success", mode, outputPath: path.join(value.root, mode === "draft" ? "draft-2000.png" : "final-2000.png"), rendererCalls: 1, durationMs: 5 }; };
+  await chooseSimpleImageCandidate({ ...value, slotId: "image:cover:primary", candidateId: value.candidate.candidateId, render });
   const buffer = await sharp({ create: { width: 1200, height: 700, channels: 3, background: "#61754b" } }).jpeg().toBuffer();
-  let rendererCalls = 0;
-  const payload = await uploadSimpleImage({ ...value, slotId: "image:day:1:primary", dataUrl: `data:image/jpeg;base64,${buffer.toString("base64")}`, fileName: "day-1.jpg", render: async () => { rendererCalls += 1; return { status: "success", outputPath: path.join(value.root, "final-2000.png"), rendererCalls: 1, durationMs: 5 }; } });
-  assert.equal(rendererCalls, 1);
+  const payload = await uploadSimpleImage({ ...value, slotId: "image:day:1:primary", dataUrl: `data:image/jpeg;base64,${buffer.toString("base64")}`, fileName: "day-1.jpg", render });
+  assert.deepEqual(modes, ["draft", "final"]);
   assert.equal(payload.pipelineStatus, "complete");
   assert.equal(payload.unresolvedRequiredCount, 0);
   assert.equal(payload.canEnterFinal, true);
@@ -98,7 +100,7 @@ test("用户主动单槽重搜只调用一个 slot，automaticFollowupRounds 保
     ...value,
     slotId: "image:cover:primary",
     runImage: async ({ slots }) => { receivedSlots = slots.map((item) => item.slotId); return { status: "needs_user_action", results: [{ slotId: slots[0].slotId, status: "not_found", selected: null, candidates: [], technicalStatus: "no_eligible_candidate", matchReason: "没有合格候选" }], metrics: { automaticFollowupRounds: 0 } }; },
-    render: async () => assert.fail("重搜未补齐时不应启动 Renderer"),
+    render: async ({ mode }) => ({ status: "success", mode, outputPath: "editable-draft.png", rendererCalls: 1 }),
   });
   assert.deepEqual(receivedSlots, ["image:cover:primary"]);
   assert.equal(payload.pipelineStatus, "partial");

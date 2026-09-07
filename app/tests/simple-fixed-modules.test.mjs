@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { APPROVED_PAYMENT, APPROVED_PAYMENT_QR_SHA256, SIMPLE_PIPELINE_DEFAULT_ORIGIN, applyApprovedFixedModules, validateApprovedPayment } from "../server/simple-fixed-modules.mjs";
-import { reviewFixedModuleLayout, runSimpleRenderer } from "../server/simple-renderer.mjs";
+import { deterministicPreflight, reviewFixedModuleLayout, runSimpleRenderer } from "../server/simple-renderer.mjs";
 
 const appRoot = path.resolve(import.meta.dirname, "..");
 const sample = JSON.parse(await readFile(path.join(appRoot, "data", "sample-itinerary.json"), "utf8"));
@@ -24,6 +24,14 @@ test("没有 notes 时 Simple Renderer 必须阻断且不能调用实际渲染",
   assert.equal(result.status, "blocked");
   assert.equal(result.rendererCalls, 0);
   assert.ok(result.qa.issues.some((item) => item.code === "fixed_notes_missing" && item.module === "旅行准备与注意事项"));
+});
+
+test("没有 notes 时草稿预检允许继续渲染但保留明确提醒", () => {
+  const data = structuredClone(sample);
+  data.notes = [];
+  const result = deterministicPreflight(data, { root: appRoot, mode: "draft" });
+  assert.equal(result.passed, true);
+  assert.ok(result.issues.some((item) => item.code === "fixed_notes_missing" && item.severity === "warning"));
 });
 
 test("批准收款数据和本机二维码资产完整，且伪造字段不能通过", () => {

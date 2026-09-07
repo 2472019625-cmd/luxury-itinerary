@@ -10,7 +10,7 @@ import { copyRequestJson, copyResearchFacts, createWorkbookFile, imageAdapters, 
 
 const appRoot = path.resolve(import.meta.dirname, "..");
 
-test("完整链路并行调用两个 Skill，隔离单项失败并阻止必需缺图进入100%", async (t) => {
+test("完整链路隔离单项失败，必需项未齐时仍生成可编辑草稿但不进入100%", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-pipeline-partial-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   let rendererCalls = 0;
@@ -25,7 +25,7 @@ test("完整链路并行调用两个 Skill，隔离单项失败并阻止必需�
       sourcePagesPerSlot: 1, downloadsPerSlot: 1, visionCandidatesPerSlot: 1,
       adapters: imageAdapters({ appRoot, failMatcher: (query) => /Angama Amboseli/.test(query) || /草原飞机/.test(query) }),
     },
-    adapters: { render: async () => { rendererCalls += 1; return { status: "success", outputPath: "should-not-render.png", rendererCalls: 1 }; } },
+    adapters: { render: async ({ mode }) => { rendererCalls += 1; assert.equal(mode, "draft"); return { status: "success", mode, outputPath: "editable-draft.png", rendererCalls: 1 }; } },
   });
   assert.equal(result.concurrency.copyImage.parallel, true);
   assert.equal(result.callCounts.copyModelCalls, 3);
@@ -40,8 +40,9 @@ test("完整链路并行调用两个 Skill，隔离单项失败并阻止必需�
   assert.ok(result.writeback.images.some((item) => item.status === "removed_optional"));
   assert.ok(result.unresolvedItems.some((item) => item.kind === "image" && item.required));
   assert.equal(result.pipelineStatus, "partial");
-  assert.equal(result.renderStatus, "blocked_by_required_items");
-  assert.equal(rendererCalls, 0);
+  assert.equal(result.renderStatus, "success");
+  assert.equal(result.render.mode, "draft");
+  assert.equal(rendererCalls, 1);
   assert.equal(result.legacyEvidence.clear, true);
   assert.equal(result.legacyEvidence.invoked.length, 0);
   assert.equal(result.legacyEvidence.automaticCopyRegenerationRounds, 0);
@@ -84,7 +85,34 @@ test("全部必需单元满足时进入 Renderer，并只在真实渲染成功�
   assert.ok(result.plannerResult.warnings.some((item) => item.code === "product_highlight_material_insufficient"));
 });
 
-test("原始资料没有 notes 且必需生成失败时不得渲染或完成", async (t) => {
+test("正式版面检查未通过时自动保留可编辑草稿而不是卡住", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-pipeline-render-fallback-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const modes = [];
+  const result = await runSimplePipeline({
+    sourceFile: createWorkbookFile(),
+    root: appRoot,
+    storeRoot: path.join(root, "projects"),
+    plannerOptions: { apiKey: "fixture", baseUrl: "https://planner.invalid", model: "fixture", requestJson: plannerRequestJson() },
+    copyOptions: { apiKey: "fixture", baseUrl: "https://copy.invalid", model: "fixture", requestJson: copyRequestJson(), researchFacts: copyResearchFacts },
+    imageOptions: { visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture", sourcePagesPerSlot: 1, downloadsPerSlot: 1, visionCandidatesPerSlot: 1, adapters: imageAdapters({ appRoot }) },
+    adapters: { render: async ({ mode }) => {
+      modes.push(mode);
+      return mode === "final"
+        ? { status: "blocked", mode, outputPath: null, rendererCalls: 1, qa: { issues: [{ code: "text_overflow" }] } }
+        : { status: "success", mode, outputPath: "editable-draft.png", rendererCalls: 1 };
+    } },
+  });
+  assert.deepEqual(modes, ["final", "draft"]);
+  assert.equal(result.pipelineStatus, "partial");
+  assert.equal(result.renderStatus, "success");
+  assert.equal(result.render.mode, "draft");
+  assert.equal(result.outputPath, "editable-draft.png");
+  assert.equal(result.callCounts.rendererCalls, 2);
+  assert.ok(result.unresolvedItems.some((item) => item.kind === "renderer"));
+});
+
+test("原始资料没有 notes 且必需生成失败时只生成草稿，不得完成", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-pipeline-notes-failed-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   let rendererCalls = 0;
@@ -95,11 +123,11 @@ test("原始资料没有 notes 且必需生成失败时不得渲染或完成", a
     plannerOptions: { apiKey: "fixture", baseUrl: "https://planner.invalid", model: "fixture", requestJson: plannerRequestJson() },
     copyOptions: { apiKey: "fixture", baseUrl: "https://copy.invalid", model: "fixture", requestJson: copyRequestJson({ failTargetId: "copy:notes:travel-preparation" }), researchFacts: copyResearchFacts },
     imageOptions: { visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture", sourcePagesPerSlot: 1, downloadsPerSlot: 1, visionCandidatesPerSlot: 1, adapters: imageAdapters({ appRoot }) },
-    adapters: { render: async () => { rendererCalls += 1; return { status: "success", outputPath: "should-not-render.png", rendererCalls: 1 }; } },
+    adapters: { render: async ({ mode }) => { rendererCalls += 1; assert.equal(mode, "draft"); return { status: "success", mode, outputPath: "editable-draft.png", rendererCalls: 1 }; } },
   });
   assert.notEqual(result.pipelineStatus, "complete");
-  assert.equal(result.renderStatus, "blocked_by_required_items");
-  assert.equal(rendererCalls, 0);
+  assert.equal(result.renderStatus, "success");
+  assert.equal(rendererCalls, 1);
   assert.ok(result.unresolvedItems.some((item) => item.id === "copy:notes:travel-preparation" && item.required));
 });
 

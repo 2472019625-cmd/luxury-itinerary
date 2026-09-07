@@ -88,6 +88,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   if (!payload) return <div className="agent-shell"><div className="agent-status"><span className="agent-spinner"/><b>{error || "正在读取当前 Simple Pipeline 项目"}</b></div></div>;
   if (screen === "versions" && payload.canEnterFinal) return <VersionsStep project={payload.project} existingOnly onBack={() => setScreen("editor")} />;
   const firstUnresolved = payload.unresolvedRequiredSlotIds?.[0] || "image:cover:primary";
+  const pendingSummary = payload.unresolvedNotices?.map((item) => item.message) || [];
   return <><Editor
     project={payload.project}
     ItineraryComponent={ItineraryComponent}
@@ -99,9 +100,11 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     openPickerOnImageClick
     canOpenVersions={payload.canEnterFinal}
     initialSelection={editorSelectionForSlot(payload.project, firstUnresolved)}
-    initialTab="image"
+    initialTab={payload.unresolvedCopyCount ? "copy" : "image"}
     defaultDesigner={payload.project.data.designer || { avatar:"", name:"", role:"", bio:"" }}
-    statusNotice={payload.canEnterFinal ? { title:"必需图片已补齐", message:"required gate 已通过，可以进入 Step 5 查看正式版本。" } : { title:`当前为 partial · 还缺 ${payload.unresolvedRequiredCount} 个 required 项`, message:"可以在画布里点击具体图片槽位补图；required 图片未齐前 Step 5 和最终 2000px 成品保持关闭。" }}
+    statusNotice={payload.canEnterFinal
+      ? { title:"内容已经补齐", message:"正式成品已通过检查，可以进入 Step 5 查看和下载。" }
+      : { title:"可编辑草稿已生成", message:payload.draftRendered ? "未完成项目已在对应位置保留提醒；你可以先编辑文案、补图和检查版面，正式下载会在问题补齐后开放。" : "可以先在编辑器处理未完成项目；草稿长图生成未通过时，请按下方提醒检查对应模块。", items:pendingSummary }}
   />{busy && <div className="agent-execution-notice">正在处理 {busy.split(":").slice(0, -1).join(":")}，只会更新当前图片位。</div>}{error && <div className="agent-error">{error}</div>}</>;
 }
 

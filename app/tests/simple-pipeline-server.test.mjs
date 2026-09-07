@@ -10,15 +10,24 @@ test("员工端确认后创建 simple_skill_v1 运行而不是旧 agent_v1", asy
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-pipeline-server-"));
   const simpleStore = new AgentPlanStore(path.join(root, "projects"));
   let received;
+  let releaseRunner;
+  const runnerPaused = new Promise((resolve) => { releaseRunner = resolve; });
   const runtime = createAgentPlannerServer({
     port: 0,
     simpleStore,
+    modelConfig: { apiKey: "text-key", baseUrl: "https://text.example/v1", model: "text-model" },
+    searchModelConfig: { apiKey: "search-key", baseUrl: "https://search.example/v1", model: "facts-search-model", imageSearchModel: "image-search-model" },
     simplePipelineRunner: async (options) => {
       received = options;
       options.onEvent({ stage: "parser", phase: "started" });
       options.onEvent({ stage: "parser", phase: "finished" });
       options.onEvent({ stage: "planner", phase: "started", projectId: options.projectId });
       options.onEvent({ stage: "planner", phase: "progress", detail: { message: "正在返回规划" } });
+      options.onEvent({ stage: "skills", phase: "started" });
+      options.onEvent({ stage: "image_skill", phase: "started" });
+      options.onEvent({ stage: "capability", capabilityId: "visual_judgment", phase: "finished", status: "success" });
+      await runnerPaused;
+      options.onEvent({ stage: "skills", phase: "finished", status: "success" });
       return { projectId: options.projectId, pipelineStatus: "complete" };
     },
   });
@@ -40,5 +49,11 @@ test("员工端确认后创建 simple_skill_v1 运行而不是旧 agent_v1", asy
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(received.projectId, created.projectId);
   assert.equal(received.sourceData.data.destination, "肯尼亚");
+  assert.equal(received.copyOptions.researchApiKey, "search-key");
+  assert.equal(received.copyOptions.researchBaseUrl, "https://search.example/v1");
+  assert.equal(received.copyOptions.researchModel, "facts-search-model");
+  assert.equal(runtime.simpleJobs.get(created.projectId).stageStates.image_skill, "running", "单个视觉能力结束不能把整个图片阶段标成完成");
+  releaseRunner();
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(runtime.simpleJobs.get(created.projectId).status, "complete");
 });

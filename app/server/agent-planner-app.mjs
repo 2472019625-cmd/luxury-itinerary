@@ -107,7 +107,7 @@ export function createAgentPlannerServer(options = {}) {
       : event.stage;
     const states = { ...job.stageStates };
     if (states[stage] && event.phase === "started") states[stage] = "running";
-    if (states[stage] && event.phase === "finished") states[stage] = event.status === "failed" ? "failed" : "complete";
+    if (event.stage !== "capability" && states[stage] && event.phase === "finished") states[stage] = event.status === "failed" ? "failed" : "complete";
     if (event.stage === "skills" && event.phase === "finished") {
       states.copy_skill = "complete";
       states.image_skill = "complete";
@@ -167,7 +167,12 @@ export function createAgentPlannerServer(options = {}) {
           root,
           adapters: { store: simpleStore },
           plannerOptions: modelConfig,
-          copyOptions: modelConfig,
+          copyOptions: {
+            ...modelConfig,
+            researchApiKey: searchModelConfig.apiKey,
+            researchBaseUrl: searchModelConfig.baseUrl,
+            researchModel: searchModelConfig.model,
+          },
           imageOptions: {
             searchApiKey: searchModelConfig.apiKey,
             searchBaseUrl: searchModelConfig.baseUrl,

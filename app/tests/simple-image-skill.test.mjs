@@ -339,6 +339,22 @@ test("真实批量视觉请求和返回都以candidateId为硬契约", async (t)
   assert.deepEqual(judgments.map((item) => item.candidateId), ["candidate-fixed-2", "candidate-fixed-1"]);
 });
 
+test("候选图片视觉判断超时后返回可隔离的技术错误", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-image-audit-timeout-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const filePath = path.join(root, "candidate.jpg");
+  await sharp({ create: { width: 1200, height: 800, channels: 3, background: { r: 40, g: 90, b: 140 } } }).jpeg().toFile(filePath);
+  await assert.rejects(() => judgeCandidatesBatch({
+    slot: { label: "DAY8", module: "day", context: "内罗毕", subject: "返程", visualGoal: "返程画面", mustHave: [], prefer: [], forbid: [] },
+    candidates: [{ candidateId: "candidate-timeout", filePath, pageUrl: "https://example.com/timeout", title: "候选" }],
+    apiKey: "key",
+    baseUrl: "https://vision.invalid",
+    model: "model",
+    timeoutMs: 10,
+    fetchImpl: async (_url, options) => new Promise((_resolve, reject) => options.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true })),
+  }), (error) => error.code === "audit_timeout");
+});
+
 test("搜索 query 不拼接 visualGoal、differenceFromAdjacent 或 DAY 长文", () => {
   const queries = buildImageQueries(slot("walking", {
     location: "Singita Grumeti",

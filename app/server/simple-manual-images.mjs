@@ -37,7 +37,24 @@ function projectContext(store, projectId) {
 function manualSlotIds(result) {
   const saved = result.manualImageCompletion?.slotIds;
   if (Array.isArray(saved) && saved.length) return saved;
-  return (result.unresolvedItems || []).filter((item) => item.kind === "image" && item.required && item.status === "needs_user_action").map((item) => item.id);
+  return (result.unresolvedItems || []).filter((item) => item.kind === "image" && item.required).map((item) => item.id);
+}
+
+function unresolvedNotices(items = []) {
+  const groups = new Map();
+  for (const item of items) {
+    let label = "其他生成问题";
+    if (item.kind === "image") label = "图片待补充";
+    else if (/^hotels\./.test(item.targetPath || "")) label = "酒店文案待处理";
+    else if (/^transportSummary\./.test(item.targetPath || "")) label = "交通文案待处理";
+    else if (/^days\./.test(item.targetPath || "")) label = "每日行程文案待处理";
+    else if (item.kind === "copy") label = "其他文案待处理";
+    const group = groups.get(label) || { label, count: 0, ids: [] };
+    group.count += 1;
+    group.ids.push(item.id);
+    groups.set(label, group);
+  }
+  return [...groups.values()].map((group) => ({ ...group, message: `${group.label} ${group.count} 项` }));
 }
 
 function moduleName(slotId) {
@@ -129,7 +146,9 @@ export function buildSimpleManualImagePayload(store, projectId) {
   }));
   const unresolvedRequired = (result.unresolvedItems || []).filter((item) => item.required);
   const canEnterFinal = unresolvedRequired.length === 0 && Boolean(result.outputPath);
-  const outputUrl = result.outputPath ? `/api/simple/projects/${projectId}/output` : null;
+  const outputUrl = canEnterFinal ? `/api/simple/projects/${projectId}/output` : null;
+  const notices = unresolvedNotices(result.unresolvedItems || []);
+  const draftRendered = result.renderStatus === "success" && result.render?.mode === "draft";
   return {
     project: {
       id: project.projectId,
@@ -140,7 +159,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
       currentStage: project.currentStage,
       progress: project.progress,
       versions: outputUrl ? [{ id: `simple-${run.executionRunId}`, name: `${result.data?.title || "行程"} · 2000px 正式成品`, createdAt: Date.parse(result.completedAt || result.updatedAt || project.updatedAt || new Date().toISOString()), downloadUrl: outputUrl }] : [],
-      data: { ...result.data, imageCandidates, imageReview: { slots }, simpleImageSlotBindings: plan.slotBindings || {}, requiredImageGate: { unresolvedSlotIds: unresolvedRequired.filter((item) => item.kind === "image").map((item) => item.id), passed: unresolvedRequired.length === 0 } },
+      data: { ...result.data, imageCandidates, imageReview: { slots }, simpleImageSlotBindings: plan.slotBindings || {}, generationIssues: result.unresolvedItems || [], requiredImageGate: { unresolvedSlotIds: unresolvedRequired.filter((item) => item.kind === "image").map((item) => item.id), passed: unresolvedRequired.filter((item) => item.kind === "image").length === 0 } },
     },
     executionRunId: run.executionRunId,
     pipelineStatus: result.pipelineStatus,
@@ -148,6 +167,10 @@ export function buildSimpleManualImagePayload(store, projectId) {
     outputUrl,
     unresolvedRequiredCount: unresolvedRequired.length,
     unresolvedRequiredSlotIds: unresolvedRequired.map((item) => item.id),
+    unresolvedCopyCount: (result.unresolvedItems || []).filter((item) => item.kind === "copy").length,
+    unresolvedImageCount: (result.unresolvedItems || []).filter((item) => item.kind === "image").length,
+    unresolvedNotices: notices,
+    draftRendered,
     canEnterEditor: true,
     canEnterFinal,
     imageReview: { slots },
@@ -172,9 +195,16 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
     slotBindings: plan.slotBindings,
     imageExecution,
   });
-  let renderResult = { status: "blocked_by_required_items", outputPath: null, rendererCalls: 0, durationMs: 0 };
-  if (!writeback.requiredUnresolved.length) renderResult = await render({ data: writeback.data, projectId: project.projectId, root });
-  if (!writeback.requiredUnresolved.length && renderResult.status !== "success") {
+  const renderMode = writeback.requiredUnresolved.length ? "draft" : "final";
+  let renderResult = await render({ data: writeback.data, projectId: project.projectId, root, mode: renderMode });
+  if (renderMode === "final" && renderResult.status !== "success") {
+    const finalAttempt = renderResult;
+    writeback.unresolvedItems.push({ kind: "renderer", id: "renderer:2000", status: finalAttempt.status || "failed", required: true, error: finalAttempt.error || { code: "renderer_failed", message: "正式成品版面检查未通过" } });
+    renderResult = await render({ data: writeback.data, projectId: project.projectId, root, mode: "draft" });
+    renderResult = { ...renderResult, mode: "draft", rendererCalls: Number(finalAttempt.rendererCalls || 0) + Number(renderResult.rendererCalls || 0), finalAttempt };
+  }
+  renderResult.mode ||= renderMode;
+  if (renderResult.status !== "success" && !writeback.unresolvedItems.some((item) => item.kind === "renderer")) {
     writeback.unresolvedItems.push({ kind: "renderer", id: "renderer:2000", status: renderResult.status || "failed", required: true, error: renderResult.error || { code: "renderer_failed", message: "2000px Renderer 未通过" } });
   }
   const unresolvedRequired = writeback.unresolvedItems.filter((item) => item.required);
@@ -204,7 +234,7 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
   };
   store.saveFinalResult(project.projectId, run.executionRunId, nextResult);
   store.saveEvidence(project.projectId, run.executionRunId, `manual-image-${Date.now()}`, { ...action, pipelineStatus, unresolvedRequired: unresolvedRequired.map((item) => item.id), rendererStatus: renderResult.status, savedAt: now });
-  const nextRun = { ...run, status: pipelineStatus, progress: complete ? 100 : 75, executionEnabled: false, currentStage: complete ? "完成" : "剩余图片人工补齐", updatedAt: now };
+  const nextRun = { ...run, status: pipelineStatus, progress: complete ? 100 : 90, executionEnabled: false, currentStage: complete ? "完成" : "可编辑草稿", updatedAt: now };
   store.updateExecutionRun(project.projectId, nextRun);
   store.updateProject(project.projectId, { status: pipelineStatus, currentStage: nextRun.currentStage, progress: nextRun.progress, outputPath: renderResult.outputPath || null });
   return buildSimpleManualImagePayload(store, project.projectId);
