@@ -60,6 +60,8 @@ function runtimeLegacyEvidence(events, copyExecution, imageExecution) {
 
 export async function runSimplePipeline({
   sourceFile,
+  sourceData,
+  projectId: suppliedProjectId,
   baseData = {},
   root = appRoot,
   storeRoot = path.join(root, "output", "simple-pipeline", "projects"),
@@ -84,7 +86,7 @@ export async function runSimplePipeline({
   const applyResults = adapters.applyResults || applySimpleSkillResults;
   const render = adapters.render || runSimpleRenderer;
   const store = adapters.store || new AgentPlanStore(storeRoot);
-  if (!sourceFile || typeof sourceFile.arrayBuffer !== "function") {
+  if (!sourceData && (!sourceFile || typeof sourceFile.arrayBuffer !== "function")) {
     const error = new Error("主输入必须是一份可读取的 Excel 文件");
     error.code = "source_input_invalid";
     throw error;
@@ -94,7 +96,9 @@ export async function runSimplePipeline({
   const parserStartedAt = Date.now();
   let imported;
   try {
-    imported = await parse(sourceFile, applyApprovedFixedModules(baseData));
+    imported = sourceData
+      ? { data: applyApprovedFixedModules(sourceData.data || sourceData.facts || sourceData), report: sourceData.report || {} }
+      : await parse(sourceFile, applyApprovedFixedModules(baseData));
   } catch (error) {
     error.code ||= "source_parse_failed";
     throw error;
@@ -111,7 +115,7 @@ export async function runSimplePipeline({
   }
   emit({ stage: "parser", phase: "finished", durationMs: timingsMs.parser, dayCount: parsedData.days.length });
 
-  const projectId = randomUUID();
+  const projectId = suppliedProjectId || randomUUID();
   const inputFingerprint = fingerprintFacts(parsedData);
   const now = new Date().toISOString();
   const project = {
@@ -131,7 +135,7 @@ export async function runSimplePipeline({
   const persistStartedAt = Date.now();
   try {
     store.createProject(project);
-    store.saveSourceData(projectId, { fileName: sourceFile.name || "source.xlsx", inputFingerprint, data: parsedData, report: imported.report || {} });
+    store.saveSourceData(projectId, { fileName: sourceData?.fileName || sourceFile?.name || "source.xlsx", inputFingerprint, data: parsedData, report: imported.report || {} });
   } catch (error) {
     const wrapped = new Error(`项目保存失败：${error.message}`);
     wrapped.code = "project_save_failed";
@@ -214,6 +218,7 @@ export async function runSimplePipeline({
   try { store.saveExecutionRun(projectId, initialRun); }
   catch (error) { const wrapped = new Error(`项目保存失败：${error.message}`); wrapped.code = "project_save_failed"; throw wrapped; }
   finally { timingsMs.persistence += elapsed(runPersistStartedAt); }
+  emit({ stage: "execution", phase: "started", projectId, executionRunId, progress: 30 });
 
   const copyStartedAt = Date.now();
   emit({ stage: "copy_skill", phase: "started", targetCount: simplePlan.copyTasks.length, startedAtMs: copyStartedAt });
@@ -307,6 +312,7 @@ export async function runSimplePipeline({
     timingsMs.persistence += elapsed(finalPersistStartedAt);
     timingsMs.total = elapsed(totalStartedAt);
   }
+  emit({ stage: "pipeline", phase: "finished", projectId, executionRunId, status: pipelineStatus, progress });
   return result;
 }
 

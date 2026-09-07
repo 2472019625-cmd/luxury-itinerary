@@ -283,10 +283,28 @@ const AGENT_PROGRESS_STAGES = [
   { key: "render", label: "成品渲染" },
   { key: "final_checks", label: "最终检查" },
 ];
+const SIMPLE_PROGRESS_STAGES = [
+  { key: "parser", label: "资料解析" },
+  { key: "planner", label: "整程规划" },
+  { key: "copy_skill", label: "文案生成" },
+  { key: "image_skill", label: "图片处理" },
+  { key: "program_writeback", label: "结果合并" },
+  { key: "renderer", label: "成品渲染" },
+];
 function buildAgentProgress(snapshot) {
   const project = snapshot?.project;
   const plan = snapshot?.plan;
   const run = snapshot?.executionRun;
+  if (project?.flowKind === "simple_skill_v1") {
+    const activeJob = snapshot?.activeJob;
+    const backend = new Map((activeJob?.stages || []).map((stage) => [stage.id, stage]));
+    const states = { complete: "complete", running: "active", failed: "failed", cancelled: "cancelled", pending: "pending" };
+    const stages = SIMPLE_PROGRESS_STAGES.map((definition) => {
+      const actual = backend.get(definition.key);
+      return { ...definition, state: states[actual?.status] || (project.status === "complete" ? "complete" : "pending"), progress: actual?.status === "complete" ? 1 : 0 };
+    });
+    return { stages, percent: Number(activeJob?.progress ?? run?.progress ?? project.progress ?? 0), planActive: Boolean(plan) };
+  }
   const planActive = Boolean(plan?.validation?.passed && project?.activePlanId === plan?.planId);
   if (run?.progress?.stages?.length) {
     const backend = new Map(run.progress.stages.map((stage) => [stage.id, stage]));
@@ -316,7 +334,7 @@ function AgentProgressOverview({ snapshot, taskCount, executed, elapsed, action 
   const progress = buildAgentProgress(snapshot);
   const labels = { complete: "已完成", active: "进行中", waiting: "等待确认", failed: "已中断", cancelled: "已取消", pending: "未开始" };
   const latestEvent = snapshot?.executionRun?.events?.at(-1);
-  const waitingReason = latestEvent?.waitingReason ? `等待：${latestEvent.waitingReason}` : snapshot?.project?.status === "awaiting_confirmation" ? "等待：需要你确认关键业务问题" : "";
+  const waitingReason = latestEvent?.waitingReason ? `等待：${latestEvent.waitingReason}` : snapshot?.project?.status === "awaiting_confirmation" ? "等待：需要你确认关键业务问题" : snapshot?.project?.status === "awaiting_user_action" ? "等待：需要补充必需图片" : "";
   return <aside className="agent-progress-overview"><header><small>REAL-TIME PROGRESS</small><h2>实时进度总览</h2></header><div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress.percent} aria-label="智能体真实总进度"><strong>{progress.percent}<sup>%</sup></strong><div><span style={{ width: `${progress.percent}%` }} /></div><p>{action}</p></div><ol>{progress.stages.map((stage) => <li className={`agent-progress-${stage.state}`} key={stage.key}><i /> <span>{stage.label}</span><em>{labels[stage.state]}</em></li>)}</ol>{waitingReason && <p className="agent-progress-wait">{waitingReason}</p>}<footer><div><strong>{executed}/{taskCount}</strong><span>完成任务</span></div><div><strong>{Math.floor(elapsed / 60)}分{elapsed % 60}秒</strong><span>实际用时</span></div></footer></aside>;
 }
 
@@ -325,24 +343,25 @@ function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, onE
   const plan = snapshot?.plan;
   const run = snapshot?.executionRun;
   const activeJob = snapshot?.activeJob;
+  const simpleMode = agentProject?.flowKind === "simple_skill_v1";
   const taskState = new Map((run?.taskRuns || []).map((item) => [item.taskId, item.status]));
-  const executed = [...taskState.values()].filter((value) => ["succeeded", "user_resolved", "user_accepted_suggestion", "not_applicable", "removed_optional"].includes(value)).length;
-  const taskCount = plan?.tasks?.length || 0;
+  const executed = simpleMode ? Number(activeJob?.completedActions || 0) : [...taskState.values()].filter((value) => ["succeeded", "user_resolved", "user_accepted_suggestion", "not_applicable", "removed_optional"].includes(value)).length;
+  const taskCount = simpleMode ? Number(activeJob?.totalWorkItems || ((plan?.copyTasks?.length || 0) + (plan?.imageSlots?.length || 0))) : plan?.tasks?.length || 0;
   const elapsed = agentProject?.createdAt ? Math.max(0, Math.floor((Date.now() - new Date(agentProject.createdAt).getTime()) / 1000)) : 0;
-  const waiting = agentProject?.status === "awaiting_confirmation";
-  const failed = ["planning_failed", "execution_failed"].includes(agentProject?.status);
+  const waiting = ["awaiting_confirmation", "awaiting_user_action"].includes(agentProject?.status);
+  const failed = ["planning_failed", "execution_failed", "failed", "partial"].includes(agentProject?.status);
   const cancelled = agentProject?.status === "cancelled";
-  const ready = agentProject?.status === "ready_for_editor";
+  const ready = ["ready_for_editor", "complete"].includes(agentProject?.status);
   const intakeFinished = Boolean(agentProject && !["preparing", "awaiting_confirmation"].includes(agentProject.status));
   const activeTitle = ready ? "行程成品已完成" : waiting ? "需要你的确认" : failed ? "生成任务已中断" : cancelled ? "生成任务已取消" : "正在生成行程成品";
   const latestEvent = run?.events?.at(-1);
-  const action = waiting ? "等待你确认关键业务问题" : latestEvent?.message || activeJob?.message || agentProject?.currentStage || "正在读取智能体项目";
-  const latestResult = ready ? "文案、事实、图片、实际2000px渲染和最终检查均已通过，可以进入原编辑器。" : plan ? `智能规划已完成并通过检查，已建立 ${taskCount} 个执行任务。` : intakeFinished ? "资料检查已经完成，正在建立本次唯一任务计划。" : "正在读取并检查本次上传资料。";
+  const action = waiting ? (simpleMode ? "等待补充必需图片" : "等待你确认关键业务问题") : activeJob?.currentAction || latestEvent?.message || activeJob?.message || agentProject?.currentStage || "正在读取智能体项目";
+  const latestResult = ready ? "新版 Simple Pipeline 已完成文案、图片、合并和实际 2000px 渲染。" : plan ? (simpleMode ? `整程规划已完成，Copy Skill 与 Image Skill 正在按 ${taskCount} 个责任单元执行。` : `智能规划已完成并通过检查，已建立 ${taskCount} 个执行任务。`) : intakeFinished ? "资料检查已经完成，正在建立本次唯一任务计划。" : "正在读取并检查本次上传资料。";
   return <main className="flow-page"><StepRail active={2} /><section className="generation-page agent-workspace-generation">
     <div className="generation-main"><header><small>STEP 03 · AGENT GENERATION</small><h1>{activeTitle}</h1><p>{waiting ? "保存选择后会从受影响的当前任务继续，不会整份重跑。" : failed ? agentProject?.lastError || "当前阶段没有通过安全检查。" : cancelled ? "项目、计划和已经形成的证据都已保留。" : latestResult}</p></header>
       {waiting && <div className="agent-runtime-confirm"><AgentConfirmationPanel confirmations={snapshot?.confirmations || []} decisions={decisions} onDecision={onDecision} onRetryImage={onRetryImage} /><Button tone="primary" onClick={onConfirm}>保存选择并从当前任务继续</Button></div>}
       {error && <p className="generation-error"><UiIcon name="warning" />{error}</p>}
-      {plan && <details className="agent-plan-details workspace-agent-plan"><summary><small>查看本次规划 / 技术详情</small></summary><section className="agent-technical-summary"><span>计划 {plan.planId.slice(0, 8)}</span><span>{taskCount} 个任务</span><span>{executed} 个完成</span><span>{run?.capabilityCallStats?.reduce((sum, item) => sum + item.actualCalls, 0) || 0} 次下游调用</span><span>版本 {plan.planVersion}</span></section><PlanView project={agentProject} plan={plan} embedded /></details>}
+      {plan && <details className="agent-plan-details workspace-agent-plan"><summary><small>查看本次规划 / 技术详情</small></summary><section className="agent-technical-summary"><span>计划 {plan.planId.slice(0, 8)}</span><span>{taskCount} 个责任单元</span><span>{executed} 个实时能力动作完成</span><span>{simpleMode ? "Simple Pipeline" : `${run?.capabilityCallStats?.reduce((sum, item) => sum + item.actualCalls, 0) || 0} 次下游调用`}</span><span>版本 {plan.planVersion}</span></section>{!simpleMode && <PlanView project={agentProject} plan={plan} embedded />}</details>}
     </div>
     <AgentProgressOverview snapshot={snapshot} taskCount={taskCount} executed={executed} elapsed={elapsed} action={action} />
     <footer className="generation-footer">{!waiting && !ready && <Button onClick={onReview}>查看确认信息</Button>}{ready && <Button tone="primary" onClick={onEdit}>进入原编辑器</Button>}{!["cancelled", "ready_for_editor"].includes(agentProject?.status) && <Button onClick={onCancel}>取消任务</Button>}</footer>
@@ -756,19 +775,21 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     let stopped = false; let timer;
     const refresh = async () => {
       try {
-        const response = await fetch(`/api/agent/projects/${currentProject.agentProjectId}`);
+        const apiBase = currentProject.flowKind === "simple_skill_v1" ? "/api/simple/projects" : "/api/agent/projects";
+        const response = await fetch(`${apiBase}/${currentProject.agentProjectId}`);
         const value = await response.json();
         if (!response.ok) throw new Error(value.error || "无法读取智能体项目");
         if (stopped) return;
         setAgentSnapshot(value);
         setAgentDecisions((existing) => ({ ...Object.fromEntries((value.confirmations || []).filter((item) => item.status === "pending").map((item) => [item.confirmationId, item.choices.find((choice) => choice.recommended)?.choiceId || item.choices[0]?.choiceId])), ...existing }));
-        if (value.project.status === "ready_for_editor" && value.result?.data) {
+        if (["ready_for_editor", "complete"].includes(value.project.status) && value.result?.data) {
           const executionRunId = value.executionRun?.executionRunId;
           setProjects((existing) => {
             const collection = existing.map((item) => {
               if (item.id !== currentProject.id) return item;
-              const versionId = `agent-${executionRunId}`;
-              const versions = item.versions?.some((version) => version.id === versionId) ? item.versions : [...(item.versions || []), { id: versionId, name: `${item.title} · 智能体完整生成版`, createdAt: Date.now(), snapshot: versionSnapshot(value.result.data), downloadUrl: `/api/agent/projects/${item.agentProjectId}/output` }];
+              const versionId = `${item.flowKind === "simple_skill_v1" ? "simple" : "agent"}-${executionRunId}`;
+              const downloadBase = item.flowKind === "simple_skill_v1" ? "/api/simple/projects" : "/api/agent/projects";
+              const versions = item.versions?.some((version) => version.id === versionId) ? item.versions : [...(item.versions || []), { id: versionId, name: `${item.title} · 智能体完整生成版`, createdAt: Date.now(), snapshot: versionSnapshot(value.result.data), downloadUrl: `${downloadBase}/${item.agentProjectId}/output` }];
               const visibility = value.result.data.showExpenseSection === false ? { ...(item.visibility || {}), expenses: false } : item.visibility;
               return { ...item, workflowStage: "generated", revisionMode: false, data: { ...value.result.data, designer: item.data.designer }, visibility, aiGeneration: { executionRunId, finalQa: value.result.finalQa, imageGate: value.result.imageGate }, versions, updatedAt: Date.now() };
             });
@@ -779,7 +800,11 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
           timer = setTimeout(() => { if (!stopped) setScreen("editor"); }, 900);
           return;
         }
-        if (["preparing", "planning", "ready_for_execution", "running"].includes(value.project.status) || ["pending", "running"].includes(value.executionRun?.status)) timer = setTimeout(refresh, 1000);
+        if (value.project.status === "awaiting_user_action" && value.result?.data && currentProject.flowKind === "simple_skill_v1") {
+          window.location.assign(`/simple/projects/${currentProject.agentProjectId}`);
+          return;
+        }
+        if (["preparing", "planning", "ready_for_execution", "running"].includes(value.project.status) || ["pending", "running"].includes(value.executionRun?.status) || value.activeJob?.status === "running") timer = setTimeout(refresh, 1000);
       } catch (error) { if (!stopped) setGenerationError(error?.message || "无法读取智能体项目"); }
     };
     refresh();
@@ -796,17 +821,24 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   };
   const attachAgentProject = async (project, files, recognition, sourceSha256) => {
     const workbook = files[0];
-    const response = await fetch("/api/agent/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ facts: recognition.data, report: recognition.report, sourceName: workbook.name, sourceSha256 }) });
-    const created = await response.json();
-    if (!response.ok) throw new Error(created.error || "无法创建智能体项目");
-    const next = { ...project, flowKind: "agent_v1", agentProjectId: created.projectId, workflowStage: created.status === "awaiting_confirmation" ? "agent-awaiting-confirmation" : "agent-planning", title: recognition.data.title || project.title, data: { ...recognition.data, designer: project.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type, sha256: sourceSha256 })) };
+    const next = { ...project, flowKind: "simple_skill_v1", agentProjectId: null, workflowStage: "uploaded", title: recognition.data.title || project.title, data: { ...recognition.data, designer: project.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type, sha256: sourceSha256 })) };
     updateProject(next, true);
-    const snapshotResponse = await fetch(`/api/agent/projects/${created.projectId}`);
-    if (snapshotResponse.ok) setAgentSnapshot(await snapshotResponse.json());
+    setAgentSnapshot(null);
     return next;
   };
   const continueAgent = async () => {
-    if (!currentProject?.agentProjectId) return;
+    if (!currentProject) return;
+    if (currentProject.flowKind === "simple_skill_v1" && !currentProject.agentProjectId) {
+      const source = currentProject.files?.[0] || {};
+      const response = await fetch("/api/simple/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ facts: currentProject.data, report: currentProject.recognition || {}, sourceName: source.name, sourceSha256: source.sha256 }) });
+      const created = await response.json();
+      if (!response.ok) throw new Error(created.error || "无法启动新版 Simple Pipeline");
+      updateProject({ ...currentProject, agentProjectId: created.projectId, workflowStage: "simple-running" }, true);
+      setAgentSnapshot({ project: { projectId: created.projectId, flowKind: "simple_skill_v1", status: "planning", progress: created.progress || 1 }, plan: null, executionRun: null, activeJob: created });
+      setProgress(created.progress || 1); setGenerationError(""); setScreen("generate");
+      return;
+    }
+    if (!currentProject.agentProjectId) return;
     const pending = (agentSnapshot?.confirmations || []).filter((item) => item.status === "pending");
     if (pending.length) {
       const response = await fetch(`/api/agent/projects/${currentProject.agentProjectId}/confirmations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decisions: pending.map((item) => ({ confirmationId: item.confirmationId, choiceId: agentDecisions[item.confirmationId] })) }) });
@@ -830,12 +862,19 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   };
   const cancelAgent = async () => {
     if (!currentProject?.agentProjectId || !window.confirm("确认取消当前智能体任务？项目、确认和计划记录会保留，已发生的调用无法撤销。")) return;
-    const response = await fetch(`/api/agent/projects/${currentProject.agentProjectId}/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
+    const apiBase = currentProject.flowKind === "simple_skill_v1" ? "/api/simple/projects" : "/api/agent/projects";
+    const response = await fetch(`${apiBase}/${currentProject.agentProjectId}/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
     const value = await response.json(); if (!response.ok) throw new Error(value.error || "无法取消任务"); setAgentSnapshot(value);
   };
-  const createProject = () => { const data = clone(initialData); data.designer = designerProfile(user); const project = { id: uid("project"), flowKind: agentMode ? "agent_v1" : "fixed_v1", ownerId: user.id, title: "新的定制行程", customerName: "", requirements: "", data, files: [], workflowStage: "draft", visibility: {}, versions: [], updatedAt: Date.now() }; commitProjects([project, ...projects]); setAgentSnapshot(null); setProjectId(project.id); setScreen("upload"); };
+  const createProject = () => { const data = clone(initialData); data.designer = designerProfile(user); const project = { id: uid("project"), flowKind: agentMode ? "simple_skill_v1" : "fixed_v1", ownerId: user.id, title: "新的定制行程", customerName: "", requirements: "", data, files: [], workflowStage: "draft", visibility: {}, versions: [], updatedAt: Date.now() }; commitProjects([project, ...projects]); setAgentSnapshot(null); setProjectId(project.id); setScreen("upload"); };
   const openProject = (project) => {
-    if (agentMode) { setProjectId(project.id); setAgentSnapshot(null); setScreen(project.workflowStage === "generated" || project.revisionMode ? "editor" : project.files?.length ? "confirm" : "upload"); return; }
+    if (agentMode) {
+      setProjectId(project.id);
+      setAgentSnapshot(null);
+      const simpleRunStarted = project.flowKind === "simple_skill_v1" && Boolean(project.agentProjectId);
+      setScreen(project.workflowStage === "generated" || project.revisionMode ? "editor" : simpleRunStarted ? "generate" : project.files?.length ? "confirm" : "upload");
+      return;
+    }
     if (project.data?.notes?.some((item) => typeof item === 'string')) {
       const issues = [{ ruleIds:['COPY-013'], ruleId:'COPY-013', code:'notes_legacy_structure', path:'notes', message:'历史字符串注意事项已转换为分组展示，仍需复核后才能正式导出', severity:'quality', action:'manual_revision' }];
       const normalized = { ...project, workflowStage:'needs-copy-revision', revisionMode:false, data:{ ...project.data, notes:normalizeLegacyNotesForDisplay(project.data.notes), copyQuality:{ ...(project.data.copyQuality || {}), version:'5.0', passed:false, status:'needs_copy_revision', needsReview:true, remainingIssueCount:issues.length, allIssues:issues } }, aiGeneration:{ ...(project.aiGeneration || {}), contentQuality:{ ...(project.aiGeneration?.contentQuality || {}), version:'5.0', passed:false, status:'needs_copy_revision', needsReview:true, remainingIssueCount:issues.length, allIssues:issues } } };

@@ -450,9 +450,10 @@ body:has(.editor-page) { overflow: hidden; }
 .agent-image-retry small { color: var(--ws-muted); }
 .agent-runtime-confirm { margin: 18px 0; padding: 16px; border: 1px solid #dfcfb7; border-radius: 9px; background: #fffdf8; }
 .agent-runtime-confirm .agent-inline-confirm { margin: 0 0 14px; padding: 12px; border: 0; background: transparent; }
-.agent-workspace-generation { grid-template-columns: minmax(0,1fr) 340px; }
-.agent-workspace-generation .generation-main { min-width: 0; }
-.agent-progress-overview { min-width: 0; padding: 46px 32px 100px; border-left: 1px solid var(--ws-line); background: #faf8f3; }
+.agent-workspace-generation { min-height: 0; display: block; }
+.agent-workspace-generation .generation-main { min-width: 0; border-right: 0; }
+.agent-progress-overview { min-width: 0; display: grid; grid-template-columns: minmax(240px,.72fr) minmax(0,1.28fr); column-gap: 42px; padding: 34px 5vw 42px; border-top: 1px solid var(--ws-line); background: #faf8f3; }
+.agent-progress-overview > header { grid-column: 1 / -1; }
 .agent-progress-overview > header small { color: var(--ws-gold); font: 500 9px Poppins,sans-serif; letter-spacing: .16em; }
 .agent-progress-overview > header h2 { margin: 7px 0 0; font-family: "Source Han Serif CN",serif; font-size: 20px; }
 .agent-progress-total { margin: 28px 0 24px; }
@@ -461,7 +462,7 @@ body:has(.editor-page) { overflow: hidden; }
 .agent-progress-total > div { height: 5px; margin: 14px 0; overflow: hidden; border-radius: 99px; background: #e8e0d4; }
 .agent-progress-total > div span { display: block; height: 100%; border-radius: inherit; background: var(--ws-gold); transition: width .25s ease; }
 .agent-progress-total > p { margin: 0; color: #554b40; font-size: 12px; line-height: 1.6; }
-.agent-progress-overview ol { margin: 0; padding: 0; list-style: none; }
+.agent-progress-overview ol { margin: 28px 0 24px; padding: 0; list-style: none; }
 .agent-progress-overview li { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 9px; padding: 11px 0; border-top: 1px solid #e6ded3; }
 .agent-progress-overview li i { width: 9px; height: 9px; border: 1px solid #b9afa2; border-radius: 50%; background: white; }
 .agent-progress-overview li span { color: #51483e; font-size: 12px; font-weight: 600; }
@@ -471,8 +472,8 @@ body:has(.editor-page) { overflow: hidden; }
 .agent-progress-overview li.agent-progress-waiting i { border-color: #9b742e; background: #f2dcae; }
 .agent-progress-overview li.agent-progress-failed i { border-color: var(--ws-danger); background: var(--ws-danger); }
 .agent-progress-overview li.agent-progress-cancelled { opacity: .62; }
-.agent-progress-wait { margin: 18px 0 0; padding: 11px 12px; color: #755c38; border-radius: 6px; background: #f4eadb; font-size: 11px; line-height: 1.6; }
-.agent-progress-overview > footer { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 24px; padding-top: 20px; border-top: 1px solid #ddd4c8; }
+.agent-progress-wait { grid-column: 1 / -1; margin: 4px 0 0; padding: 11px 12px; color: #755c38; border-radius: 6px; background: #f4eadb; font-size: 11px; line-height: 1.6; }
+.agent-progress-overview > footer { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; padding-top: 20px; border-top: 1px solid #ddd4c8; }
 .agent-progress-overview > footer div { display: grid; gap: 4px; }
 .agent-progress-overview > footer strong { color: #544a3e; font: 600 14px Poppins,sans-serif; }
 .agent-progress-overview > footer span { color: var(--ws-muted); font-size: 9px; }
@@ -538,7 +539,7 @@ body:has(.editor-page) { overflow: hidden; }
   .confirm-layout, .generation-page { grid-template-columns: 1fr; }
   .recognition-summary, .generation-preview, .agent-progress-overview { border-left: 0; border-top: 1px solid var(--ws-line); }
   .generation-page { display: block; }
-  .agent-progress-overview { padding: 28px 24px 90px; }
+  .agent-progress-overview { display: block; padding: 28px 24px 90px; }
   .generation-footer { min-height: 72px; }
   .agent-generation-stats, .agent-locked-next { grid-template-columns: 1fr 1fr; }
   .agent-inline-confirm label { grid-template-columns: auto 1fr; }

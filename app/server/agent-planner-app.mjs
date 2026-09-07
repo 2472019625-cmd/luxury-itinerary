@@ -14,6 +14,7 @@ import { AgentExecutionEngine } from "./agent-execution-engine.mjs";
 import { applyRuntimeImageConfirmations, enrichPendingImageConfirmations, imageConfirmationChoices } from "./agent-image-confirmation.mjs";
 import { evaluateAgentImageCompletion } from "./agent-image-plan.mjs";
 import { runImageSearchSkill } from "./simple-image-skill.mjs";
+import { runSimplePipeline } from "./simple-pipeline-executor.mjs";
 import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, uploadSimpleImage } from "./simple-manual-images.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -70,11 +71,128 @@ export function createAgentPlannerServer(options = {}) {
   const simpleStore = options.simpleStore || new AgentPlanStore(path.join(root, "output", "simple-pipeline", "projects"));
   const jobs = new Map();
   const controllers = new Map();
+  const simpleJobs = new Map();
+  const simpleControllers = new Map();
   const planner = options.planner || generateAgentPlan;
+  const simplePipelineRunner = options.simplePipelineRunner || runSimplePipeline;
   const modelConfig = options.modelConfig || { apiKey: process.env.TEXT_MODEL_API_KEY, baseUrl: (process.env.TEXT_MODEL_BASE_URL || "https://api.deepseek.com").replace(/\/$/, ""), model: process.env.TEXT_MODEL_NAME || "deepseek-v4-flash" };
   const searchModelConfig = options.searchModelConfig || { apiKey: process.env.IMAGE_SEARCH_API_KEY, baseUrl: (process.env.IMAGE_SEARCH_BASE_URL || "https://api.vveai.com/v1").replace(/\/$/, ""), model: "gemini-3.7-flash-search", imageSearchModel: process.env.IMAGE_SEARCH_MODEL || "gemini-3.6-flash-search" };
   const visionModelConfig = options.visionModelConfig || { apiKey: process.env.BIGMODEL_API_KEY, baseUrl: (process.env.BIGMODEL_BASE_URL || "https://open.bigmodel.cn/api/paas/v4").replace(/\/$/, ""), model: process.env.BIGMODEL_MODEL || "glm-5.3-flash" };
   const executor = options.executor || new AgentExecutionEngine({ store, root, origin: `http://127.0.0.1:${port}`, textModelConfig: modelConfig, searchModelConfig, visionModelConfig });
+
+  const simpleStageDefinitions = [
+    ["parser", "资料解析"],
+    ["planner", "整程规划"],
+    ["copy_skill", "文案生成"],
+    ["image_skill", "图片处理"],
+    ["program_writeback", "结果合并"],
+    ["renderer", "成品渲染"],
+  ];
+  const simpleStageState = () => Object.fromEntries(simpleStageDefinitions.map(([id]) => [id, "pending"]));
+  const simpleActionLabels = {
+    parser: "正在解析并校验上传资料",
+    planner: "正在建立整程内容与视觉计划",
+    copy_skill: "正在生成客户文案",
+    image_skill: "正在搜索并筛选图片",
+    program_writeback: "正在合并文案与图片结果",
+    renderer: "正在生成并检查 2000px 成品",
+    copy_writer: "Copy Skill 正在生成客户文案",
+    image_search: "Image Skill 正在搜索与下载图片",
+    visual_judgment: "Image Skill 正在判断候选图片",
+  };
+  const updateSimpleJob = (job, event = {}) => {
+    const now = new Date().toISOString();
+    const stage = event.stage === "capability"
+      ? (event.capabilityId === "copy_writer" || event.capabilityId === "copy_facts_research" ? "copy_skill" : "image_skill")
+      : event.stage;
+    const states = { ...job.stageStates };
+    if (states[stage] && event.phase === "started") states[stage] = "running";
+    if (states[stage] && event.phase === "finished") states[stage] = event.status === "failed" ? "failed" : "complete";
+    if (event.stage === "skills" && event.phase === "finished") {
+      states.copy_skill = "complete";
+      states.image_skill = "complete";
+    }
+    let progress = Number(job.progress || 1);
+    if (event.stage === "parser") progress = Math.max(progress, event.phase === "finished" ? 8 : 2);
+    if (event.stage === "planner") progress = event.phase === "finished" ? Math.max(progress, 30) : Math.min(28, Math.max(progress + (event.phase === "progress" ? 1 : 2), 10));
+    if (["copy_skill", "image_skill"].includes(event.stage) && event.phase === "started") progress = Math.max(progress, 34);
+    if (event.stage === "capability" && event.phase === "finished") progress = Math.min(74, Math.max(progress + 1, 35));
+    if (event.stage === "skills" && event.phase === "finished") progress = Math.max(progress, 75);
+    if (event.stage === "program_writeback" && event.phase === "finished") progress = Math.max(progress, 82);
+    if (event.stage === "renderer") progress = Math.max(progress, event.phase === "finished" ? 96 : 88);
+    if (event.stage === "pipeline" && event.phase === "finished") progress = Number(event.progress || progress);
+    const finishedAction = event.stage === "capability" && event.phase === "finished";
+    const completedActions = Number(job.completedActions || 0) + (finishedAction ? 1 : 0);
+    const detailMessage = event.detail?.message || event.detail?.currentAction;
+    const target = event.target ? ` · ${event.target}` : "";
+    Object.assign(job, {
+      stageStates: states,
+      stages: simpleStageDefinitions.map(([id, label]) => ({ id, label, status: states[id] })),
+      progress,
+      completedActions,
+      currentAction: detailMessage || `${simpleActionLabels[event.capabilityId] || simpleActionLabels[stage] || "正在执行新版流程"}${target}`,
+      latestEvent: event,
+      updatedAt: now,
+    });
+    if (event.stage === "planner" && event.phase === "finished") job.totalWorkItems = Number(event.copyTaskCount || 0) + Number(event.imageSlotCount || 0);
+  };
+  const simpleProjectPayload = (projectId) => {
+    const project = simpleStore.getProject(projectId);
+    const job = simpleJobs.get(projectId) || null;
+    if (!project && !job) return null;
+    const plan = project?.activePlanId ? simpleStore.getPlan(projectId, project.activePlanId) : null;
+    const executionRun = project?.activeExecutionRunId ? simpleStore.getExecutionRun(projectId, project.activeExecutionRunId) : null;
+    const result = executionRun ? simpleStore.getFinalResult(projectId, executionRun.executionRunId) : null;
+    return { project: project || job.project, plan, executionRun, result, activeJob: job, confirmations: [] };
+  };
+  const startSimplePipeline = (payload) => {
+    const projectId = randomUUID();
+    const now = new Date().toISOString();
+    const job = {
+      jobId: randomUUID(), projectId, flowKind: "simple_skill_v1", status: "running", progress: 1,
+      currentAction: "正在准备新版 Simple Pipeline", completedActions: 0, totalWorkItems: 0,
+      stageStates: simpleStageState(), stages: simpleStageDefinitions.map(([id, label]) => ({ id, label, status: "pending" })),
+      project: { projectId, flowKind: "simple_skill_v1", status: "planning", currentStage: "资料解析", progress: 1, createdAt: now, updatedAt: now },
+      createdAt: now, updatedAt: now,
+    };
+    const controller = new AbortController();
+    simpleJobs.set(projectId, job);
+    simpleControllers.set(projectId, controller);
+    const sourceData = { data: payload.facts, report: payload.report || {}, fileName: payload.sourceName || payload.report?.workbookName || "行程资料.xlsx" };
+    setImmediate(async () => {
+      try {
+        const result = await simplePipelineRunner({
+          projectId,
+          sourceData,
+          root,
+          adapters: { store: simpleStore },
+          plannerOptions: modelConfig,
+          copyOptions: modelConfig,
+          imageOptions: {
+            searchApiKey: searchModelConfig.apiKey,
+            searchBaseUrl: searchModelConfig.baseUrl,
+            searchModel: searchModelConfig.imageSearchModel,
+            visionApiKey: visionModelConfig.apiKey,
+            visionBaseUrl: visionModelConfig.baseUrl,
+            visionModel: visionModelConfig.model,
+          },
+          signal: controller.signal,
+          onEvent: (event) => updateSimpleJob(job, event),
+        });
+        job.status = result.pipelineStatus;
+        job.progress = result.pipelineStatus === "complete" ? 100 : result.pipelineStatus === "awaiting_user_action" ? 85 : 75;
+        job.currentAction = result.pipelineStatus === "complete" ? "新版流程已完成" : result.pipelineStatus === "awaiting_user_action" ? "需要补充必需图片" : "部分责任单元需要处理";
+      } catch (failure) {
+        job.status = controller.signal.aborted ? "cancelled" : "failed";
+        job.currentAction = controller.signal.aborted ? "已取消" : "新版流程执行失败";
+        job.error = failure.message || String(failure);
+      } finally {
+        job.updatedAt = new Date().toISOString();
+        simpleControllers.delete(projectId);
+      }
+    });
+    return job;
+  };
 
   const run = async (job, project) => {
     let phase = "planning";
@@ -160,6 +278,30 @@ export function createAgentPlannerServer(options = {}) {
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${port}`);
+    if (request.method === "POST" && url.pathname === "/api/simple/projects") {
+      try {
+        const payload = await requestBody(request);
+        if (!payload?.facts?.days?.length) return json(response, 400, { error: "没有识别到可执行的逐日行程" });
+        const job = startSimplePipeline(payload);
+        return json(response, 202, { projectId: job.projectId, flowKind: job.flowKind, status: job.status, progress: job.progress });
+      } catch (failure) { return json(response, 400, { error: failure.message || "无法启动新版 Simple Pipeline" }); }
+    }
+    const simpleProjectMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)$/);
+    if (request.method === "GET" && simpleProjectMatch) {
+      const active = simpleProjectPayload(decodeURIComponent(simpleProjectMatch[1]));
+      return active ? json(response, 200, active) : json(response, 404, { error: "Simple Pipeline 项目不存在" });
+    }
+    const simpleCancelMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/cancel$/);
+    if (request.method === "POST" && simpleCancelMatch) {
+      const payload = await requestBody(request).catch(() => ({}));
+      if (payload.confirmed !== true) return json(response, 400, { error: "取消需要明确确认" });
+      const projectId = decodeURIComponent(simpleCancelMatch[1]);
+      const job = simpleJobs.get(projectId);
+      if (!job) return json(response, 404, { error: "Simple Pipeline 任务不存在" });
+      simpleControllers.get(projectId)?.abort();
+      job.status = "cancelled"; job.currentAction = "正在取消"; job.updatedAt = new Date().toISOString();
+      return json(response, 202, simpleProjectPayload(projectId));
+    }
     const simpleManualMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images$/);
     if (request.method === "GET" && simpleManualMatch) {
       try { return json(response, 200, buildSimpleManualImagePayload(simpleStore, decodeURIComponent(simpleManualMatch[1]))); }
@@ -450,7 +592,7 @@ export function createAgentPlannerServer(options = {}) {
     if (!existsSync(file)) { response.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end("请先运行 npm run build"); return; }
     streamFile(response, file);
   });
-  return { server, port, store, jobs, controllers, executor };
+  return { server, port, store, jobs, controllers, executor, simpleStore, simpleJobs, simpleControllers };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
