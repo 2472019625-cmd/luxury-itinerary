@@ -71,9 +71,13 @@ export function copyRequestJson({ failTargetId = null, delayMs = 60 } = {}) {
       if (task.moduleType === "product_highlight") value = `${task.facts.selectedByPlanner}｜解释这项已确认配置对客户的具体价值。`;
       if (task.moduleType === "hotel") value = "坐落于安博塞利核心景观区域，以真实开阔视野与完整营地空间构成值得期待的住宿体验。";
       if (task.moduleType === "hotel_proof_points") value = ["开阔景观中的居停空间", "贴近自然环境的住宿体验"];
+      if (task.moduleType === "dining") value = "在真实行程所列的用餐场景中品尝当地风味，让餐食本身成为旅途体验的一部分。";
+      if (task.moduleType === "transport_usage") value = "城市与机场接送 · 保护区游猎移动";
       if (task.moduleType === "transport") value = "草原飞机与专属游猎车承担主要移动，在真实交通类别范围内兼顾跨区效率与游猎舒适度。";
+      if (task.moduleType === "transport_features") value = ["跨区域衔接更高效", "游猎移动更从容"];
       if (task.moduleType === "day_theme") value = `DAY ${Number(task.layoutHints?.dayIndex || 0) + 1} 的独立旅行主题`;
       if (task.moduleType === "day") value = `当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。`;
+      if (task.moduleType === "day_notice") value = "当天移动与体验较为集中，建议提前整理随身用品，轻装参与。";
       if (task.moduleType === "day_spot") value = "围绕这一项真实活动说明体验方式与客户价值。";
       if (task.moduleType === "notes") value = [
         { title: "行前准备", icon: "calendar", tone: "gold", items: ["请根据本次目的地与活动安排准备合适衣物和随身用品，具体清单由定制师在出发前协助复核。"] },
