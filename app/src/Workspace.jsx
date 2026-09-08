@@ -13,7 +13,7 @@ import { PlanView } from "./AgentPlanner.jsx";
 const STORAGE_USERS = "sheyou-workspace-users-v1";
 const STORAGE_SESSION = "sheyou-workspace-session-v1";
 const STORAGE_PROJECTS = "sheyou-workspace-projects-v1";
-const AGENT_STORAGE = { users: "sheyou-agent-users-v1", session: "sheyou-agent-session-v1", projects: "sheyou-agent-projects-v1" };
+export const AGENT_STORAGE = { users: "sheyou-agent-users-v1", session: "sheyou-agent-session-v1", projects: "sheyou-agent-projects-v1" };
 const FIXED_STORAGE = { users: STORAGE_USERS, session: STORAGE_SESSION, projects: STORAGE_PROJECTS };
 const DEFAULT_INVITE = import.meta.env.VITE_COMPANY_INVITE_CODE || "SHEYOU2026";
 
@@ -43,7 +43,7 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function readStorage(key, fallback) {
+export function readStorage(key, fallback) {
   try {
     const value = JSON.parse(localStorage.getItem(key));
     return value ?? fallback;
@@ -148,7 +148,7 @@ function AuthScreen({ onAuth, storageKeys = FIXED_STORAGE }) {
   </main>;
 }
 
-function AppHeader({ user, project, saved, canGenerate, onHome, onLogout, onAdmin, onGenerate, onProfile }) {
+export function AppHeader({ user, project, saved, canGenerate, onHome, onLogout, onAdmin, onGenerate, onProfile }) {
   return <header className="workspace-header">
     <button className="header-brand" onClick={onHome}><img src="/assets/logos/logo-gold.png" alt="奢游国际" /><span>行程创建工作台</span></button>
     {project && <div className="header-project"><strong>{project.title}</strong><button aria-label="修改项目名称"><UiIcon name="itinerary" size={16} /></button></div>}
@@ -319,7 +319,9 @@ function AgentProgressOverview({ snapshot, elapsed }) {
   const labels = { complete: "已完成", active: "进行中", waiting: "等待确认", failed: "已中断", cancelled: "已取消", pending: "未开始" };
   const latestEvent = snapshot?.executionRun?.events?.at(-1);
   const waitingReason = latestEvent?.waitingReason ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_confirmation" ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_user_action" ? "部分内容需要在编辑页补充或确认，不影响你先查看和调整草稿。" : "";
-  const action = getDesignerCurrentAction(snapshot);
+  const imageSlots = snapshot?.activeJob?.imageSlotProgress;
+  const imageProgressText = imageSlots?.total > 0 ? `图片处理 ${imageSlots.completed}/${imageSlots.total}（已结束/总数，含未找到）` : "";
+  const action = [imageProgressText, getDesignerCurrentAction(snapshot)].filter(Boolean).join(" · ");
   return <section className="agent-progress-overview" aria-labelledby="designer-progress-title"><header><small>TRIP PRODUCTION STATUS</small><h2 id="designer-progress-title">客户行程制作进度</h2><p>系统会按已确认资料继续制作，完成后仍可调整文案、图片和版式。</p></header><div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress.percent} aria-label="客户行程制作进度"><strong>{progress.percent}<sup>%</sup></strong><div><span style={{ width: `${progress.percent}%` }} /></div><p aria-live="polite">{action}</p></div><ol>{progress.stages.map((stage) => <li className={`agent-progress-${stage.state}`} key={stage.key}><i /> <span>{stage.label}</span><em>{labels[stage.state]}</em></li>)}</ol>{waitingReason && <p className="agent-progress-wait">{waitingReason}</p>}<footer><div><strong>{Math.floor(elapsed / 60)}分{elapsed % 60}秒</strong><span>已用时间</span></div><div><strong>可继续调整</strong><span>完成后进入编辑页</span></div></footer></section>;
 }
 

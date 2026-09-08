@@ -107,7 +107,7 @@ function sourceIncludes(source, value) {
 }
 
 export function validateCopyCommitments(value, task = {}) {
-  const output = copyText(value);
+  const output = task.moduleType === 'visual_card' && value && typeof value === 'object' ? copyText([value.cardTitle, value.cardDescription]) : copyText(value);
   if (!output) return [];
   const source = JSON.stringify({
     facts: task.facts || {},

@@ -148,7 +148,8 @@ test("多 slot 单批次并发处理，多 query 且单 slot 失败不影响其�
     assert.equal(result.metrics.automaticFollowupRounds, 0);
     assert.ok(result.results[0].constraints.mustHave.some((item) => item.includes("塞伦盖蒂")));
     assert.ok(result.results[0].constraints.forbid.includes("AI 生成图"));
-    assert.deepEqual([...new Set(events.map((event) => event.capabilityId))].sort(), ["image_search", "visual_judgment"]);
+    assert.deepEqual([...new Set(events.filter((event) => event.phase !== "slot_progress").map((event) => event.capabilityId))].sort(), ["image_search", "visual_judgment"]);
+    assert.deepEqual(events.filter((event) => event.phase === "slot_progress").map((event) => event.completedSlots), [0, 1, 2, 3]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

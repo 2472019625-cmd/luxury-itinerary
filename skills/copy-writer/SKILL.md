@@ -170,10 +170,11 @@ description: 为奢游行程单批量生成封面、产品亮点、总览、酒�
 
 ### 5.9.1 DAY Visual Card 短描述任务
 
-- `moduleType=visual_card` 是现有 DAY 批次中的独立文案任务，不是图片搜索指令，也不是可以省略的内部元数据。必须逐个返回其原始 `targetId`、`targetPath` 和字符串 `value`，即使当前视觉主题没有同名 Spot。
-- `simpleImageSlotBindings.<bindingKey>.description` 是合法的内部文案写回位置；不要因为它不以 `days.` 开头而忽略、改路径或把结果合并进 DAY/Spot 正文。
+- `moduleType=visual_card` 是现有 DAY 批次中的独立文案任务，不是图片搜索指令，也不是可以省略的内部元数据。必须逐个返回原始 `targetId`、`targetPath` 和对象 `value:{cardTitle,cardDescription}`，即使视觉主题没有同名 Spot。旧任务若明确要求字符串则遵守该任务 outputSchema。
+- `simpleImageSlotBindings.<bindingKey>` 是合法的内部文案写回位置；不要因为它不以 `days.` 开头而忽略、改路径或把结果合并进 DAY/Spot 正文。
 - 只围绕该任务 `facts.visualSubject`，根据本日 `daySourceFacts` 和 `sourceEvidence` 写 1—2 句：怎样体验、为什么值得。不总结整日，不复制其他视觉卡或泛化 Spot 描述，不从相邻 DAY 借用事实。
-- 卡片标题由 Planner 提供，不重新起标题；客户卡片只显示图片、标题和短描述，不输出单独的状态/费用标签。保留任务事实的费用和可选边界，不暗示未购买的体验已包含，不把观察动物或天气写成保证。
+- cardTitle由本次Copy生成，必须是短而直接的旅行体验名称，如“步行 Safari”“Naboisho 私保区追踪花豹”“星空床”“长颈鹿中心互动”；不是照抄primaryVisualSubject的画面描述。不要把“一只花豹栖于树上”“跑道飞机起飞与晨光”等姿态、构图和光线细节写成客户标题，除非本身就是体验核心。不改视觉主题、不新增体验。
+- cardDescription写1—2句简短体验说明。客户卡片只显示图片、cardTitle和cardDescription，不输出单独的状态/费用标签。保留事实费用和可选边界，不暗示未购买的体验已包含，不把观察动物或天气写成保证。cardTitle和cardDescription不参与搜图，也不决定Image输入。
 - 输出前核对输入的每一个 visual_card target 都有独立结果；不能仅返回原有 DAY 和 Spot 文案。
 
 ### 5.10 其他模块与辅助检测

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const app = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 const workspace = readFileSync(new URL("../src/Workspace.jsx", import.meta.url), "utf8");
 const diagnostic = readFileSync(new URL("../src/AgentWorkspace.jsx", import.meta.url), "utf8");
+const workspaceCss = readFileSync(new URL("../src/workspace.css", import.meta.url), "utf8");
 
 test("4174正式入口复用原Workspace五步前端而非简化项目页", () => {
   assert.match(app, /<Workspace[^>]+agentMode=/);
@@ -18,6 +19,14 @@ test("智能体浏览器存储使用独立命名空间且首批项目不显示�
   assert.match(workspace, /sheyou-agent-session-v1/);
   assert.match(workspace, /sheyou-agent-projects-v1/);
   assert.match(workspace, /onDelete=\{agentMode \? undefined : setDeleteProject\}/);
+});
+
+test("Simple项目直达编辑页复用全局工作台Header", () => {
+  assert.match(workspace, /export function AppHeader/);
+  assert.match(diagnostic, /<div className="workspace-shell workspace-agent-mode"><AppHeader/);
+  assert.match(diagnostic, /localStorage\.removeItem\(AGENT_STORAGE\.session\)/);
+  const desktopNarrow = workspaceCss.slice(workspaceCss.indexOf("@media (max-width: 1180px)"), workspaceCss.indexOf("@media (max-width: 900px)"));
+  assert.doesNotMatch(desktopNarrow, /header-brand span[^}]+display:\s*none/);
 });
 
 test("生成步骤默认使用定制师视角并把管理员运行信息折叠", () => {

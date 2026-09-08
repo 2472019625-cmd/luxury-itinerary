@@ -25,6 +25,21 @@
 - `webVerification`: 只针对已有实体列出未来核验项；每项含 `subject/field/reason/preferredSource/blockingTaskIds`。当前不联网。
 - `imagePlan`: 含 `visualStory` 和 `slots`。封面、每个显示酒店有一个 `required:true` 主图，role 分别为 `cover`、`hotel:1` 等。DAY 按真实视觉价值选择完整集合：只有一个高价值点可选1个，普通日1—2个，多种差异化高价值体验日2—4个，简单返程1个。每组第一个是 `role:day:N, required:true, removable:false`；其余是 `role:day:N:supporting:1` 等、`required:false, removable:true`。不能只列主图而漏掉已识别的高价值辅助体验，也不得给所有Spot平均出图或用接送入住凑数。每项含 `slotId/role/label/required/primaryVisualSubject/visualDuty/differentiation/searchIntent/removable/sourceRefs`。封面 `primaryVisualSubject` 只能有一个核心视觉焦点，不能要求一张图同时表现整程多个场景。DAY 的地理地点只能使用真实地区/城市/保护区，不能用酒店名代替。必需位不可移除，补充位才可移除。
 - `confirmations`: 只放事实、费用、履约、安全问题；含 `confirmationId/category/question/reason/affectedTaskIds/status`，status 固定 `anticipated`。资料完整时返回空数组。
+- DAY图片字段分工：primaryVisualSubject是有当天事实依据的内部视觉责任，不是客户标题；searchIntent是独立的简短搜图关键词，优先用准确英文“地点/真实实体 + 核心主体或体验”，通常3—8个词。不要机械照抄视觉描述，不加入非体验核心的姿态、光线、构图、精确动作或情绪修饰。示例仅说明表达方式：Naboisho leopard safari、Nairobi airport departure、Ritz Carlton Masai Mara sundowner、Amboseli Observation Hill。实体不可省略或替换，只有本日确有对应事实才可使用。客户cardTitle/cardDescription由下游同一Copy任务生成，不由搜图结果决定。
 - `adjustments`: 首次输出为空数组；修正时逐条说明校验问题和具体修正，不得披露内部推理。
+
+selectedHighlights 来源分类（首次规划与 correction pass 均必须遵守）：
+
+- sourceType 表示事实来源，不表示内容类型、营销价值或你的改写判断。selectedHighlight.sourceText 只要来自 factBasis.sourcePosterHighlights，就必须原文保留并标记 sourceType:"source_designated"，sourceRefs 指向对应原始条目；即使它描述单个DAY、酒店或特别体验，也不能标成 planner_derived 或 official_product。
+- 来源匹配优先于内容判断：先逐条匹配 sourcePosterHighlights，命中就固定为 source_designated；未命中才考虑 officialProductValues 或 planner_derived。同一内容即使也能归入正式服务或DAY体验，也不得改变其原始指定来源。
+- correction pass 保留所有已正确的原始亮点 sourceText/sourceType/sourceRefs；修其他问题不能重新分类。若收到 source_highlight_priority_missing，逐条核对原始指定亮点与 selectedHighlights：原文已存在但类型错误时，只纠正其 sourceType 为 source_designated，不删原文、不改写、不因数量或合并理由降级来源。输出前确认原始指定亮点均被正确识别，不能只在 selectionReason 中声称保留。
+
+DAY 图片组完整性（首次规划与 correction pass 均必须遵守）：
+
+- 每个需要展示图片的 DAY，先在 `imagePlan.slots` 中明确写出且只写出一个 `role:"day:N", required:true, removable:false` 主视觉；`dayRoles` 中的主体描述、封面 `cover` 或酒店 `hotel:N` 都不能替代这个 DAY 主视觉 slot。
+- 如果当天只选择一个高价值视觉点，该唯一 slot 必须就是上述主视觉，绝不能只有 `day:N:supporting:1`。这是视觉位必要性，不是体验是否自费或可选的业务状态。
+- 只有同一天的 `day:N` 主视觉已经存在，才可追加 0—3 个 `day:N:supporting:1` 等辅助位；辅助位必须 `required:false, removable:true`。不得为了完整性凑低价值视觉点。
+- correction pass 必须重新逐日检查最终完整的 `imagePlan.slots`：每个 DAY 恰好一个主视觉，所有 supporting 都有本日主视觉。不得在去重、调整主体或修正其他问题时删除唯一主视觉或把它降为 supporting。
+- 如果校验指出缺少 `day:N`，且本日仅剩一个 supporting，请在本次 Planner 输出中将该已有视觉点改为 `role:"day:N", required:true, removable:false`，保留其事实依据与视觉主体；不要原样返回孤立 supporting，也不要依赖下游补位。若本日保留多个视觉点，则由你选出其中最核心的一个作为主视觉，其余才是 supporting。
 
 禁止返回 `factBasis/tasks/copyPlan/taskId/dependsOn/parallelGroup/budgetKey/retryLimit/failurePolicy`，禁止输出最终 title、subtitle、highlights、酒店成稿或DAY长文。不得引用4173、旧流程、98%或预算结束缺图留空。

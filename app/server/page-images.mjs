@@ -20,7 +20,7 @@ export async function assertPublicUrl(value) {
   return url;
 }
 
-export async function fetchPublicUrl(value, { signal, headers = {}, timeoutMs = 20_000, maxRedirects = 5, fetchImpl = fetch } = {}) {
+export async function fetchPublicUrl(value, { signal, headers = {}, timeoutMs = 20_000, maxRedirects = 5, fetchImpl = fetch, onRequest } = {}) {
   let current = (await assertPublicUrl(value)).href;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -28,6 +28,7 @@ export async function fetchPublicUrl(value, { signal, headers = {}, timeoutMs = 
   try {
     for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
       await assertPublicUrl(current);
+      onRequest?.(current);
       const response = await fetchImpl(current, { redirect: 'manual', headers, signal: combinedSignal });
       if (![301, 302, 303, 307, 308].includes(response.status)) return response;
       const location = response.headers.get('location');
@@ -256,17 +257,18 @@ export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.
     .slice(0, maxImages);
 }
 
-export async function extractPageImages(page, { signal, maxImages = 36, semanticTerms = [] } = {}) {
-  const safeUrl = await assertPublicUrl(page.pageUrl);
+export async function fetchImagePageContent(pageUrl, { signal, onRequest } = {}) {
+  const safeUrl = await assertPublicUrl(pageUrl);
   const response = await fetchPublicUrl(safeUrl, {
     headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36 LuxuryTravelImageResearch/1.1", accept: "text/html,application/xhtml+xml,image/avif,image/webp,image/png,image/jpeg" },
     signal,
     timeoutMs: 20_000,
+    onRequest,
   });
   const type = response.headers.get("content-type") || "";
-  if (type.startsWith("image/") && response.ok) return [{ ...page, imageUrl: response.url, kind: "direct-search-result", alt: page.title || "", highResHint: true }];
-  if (!type.includes("text/html")) return [];
-  const requestedUrl = new URL(page.pageUrl);
+  if (type.startsWith("image/") && response.ok) return { responseUrl: response.url, directImage: true };
+  if (!type.includes("text/html")) return { responseUrl: response.url, empty: true };
+  const requestedUrl = new URL(pageUrl);
   const finalUrl = new URL(response.url);
   if (requestedUrl.hostname === finalUrl.hostname && requestedUrl.pathname !== finalUrl.pathname) {
     const ignored = new Set(["activity", "activities", "experience", "experiences", "the", "at", "in", "and", "visit"]);
@@ -283,5 +285,12 @@ export async function extractPageImages(page, { signal, maxImages = 36, semantic
   if ([401, 403, 429].includes(response.status) && /Just a moment|cf-chl-|captcha|Access Denied/i.test(html.slice(0, 20_000))) {
     const error = new Error(`网页访问被站点拦截（${response.status}）`); error.code = "page_access_blocked"; throw error;
   }
-  return extractImageCandidatesFromHtml(html, { ...page, requestedPageUrl: page.pageUrl, pageUrl: response.url }, { responseUrl: response.url, maxImages, semanticTerms });
+  return { html, responseUrl: response.url };
+}
+
+export async function extractPageImages(page, { signal, maxImages = 36, semanticTerms = [], loadPage = fetchImagePageContent } = {}) {
+  const content = await loadPage(page.pageUrl, { signal });
+  if (content.directImage) return [{ ...page, imageUrl: content.responseUrl, kind: "direct-search-result", alt: page.title || "", highResHint: true }];
+  if (content.empty) return [];
+  return extractImageCandidatesFromHtml(content.html, { ...page, requestedPageUrl: page.pageUrl, pageUrl: content.responseUrl }, { responseUrl: content.responseUrl, maxImages, semanticTerms });
 }

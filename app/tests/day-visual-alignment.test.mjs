@@ -24,7 +24,7 @@ test('Planner视觉保真、无同名Spot合法、地理字段不受活动污染
   assert.match(slot.visualGoal, /突出雪山下的野生象群/);
   assert.equal(slot.location, '安博塞利');
   assert.deepEqual(plan.preparedData.days[0].spots, data.days[0].spots);
-  assert.ok(buildImageQueries(slot).every(q => q.includes('大象与乞力马扎罗')));
+  assert.deepEqual(buildImageQueries(slot), ['Amboseli elephants Kilimanjaro', 'Amboseli elephants Kilimanjaro photos']);
 });
 
 test('长颈鹿中心视觉不回落到飞机Spot；slot缺主题时才用dayRole', () => {
@@ -72,7 +72,7 @@ test('真实binding保留空位索引，前端隐藏普通Spot及缺失辅助图
   assert.equal(cards.length, 2);
   assert.deepEqual(cards.map(c => c.imageIndex), [0, 2]);
   assert.equal(cards[0].spot.images.length, 0);
-  assert.equal(cards[0].spot.name, '大象与乞力马扎罗');
+  assert.equal(cards[0].spot.name, '行程体验');
   assert.equal(cards[0].spot.description, '');
   const customer = selectCustomerRenderData(data);
   assert.equal(dayVisualCards(customer.days[0], 0, customer.simpleImageSlotBindings).length, 2);
@@ -84,9 +84,12 @@ test('独立视觉短文案随Copy批次写回，不复制泛化Spot；客户投
   const tasks = plan.copyTasks.filter(task => task.moduleType === 'visual_card');
   assert.equal(tasks.length, 3);
   const texts = ['清晨寻找象群，天气允许时欣赏雪山背景。', '跟随向导步行，从地面角度观察草原。', '夜间开启游猎，感受与白天不同的观察体验。'];
-  const result = applySimpleSkillResults({ ...plan, copyTasks: tasks, copyExecution: { results: tasks.map((task, i) => ({ ...task, status: 'success', value: texts[i] })) }, imageExecution: { results: plan.imageSlots.filter(s => s.moduleType === 'day').map(s => ({ slotId: s.slotId, status: 'success', selected: { localUrl: '/image-assets/test.jpg' } })) } });
+  const titles = ['雪山下追踪象群', '步行 Safari', '夜间游猎'];
+  const result = applySimpleSkillResults({ ...plan, copyTasks: tasks, copyExecution: { results: tasks.map((task, i) => ({ ...task, status: 'success', value: { cardTitle: titles[i], cardDescription: texts[i] } })) }, imageExecution: { results: plan.imageSlots.filter(s => s.moduleType === 'day').map(s => ({ slotId: s.slotId, status: 'success', selected: { localUrl: '/image-assets/test.jpg' } })) } });
   const cards = dayVisualCards(result.data.days[0], 0, result.data.simpleImageSlotBindings);
   assert.deepEqual(cards.map(c => c.spot.description), texts);
+  assert.deepEqual(cards.map(c => c.spot.name), titles);
+  assert.deepEqual(buildLayoutImageSlots(result.data).filter(s => s.module === 'day').map(s => s.label), titles);
   assert.equal(new Set(cards.map(c => c.spot.description)).size, 3);
   assert.deepEqual(selectCustomerRenderData(result.data).days[0].spots.map(s => s.description), texts);
   assert.equal(fixture().plan.imageSlots.filter(s => s.moduleType === 'day').length, 1);
@@ -99,7 +102,7 @@ test('同名Spot继续保留原文、状态与费用', () => {
   assert.equal(card.description, '已有的游猎体验介绍');
   assert.equal(card.status, 'included');
   assert.equal(card.feeBoundary, 'included');
-  assert.equal(plan.copyTasks.filter(t => t.moduleType === 'visual_card').length, 0);
+  assert.equal(plan.copyTasks.filter(t => t.moduleType === 'visual_card').length, 1);
 });
 
 test('独立视觉通过括号来源引用保留自费状态，但不复制泛化描述', () => {

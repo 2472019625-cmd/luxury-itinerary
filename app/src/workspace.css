@@ -541,7 +541,6 @@ body:has(.editor-page) { overflow: hidden; }
   .workspace-itinerary .export-frame { zoom: .31; }
   .step-rail { padding: 0 2vw; }
   .step-item small { display: none; }
-  .header-brand span { display: none; }
 }
 
 @media (max-width: 900px) {
@@ -552,7 +551,7 @@ body:has(.editor-page) { overflow: hidden; }
   .auth-brand { display: none; }
   .auth-panel { min-height: 100vh; }
   .workspace-header { padding: 0 16px; }
-  .header-project, .save-state, .user-chip div, .header-brand img { display: none; }
+  .header-project, .save-state, .user-chip div, .header-brand img, .header-brand span { display: none; }
   .header-brand::before { content: "奢游国际"; color: var(--ws-gold-deep); font-family: "Source Han Serif CN", serif; font-weight: 600; }
   .projects-page, .flow-content { width: calc(100% - 32px); }
   .project-row { grid-template-columns: 96px 1fr 70px; }

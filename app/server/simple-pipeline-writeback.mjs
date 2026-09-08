@@ -65,7 +65,9 @@ export function applySimpleSkillResults({ preparedData, copyTasks = [], copyExec
     }
     const visualSlotId = task.layoutHints?.placement === 'visual_card' ? task.layoutHints.slotId : null;
     const visualBinding = visualSlotId && data.simpleImageSlotBindings?.[visualSlotId];
-    const visualPathAllowed = visualBinding?.module === 'day' && visualBinding.useSpotCopy === false && task.targetPath === `simpleImageSlotBindings.${visualSlotId.replace(/:/g, '_')}.description`;
+    const visualRoot = visualSlotId && `simpleImageSlotBindings.${visualSlotId.replace(/:/g, '_')}`;
+    const visualCardPath = visualBinding?.module === 'day' && task.moduleType === 'visual_card' && task.targetPath === visualRoot;
+    const visualPathAllowed = visualCardPath || (visualBinding?.module === 'day' && visualBinding.useSpotCopy === false && task.targetPath === `${visualRoot}.description`);
     if (result.targetPath !== task.targetPath || !(COPY_PATH.test(task.targetPath) || visualPathAllowed)) {
       unresolvedItems.push(unresolved("copy", task.targetId, "failed", task.required !== false, { targetPath: task.targetPath, error: { code: "unauthorized_target_path", message: "Copy 返回路径不一致或不在授权文案字段中" } }));
       copyWriteback.push({ targetId: task.targetId, targetPath: task.targetPath, status: "failed" });
@@ -78,7 +80,12 @@ export function applySimpleSkillResults({ preparedData, copyTasks = [], copyExec
       continue;
     }
     try {
-      if (visualPathAllowed) visualBinding.description = result.value;
+      if (visualCardPath) {
+        if (typeof result.value?.cardTitle !== 'string' || typeof result.value?.cardDescription !== 'string' || Object.keys(result.value).some(key => !['cardTitle', 'cardDescription'].includes(key))) throw new Error('Visual Card仅允许写cardTitle/cardDescription');
+        visualBinding.cardTitle = result.value.cardTitle;
+        visualBinding.cardDescription = result.value.cardDescription;
+      }
+      else if (visualPathAllowed) visualBinding.description = result.value;
       else writeAtPath(data, task.targetPath, result.value);
       copyWriteback.push({ targetId: task.targetId, targetPath: task.targetPath, status: "written" });
     } catch (error) {

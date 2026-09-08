@@ -7,12 +7,13 @@ import { assertPublicUrl, fetchPublicUrl } from "./page-images.mjs";
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const extensions = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" };
 
-export async function downloadCandidate(candidate, { directory, publicPrefix, signal, minWidth = 900, minHeight = 500, maxBytes = 14 * 1024 * 1024 }) {
+export async function downloadCandidate(candidate, { directory, publicPrefix, signal, minWidth = 900, minHeight = 500, maxBytes = 14 * 1024 * 1024, onRequest }) {
   await assertPublicUrl(candidate.imageUrl);
   const response = await fetchPublicUrl(candidate.imageUrl, {
     headers: { "user-agent": "Mozilla/5.0 LuxuryTravelImageResearch/1.0", accept: "image/avif,image/webp,image/png,image/jpeg" },
     signal,
     timeoutMs: 25_000,
+    onRequest,
   });
   if (!response.ok) throw new Error(`图片下载失败（${response.status}）`);
   const declaredLength = Number(response.headers.get("content-length") || 0);

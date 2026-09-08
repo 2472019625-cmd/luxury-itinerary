@@ -7,7 +7,9 @@ export function dayVisualCards(day, dayIndex, bindings) {
     if (!binding.required && !image?.src) return [];
     return [{ slotId, spotIndex: binding.spotIndex, imageIndex: binding.imageIndex, spot: {
       ...(binding.useSpotCopy !== false ? source : { description: binding.description || '', status: binding.status || '', statusLabel: binding.statusLabel || '', feeBoundary: binding.feeBoundary || '', reminder: binding.reminder || '' }),
-      name: binding.visualSubject || source.name,
+      name: binding.cardTitle || (binding.useSpotCopy !== false ? source.name : '行程体验'),
+      description: binding.cardDescription || (binding.useSpotCopy !== false ? source.experience || source.description : binding.description) || '',
+      experience: undefined,
       images: image?.src ? [image] : [],
       image: undefined,
     } }];

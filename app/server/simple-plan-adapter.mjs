@@ -616,13 +616,13 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     const optionalBoundary = ["optional_paid", "reservation_required", "pending"].includes(status) ? `；该视觉重点为${statusLabel}，不得暗示已包含` : "";
     const required = visualIndex === 0;
     const slotId = `image:day:${index + 1}:${required ? "primary" : `supporting:${visualIndex}`}`;
-    const visualCopyPath = `simpleImageSlotBindings.${slotId.replace(/:/g, '_')}.description`;
-    if (matchedIndex < 0) copyTasks.push(copyTask({
+    const visualCopyPath = `simpleImageSlotBindings.${slotId.replace(/:/g, '_')}`;
+    copyTasks.push(copyTask({
       targetId: `copy:visual:${slotId}`, targetPath: visualCopyPath, moduleType: 'visual_card',
-      facts: { visualSubject: primarySubject, daySourceFacts: dayFactText(day), sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], experiences: (day.spots || []).map(spotCopyFacts) },
-      plannerGoal: '只为当前 visualSubject 写1—2句简短体验介绍：怎么体验、为什么值得。只使用本日真实事实和来源依据，不总结整天，不借其他视觉卡内容，不复制泛化Spot全文，不新增设施、动物保证或费用承诺。卡片不显示状态标签，但文案不得暗示未购买体验已包含。',
+      facts: { visualSubject: primarySubject, daySourceFacts: dayFactText(day), sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], experiences: (day.spots || []).map(spotCopyFacts), matchedSpot: matchedIndex >= 0 ? spotCopyFacts(primarySpot) : null, status, statusLabel, feeBoundary: primarySpot?.feeBoundary || '' },
+      plannerGoal: '为当前视觉体验返回{cardTitle,cardDescription}。cardTitle是短、直接的客户体验名称，不是图片画面提示词，不写姿态、构图、光线等非核心细节。cardDescription写1—2句怎么体验、为什么值得，只使用本日真实事实，不总结整天，不复制泛化Spot全文，不新增事实或费用承诺。有准确匹配Spot时优先复用其适合本体验的短描述。卡片不显示状态标签，但描述不得暗示未购买体验已包含。',
       relevantContext: { dayRole: role.role, visualSubject: primarySubject, otherVisualSubjects: ordered.map(item => item.primaryVisualSubject).filter(item => item !== primarySubject) },
-      layoutHints: { placement: 'visual_card', slotId }, outputSchema: { type: 'string', minLength: 12, maxLength: 160 }, required,
+      layoutHints: { placement: 'visual_card', slotId }, outputSchema: { type: 'object', required: ['cardTitle', 'cardDescription'], additionalProperties: false, properties: { cardTitle: { type: 'string', minLength: 2, maxLength: 48 }, cardDescription: { type: 'string', minLength: 12, maxLength: 160 } } }, required,
     }));
     addSlot({ ...slot({
       slotId, moduleType: "day", required,

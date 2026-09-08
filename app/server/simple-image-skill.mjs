@@ -6,7 +6,7 @@ import { judgeCandidatesBatch } from "./image-audit.mjs";
 import { ImageDeduper } from "./image-dedupe.mjs";
 import { downloadCandidate } from "./image-download.mjs";
 import { searchWebBatch } from "./image-search.mjs";
-import { canonicalImageAssetKey, extractPageImages } from "./page-images.mjs";
+import { canonicalImageAssetKey, extractPageImages, fetchImagePageContent } from "./page-images.mjs";
 import { searchCommonsImages } from "./commons-search.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -61,6 +61,11 @@ export function buildImageConstraints(slot = {}) {
 }
 
 export function buildImageQueries(slot = {}, maxQueries = 3) {
+  // DAY search language is independent of customer copy and detailed visual responsibility.
+  if (String(slot.moduleType || '').toLowerCase() === 'day') {
+    const intents = unique((Array.isArray(slot.searchIntent) ? slot.searchIntent : [slot.searchIntent]).map(text).map(value => value.replace(/\s+/g, ' ').trim()).filter(Boolean));
+    if (intents.length) return unique([...intents, `${intents[0]} photos`]).slice(0, Math.max(1, Math.min(3, maxQueries)));
+  }
   const location = text(slot.location);
   const hotel = text(slot.hotel);
   const activity = text(slot.activity);
@@ -302,6 +307,28 @@ export async function runImageSearchSkill({
   const withDedupeLock = (candidate) => { const operation = dedupeTail.then(() => deduper.accept(candidate)); dedupeTail = operation.catch(() => undefined); return operation; };
   const timingsMs = { searchProvider: 0, commons: 0, pageExtraction: 0, download: 0, batchVision: 0, topConfirmation: 0 };
   const metrics = { businessBatches: 1, automaticFollowupRounds: 0, slotCount: Array.isArray(slots) ? slots.length : 0, searchCalls: 0, commonsCalls: 0, pageExtractionCalls: 0, downloadAttempts: 0, batchVisionCalls: 0, topConfirmationCalls: 0, technicalRetries: { search: 0, pageExtraction: 0, download: 0 }, timingsMs, timingsSemantics: "各阶段所有并发操作耗时累计；阶段间存在重叠，不应相加作为总耗时" };
+  // These maps belong only to this invocation. Never cache slot semantics or judgments.
+  const pageCache = new Map();
+  const downloadCache = new Map();
+  const resourceStats = () => ({ requests: 0, hits: 0, inFlightHits: 0, attempts: 0, networkRequests: 0, attemptsByUrl: {}, networkRequestsByUrl: {} });
+  metrics.resourceReuse = { pages: resourceStats(), images: resourceStats() };
+  const increment = (counts, url) => { counts[url] = (counts[url] || 0) + 1; };
+  const networkEvent = (stats) => (url) => { stats.networkRequests += 1; increment(stats.networkRequestsByUrl, url); };
+  const reuse = (cache, stats, url, worker) => {
+    stats.requests += 1;
+    const previous = cache.get(url);
+    if (previous) { stats.hits += 1; if (!previous.settled) stats.inFlightHits += 1; return previous.promise; }
+    const entry = { settled: false };
+    entry.promise = Promise.resolve().then(worker).then((value) => { entry.settled = true; return value; }, (error) => { if (cache.get(url) === entry) cache.delete(url); throw error; });
+    cache.set(url, entry);
+    return entry.promise;
+  };
+  const loadPage = (url) => reuse(pageCache, metrics.resourceReuse.pages, url, () => pageQueue.add(() => withOneTechnicalRetry(async () => {
+    metrics.pageExtractionCalls += 1;
+    metrics.resourceReuse.pages.attempts += 1;
+    increment(metrics.resourceReuse.pages.attemptsByUrl, url);
+    return measure("pageExtraction", () => (adapters.fetchImagePageContent || fetchImagePageContent)(url, { signal, onRequest: networkEvent(metrics.resourceReuse.pages) }));
+  }, () => { metrics.technicalRetries.pageExtraction += 1; })));
   const assetDirectory = path.join(root, "output", "image-assets", `simple-${batchId}`);
   const publicPrefix = `/image-assets/simple-${batchId}`;
   await mkdir(assetDirectory, { recursive: true });
@@ -353,12 +380,14 @@ export async function runImageSearchSkill({
       evidence.officialSourcePages = allPages.filter((item) => item.officialHint).length;
       const directCandidates = commonsResult.status === "fulfilled" ? commonsResult.value : [];
       const semanticTerms = unique([text(layerSlot.activity), text(layerSlot.subject), text(layerSlot.location), ...(isHotel ? [text(layerSlot.hotel), "hotel lodge camp tented suite guest room interior exterior public space lounge restaurant dining deck pool spa accommodation"] : []), ...(Array.isArray(layerSlot.searchKeywords) ? layerSlot.searchKeywords : []), ...layerQueries]);
-      const extractedGroups = await Promise.all(allPages.map((page) => pageQueue.add(async () => {
+      const extractedGroups = await Promise.all(allPages.map(async (page) => {
         try {
-          return await withOneTechnicalRetry(async () => { metrics.pageExtractionCalls += 1; return measure("pageExtraction", () => extractFn(page, { signal, maxImages: 24, semanticTerms })); }, (error) => { metrics.technicalRetries.pageExtraction += 1; warnings.push(`${layerName} 网页提图技术重试：${page.pageUrl}：${error?.message || error}`); });
+          // Legacy test adapters can own extraction; production shares only the raw page.
+          if (adapters.extractPageImages) return await pageQueue.add(() => withOneTechnicalRetry(async () => { metrics.pageExtractionCalls += 1; return measure("pageExtraction", () => extractFn(page, { signal, maxImages: 24, semanticTerms })); }, (error) => { metrics.technicalRetries.pageExtraction += 1; warnings.push(`${layerName} 网页提图技术重试：${page.pageUrl}：${error?.message || error}`); }));
+          return await extractFn(page, { signal, maxImages: 24, semanticTerms, loadPage });
         }
         catch (error) { const classified = failureLayer(error); const failure = classified === "download" ? "page_fetch" : classified; evidence.pageFailures.push({ pageUrl: page.pageUrl, layer: failure, reason: error?.message || String(error) }); warnings.push(`${layerName} 网页图片提取失败：${page.pageUrl}：${error?.message || error}`); return []; }
-      })));
+      }));
       evidence.semanticExtractionCompleted = true;
       const perPageCap = Math.max(2, Math.ceil(downloadsPerSlot / Math.max(1, allPages.length)));
       const diverseExtracted = extractedGroups.flatMap((group, index) => [...group].sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot)).slice(0, isHotel && allPages[index]?.officialHint ? Math.max(4, downloadsPerSlot) : perPageCap));
@@ -366,12 +395,19 @@ export async function runImageSearchSkill({
       evidence.extractedCandidates = extractedGroups.flat().length + directCandidates.length;
       evidence.officialExtractedCandidates = extractedGroups.reduce((sum, group, index) => sum + (allPages[index]?.officialHint ? group.length : 0), 0);
       evidence.semanticRelevantCandidates = extractedGroups.flat().filter((item) => Number(item.semanticScore || 0) > 0).length + directCandidates.filter((item) => Number(item.semanticScore || 0) > 0).length;
-      const downloadedResults = await Promise.all(rawCandidates.map((candidate) => downloadQueue.add(async () => {
+      const downloadedResults = await Promise.all(rawCandidates.map(async (candidate) => {
         try {
-          return await withOneTechnicalRetry(async () => { metrics.downloadAttempts += 1; evidence.downloadAttempts += 1; return measure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal })); }, (error) => { metrics.technicalRetries.download += 1; warnings.push(`${layerName} 候选下载技术重试：${error?.message || error}`); });
+          const technical = await reuse(downloadCache, metrics.resourceReuse.images, candidate.imageUrl, () => downloadQueue.add(() => withOneTechnicalRetry(async () => {
+            metrics.downloadAttempts += 1; evidence.downloadAttempts += 1;
+            metrics.resourceReuse.images.attempts += 1;
+            increment(metrics.resourceReuse.images.attemptsByUrl, candidate.imageUrl);
+            const result = await measure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal, onRequest: networkEvent(metrics.resourceReuse.images) }));
+            return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType"].map((key) => [key, result[key]]));
+          }, (error) => { metrics.technicalRetries.download += 1; warnings.push(`${layerName} 候选下载技术重试：${error?.message || error}`); })));
+          return { ...candidate, ...technical };
         }
         catch (error) { const failure = failureLayer(error); evidence.downloadFailures.push({ imageUrl: candidate.imageUrl, layer: failure, reason: error?.message || String(error) }); warnings.push(`${layerName} 候选下载失败：${error?.message || error}`); return null; }
-      })));
+      }));
       const contentSeen = new Set();
       const downloaded = downloadedResults.filter((item) => item?.filePath && item?.sha256 && !contentSeen.has(item.sha256) && contentSeen.add(item.sha256)).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot)).map((item) => ({ ...item, candidateId: stableCandidateId(slot.slotId, item) }));
       evidence.downloadedCandidates = downloaded.length;
@@ -444,9 +480,12 @@ export async function runImageSearchSkill({
     return { slotId: slot.slotId, status: fallbackNeedsUser ? "needs_user_action" : "not_found", matchLevel: null, fallbackReason: "exact_activity_image_not_found", originalExactTarget: fallbackPlan.originalExactTarget, fallbackTarget: fallbackPlan.fallbackTarget, fallbackTheme: fallbackPlan.fallbackTheme, selected: null, candidates: allCandidates, queriesUsed: allQueries, sourceEvidence: allSources, actualSubject: fallback.actualSubject || exact.actualSubject, matchReason: fallbackNeedsUser ? "controlled_fallback 视觉判断未完成" : "精确层与 controlled_fallback 均无合格候选", technicalStatus: fallback.technicalStatus, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
   }
 
+  let completedSlots = 0;
+  onCapabilityCall?.({ phase: "slot_progress", capabilityId: "image_slot_progress", completedSlots, totalSlots: slots.length });
   const results = await Promise.all([...slots].sort((a, b) => imageSlotPriority(a) - imageSlotPriority(b)).map((slot) => slotQueue.add(async () => {
     try { return await processSlot(slot); }
     catch (error) { return { slotId: slot?.slotId || null, status: "failed", selected: null, candidates: [], queriesUsed: [], sourceEvidence: [], actualSubject: null, matchReason: error?.message || String(error), technicalStatus: "slot_failed", warnings: [], constraints: null, durationMs: 0 }; }
+    finally { completedSlots += 1; onCapabilityCall?.({ phase: "slot_progress", capabilityId: "image_slot_progress", completedSlots, totalSlots: slots.length, target: slot.slotId }); }
   })));
   return { batchId, status: resultStatus(results), results, warnings: [], metrics: { ...metrics, concurrencyPeak: { slots: slotQueue.peak, search: searchQueue.peak, pages: pageQueue.peak, downloads: downloadQueue.peak, vision: visionQueue.peak }, durationMs: Date.now() - startedAt } };
 }

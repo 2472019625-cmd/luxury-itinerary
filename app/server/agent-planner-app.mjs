@@ -102,6 +102,11 @@ export function createAgentPlannerServer(options = {}) {
   };
   const updateSimpleJob = (job, event = {}) => {
     const now = new Date().toISOString();
+    if (event.capabilityId === "image_slot_progress" && event.phase === "slot_progress") {
+      job.imageSlotProgress = { completed: event.completedSlots, total: event.totalSlots };
+      job.updatedAt = now;
+      return;
+    }
     const stage = event.stage === "capability"
       ? (event.capabilityId === "copy_writer" || event.capabilityId === "copy_facts_research" ? "copy_skill" : "image_skill")
       : event.stage;

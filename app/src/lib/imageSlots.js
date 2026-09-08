@@ -16,7 +16,7 @@ export function buildLayoutImageSlots(data = {}) {
     const existing = new Map(buildLayoutImageSlots(legacyData).map(slot => [slot.fieldPath, slot]));
     return Object.entries(simpleImageSlotBindings).map(([slotId, binding]) => ({
       ...existing.get(binding.fieldPath), ...binding, slotId,
-      label: binding.visualSubject || existing.get(binding.fieldPath)?.label || '行程图片',
+      label: binding.cardTitle || (binding.module === 'day' && binding.useSpotCopy === false ? '行程体验' : existing.get(binding.fieldPath)?.label) || '行程图片',
       purpose: binding.visualSubject || existing.get(binding.fieldPath)?.purpose || '',
       itemIndex: binding.module === "day" ? binding.dayIndex : binding.itemIndex,
       ratio: existing.get(binding.fieldPath)?.ratio || "16:9", maxImages: 1, allowEmpty: true,
