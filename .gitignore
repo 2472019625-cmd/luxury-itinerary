@@ -44,3 +44,6 @@ Desktop.ini
 .idea/
 *.swp
 *.tmp
+
+# One-off local visual QA notes
+/design-qa.md

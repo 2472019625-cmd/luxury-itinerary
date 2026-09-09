@@ -1,0 +1,17 @@
+@font-face { font-family: "Source Han Sans CN"; src: url('/fonts/SourceHanSansCN/SourceHanSansCN-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Sans CN"; src: url('/fonts/SourceHanSansCN/SourceHanSansCN-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Sans CN"; src: url('/fonts/SourceHanSansCN/SourceHanSansCN-Medium.otf') format('opentype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Sans CN"; src: url('/fonts/SourceHanSansCN/SourceHanSansCN-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Sans CN"; src: url('/fonts/SourceHanSansCN/SourceHanSansCN-Heavy.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Serif CN"; src: url('/fonts/SourceHanSerifCN/SourceHanSerifCN-Light.otf') format('opentype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Serif CN"; src: url('/fonts/SourceHanSerifCN/SourceHanSerifCN-Regular.otf') format('opentype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Serif CN"; src: url('/fonts/SourceHanSerifCN/SourceHanSerifCN-SemiBold.otf') format('opentype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Serif CN"; src: url('/fonts/SourceHanSerifCN/SourceHanSerifCN-Bold.otf') format('opentype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: "Source Han Serif CN"; src: url('/fonts/SourceHanSerifCN/SourceHanSerifCN-Heavy.otf') format('opentype'); font-weight: 900; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-Light.ttf') format('truetype'); font-weight: 300; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-Regular.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-Medium.ttf') format('truetype'); font-weight: 500; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-SemiBold.ttf') format('truetype'); font-weight: 600; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-Bold.ttf') format('truetype'); font-weight: 700; font-style: normal; font-display: block; }
+@font-face { font-family: "Poppins"; src: url('/fonts/Poppins/Poppins-ExtraBold.ttf') format('truetype'); font-weight: 800; font-style: normal; font-display: block; }
+@font-face { font-family: "FangYa Song"; src: url('/fonts/FangYaSong/猫啃网风雅宋.ttf') format('truetype'); font-weight: 400; font-style: normal; font-display: block; }

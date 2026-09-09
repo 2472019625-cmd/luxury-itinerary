@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prebuild": "node scripts/check-web-fonts.mjs",
+    "build:web-fonts": "python scripts/build-web-fonts.py && node scripts/check-web-fonts.mjs",
     "dev": "vite",
     "app": "npm run build && node server/app.mjs",
     "serve": "node server/app.mjs",
@@ -16,6 +18,7 @@
     "test:import": "node --test tests/itinerary-import.test.mjs",
     "test:images": "node --test tests/image-pipeline.test.mjs tests/image-security.test.mjs",
     "test:rules": "node --test tests/itinerary-rules.test.mjs tests/itinerary-refinement.test.mjs tests/content-quality.test.mjs tests/copy-rule-runtime.test.mjs tests/copy-repair.test.mjs tests/fact-provenance.test.mjs tests/notes-schema.test.mjs tests/workflow-gates.test.mjs tests/storage-safety.test.mjs tests/final-output-qa.test.mjs tests/transport-presentation.test.mjs",
+    "test:entities": "node --test tests/travel-entity-registry.test.mjs",
     "test:rule-coverage": "node --test tests/rule-coverage.test.mjs",
     "test:model": "node --test tests/deepseek-client.test.mjs",
     "test:agent-planner": "node --test tests/agent-planner*.test.mjs",

@@ -1,4 +1,8 @@
 node_modules/
+.font-tools/
+public/fonts/web/
+src/web-fonts.css
+scripts/__pycache__/
 dist/
 output/generated/
 output/image-assets/
