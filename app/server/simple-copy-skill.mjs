@@ -115,6 +115,11 @@ export function validateCopyCommitments(value, task = {}) {
     verifiedFacts: task.verifiedFacts || task.facts?.verifiedFacts || [],
   });
   const errors = [];
+  if (task.moduleType === 'visual_card' && task.facts?.entityDisplayName) {
+    const title = clean(value?.cardTitle);
+    const displayName = clean(task.facts.entityDisplayName);
+    if (!title.includes(displayName)) errors.push(`Visual Card 标题必须原样使用已确认实体展示名“${displayName}”`);
+  }
   for (const match of output.matchAll(/(?:^|[^\d])((?:[01]?\d|2[0-3])[:：][0-5]\d)[^，。；]{0,12}(?:准时|固定|必须|安排|出发|集合)/g)) {
     const hasConfirmedTime = sourceIncludes(source, match[1]) && /confirmed|已确认|确定|固定|准时|departureTime|startTime/i.test(source);
     if (!hasConfirmedTime) errors.push(`固定钟点承诺“${match[1]}”没有订单或已核验依据`);

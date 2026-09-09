@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveTravelEntity } from "../src/lib/travelEntityDisplay.js";
 
 const stringSchema = Object.freeze({ type: "string", minLength: 1 });
 const subtitleSchema = Object.freeze({ type: "string", minLength: 1, maxLength: 76 });
@@ -614,13 +615,21 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     const status = clean(primarySpot?.status || primarySpot?.feeBoundary);
     const statusLabel = clean(primarySpot?.statusLabel || (status === "optional_paid" ? "自费可选" : status === "included" ? "已包含" : status ? "待确认" : ""));
     const optionalBoundary = ["optional_paid", "reservation_required", "pending"].includes(status) ? `；该视觉重点为${statusLabel}，不得暗示已包含` : "";
+    const entityDisplay = resolveTravelEntity(primarySubject, { locale: data.locale || 'zh-CN', country: data.country, region: day.region });
+    const resolvedEntityFacts = entityDisplay.entity ? {
+      entityCanonicalName: entityDisplay.canonicalName,
+      entityDisplayName: entityDisplay.displayName,
+      entityDisplayLocale: entityDisplay.locale,
+      entityDisplayNameMissing: entityDisplay.status === 'canonical_fallback',
+      entityDisplayIssue: entityDisplay.status === 'canonical_fallback' ? 'entity_display_name_missing' : '',
+    } : {};
     const required = visualIndex === 0;
     const slotId = `image:day:${index + 1}:${required ? "primary" : `supporting:${visualIndex}`}`;
     const visualCopyPath = `simpleImageSlotBindings.${slotId.replace(/:/g, '_')}`;
     copyTasks.push(copyTask({
       targetId: `copy:visual:${slotId}`, targetPath: visualCopyPath, moduleType: 'visual_card',
-      facts: { visualSubject: primarySubject, daySourceFacts: dayFactText(day), sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], experiences: (day.spots || []).map(spotCopyFacts), matchedSpot: matchedIndex >= 0 ? spotCopyFacts(primarySpot) : null, status, statusLabel, feeBoundary: primarySpot?.feeBoundary || '' },
-      plannerGoal: '为当前视觉体验返回{cardTitle,cardDescription}。cardTitle是短、直接的客户体验名称，不是图片画面提示词，不写姿态、构图、光线等非核心细节。cardDescription写1—2句怎么体验、为什么值得，只使用本日真实事实，不总结整天，不复制泛化Spot全文，不新增事实或费用承诺。有准确匹配Spot时优先复用其适合本体验的短描述。卡片不显示状态标签，但描述不得暗示未购买体验已包含。',
+      facts: { visualSubject: primarySubject, ...resolvedEntityFacts, daySourceFacts: dayFactText(day), sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], experiences: (day.spots || []).map(spotCopyFacts), matchedSpot: matchedIndex >= 0 ? spotCopyFacts(primarySpot) : null, status, statusLabel, feeBoundary: primarySpot?.feeBoundary || '' },
+      plannerGoal: `为当前视觉体验返回{cardTitle,cardDescription}。cardTitle是短、直接的客户体验名称，不是图片画面提示词，不写姿态、构图、光线等非核心细节。cardDescription写1—2句怎么体验、为什么值得，只使用本日真实事实，不总结整天，不复制泛化Spot全文，不新增事实或费用承诺。有准确匹配Spot时优先复用其适合本体验的短描述。卡片不显示状态标签，但描述不得暗示未购买体验已包含。${entityDisplay.entity ? `当前实体的客户展示名为“${entityDisplay.displayName}”，cardTitle必须原样使用，不得重译或展开官方名称。` : '当前视觉主题未解析为确定实体时，不得擅自创造新的实体译名。'}`,
       relevantContext: { dayRole: role.role, visualSubject: primarySubject, otherVisualSubjects: ordered.map(item => item.primaryVisualSubject).filter(item => item !== primarySubject) },
       layoutHints: { placement: 'visual_card', slotId }, outputSchema: { type: 'object', required: ['cardTitle', 'cardDescription'], additionalProperties: false, properties: { cardTitle: { type: 'string', minLength: 2, maxLength: 48 }, cardDescription: { type: 'string', minLength: 12, maxLength: 160 } } }, required,
     }));

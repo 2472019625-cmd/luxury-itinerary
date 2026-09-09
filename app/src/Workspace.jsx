@@ -9,6 +9,7 @@ import { collectCopyIssues, copyExportEligibility, generationStateLabel, groupCo
 import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
 import { AGENT_DESIGNER_STAGES, SIMPLE_DESIGNER_STAGES, getDesignerCurrentAction, getDesignerHighlights, getDesignerSummary, getDesignerTripTitle } from './lib/agentProgressView.js';
 import { readAgentSnapshot, agentDisplayState, displayAgentStages, agentElapsed, agentFailurePresentation } from './lib/agentConnection.js';
+import { buildCustomerTravelEntityData } from './lib/travelEntityDisplay.js';
 import { PlanView } from "./AgentPlanner.jsx";
 
 const STORAGE_USERS = "sheyou-workspace-users-v1";
@@ -541,7 +542,7 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
   const designerFileRef = useRef(null);
   const historyRef = useRef({ undo: [], redo: [], group: null, at: 0 });
   const visibility = project.visibility || {};
-  const viewData = useMemo(() => visibilityData(project.data, visibility), [project.data, visibility]);
+  const viewData = useMemo(() => visibilityData(buildCustomerTravelEntityData(project.data), visibility), [project.data, visibility]);
   const selectedModule = MODULES.find((module) => module.id === selection.module) || MODULES[0];
   const selectedDay = selection.module === "days" ? project.data.days[selection.itemIndex] : null;
   const hasImages = ["cover", "hotels", "dining", "transport", "days"].includes(selection.module);

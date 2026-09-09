@@ -11,6 +11,7 @@ import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
 import { transportConfigurationLabels, transportProductName, transportUsageLabel } from './lib/transportPresentation.js';
 import { dayVisualCards } from './lib/dayVisualCards.js';
 import { coverLayout } from './lib/coverLayout.js';
+import { buildCustomerTravelEntityData, sameTravelEntityName } from './lib/travelEntityDisplay.js';
 const VisualBindingsContext = React.createContext(undefined);
 
 const ICON = "/assets/icons/";
@@ -163,7 +164,7 @@ function HotelsOverview({ hotels = [], policy, title = "臻选下榻", introTitl
   const hasFeatured = hotels.some((hotel) => hotel.layout === "wide");
   return <section className="journey-feature-section hotels-section" data-edit-path="hotels"><SectionTitle en="SIGNATURE STAYS" zh={title} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`hotel-grid${isOdd ? " hotel-grid-odd" : ""}${hasFeatured ? " hotel-grid-featured" : ""}`}>{hotels.map((hotel, hotelIndex) => <article className={`hotel-card${hotel.layout === "wide" ? " hotel-card-wide" : ""}${hotel.images?.[0] ? "" : " hotel-card-no-image"}`} key={hotel.id || hotel.officialName} data-edit-path={`hotels.${hotelIndex}`}>
     {hotel.images?.[0] ? <div className="hotel-image"><SafeImage src={hotel.images[0].src || hotel.images[0]} alt={hotel.shortName || hotel.officialName} fallbackLabel="酒店图片待补充" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" style={{ objectPosition: hotel.images[0].focus || "50% 50%" }} /></div> : <MissingImageState label="酒店图片待补充" compact className="card-missing-image" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" />}
-    <div className="hotel-copy"><div className="hotel-kicker"><span>{hotel.region}</span><em>{hotel.nights}晚</em></div><h3>{hotel.shortName || hotel.officialName}</h3>{hotel.shortName && <p className="hotel-official-name">{hotel.officialName}</p>}
+    <div className="hotel-copy"><div className="hotel-kicker"><span>{hotel.region}</span><em>{hotel.nights}晚</em></div><h3>{hotel.shortName || hotel.officialName}</h3>{hotel.shortName && hotel.officialName && !sameTravelEntityName(hotel.shortName, hotel.officialName) && <p className="hotel-official-name">{hotel.officialName}</p>}
       {hotel.editorialCopy && <p className="hotel-editorial">{hotel.editorialCopy}</p>}
       {hotel.proofPoints?.length > 0 && <div className="hotel-proof-points">{hotel.proofPoints.map((point) => <span key={point}>{point}</span>)}</div>}
     </div>
@@ -218,7 +219,7 @@ function OvernightFact({ day }) {
   if (type === "none") return <div className="day-fact day-overnight-none"><span className="fact-icon"><Icon name="return" size={64} tone="light" /></span><div><span>今晚安排</span><strong>无住宿 · 行程结束</strong></div></div>;
   if (type === "inflight") return <div className="day-fact day-overnight-inflight"><span className="fact-icon"><Icon name="departure" size={64} tone="light" /></span><div><span>今晚安排</span><strong>{day.overnightLabel || "返程航班"}</strong></div></div>;
   if (!day.hotel) return null;
-  return <div className="day-fact"><span className="fact-icon"><Icon name="hotel" size={64} tone="light" /></span><div><span>今晚入住</span><strong>{day.hotelShortName || day.hotel}</strong>{day.hotelOfficialName && day.hotelOfficialName !== "—" && <small className="day-hotel-official">{day.hotelOfficialName}</small>}</div></div>;
+  return <div className="day-fact"><span className="fact-icon"><Icon name="hotel" size={64} tone="light" /></span><div><span>今晚入住</span><strong>{day.hotelShortName || day.hotel}</strong></div></div>;
 }
 
 function DayNotices({ notices }) {
@@ -378,7 +379,7 @@ export function App() {
     try { workspaceData = JSON.parse(localStorage.getItem("sheyou-export-data-v1")); } catch { workspaceData = null; }
   }
   const dataset = workspaceData || (datasetName === "xinjiang" ? sampleData : datasetName === "kenya-luxury-8d" ? kenyaLuxury8dData : datasetName === "tanzania-luxury-10d" ? tanzaniaLuxury10dData : africaData);
-  const data = buildScenario(dataset, params.get("scenario"));
+  const data = buildCustomerTravelEntityData(buildScenario(dataset, params.get("scenario")));
   if (params.get("styleProof") === "A") return <StyleProofA data={data} />;
   if (!exportMode && params.get("templatePreview") !== "1") return <Workspace initialData={createProductionDefaultData()} ItineraryComponent={Itinerary} agentMode={window.location.pathname === "/agent" || window.location.pathname === "/agent/"} />;
   return <>{!exportMode && <nav className="preview-toolbar"><div><strong>奢游国际行程长图模板</strong><span>{data.days.length}天真实资料 · 动态组件预览</span></div><div className="toolbar-actions"><a href="/?export=1&width=2000" target="_blank">2000px 原图</a><a href="/?export=1&width=1080" target="_blank">1080px 分享版</a></div></nav>}<div className={exportMode ? "export-mode" : "preview-stage"}><Itinerary data={data} scale={scale} /></div></>;

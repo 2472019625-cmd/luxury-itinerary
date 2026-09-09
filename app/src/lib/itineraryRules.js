@@ -1,3 +1,5 @@
+import { synchronizeTravelEntityDisplayFields } from "./travelEntityDisplay.js";
+
 const FLIGHT_OVERNIGHT = /^(?:飞机|飞机上|航班|返程航班|夜航|机上)$/i;
 const NO_OVERNIGHT = /^(?:无住宿|不住宿|无需住宿|行程结束|返程结束|—|-)$/i;
 const AIRPORT = /机场|航站楼|airport/i;
@@ -318,8 +320,10 @@ export function buildRouteNodes(day = {}, context = {}) {
   const description = source.description;
   const detailed = [...extractDetailedRouteNodes(description, baseLocations), ...independentSpotNodes(day, description)]
     .sort((left, right) => left.index - right.index);
-  const previousHotel = cleanText(context.previousDay?.hotelShortName || context.previousDay?.hotel || "");
-  const currentHotel = cleanText(day.hotelShortName || source.hotel || day.hotel || "");
+  // Route construction is an internal fact operation: prefer the source/canonical
+  // hotel name and keep the locale-specific hotelShortName out of routeNodes.
+  const previousHotel = cleanText(context.previousDay?.hotel || context.previousDay?.hotelOfficialName || context.previousDay?.hotelShortName || "");
+  const currentHotel = cleanText(source.hotel || day.hotel || day.hotelOfficialName || day.hotelShortName || "");
   const sameStay = previousHotel && currentHotel && normalizeName(previousHotel) === normalizeName(currentHotel);
   const explicitTransition = /→|—|－|✈|🚗|🚙|🚌|\s+-\s+|至/.test(source.route);
   const startsAtHotel = Boolean(previousHotel && (
@@ -513,7 +517,7 @@ export function normalizeItineraryFacts(data = {}, { mapDates = true } = {}) {
     modelGuaranteed: item.modelGuaranteed === true && Boolean((item.sourceEvidence || []).length || item.confirmedByUser),
     modelDisplay: item.model ? (item.modelGuaranteed === true && Boolean((item.sourceEvidence || []).length || item.confirmedByUser) ? item.model : `${item.model}（同等级参考）`) : "",
   }));
-  return next;
+  return synchronizeTravelEntityDisplayFields(next);
 }
 
 function itemText(value) {

@@ -69,6 +69,7 @@ description: 为奢游行程单批量生成封面、产品亮点、总览、酒�
 
 ### 5.1 品牌表达与事实边界
 
+- 任务 facts 已提供 `displayName`、`displayNames[currentLocale]`、`shortName`、`entityDisplayName` 或其他已解析实体展示名时，所有客户可见标题和正文必须优先、原样使用该名称；不得重新展开 `officialName/canonicalName`、重新翻译、自行音译或创造新的中文实体名称。当前 locale 没有展示名时保留 canonicalName，不猜测翻译，并保留 `entity_display_name_missing` 供程序处理。客户展示名不得反向用于 Facts Research、Image Search、知识库精确查询或 `searchIntent`。
 - 结构数据负责完整，Copy 负责选择。客户文案不是源资料、Planner facts 或 `verifiedFacts` 的完整摘要；先判断当前模块要回答的客户问题，再选择最值得客户看到的少量事实。
 - 每段只突出一个主价值，必要时增加一个辅助价值。真实但与当前模块核心客户问题无关的事实可以不进入正文，不得用“完整复述”代替内容判断。
 - 角色定位是“高端定制旅行产品内容营销写作者”，不是供应商资料复述员、百科编辑、官网翻译员、旅行散文作者或口号生成器。
@@ -173,7 +174,7 @@ description: 为奢游行程单批量生成封面、产品亮点、总览、酒�
 - `moduleType=visual_card` 是现有 DAY 批次中的独立文案任务，不是图片搜索指令，也不是可以省略的内部元数据。必须逐个返回原始 `targetId`、`targetPath` 和对象 `value:{cardTitle,cardDescription}`，即使视觉主题没有同名 Spot。旧任务若明确要求字符串则遵守该任务 outputSchema。
 - `simpleImageSlotBindings.<bindingKey>` 是合法的内部文案写回位置；不要因为它不以 `days.` 开头而忽略、改路径或把结果合并进 DAY/Spot 正文。
 - 只围绕该任务 `facts.visualSubject`，根据本日 `daySourceFacts` 和 `sourceEvidence` 写 1—2 句：怎样体验、为什么值得。不总结整日，不复制其他视觉卡或泛化 Spot 描述，不从相邻 DAY 借用事实。
-- cardTitle由本次Copy生成，必须是短而直接的旅行体验名称，如“步行 Safari”“Naboisho 私保区追踪花豹”“星空床”“长颈鹿中心互动”；不是照抄primaryVisualSubject的画面描述。不要把“一只花豹栖于树上”“跑道飞机起飞与晨光”等姿态、构图和光线细节写成客户标题，除非本身就是体验核心。不改视觉主题、不新增体验。
+- cardTitle由本次Copy生成，必须是短而直接的旅行体验名称，如“步行 Safari”“Naboisho 私保区追踪花豹”“星空床”“长颈鹿中心互动”；不是照抄primaryVisualSubject的画面描述。不要把“一只花豹栖于树上”“跑道飞机起飞与晨光”等姿态、构图和光线细节写成客户标题，除非本身就是体验核心。不改视觉主题、不新增体验。任务 facts 提供 `entityDisplayName` 时，标题必须原样包含该名称，不得把同一实体重新翻译成另一种中文名；这不改变 `searchIntent`。
 - cardDescription写1—2句简短体验说明。客户卡片只显示图片、cardTitle和cardDescription，不输出单独的状态/费用标签。保留事实费用和可选边界，不暗示未购买的体验已包含，不把观察动物或天气写成保证。cardTitle和cardDescription不参与搜图，也不决定Image输入。
 - 输出前核对输入的每一个 visual_card target 都有独立结果；不能仅返回原有 DAY 和 Spot 文案。
 
