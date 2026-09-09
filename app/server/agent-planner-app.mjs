@@ -1,5 +1,7 @@
 import { createReadStream, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { createDemoAuth } from "./demo-auth.mjs";
+import { servePublicStatic } from "./public-static.mjs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
@@ -286,8 +288,10 @@ export function createAgentPlannerServer(options = {}) {
     }));
   };
 
+  const authenticate = createDemoAuth(options.auth);
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${port}`);
+    if (await authenticate(request, response, url)) return;
     if (request.method === "POST" && url.pathname === "/api/simple/projects") {
       try {
         const payload = await requestBody(request);
@@ -322,7 +326,7 @@ export function createAgentPlannerServer(options = {}) {
       try {
         const payload = await requestBody(request);
         const input = { store: simpleStore, root, projectId: decodeURIComponent(simpleCandidateMatch[1]), slotId: decodeURIComponent(simpleCandidateMatch[2]), candidateId: String(payload.candidateId || ""), manualConfirmed: payload.manualConfirmed === true };
-        const result = simpleCandidateMatch[3] === "select" ? await chooseSimpleImageCandidate(input) : await rejectSimpleImageCandidate(input);
+        const result = simpleCandidateMatch[3] === "select" ? await chooseSimpleImageCandidate({ ...input, deferRender: true }) : await rejectSimpleImageCandidate(input);
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_decision_failed" }); }
     }
@@ -332,7 +336,7 @@ export function createAgentPlannerServer(options = {}) {
         const contentType = String(request.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
         const buffer = await requestBuffer(request);
         const dataUrl = `data:${contentType};base64,${buffer.toString("base64")}`;
-        const result = await uploadSimpleImage({ store: simpleStore, root, projectId: decodeURIComponent(simpleUploadMatch[1]), slotId: decodeURIComponent(simpleUploadMatch[2]), dataUrl, fileName: decodeURIComponent(String(request.headers["x-file-name"] || "用户上传图片")) });
+        const result = await uploadSimpleImage({ store: simpleStore, root, deferRender: true, projectId: decodeURIComponent(simpleUploadMatch[1]), slotId: decodeURIComponent(simpleUploadMatch[2]), dataUrl, fileName: decodeURIComponent(String(request.headers["x-file-name"] || "用户上传图片")) });
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_upload_failed" }); }
     }
@@ -340,6 +344,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "POST" && simpleResearchMatch) {
       try {
         const result = await researchSimpleImageSlot({
+          deferRender: true,
           store: simpleStore,
           root,
           projectId: decodeURIComponent(simpleResearchMatch[1]),
@@ -600,7 +605,7 @@ export function createAgentPlannerServer(options = {}) {
     const candidate = path.resolve(clientDir, relative);
     const file = candidate.startsWith(clientDir) && existsSync(candidate) ? candidate : path.join(clientDir, "index.html");
     if (!existsSync(file)) { response.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end("请先运行 npm run build"); return; }
-    streamFile(response, file);
+    servePublicStatic(request, response, file, clientDir, contentTypes);
   });
   return { server, port, store, jobs, controllers, executor, simpleStore, simpleJobs, simpleControllers };
 }

@@ -8,6 +8,7 @@ import { humanReviewReady, recordHumanReview } from './lib/humanReview.js';
 import { collectCopyIssues, copyExportEligibility, generationStateLabel, groupCopyIssueTargets, groupCopyIssues } from './lib/copyIssuePresentation.js';
 import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
 import { AGENT_DESIGNER_STAGES, SIMPLE_DESIGNER_STAGES, getDesignerCurrentAction, getDesignerHighlights, getDesignerSummary, getDesignerTripTitle } from './lib/agentProgressView.js';
+import { readAgentSnapshot, agentDisplayState, displayAgentStages, agentElapsed, agentFailurePresentation } from './lib/agentConnection.js';
 import { PlanView } from "./AgentPlanner.jsx";
 
 const STORAGE_USERS = "sheyou-workspace-users-v1";
@@ -103,14 +104,18 @@ export function StepRail({ active, onStep, maxStep = active }) {
   })}</div>;
 }
 
-function AuthScreen({ onAuth, storageKeys = FIXED_STORAGE }) {
+export function AuthScreen({ onAuth, storageKeys = FIXED_STORAGE, serverLogin }) {
   const [mode, setMode] = useState("login");
   const [form, setForm] = useState({ invite: "", name: "", login: "", pin: "" });
   const [error, setError] = useState("");
   const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault();
     setError("");
+    if (serverLogin) {
+      try { return onAuth(await serverLogin(form.login.trim(), form.pin)); }
+      catch (failure) { return setError(failure.message); }
+    }
     const users = readStorage(storageKeys.users, []);
     if (mode === "register") {
       if (form.invite.trim() !== DEFAULT_INVITE) return setError("公司邀请码不正确");
@@ -134,12 +139,12 @@ function AuthScreen({ onAuth, storageKeys = FIXED_STORAGE }) {
       <p>资料识别、品牌文案、旅行影像与高清交付，在一个工作台里完成。</p>
     </section>
     <section className="auth-panel">
-      <div className="auth-tabs"><button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>登录</button><button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>首次使用</button></div>
+      <div className="auth-tabs"><button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>登录</button>{!serverLogin && <button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>首次使用</button>}</div>
       <form onSubmit={submit}>
-        <header><small>WELCOME</small><h2>{mode === "login" ? "回到我的项目" : "创建个人工作区"}</h2><p>{mode === "login" ? "使用内部账号和6位PIN登录" : "首位注册用户将自动成为管理员"}</p></header>
+        <header><small>WELCOME</small><h2>{mode === "login" ? "回到我的项目" : "创建个人工作区"}</h2><p>{serverLogin ? "使用共享 Demo 账号和密码登录" : mode === "login" ? "使用内部账号和6位PIN登录" : "首位注册用户将自动成为管理员"}</p></header>
         {mode === "register" && <><label>公司邀请码<input value={form.invite} onChange={update("invite")} placeholder="请输入公司邀请码" /></label><label>姓名<input value={form.name} onChange={update("name")} placeholder="定制师姓名" /></label></>}
         <label>登录账号<input value={form.login} onChange={update("login")} placeholder="至少3个字符" autoComplete="username" /></label>
-        <label>6位PIN<input type="password" inputMode="numeric" maxLength="6" value={form.pin} onChange={update("pin")} placeholder="••••••" autoComplete="current-password" /></label>
+        <label>{serverLogin ? "密码" : "6位PIN"}<input type="password" inputMode={serverLogin ? undefined : "numeric"} maxLength={serverLogin ? 256 : 6} value={form.pin} onChange={update("pin")} placeholder="••••••" autoComplete="current-password" /></label>
         {error && <p className="form-error"><UiIcon name="warning" />{error}</p>}
         <Button tone="primary" type="submit">{mode === "login" ? "进入工作台" : "创建并进入"}</Button>
         {mode === "register" && <small className="invite-tip">演示邀请码：SHEYOU2026</small>}
@@ -161,19 +166,28 @@ export function AppHeader({ user, project, saved, canGenerate, onHome, onLogout,
   </header>;
 }
 
-function ProjectList({ user, projects, onCreate, onOpen, onDelete }) {
+function ProjectList({ user, projects, onCreate, onOpen, onDelete, onTrash, onRestore }) {
   const [query, setQuery] = useState("");
-  const visible = projects.filter((project) => project.ownerId === user.id && `${project.title}${project.data.destination}`.toLowerCase().includes(query.toLowerCase()));
+  const [view, setView] = useState("active");
+  const trashEnabled = Boolean(onTrash && onRestore);
+  const ownedProjects = projects.filter((project) => project.ownerId === user.id);
+  const trashCount = ownedProjects.filter((project) => Boolean(project.trashedAt)).length;
+  const visible = ownedProjects.filter((project) => {
+    const inSelectedView = trashEnabled ? (view === "trash" ? Boolean(project.trashedAt) : !project.trashedAt) : true;
+    return inSelectedView && `${project.title}${project.data.destination}`.toLowerCase().includes(query.toLowerCase());
+  });
   return <main className="projects-page">
-    <header className="projects-heading"><div><small>MY JOURNEYS</small><h1>我的项目</h1><p>每一份草稿都会自动保存，正式版本可随时重新下载。</p></div><Button tone="primary" icon="itinerary" onClick={onCreate}>新建行程</Button></header>
+    <header className="projects-heading"><div><small>{view === "trash" ? "RECYCLE BIN" : "MY JOURNEYS"}</small><h1>{view === "trash" ? "回收站" : "我的项目"}</h1><p>{view === "trash" ? "这里的项目仍完整保留，可以随时恢复到项目列表。" : "每一份草稿都会自动保存，正式版本可随时重新下载。"}</p></div><div className="projects-heading-actions">{trashEnabled && <Button onClick={() => { setView(view === "trash" ? "active" : "trash"); setQuery(""); }}>{view === "trash" ? "返回我的项目" : `回收站${trashCount ? `（${trashCount}）` : ""}`}</Button>}{view === "active" && <Button tone="primary" icon="itinerary" onClick={onCreate}>新建行程</Button>}</div></header>
     <div className="project-search"><UiIcon name="itinerary" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索项目名称或目的地" /></div>
-    {visible.length ? <div className="project-list">{visible.map((project) => <article key={project.id} className="project-row" onClick={() => onOpen(project)}>
+    {visible.length ? <div className="project-list">{visible.map((project) => <article key={project.id} className={`project-row${view === "trash" ? " project-row-trashed" : ""}`} onClick={view === "active" ? () => onOpen(project) : undefined}>
       <div className="project-thumb">{project.data.heroImage ? <img src={project.data.heroImage} alt="" onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add("project-thumb-missing"); }} /> : <span>缺图</span>}</div>
-      <div className="project-copy"><small>{project.data.destination || "目的地待确认"}</small><h2>{project.title}</h2><span>最后编辑 {formatTime(project.updatedAt)}</span></div>
+      <div className="project-copy"><small>{project.data.destination || "目的地待确认"}</small><h2>{project.title}</h2><span>{view === "trash" ? `移入时间 ${formatTime(project.trashedAt)}` : `最后编辑 ${formatTime(project.updatedAt)}`}</span></div>
       <div className="project-version"><strong>{project.versions?.length || 0}</strong><span>正式版本</span></div>
       {onDelete && <button className="row-delete" onClick={(event) => { event.stopPropagation(); onDelete(project); }} aria-label="删除项目">删除</button>}
-      <span className="row-open">打开项目 <UiIcon name="return" size={16} /></span>
-    </article>)}</div> : <div className="empty-projects"><UiIcon name="itinerary" size={42} /><h2>还没有匹配的项目</h2><p>上传原始报价表，开始第一份客户行程。</p><Button tone="primary" onClick={onCreate}>创建项目</Button></div>}
+      {trashEnabled && view === "active" && <button className="row-project-action" onClick={(event) => { event.stopPropagation(); onTrash(project); }} aria-label={`将${project.title}移入回收站`}>移入回收站</button>}
+      {trashEnabled && view === "trash" && <button className="row-project-action row-restore" onClick={(event) => { event.stopPropagation(); onRestore(project); }} aria-label={`恢复${project.title}`}>恢复</button>}
+      {view === "active" && <span className="row-open">打开项目 <UiIcon name="return" size={16} /></span>}
+    </article>)}</div> : <div className="empty-projects"><UiIcon name="itinerary" size={42} /><h2>{view === "trash" ? "回收站是空的" : "还没有匹配的项目"}</h2><p>{view === "trash" ? "移入回收站的项目会显示在这里。" : "上传原始报价表，开始第一份客户行程。"}</p>{view === "active" && <Button tone="primary" onClick={onCreate}>创建项目</Button>}</div>}
   </main>;
 }
 
@@ -316,13 +330,39 @@ function buildAgentProgress(snapshot) {
 
 function AgentProgressOverview({ snapshot, elapsed }) {
   const progress = buildAgentProgress(snapshot);
-  const labels = { complete: "已完成", active: "进行中", waiting: "等待确认", failed: "已中断", cancelled: "已取消", pending: "未开始" };
+  const display = agentDisplayState(snapshot);
+  progress.stages = displayAgentStages(progress.stages, display);
+  const labels = { complete: "已完成", active: "进行中", waiting: "等待确认", failed: "失败", cancelled: "已取消", pending: display.failed ? "未执行" : "等待处理", unknown: "状态待确认" };
   const latestEvent = snapshot?.executionRun?.events?.at(-1);
   const waitingReason = latestEvent?.waitingReason ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_confirmation" ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_user_action" ? "部分内容需要在编辑页补充或确认，不影响你先查看和调整草稿。" : "";
   const imageSlots = snapshot?.activeJob?.imageSlotProgress;
-  const imageProgressText = imageSlots?.total > 0 ? `图片处理 ${imageSlots.completed}/${imageSlots.total}（已结束/总数，含未找到）` : "";
-  const action = [imageProgressText, getDesignerCurrentAction(snapshot)].filter(Boolean).join(" · ");
-  return <section className="agent-progress-overview" aria-labelledby="designer-progress-title"><header><small>TRIP PRODUCTION STATUS</small><h2 id="designer-progress-title">客户行程制作进度</h2><p>系统会按已确认资料继续制作，完成后仍可调整文案、图片和版式。</p></header><div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress.percent} aria-label="客户行程制作进度"><strong>{progress.percent}<sup>%</sup></strong><div><span style={{ width: `${progress.percent}%` }} /></div><p aria-live="polite">{action}</p></div><ol>{progress.stages.map((stage) => <li className={`agent-progress-${stage.state}`} key={stage.key}><i /> <span>{stage.label}</span><em>{labels[stage.state]}</em></li>)}</ol>{waitingReason && <p className="agent-progress-wait">{waitingReason}</p>}<footer><div><strong>{Math.floor(elapsed / 60)}分{elapsed % 60}秒</strong><span>已用时间</span></div><div><strong>可继续调整</strong><span>完成后进入编辑页</span></div></footer></section>;
+  const detailedAction = getDesignerCurrentAction(snapshot);
+  const imageProgressText = imageSlots?.total > 0 ? `正在处理图片 ${imageSlots.completed} / ${imageSlots.total}` : "";
+  const actionStage = progress.stages.find((stage) => {
+    if (stage.state !== "active") return false;
+    if (/文案|介绍/.test(detailedAction)) return stage.key === "copy_skill" || stage.key === "copy";
+    if (/图片|主视觉/.test(detailedAction)) return stage.key === "image_skill" || stage.key === "images";
+    if (/读取|整理/.test(detailedAction)) return stage.key === "parser";
+    if (/节奏|亮点/.test(detailedAction)) return stage.key === "planner" || stage.key === "planning";
+    if (/费用|原始资料|晚数/.test(detailedAction)) return stage.key === "program_writeback" || stage.key === "final_checks" || stage.key === "verification";
+    if (/长图/.test(detailedAction)) return stage.key === "renderer" || stage.key === "render";
+    return false;
+  }) || progress.stages.find((stage) => stage.state === "active") || progress.stages.find((stage) => stage.state === "waiting");
+  const failedStage = progress.stages.find((stage) => stage.state === "failed");
+  const failure = agentFailurePresentation(snapshot, failedStage?.label);
+  const primaryStatus = display.disconnected ? "正在重新获取制作状态" : display.failed ? "生成已终止" : display.completed ? "生成完成" : actionStage ? `${actionStage.state === "waiting" ? "等待确认：" : "正在"}${actionStage.label}` : detailedAction;
+  const auxiliaryParts = display.disconnected ? ["以下为最后已知进度，后台任务可能仍在继续"] : display.failed ? [`本次生成在「${failure.stageLabel}」遇到问题，已停止继续处理`, failure.userMessage] : display.completed ? ["客户版行程已制作完成，可以继续调整文案、图片和版式"] : [detailedAction !== primaryStatus ? detailedAction : "", imageProgressText].filter(Boolean);
+  const auxiliaryStatus = [...new Set(auxiliaryParts)].join(" · ");
+  const displayMode = display.failed ? "failed" : display.completed ? "completed" : display.disconnected ? "disconnected" : "running";
+  return <section className={`agent-progress-overview agent-progress-card-${displayMode}`} aria-labelledby="designer-progress-title">
+    <header><h2 id="designer-progress-title">客户行程制作进度</h2><span>{display.disconnected ? "最后同步" : "已用时"} {Math.floor(elapsed / 60)}分{elapsed % 60}秒</span></header>
+    <div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress.percent} aria-label="客户行程制作进度">
+      <div className="agent-progress-headline"><strong>{progress.percent}<sup>%</sup></strong><div><h3 aria-live="polite">{primaryStatus}</h3>{auxiliaryStatus && <p aria-live="polite">{auxiliaryStatus}</p>}</div></div>
+      <div className="agent-progress-track"><span style={{ width: `${progress.percent}%` }} /></div>
+    </div>
+    <ol>{progress.stages.map((stage) => <li className={`agent-progress-${stage.state}`} key={stage.key}><i aria-hidden="true">{stage.state === "complete" && <UiIcon name="included" size={13} />}</i><span>{stage.label}</span><em>{labels[stage.state]}</em></li>)}</ol>
+    {waitingReason && <p className="agent-progress-wait">{waitingReason}</p>}
+  </section>;
 }
 
 function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, onEdit, decisions, onDecision, onConfirm, onRetryImage }) {
@@ -334,28 +374,33 @@ function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, onE
   const taskState = new Map((run?.taskRuns || []).map((item) => [item.taskId, item.status]));
   const executed = simpleMode ? Number(activeJob?.completedActions || 0) : [...taskState.values()].filter((value) => ["succeeded", "user_resolved", "user_accepted_suggestion", "not_applicable", "removed_optional"].includes(value)).length;
   const taskCount = simpleMode ? Number(activeJob?.totalWorkItems || ((plan?.copyTasks?.length || 0) + (plan?.imageSlots?.length || 0))) : plan?.tasks?.length || 0;
-  const elapsed = agentProject?.createdAt ? Math.max(0, Math.floor((Date.now() - new Date(agentProject.createdAt).getTime()) / 1000)) : 0;
+  const display = agentDisplayState(snapshot);
+  const elapsed = agentProject?.createdAt ? agentElapsed(snapshot) : 0;
   const waiting = ["awaiting_confirmation", "awaiting_user_action"].includes(agentProject?.status);
   const draft = agentProject?.status === "partial";
-  const failed = ["planning_failed", "execution_failed", "failed"].includes(agentProject?.status);
+  const failed = display.failed;
   const cancelled = agentProject?.status === "cancelled";
   const ready = ["ready_for_editor", "complete"].includes(agentProject?.status);
   const latestEvent = run?.events?.at(-1);
   const tripTitle = getDesignerTripTitle(snapshot, project);
   const highlights = getDesignerHighlights(snapshot, project);
-  const summary = getDesignerSummary(snapshot);
+  const progress = buildAgentProgress(snapshot);
+  const displayedStages = displayAgentStages(progress.stages, display);
+  const failure = agentFailurePresentation(snapshot, displayedStages.find((stage) => stage.state === "failed")?.label);
+  const summary = display.disconnected ? "暂时无法获取最新制作状态，后台可能仍在运行。正在重新获取状态，请不要重复开始生成。" : failed ? `「${tripTitle}」本次生成在「${failure.stageLabel}」遇到问题，已停止继续处理。${failure.userMessage}。` : getDesignerSummary(snapshot);
   const rawAction = activeJob?.currentAction || latestEvent?.message || activeJob?.message || agentProject?.currentStage || "正在读取智能体项目";
+  const technicalError = snapshot?._connectionError || error || failure.technicalError;
   return <main className="flow-page"><StepRail active={2} /><section className="generation-page agent-workspace-generation">
-    <div className="generation-main agent-designer-summary"><header><small>本次定制摘要</small><h1>{ready ? `「${tripTitle}」已完成` : draft ? `「${tripTitle}」可编辑草稿已生成` : waiting ? `「${tripTitle}」需要你的确认` : failed ? `「${tripTitle}」制作暂时中断` : cancelled ? `「${tripTitle}」已取消` : `正在制作「${tripTitle}」`}</h1><p>{summary}</p></header>
+    <div className="generation-main agent-designer-summary"><header><small>本次定制摘要</small><h1>{display.disconnected ? `「${tripTitle}」连接异常，正在确认制作状态` : failed ? "生成已终止" : ready ? "生成完成" : draft ? `「${tripTitle}」可编辑草稿已生成` : waiting ? `「${tripTitle}」需要你的确认` : cancelled ? `「${tripTitle}」已取消` : `正在制作「${tripTitle}」`}</h1><p>{summary}</p></header>
       <section className="agent-fact-assurance" aria-label="已保护的重要信息"><div><small>已按你的确认制作</small><strong>日期、酒店、路线和费用不会被擅自改动</strong></div><span>确认信息优先</span></section>
       {highlights.length > 0 && <section className="agent-custom-priorities" aria-labelledby="custom-priorities-title"><header><small>本次定制重点</small><p id="custom-priorities-title">系统会围绕这些体验重点组织客户版表达和配图。</p></header><ul>{highlights.map((highlight) => <li key={highlight}>{highlight}</li>)}</ul></section>}
       <p className="agent-editable-note">完成后可进入编辑页继续调整文案、图片和版式，系统不会把生成结果锁死。</p>
       {waiting && <div className="agent-runtime-confirm"><AgentConfirmationPanel confirmations={snapshot?.confirmations || []} decisions={decisions} onDecision={onDecision} onRetryImage={onRetryImage} /><Button tone="primary" onClick={onConfirm}>保存选择并从当前任务继续</Button></div>}
-      {error && <p className="generation-error"><UiIcon name="warning" />{error}</p>}
-      {plan && <details className="agent-plan-details workspace-agent-plan agent-admin-runtime"><summary><span>管理员运行详情</span><small>用于排查任务，定制师无需处理</small></summary><section className="agent-technical-summary"><span>projectId {agentProject?.projectId}</span><span>executionRunId {agentProject?.activeExecutionRunId || run?.executionRunId || "未创建"}</span><span>计划 {plan.planId}</span><span>{taskCount} 个责任单元</span><span>{executed} 个实时能力动作完成</span><span>{simpleMode ? "Simple Pipeline" : `${run?.capabilityCallStats?.reduce((sum, item) => sum + item.actualCalls, 0) || 0} 次下游调用`}</span><span>版本 {plan.planVersion || "未标注"}</span></section><p className="agent-raw-action"><strong>当前内部动作</strong><code>{rawAction}</code></p>{!simpleMode && <PlanView project={agentProject} plan={plan} embedded />}</details>}
+      {(error || display.disconnected) && <p className="generation-error" role="alert"><UiIcon name="warning" />{display.disconnected ? "暂时无法获取最新状态，正在重新连接，请勿重复生成。" : "操作未完成，请查看管理员运行详情；不代表后台任务已停止。"}</p>}
+      {(plan || error || failed || snapshot?._connectionError) && <details className="agent-plan-details workspace-agent-plan agent-admin-runtime"><summary><span>管理员运行详情</span><small>用于排查任务，定制师无需处理</small></summary><section className="agent-technical-summary"><span>projectId {agentProject?.projectId}</span><span>executionRunId {agentProject?.activeExecutionRunId || run?.executionRunId || "未创建"}</span><span>计划 {plan?.planId || "未创建"}</span><span>{taskCount} 个责任单元</span><span>{executed} 个实时能力动作完成</span><span>{simpleMode ? "Simple Pipeline" : `${run?.capabilityCallStats?.reduce((sum, item) => sum + item.actualCalls, 0) || 0} 次下游调用`}</span><span>版本 {plan?.planVersion || "未标注"}</span></section><p className="agent-raw-action"><strong>当前内部动作</strong><code>{rawAction}</code></p>{(failed || error || snapshot?._connectionError) && <p className="agent-technical-error">{technicalError}</p>}{!simpleMode && plan && <PlanView project={agentProject} plan={plan} embedded />}</details>}
     </div>
     <AgentProgressOverview snapshot={snapshot} elapsed={elapsed} />
-    <footer className="generation-footer">{!waiting && !ready && !draft && <Button onClick={onReview}>查看确认信息</Button>}{(ready || draft) && <Button tone="primary" onClick={onEdit}>进入编辑页</Button>}{!waiting && !ready && !draft && !cancelled && <Button onClick={onCancel}>取消任务</Button>}</footer>
+    <footer className="generation-footer">{!waiting && !ready && !draft && <Button onClick={onReview}>查看确认信息</Button>}{(ready || draft) && <Button tone="primary" onClick={onEdit}>进入编辑页</Button>}{!waiting && !ready && !draft && !cancelled && !failed && <Button onClick={onCancel}>取消任务</Button>}</footer>
   </section></main>;
 }
 
@@ -436,14 +481,20 @@ function ItemPicker({ label, items, index = 0, getLabel, onSelect, onAdd, onDele
   return <div className="item-picker"><label>{label}<select value={Math.min(index, items.length - 1)} onChange={(event) => onSelect(Number(event.target.value))}>{items.map((item, itemIndex) => <option key={item.id || `${label}-${itemIndex}`} value={itemIndex}>{getLabel(item, itemIndex)}</option>)}</select></label><div className="item-picker-actions"><button onClick={() => onMove(-1)} disabled={index <= 0}>上移</button><button onClick={() => onMove(1)} disabled={index >= items.length - 1}>下移</button><button onClick={onAdd}>新增</button><button className="danger-text" onClick={onDelete}>删除</button></div></div>;
 }
 
-function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, onClose }) {
+function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, onClose, operation = {} }) {
   const [tab, setTab] = useState('recommended');
-  const [researching, setResearching] = useState(false);
+  const researching = operation.searching;
+  const [pendingChoice, setPendingChoice] = useState(null);
+  useEffect(() => {
+    const close = event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); } };
+    window.addEventListener('keydown', close, true);
+    return () => window.removeEventListener('keydown', close, true);
+  }, [onClose]);
   const inputRef = useRef(null);
   const placements = listImagePlacements(data);
   const usedBySrc = new Map(placements.map(({ slot, image }) => [image.src, slot]));
   const savedCandidates = (data.imageCandidates || []).filter((item) => item.localPreviewUrl);
-  const uploaded = placements.filter(({ image }) => image.userProvided).map(({ slot, image }) => ({ candidateId: 'user-' + slot.slotId, localPreviewUrl: image.src, sourceTitle: '本地上传', slotId: slot.slotId, userProvided: true }));
+  const uploaded = placements.filter(({ image }) => image.userProvided && !savedCandidates.some(candidate => candidate.localPreviewUrl === image.src)).map(({ slot, image }) => ({ candidateId: 'user-' + slot.slotId, localPreviewUrl: image.src, sourceTitle: '本地上传', slotId: slot.slotId, userProvided: true }));
   const all = [...savedCandidates, ...uploaded].filter((item, index, array) => array.findIndex((other) => other.localPreviewUrl === item.localPreviewUrl && other.pipelineSlotId === item.pipelineSlotId) === index);
   const matchesTarget = (candidate) => candidate.fieldPath ? candidate.fieldPath === targetSlot.fieldPath : candidate.slotId === targetSlot.slotId;
   const canChoose = (candidate) => candidate.manualSelectable === true || candidate.userProvided || candidate.libraryEligible === true && (!candidate.pipelineSlotId || matchesTarget(candidate));
@@ -451,17 +502,40 @@ function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, on
   return <div className="modal-backdrop image-picker-backdrop" role="dialog" aria-modal="true" aria-label="更换图片"><section className="image-picker-modal">
     <header><div><small>更换图片</small><h2>{targetSlot.label}</h2><p>选择已使用图片时会移动到这里，原位置自动留空。</p></div><button onClick={onClose}>关闭</button></header>
     <nav><button className={tab === 'recommended' ? 'active' : ''} onClick={() => setTab('recommended')}>适合当前位置</button><button className={tab === 'all' ? 'active' : ''} onClick={() => setTab('all')}>全部行程图片</button><button className={tab === 'upload' ? 'active' : ''} onClick={() => setTab('upload')}>本地上传</button></nav>
-    {tab === 'upload' ? <div className="image-picker-upload"><UiIcon name="included" size={42} /><strong>上传你确认可使用的图片</strong><p>上传后会保存在当前项目，并锁定这个位置，自动搜索不会覆盖。</p><Button tone="primary" onClick={() => inputRef.current?.click()}>选择本地图片</Button></div> : <div className="image-picker-grid">{visible.length ? visible.map((candidate) => { const used = usedBySrc.get(candidate.localPreviewUrl); const selectable = canChoose(candidate); return <button key={`${candidate.pipelineSlotId || candidate.slotId}-${candidate.candidateId}`} disabled={!selectable} className={selectable ? '' : 'image-picker-candidate-rejected'} onClick={() => selectable && onChoose(candidate, used)}><img src={candidate.localPreviewUrl} alt={candidate.actualSubject || '候选图片'} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add('thumbnail-load-failed'); }} /><span><strong>{candidate.sourceTitle || (candidate.userProvided ? '本地上传' : '已检查图片')}</strong><small>{selectable ? used ? '当前在：' + used.label : '可人工采用' : candidate.status === IMAGE_REVIEW_STATE.HARD_REJECTED ? '明确拒绝 · 不可采用' : '不适合当前位置'}</small>{candidate.actualSubject && <small>实际主体：{candidate.actualSubject}</small>}{candidate.reason && <small>判定：{candidate.reason}</small>}</span></button>; }) : <div className="empty-image-state"><strong>还没有适合的图片</strong><span>可以为当前位置继续搜索，或上传自己的图片。</span></div>}</div>}
-    <footer><Button disabled={researching} onClick={async () => { setResearching(true); try { await onResearch(); } finally { setResearching(false); } }}>{researching ? '正在搜索…' : '为当前位置搜索更多'}</Button></footer>
+    {tab === 'upload' ? <div className="image-picker-upload"><UiIcon name="included" size={42} /><strong>上传你确认可使用的图片</strong><p>上传后会保存在当前项目，并锁定这个位置，自动搜索不会覆盖。</p><Button tone="primary" disabled={operation.saving} onClick={() => inputRef.current?.click()}>选择本地图片</Button></div> : <div className="image-picker-grid">{visible.length ? visible.map((candidate) => { const used = usedBySrc.get(candidate.localPreviewUrl); const selectable = canChoose(candidate); return <button key={`${candidate.pipelineSlotId || candidate.slotId}-${candidate.candidateId}`} disabled={!selectable || operation.saving} className={selectable ? '' : 'image-picker-candidate-rejected'} onClick={() => selectable && setPendingChoice({ candidate, used })}><img src={candidate.localPreviewUrl} alt={candidate.actualSubject || '候选图片'} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add('thumbnail-load-failed'); }} /><span><strong>{candidate.sourceTitle || (candidate.userProvided ? '本地上传' : '已检查图片')}</strong><small>{selectable ? used ? '当前在：' + used.label : '可人工采用' : candidate.status === IMAGE_REVIEW_STATE.HARD_REJECTED ? '明确拒绝 · 不可采用' : '不适合当前位置'}</small>{candidate.actualSubject && <small>实际主体：{candidate.actualSubject}</small>}{candidate.reason && <small>判定：{candidate.reason}</small>}</span></button>; }) : <div className="empty-image-state"><strong>还没有适合的图片</strong><span>可以为当前位置继续搜索，或上传自己的图片。</span></div>}</div>}
+    <footer><div role="status" aria-live="polite">{operation.message}</div>{pendingChoice && <div className="empty-image-state"><strong>确认用于「{targetSlot.label}」？</strong><span>{pendingChoice.candidate.reason || '请确认图片内容和使用权。'} 已使用的图片会移动到这里，原位置留空。</span><Button disabled={operation.saving} onClick={() => onChoose({ ...pendingChoice.candidate, manualConfirmed: true }, pendingChoice.used)}>确认替换</Button><Button onClick={() => setPendingChoice(null)}>取消选择</Button></div>}<Button disabled={researching || !onResearch} onClick={onResearch}>{researching ? '正在搜索…' : '为当前位置搜索更多'}</Button></footer>
     <input ref={inputRef} hidden type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload(file); event.target.value = ''; }} />
   </section></div>;
 }
 
-export function Editor({ project, ItineraryComponent, onProject, onVersions, onResearchSlot, onChooseImage, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, copyRepairState, defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
+export function Editor({ project, ItineraryComponent, onProject, onVersions, onResearchSlot, onChooseImage, onOpenImagePicker, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, copyRepairState, defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
   const [selection, setSelection] = useState(initialSelection || { module: "days", itemIndex: Math.min(2, project.data.days.length - 1), subItemIndex: null, imageIndex: 0 });
   const [tab, setTab] = useState(initialTab);
   const [historyTick, setHistoryTick] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
+  useEffect(() => { if (pickerOpen) onOpenImagePicker?.(); }, [pickerOpen]);
+  const [imageOperations, setImageOperations] = useState({});
+  const [imageMessage, setImageMessage] = useState('');
+  const activeImageActions = useRef(new Set());
+  const imageAction = async (slot, kind, perform) => {
+    const key = `${slot.slotId}:${kind}`;
+    if (activeImageActions.current.has(key)) return false;
+    activeImageActions.current.add(key);
+    const flag = kind === 'search' ? 'searching' : 'saving';
+    const start = kind === 'search' ? `正在为「${slot.label}」搜索更多图片` : kind === 'upload' ? '正在上传并保存图片…' : '正在保存图片…';
+    const show = (message, busy) => { setImageOperations(current => ({ ...current, [slot.slotId]: { ...current[slot.slotId], [flag]: busy, message } })); setImageMessage(message); };
+    show(start, true);
+    try {
+      const result = await perform();
+      if (result === false) throw new Error('保存失败');
+      const message = kind === 'search' ? (result?.newCandidateCount > 0 ? `已找到 ${result.newCandidateCount} 张新候选` : '暂未找到更多合适图片') : kind === 'upload' ? '上传成功，图片已保存' : '图片替换成功';
+      show(message, false);
+      return true;
+    } catch (error) {
+      show(`${kind === 'search' ? '搜索失败，请重试' : kind === 'upload' ? '上传或保存失败，请重试' : '图片替换失败，请重试'}${error?.message ? `：${error.message}` : ''}`, false);
+      return false;
+    } finally { activeImageActions.current.delete(key); }
+  };
   const previewRef = useRef(null);
   const fileRef = useRef(null);
   const designerFileRef = useRef(null);
@@ -661,7 +735,7 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
     };
     try {
       if (onUploadImage) {
-        await onUploadImage(file, uploadSlot);
+        await imageAction(uploadSlot, 'upload', () => onUploadImage(file, uploadSlot));
         return;
       }
       const response = await fetch('/api/images/upload', { method: 'POST', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
@@ -672,7 +746,8 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
       next.imageLocks = { ...(next.imageLocks || {}), [uploadSlot.slotId]: { source: "user_upload", lockedAt: Date.now(), name: file.name } };
       recordImageDecision(next, { slotId: uploadSlot.slotId, action: 'upload', source: 'user_upload', fileName: file.name });
       }, `upload-${uploadSlot.slotId}`);
-    } catch (error) { alert(error?.message || '图片上传失败'); }
+      setImageMessage('上传成功，图片已保存');
+    } catch (error) { setImageMessage(`上传或保存失败，请重试：${error?.message || ''}`); }
   };
   const deleteImage = () => {
     if (!currentSlot || selection.module === "cover" || !window.confirm("删除这张图片？可以立即撤销恢复。")) return;
@@ -681,13 +756,9 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
   };
   const chooseLibraryImage = async (candidate, usedSlot) => {
     if (!currentSlot) return;
-    if (candidate.manualSelectable) {
-      if (!window.confirm(`确认将这张图片用于「${currentSlot.label}」？\n\n原判断：${candidate.reason || '请自行确认图片内容'}\n\n请确认内容和使用权。人工采用会保留原审核结论；已使用的图片会移动到这里，原位置留空。`)) return;
-      candidate = { ...candidate, manualConfirmed: true };
-    }
+    if (candidate.manualSelectable && !candidate.manualConfirmed) return;
     if (onChooseImage) {
-      if (await onChooseImage(candidate, currentSlot, usedSlot) === false) return;
-      setPickerOpen(false);
+      await imageAction(currentSlot, 'select', () => onChooseImage(candidate, currentSlot, usedSlot));
       return;
     }
     updateData((next) => {
@@ -698,7 +769,9 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
       recordImageDecision(next, { slotId: currentSlot.slotId, sourceSlotId: usedSlot?.slotId, action: usedSlot ? 'move' : 'adopt', source: candidate.userProvided ? 'user_upload' : 'user_selection', candidateId: candidate.candidateId });
     }, `choose-image-${currentSlot.slotId}-${Date.now()}`);
     setPickerOpen(false);
+    setImageMessage('图片替换成功');
   };
+  const researchCurrentSlot = () => imageAction(currentSlot, 'search', () => onResearchSlot(currentSlot.pipelineSlotId || currentSlot.slotId));
   const failurePrefix = selection.module === "cover" ? "cover" : selection.module === "days" ? `days:${selection.itemIndex}:` : `${selection.module}:`;
   const moduleFailures = (project.data.imageFailures || []).filter((failure) => String(failure.slot || "").startsWith(failurePrefix));
   const imagePanel = <div className="image-inspector"><div className="image-library"><header><strong>本模块图片位置</strong><span>{slots.filter((slot) => slot.src).length} / {slots.length}</span></header><div className="image-thumbnails">{slots.map((slot) => <button key={slot.key} className={currentSlot?.key === slot.key ? "active" : ""} onClick={() => selectSlot(slot)}>{slot.src ? <img src={slot.src} alt={slot.label} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add("thumbnail-load-failed"); }} /> : <span className="empty-slot-thumb">缺图</span>}<span>{slot.label}</span></button>)}</div>{!slots.some((slot) => slot.src) && <div className="empty-image-state"><strong>当前模块暂时缺图</strong><span>可以打开换图窗口，从本次行程图片中选择或本地上传。</span>{moduleFailures.map((failure) => <small key={failure.slot}>{failure.label}：{failure.error}</small>)}</div>}</div>{currentSlot && <>{currentSlot.src ? <><div className="focus-preview" onPointerDown={(event) => { const box = event.currentTarget.getBoundingClientRect(); event.currentTarget.setPointerCapture(event.pointerId); setFocus((event.clientX - box.left) / box.width * 100, (event.clientY - box.top) / box.height * 100); }} onPointerMove={(event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const box = event.currentTarget.getBoundingClientRect(); setFocus(Math.max(0, Math.min(100, (event.clientX - box.left) / box.width * 100)), Math.max(0, Math.min(100, (event.clientY - box.top) / box.height * 100))); }}><img src={currentSlot.src} alt="当前选中图片" style={{ objectPosition: currentSlot.focus }} /><span style={{ left: `${focusX}%`, top: `${focusY}%` }} /></div><div className="focus-controls"><label>横向焦点 <span>{Math.round(focusX)}%</span><input type="range" min="0" max="100" value={focusX} onChange={(event) => setFocus(Number(event.target.value), focusY)} /></label><label>纵向焦点 <span>{Math.round(focusY)}%</span><input type="range" min="0" max="100" value={focusY} onChange={(event) => setFocus(focusX, Number(event.target.value))} /></label></div></> : <div className="empty-image-state"><strong>这个位置还没有图片</strong><span>空位置不会显示破图，也不会阻止继续编辑。</span></div>}<div className="image-actions"><Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button>{currentSlot.src && <Button onClick={() => setFocus(50, 50)}>恢复居中</Button>}</div></>}<input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { uploadLocalImage(event.target.files?.[0]); event.target.value = ""; }} />{currentSlot?.src && selection.module !== "cover" && <button className="delete-image-button" onClick={deleteImage}>删除当前图片</button>}<p className="image-source">自动图片已经下载保存并检查；本地素材请确认使用权。</p></div>;
@@ -712,7 +785,7 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
       {tab === "image" && <div className="inspector-body">{imagePanel}</div>}
       <footer className="module-toggle"><div><UiIcon name="city" /><span><strong>模块显示</strong><small>{selectedModule.required ? "品牌固定模块" : "控制是否进入正式版本"}</small></span></div><label className="switch"><input type="checkbox" checked={selectedModule.required || visibility[selectedModule.id] !== false} disabled={selectedModule.required} onChange={(event) => updateVisibility(event.target.checked)} /><span /></label></footer>
     </aside>
-  </div>{pickerOpen && currentSlot && <ImagePickerModal data={project.data} targetSlot={currentSlot} onClose={() => setPickerOpen(false)} onChoose={chooseLibraryImage} onResearch={() => onResearchSlot?.(currentSlot.pipelineSlotId || currentSlot.slotId)} onUpload={async (file) => { await uploadLocalImage(file); setPickerOpen(false); }} />}</main>;
+  </div>{imageMessage && !pickerOpen && <div className="manual-image-feedback" role="status" aria-live="polite">{imageMessage}</div>}{pickerOpen && currentSlot && <ImagePickerModal key={currentSlot.slotId} operation={imageOperations[currentSlot.slotId]} data={project.data} targetSlot={currentSlot} onClose={() => setPickerOpen(false)} onChoose={chooseLibraryImage} onResearch={onResearchSlot ? researchCurrentSlot : undefined} onUpload={uploadLocalImage} />}</main>;
 }
 
 export function VersionsStep({ project, exporting, exportError, onExport, onBack, onReviewDecision, existingOnly = false }) {
@@ -731,7 +804,41 @@ function ProfilePanel({ user, onClose, onSave }) {
   const [syncProjects, setSyncProjects] = useState(true);
   const fileRef = useRef(null);
   const update = (key) => (event) => setProfile((current) => ({ ...current, [key]: event.target.value }));
-  return <div className="modal-backdrop" role="dialog" aria-modal="true"><section className="profile-panel"><header><div><small>MY PROFILE</small><h2>我的定制师资料</h2><p>保存后将作为新项目的默认封面身份。</p></div><button onClick={onClose}>关闭</button></header><div className="profile-layout"><div className="profile-avatar-editor"><img src={profile.avatar} alt="定制师头像预览" /><Button onClick={() => fileRef.current?.click()}>上传头像</Button><input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setProfile((current) => ({ ...current, avatar: reader.result })); reader.readAsDataURL(file); }} /><small>建议上传清晰正方形照片，系统将自动居中裁切。</small></div><div className="profile-fields"><Field label="定制师姓名" value={profile.name} onChange={(value) => setProfile((current) => ({ ...current, name: value }))} /><Field label="职位" value={profile.role} onChange={(value) => setProfile((current) => ({ ...current, role: value }))} /><Field label="个人介绍" rows={6} value={profile.bio} onChange={(value) => setProfile((current) => ({ ...current, bio: value }))} /><label className="sync-projects"><input type="checkbox" checked={syncProjects} onChange={(event) => setSyncProjects(event.target.checked)} /><span><strong>同步到我的已有项目</strong><small>项目内已单独修改的资料也会被本次资料覆盖。</small></span></label></div></div><footer><Button onClick={onClose}>取消</Button><Button tone="primary" onClick={() => onSave(profile, syncProjects)}>保存资料</Button></footer></section></div>;
+  return <div className="modal-backdrop profile-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="profile-panel-title">
+    <section className="profile-panel">
+      <header className="profile-panel-header">
+        <div>
+          <small>MY PROFILE</small>
+          <h2 id="profile-panel-title">我的定制师资料</h2>
+          <p>保存后将作为新项目的默认封面身份。</p>
+        </div>
+        <button className="profile-close-button" onClick={onClose} aria-label="关闭">×</button>
+      </header>
+      <div className="profile-layout">
+        <aside className="profile-avatar-editor">
+          <img src={profile.avatar} alt="定制师头像预览" />
+          <Button className="profile-avatar-button" onClick={() => fileRef.current?.click()}>上传头像</Button>
+          <input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => setProfile((current) => ({ ...current, avatar: reader.result })); reader.readAsDataURL(file); }} />
+          <small>建议上传清晰正方形照片，系统将自动居中裁切。</small>
+        </aside>
+        <div className="profile-fields">
+          <div className="profile-name-row">
+            <div className="profile-field"><Field label="定制师姓名" value={profile.name} onChange={(value) => setProfile((current) => ({ ...current, name: value }))} /></div>
+            <div className="profile-field"><Field label="职位" value={profile.role} onChange={(value) => setProfile((current) => ({ ...current, role: value }))} /></div>
+          </div>
+          <div className="profile-field profile-bio-field"><Field label="个人介绍" rows={5} value={profile.bio} onChange={(value) => setProfile((current) => ({ ...current, bio: value }))} /></div>
+          <label className="sync-projects">
+            <input type="checkbox" checked={syncProjects} onChange={(event) => setSyncProjects(event.target.checked)} />
+            <span><strong>同步到我的已有项目</strong><small>项目内已单独修改的资料也会被本次资料覆盖。</small></span>
+          </label>
+        </div>
+      </div>
+      <footer>
+        <Button className="profile-cancel-button" onClick={onClose}>取消</Button>
+        <Button tone="primary" onClick={() => onSave(profile, syncProjects)}>保存资料</Button>
+      </footer>
+    </section>
+  </div>;
 }
 
 function AdminPanel({ users, projects, onClose, onToggle, onReset }) {
@@ -742,10 +849,14 @@ function DeleteDialog({ project, onCancel, onConfirm }) {
   return <div className="modal-backdrop"><section className="confirm-dialog"><UiIcon name="warning" size={34} /><h2>删除“{project.title}”？</h2><p>项目和专属素材将进入回收站。若继续清理正在被历史版本使用的素材，旧版本可能缺图且无法恢复。</p><div><Button onClick={onCancel}>取消</Button><Button tone="danger" onClick={onConfirm}>仍然删除</Button></div></section></div>;
 }
 
+function TrashDialog({ project, onCancel, onConfirm }) {
+  return <div className="modal-backdrop"><section className="confirm-dialog"><UiIcon name="warning" size={34} /><h2>将“{project.title}”移入回收站？</h2><p>项目、原始资料、运行记录和成品都会完整保留，可随时从回收站恢复。正在执行的生成任务不会因此取消。</p><div><Button onClick={onCancel}>取消</Button><Button tone="primary" onClick={onConfirm}>移入回收站</Button></div></section></div>;
+}
+
 export function Workspace({ initialData, ItineraryComponent, agentMode = false }) {
   const storageKeys = agentMode ? AGENT_STORAGE : FIXED_STORAGE;
-  const [users, setUsers] = useState(() => readStorage(storageKeys.users, []));
-  const [user, setUser] = useState(() => { const session = readStorage(storageKeys.session, null); return readStorage(storageKeys.users, []).find((item) => item.id === session?.userId) || null; });
+  const [users, setUsers] = useState(() => window.__sheyouServerUser ? [window.__sheyouServerUser] : readStorage(storageKeys.users, []));
+  const [user, setUser] = useState(() => { if(window.__sheyouServerUser) return window.__sheyouServerUser; const session = readStorage(storageKeys.session, null); return readStorage(storageKeys.users, []).find((item) => item.id === session?.userId) || null; });
   const [projects, setProjects] = useState(() => readStorage(storageKeys.projects, []));
   const [projectId, setProjectId] = useState(null);
   const [screen, setScreen] = useState("list");
@@ -759,6 +870,7 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   const [adminOpen, setAdminOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [deleteProject, setDeleteProject] = useState(null);
+  const [trashProject, setTrashProject] = useState(null);
   const [agentSnapshot, setAgentSnapshot] = useState(null);
   const [agentDecisions, setAgentDecisions] = useState({});
   const saveTimer = useRef(null);
@@ -771,9 +883,8 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     const refresh = async () => {
       try {
         const apiBase = currentProject.flowKind === "simple_skill_v1" ? "/api/simple/projects" : "/api/agent/projects";
-        const response = await fetch(`${apiBase}/${currentProject.agentProjectId}`);
-        const value = await response.json();
-        if (!response.ok) throw new Error(value.error || "无法读取智能体项目");
+        const response = await fetch(`${apiBase}/${currentProject.agentProjectId}`, { signal: AbortSignal.timeout(15000), cache: "no-store" });
+        const value = await readAgentSnapshot(response);
         if (stopped) return;
         setAgentSnapshot(value);
         setAgentDecisions((existing) => ({ ...Object.fromEntries((value.confirmations || []).filter((item) => item.status === "pending").map((item) => [item.confirmationId, item.choices.find((choice) => choice.recommended)?.choiceId || item.choices[0]?.choiceId])), ...existing }));
@@ -792,7 +903,7 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
             return collection;
           });
           setProgress(100);
-          timer = setTimeout(() => { if (!stopped) setScreen("editor"); }, 900);
+          timer = setTimeout(() => { if (!stopped) { if (currentProject.flowKind === "simple_skill_v1") window.location.assign(`/simple/projects/${currentProject.agentProjectId}`); else setScreen("editor"); } }, 900);
           return;
         }
         if (["awaiting_user_action", "partial", "ready_to_render"].includes(value.project.status) && value.result?.data && currentProject.flowKind === "simple_skill_v1") {
@@ -800,12 +911,22 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
           return;
         }
         if (["preparing", "planning", "ready_for_execution", "running"].includes(value.project.status) || ["pending", "running"].includes(value.executionRun?.status) || value.activeJob?.status === "running") timer = setTimeout(refresh, 1000);
-      } catch (error) { if (!stopped) setGenerationError(error?.message || "无法读取智能体项目"); }
+      } catch (error) {
+        if (!stopped) {
+          setAgentSnapshot(previous => ({ ...previous, _connectionError: error?.message || "状态请求失败", _observedAt: previous?._observedAt || Date.now() }));
+          timer = setTimeout(refresh, 3000);
+        }
+      }
     };
     refresh();
     return () => { stopped = true; clearTimeout(timer); };
   }, [agentMode, currentProject?.agentProjectId, screen, agentSnapshot?.project?.activeJobId]);
   const commitProjects = (next) => { setProjects(next); try { writeStorage(storageKeys.projects, next); setSaveState('saved'); } catch (error) { setSaveState('error'); alert(error.message); } };
+  const commitProjectLifecycle = (next) => {
+    try { writeStorage(storageKeys.projects, next); setProjects(next); setSaveState("saved"); return true; }
+    catch (error) { setSaveState("error"); alert(error.message); return false; }
+  };
+  const restoreProject = (project) => commitProjectLifecycle(projects.map((item) => item.id === project.id ? { ...item, trashedAt: null, restoredAt: Date.now() } : item));
   const updateProject = (nextProject, immediate = false) => {
     const next = { ...nextProject, updatedAt: Date.now() };
     const collection = projects.map((item) => item.id === next.id ? next : item);
@@ -867,6 +988,10 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
       setProjectId(project.id);
       setAgentSnapshot(null);
       const simpleRunStarted = project.flowKind === "simple_skill_v1" && Boolean(project.agentProjectId);
+      if (simpleRunStarted && (project.workflowStage === "generated" || project.revisionMode)) {
+        window.location.assign(`/simple/projects/${project.agentProjectId}`);
+        return;
+      }
       setScreen(project.workflowStage === "generated" || project.revisionMode ? "editor" : simpleRunStarted ? "generate" : project.files?.length ? "confirm" : "upload");
       return;
     }
@@ -1047,11 +1172,11 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
       setExportError(message);
     }
   };
-  const logout = () => { localStorage.removeItem(storageKeys.session); setUser(null); setProjectId(null); setScreen("list"); };
+  const logout = () => { if(window.__sheyouServerUser){window.dispatchEvent(new Event('sheyou-logout'));return;} localStorage.removeItem(storageKeys.session); setUser(null); setProjectId(null); setScreen("list"); };
   if (!user) return <AuthScreen storageKeys={storageKeys} onAuth={(nextUser) => { setUsers(readStorage(storageKeys.users, [])); setUser(nextUser); }} />;
   return <div className={`workspace-shell${agentMode ? " workspace-agent-mode" : ""}`}><AppHeader user={user} project={currentProject && !["list", "admin"].includes(screen) ? currentProject : null} saved={saveState} canGenerate={agentMode ? false : copyExportEligibility(currentProject || {}).allowed} onHome={() => setScreen("list")} onLogout={logout} onAdmin={() => setAdminOpen(true)} onProfile={() => setProfileOpen(true)} onGenerate={() => setScreen('versions')} />
     {agentMode && <div className="agent-mode-strip"><span>定制师智能工作台 · 独立项目数据</span><strong>确认信息优先 · 完成后可继续调整</strong></div>}
-    {screen === "list" && <ProjectList user={user} projects={projects} onCreate={createProject} onOpen={openProject} onDelete={agentMode ? undefined : setDeleteProject} />}
+    {screen === "list" && <ProjectList user={user} projects={projects} onCreate={createProject} onOpen={openProject} onDelete={agentMode ? undefined : setDeleteProject} onTrash={agentMode ? setTrashProject : undefined} onRestore={agentMode ? restoreProject : undefined} />}
     {screen === "upload" && currentProject && <UploadStep project={currentProject} onFiles={async (files, recognition, sourceSha256) => agentMode ? attachAgentProject(currentProject, files, recognition, sourceSha256) : updateProject({ ...currentProject, workflowStage: "uploaded", title: recognition.data.title || currentProject.title, data: { ...recognition.data, designer: currentProject.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type })) }, true)} onContinue={() => setScreen("confirm")} />}
     {screen === "confirm" && currentProject && <ConfirmStep project={currentProject} agentMode={agentMode} agentSnapshot={agentSnapshot} agentDecisions={agentDecisions} onAgentDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onChange={(data, metadata = {}) => updateProject({ ...currentProject, ...metadata, data })} onBack={() => setScreen("upload")} onContinue={() => agentMode ? continueAgent().catch((error) => setGenerationError(error?.message || "无法继续")) : (() => { setProgress(0); setGenerationError(""); setGenerationStatus({ phase: "queued", status: "idle", currentAction: "尚未开始", stats: {}, elapsedMs: 0 }); setScreen("generate"); })()} />}
     {screen === "generate" && currentProject && (agentMode ? <AgentGenerationStep project={currentProject} snapshot={agentSnapshot} error={generationError} decisions={agentDecisions} onDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onConfirm={() => continueAgent().catch((error) => setGenerationError(error?.message || "无法保存确认"))} onRetryImage={(slotId) => retryAgentImage(slotId).catch((error) => setGenerationError(error?.message || "无法重新搜索图片"))} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onCancel={() => cancelAgent().catch((error) => setGenerationError(error?.message || "无法取消任务"))} /> : <GenerationStep project={currentProject} progress={progress} status={generationStatus} error={generationError} onStart={generateProject} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onRevision={() => { updateProject({ ...currentProject, revisionMode: true }, true); setScreen('editor'); }} />)}
@@ -1060,5 +1185,6 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     {adminOpen && <AdminPanel users={users} projects={projects} onClose={() => setAdminOpen(false)} onToggle={(target) => { const next = users.map((item) => item.id === target.id ? { ...item, active: item.active === false } : item); setUsers(next); writeStorage(storageKeys.users, next); }} onReset={(target) => { const next = users.map((item) => item.id === target.id ? { ...item, pin: "123456" } : item); setUsers(next); writeStorage(storageKeys.users, next); alert(`${target.name} 的PIN已重置为 123456`); }} />}
     {profileOpen && <ProfilePanel user={user} onClose={() => setProfileOpen(false)} onSave={(profile, syncProjects) => { const nextUsers = users.map((item) => item.id === user.id ? { ...item, name: profile.name || item.name, profile } : item); const nextUser = nextUsers.find((item) => item.id === user.id); setUsers(nextUsers); setUser(nextUser); writeStorage(storageKeys.users, nextUsers); if (syncProjects) { const nextProjects = projects.map((item) => item.ownerId === user.id ? { ...item, data: { ...item.data, designer: clone(profile) }, updatedAt: Date.now() } : item); commitProjects(nextProjects); } setProfileOpen(false); }} />}
     {!agentMode && deleteProject && <DeleteDialog project={deleteProject} onCancel={() => setDeleteProject(null)} onConfirm={() => { commitProjects(projects.filter((item) => item.id !== deleteProject.id)); setDeleteProject(null); }} />}
+    {agentMode && trashProject && <TrashDialog project={trashProject} onCancel={() => setTrashProject(null)} onConfirm={() => { const saved = commitProjectLifecycle(projects.map((item) => item.id === trashProject.id ? { ...item, trashedAt: Date.now() } : item)); if (saved) setTrashProject(null); }} />}
   </div>;
 }

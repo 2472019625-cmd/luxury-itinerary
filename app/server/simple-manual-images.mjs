@@ -4,8 +4,10 @@ import path from "node:path";
 import sharp from "sharp";
 import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
+import { getSlotImage, setSlotImage } from "../src/lib/imageSlots.js";
 
 const MIME_EXTENSIONS = Object.freeze({ "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" });
+const manualRenders = new Map();
 const SLOT_LABELS = Object.freeze({
   "image:cover:primary": "封面主图 · 坦桑尼亚草原飞机",
   "image:hotel:imported-hotel-2:primary": "酒店主图 · Singita Sabora Tented Camp",
@@ -164,6 +166,9 @@ export function buildSimpleManualImagePayload(store, projectId) {
       data: { ...result.data, imageCandidates, imageReview: { slots }, simpleImageSlotBindings: result.data?.simpleImageSlotBindings || plan.slotBindings || {}, generationIssues: result.unresolvedItems || [], requiredImageGate: { unresolvedSlotIds: unresolvedRequired.filter((item) => item.kind === "image").map((item) => item.id), passed: unresolvedRequired.filter((item) => item.kind === "image").length === 0 } },
     },
     executionRunId: run.executionRunId,
+    manualRevision: result.manualImageCompletion?.revision || null,
+    manualVersion: result.manualImageCompletion?.version || 0,
+    renderPending: result.renderStatus === "pending_manual_render",
     pipelineStatus: result.pipelineStatus,
     outputPath: result.outputPath || null,
     outputUrl,
@@ -188,21 +193,48 @@ function selectedCandidate(imageResult, candidateId) {
   return candidatePool(imageResult).find((item) => item.candidateId === candidateId) || null;
 }
 
-async function persistResult({ store, root, project, run, plan, result, imageExecution, action, render = runSimpleRenderer }) {
+async function persistResult({ store, root, project, run, plan, result, imageExecution, action, render = runSimpleRenderer, deferRender = false }) {
+  const affected = new Set([action.slotId, ...(action.humanDecision?.movedFrom || [])]);
+  if (action.type === "explicit_single_slot_search" && result.imageExecution?.results?.find(item => item.slotId === action.slotId)?.selected) affected.clear();
   const writeback = applySimpleSkillResults({
-    preparedData: plan.preparedData,
-    copyTasks: plan.copyTasks,
+    preparedData: result.data || plan.preparedData,
+    copyTasks: [],
     copyExecution: result.copyExecution,
-    imageSlots: plan.imageSlots,
+    imageSlots: plan.imageSlots.filter(slot => affected.has(slot.slotId)).map(slot => ({ ...slot, userLocked: false })),
     slotBindings: plan.slotBindings,
     imageExecution,
   });
+  writeback.copyWriteback = result.writeback?.copy || [];
+  writeback.unresolvedItems.push(...(result.unresolvedItems || []).filter(item => item.kind !== "renderer" && !(item.kind === "image" && affected.has(item.id))));
+  writeback.data.simpleImageSlotBindings ||= plan.slotBindings;
+  for (const slotId of affected) {
+    const selected = imageExecution.results.find(item => item.slotId === slotId)?.selected;
+    const binding = plan.slotBindings[slotId];
+    if (selected && binding) {
+      const image = getSlotImage(writeback.data, binding);
+      if (image) setSlotImage(writeback.data, binding, { ...image, userProvided: Boolean(selected.userProvided), userSelected: Boolean(selected.userSelected) });
+    }
+    if (action.type !== "explicit_single_slot_search") writeback.data.imageLocks = { ...writeback.data.imageLocks, [slotId]: { source: slotId !== action.slotId ? "user_moved_out" : action.type === "upload_real_image" ? "user_upload" : "user_selection", candidateId: selected?.candidateId || null, lockedAt: Date.now() } };
+  }
+  writeback.requiredUnresolved = writeback.unresolvedItems.filter(item => item.required);
+  const revision = randomUUID();
+  const pending = { ...result, data: writeback.data, imageExecution, unresolvedItems: writeback.unresolvedItems, outputPath: null, pipelineStatus: "partial", renderStatus: "pending_manual_render", manualImageCompletion: { ...result.manualImageCompletion, revision, version: Number(result.manualImageCompletion?.version || 0) + 1, slotIds: manualSlotIds(result), lastAction: action } };
+  // Save the binding before export verification; stale output must not be downloadable.
+  store.saveFinalResult(project.projectId, run.executionRunId, pending);
+  store.updateProject(project.projectId, { status: "partial", progress: 90, currentStage: "图片已保存，正在检查成品", outputPath: null });
+  const key = path.resolve(root, project.projectId);
+  const finish = async () => {
+  if (store.getFinalResult(project.projectId, run.executionRunId)?.manualImageCompletion?.revision !== revision) return;
+  const safeRender = async (input) => {
+    try { return await render(input); }
+    catch (error) { return { status: "failed", error: { code: "manual_render_failed", message: error.message } }; }
+  };
   const renderMode = writeback.requiredUnresolved.length ? "draft" : "final";
-  let renderResult = await render({ data: writeback.data, projectId: project.projectId, root, mode: renderMode });
+  let renderResult = await safeRender({ data: writeback.data, projectId: project.projectId, root, mode: renderMode });
   if (renderMode === "final" && renderResult.status !== "success") {
     const finalAttempt = renderResult;
     writeback.unresolvedItems.push({ kind: "renderer", id: "renderer:2000", status: finalAttempt.status || "failed", required: true, error: finalAttempt.error || { code: "renderer_failed", message: "正式成品版面检查未通过" } });
-    renderResult = await render({ data: writeback.data, projectId: project.projectId, root, mode: "draft" });
+    renderResult = await safeRender({ data: writeback.data, projectId: project.projectId, root, mode: "draft" });
     renderResult = { ...renderResult, mode: "draft", rendererCalls: Number(finalAttempt.rendererCalls || 0) + Number(renderResult.rendererCalls || 0), finalAttempt };
   }
   renderResult.mode ||= renderMode;
@@ -214,7 +246,7 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
   const pipelineStatus = complete ? "complete" : "partial";
   const now = new Date().toISOString();
   const nextResult = {
-    ...result,
+    ...pending,
     pipelineStatus,
     imageExecution,
     writeback: { copy: writeback.copyWriteback, images: writeback.imageWriteback },
@@ -224,7 +256,8 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
     data: writeback.data,
     render: renderResult,
     manualImageCompletion: {
-      ...(result.manualImageCompletion || {}),
+      ...pending.manualImageCompletion,
+      revision,
       slotIds: manualSlotIds(result),
       lastAction: action,
       updatedAt: now,
@@ -234,19 +267,25 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
       rendererCalls: Number(result.manualImageCompletion?.rendererCalls || 0) + Number(renderResult.rendererCalls || 0),
     },
   };
+  if (store.getFinalResult(project.projectId, run.executionRunId)?.manualImageCompletion?.revision !== revision) return;
   store.saveFinalResult(project.projectId, run.executionRunId, nextResult);
   store.saveEvidence(project.projectId, run.executionRunId, `manual-image-${Date.now()}`, { ...action, pipelineStatus, unresolvedRequired: unresolvedRequired.map((item) => item.id), rendererStatus: renderResult.status, savedAt: now });
   const nextRun = { ...run, status: pipelineStatus, progress: complete ? 100 : 90, executionEnabled: false, currentStage: complete ? "完成" : "可编辑草稿", updatedAt: now };
   store.updateExecutionRun(project.projectId, nextRun);
   store.updateProject(project.projectId, { status: pipelineStatus, currentStage: nextRun.currentStage, progress: nextRun.progress, outputPath: renderResult.outputPath || null });
+  };
+  const job = (manualRenders.get(key) || Promise.resolve()).catch(() => {}).then(finish);
+  manualRenders.set(key, job);
+  job.catch(error => console.error("Manual image verification failed:", error.message)).finally(() => { if (manualRenders.get(key) === job) manualRenders.delete(key); });
+  if (!deferRender) await job;
   return buildSimpleManualImagePayload(store, project.projectId);
 }
 
-export async function chooseSimpleImageCandidate({ store, root, projectId, slotId, candidateId, manualConfirmed = false, render } = {}) {
-  const context = projectContext(store, projectId);
+export async function chooseSimpleImageCandidate({ store, root, projectId, slotId, candidateId, manualConfirmed = false, render, deferRender = false } = {}) {
+  let context = projectContext(store, projectId);
   assertPlannedImageSlot(context, slotId);
-  const imageResults = context.result.imageExecution?.results || [];
-  const current = imageResults.find((item) => item.slotId === slotId);
+  let imageResults = context.result.imageExecution?.results || [];
+  let current = imageResults.find((item) => item.slotId === slotId);
   if (!current) throw Object.assign(new Error("该图片位没有已保存结果"), { code: "slot_result_missing" });
   const source = imageResults.find((item) => selectedCandidate(item, candidateId));
   const candidate = source && selectedCandidate(source, candidateId);
@@ -268,6 +307,9 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
   } catch {
     throw Object.assign(new Error('图片文件缺失、损坏或无法安全解码，请重新上传'), { code: 'candidate_file_unusable' });
   }
+  context = projectContext(store, projectId);
+  imageResults = context.result.imageExecution?.results || [];
+  current = imageResults.find(item => item.slotId === slotId);
   const movedFrom = imageResults.filter((item) => item.slotId !== slotId && item.selected?.localUrl === candidate.localUrl).map((item) => item.slotId);
   const humanDecision = { action: movedFrom.length ? 'move' : 'adopt', decidedAt: new Date().toISOString(), targetSlotId: slotId, sourceSlotId: source.slotId, movedFrom, riskConfirmed: manualConfirmed, overridesAutomaticJudgment, originalRejection: candidate.rejection || null, originalRisk: candidate.rejectionReason || candidate.matchReason || candidate.reason || '' };
   const nextCurrent = {
@@ -284,7 +326,7 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
   const imageExecution = { ...context.result.imageExecution, results: nextResults, metrics: { ...(context.result.imageExecution?.metrics || {}), automaticFollowupRounds: 0 } };
   for (const item of nextResults.filter((item) => movedFrom.includes(item.slotId))) store.saveTaskResult(projectId, context.run.executionRunId, `image-${item.slotId.replace(/[^a-zA-Z0-9_-]/g, '-')}`, item);
   store.saveTaskResult(projectId, context.run.executionRunId, `image-${slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, nextCurrent);
-  return persistResult({ ...context, store, root, imageExecution, render, action: { type: "choose_existing_candidate", slotId, candidateId, humanDecision } });
+  return persistResult({ ...context, store, root, imageExecution, render, deferRender, action: { type: "choose_existing_candidate", slotId, candidateId, humanDecision } });
 }
 
 export async function rejectSimpleImageCandidate({ store, root, projectId, slotId, candidateId, render } = {}) {
@@ -302,8 +344,8 @@ export async function rejectSimpleImageCandidate({ store, root, projectId, slotI
   return persistResult({ ...context, store, root, imageExecution, render, action: { type: "reject_existing_candidate", slotId, candidateId } });
 }
 
-export async function uploadSimpleImage({ store, root, projectId, slotId, dataUrl, fileName, render } = {}) {
-  const context = projectContext(store, projectId);
+export async function uploadSimpleImage({ store, root, projectId, slotId, dataUrl, fileName, render, deferRender = false } = {}) {
+  let context = projectContext(store, projectId);
   assertPlannedImageSlot(context, slotId);
   const match = String(dataUrl || "").match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\r\n]+)$/);
   if (!match) throw Object.assign(new Error("仅支持 JPEG、PNG 或 WebP 图片"), { code: "upload_format_invalid" });
@@ -321,6 +363,7 @@ export async function uploadSimpleImage({ store, root, projectId, slotId, dataUr
   const assetName = `${sha256.slice(0, 20)}${MIME_EXTENSIONS[contentType]}`;
   await mkdir(assetDir, { recursive: true });
   await writeFile(path.join(assetDir, assetName), buffer, { flag: "wx" }).catch((error) => { if (error.code !== "EEXIST") throw error; });
+  context = projectContext(store, projectId);
   const candidate = {
     candidateId: `user-${sha256.slice(0, 20)}`,
     localUrl: `/image-assets/${assetDirName}/${assetName}`,
@@ -347,20 +390,23 @@ export async function uploadSimpleImage({ store, root, projectId, slotId, dataUr
   };
   const imageExecution = { ...context.result.imageExecution, results: imageResults.map((item) => item.slotId === slotId ? nextCurrent : item), metrics: { ...(context.result.imageExecution?.metrics || {}), automaticFollowupRounds: 0 } };
   store.saveTaskResult(projectId, context.run.executionRunId, `image-${slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, nextCurrent);
-  return persistResult({ ...context, store, root, imageExecution, render, action: { type: "upload_real_image", slotId, candidateId: candidate.candidateId, fileName: fileName || null } });
+  return persistResult({ ...context, store, root, imageExecution, render, deferRender, action: { type: "upload_real_image", slotId, candidateId: candidate.candidateId, fileName: fileName || null } });
 }
 
-export async function researchSimpleImageSlot({ store, root, projectId, slotId, runImage, imageOptions = {}, render } = {}) {
-  const context = projectContext(store, projectId);
+export async function researchSimpleImageSlot({ store, root, projectId, slotId, runImage, imageOptions = {}, render, deferRender = false } = {}) {
+  let context = projectContext(store, projectId);
   const slot = assertPlannedImageSlot(context, slotId);
   if (typeof runImage !== "function") throw new Error("单槽图片搜索能力未配置");
-  const previousResults = context.result.imageExecution?.results || [];
+  let previousResults = context.result.imageExecution?.results || [];
   const existingImages = previousResults.filter((item) => item.slotId !== slotId && item.status === "success" && item.selected).map((item) => ({ ...item.selected, src: item.selected.localUrl, slotId: item.slotId }));
   const searched = await runImage({ root, slots: [slot], existingImages, ...imageOptions });
+  context = projectContext(store, projectId);
+  previousResults = context.result.imageExecution?.results || [];
+  if (searched.status === "failed" || searched.results?.some(item => item.slotId === slotId && item.status === "failed")) throw new Error("搜索失败，请重试");
   const returned = searched.results?.find((item) => item.slotId === slotId) || { slotId, status: "not_found", selected: null, candidates: [], technicalStatus: "missing_skill_result", warnings: ["单槽搜索未返回结果"] };
   const previous = previousResults.find((item) => item.slotId === slotId) || {};
   const priorCandidates = candidatePool(previous);
-  const mergedCandidates = uniqueCandidates([...priorCandidates, ...(returned.candidates || [])]);
+  const mergedCandidates = uniqueCandidates([...priorCandidates, ...candidatePool(returned)]);
   const preserveExistingSelection = previous.status === "success" && previous.selected;
   const nextCurrent = returned.status === "success" && !preserveExistingSelection ? {
     ...previous,
@@ -402,5 +448,7 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
     },
   };
   store.saveTaskResult(projectId, context.run.executionRunId, `image-${slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, nextCurrent);
-  return persistResult({ ...context, store, root, imageExecution, render, action: { type: "explicit_single_slot_search", slotId, requestId: randomUUID() } });
+  const payload = await persistResult({ ...context, store, root, imageExecution, render, deferRender, action: { type: "explicit_single_slot_search", slotId, requestId: randomUUID() } });
+  payload.newCandidateCount = mergedCandidates.filter(item => (item.localUrl || item.publicUrl) && !priorCandidates.some(old => old.candidateId === item.candidateId || (old.localUrl || old.publicUrl) === (item.localUrl || item.publicUrl))).length;
+  return payload;
 }
