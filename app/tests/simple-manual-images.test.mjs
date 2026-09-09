@@ -1,51 +1,66 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import sharp from "sharp";
-import { AgentPlanStore } from "../server/agent-plan-store.mjs";
 import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, researchSimpleImageSlot, uploadSimpleImage } from "../server/simple-manual-images.mjs";
+import { mergeManualImagePayload } from '../src/lib/manualImageState.js';
 
-async function fixture({ hardOnly = false, oneSlot = false } = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), "simple-manual-images-"));
-  await mkdir(path.join(root, 'output/image-assets/test'), { recursive: true });
-  const jpeg = await sharp({ create: { width: 1000, height: 600, channels: 3, background: '#61754b' } }).jpeg().toBuffer();
-  for (const name of ['selectable.jpg', 'hard.jpg']) await writeFile(path.join(root, 'output/image-assets/test', name), jpeg);
-  const store = new AgentPlanStore(path.join(root, "output", "simple-pipeline", "projects"));
-  const projectId = "project-manual-images";
-  const planId = "plan-manual-images";
-  const executionRunId = "run-manual-images";
-  const preparedData = {
-    title: "测试行程",
-    subtitle: "",
-    destination: "坦桑尼亚",
-    dayCount: 1,
-    startDate: "2026-10-01",
-    endDate: "2026-10-01",
-    adults: 2,
-    children: 0,
-    travelers: 2,
-    heroImage: "",
-    hotels: [],
-    transportSummary: [],
-    days: [{ id: "day-1", date: "2026-10-01", routeNodes: ["塞伦盖蒂"], city: "塞伦盖蒂", mealPlan: {}, hotel: "", vehicle: "", estimatedTravelTime: "", overnightType: "none", spots: [{ id: "spot-1", name: "游猎", status: "included", statusLabel: "已包含", feeBoundary: "included", sourceEvidence: [], images: [] }] }],
-    highlights: [], included: [], excluded: [], cancellation: [], pendingConfirmations: [], notes: [{ title: "提示", items: ["测试"] }],
-  };
-  const coverSlot = { slotId: "image:cover:primary", moduleType: "cover", required: true, location: "坦桑尼亚", subject: "草原飞机", visualGoal: "草原飞机", userLocked: false };
-  const daySlot = { slotId: "image:day:1:primary", moduleType: "day", required: true, location: "塞伦盖蒂", subject: "游猎", visualGoal: "游猎", userLocked: false };
-  const imageSlots = oneSlot ? [coverSlot] : [coverSlot, daySlot];
-  const candidate = { candidateId: "candidate-selectable", localUrl: "/image-assets/test/selectable.jpg", sourceTitle: "测试候选", actualSubject: "真实草原飞机", hardJudgment: { locationMatch: true, activityMatch: true, subjectMatch: true, watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true, eligible: false } };
-  const hardCandidate = { candidateId: "candidate-hard", localUrl: "/image-assets/test/hard.jpg", sourceTitle: "错误候选", actualSubject: "酒店泳池", rejection: "subject_mismatch", rejectionReason: "酒店泳池不能冒充活动图", hardJudgment: { locationMatch: true, activityMatch: false, subjectMatch: false, watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true, eligible: false } };
-  const coverResult = { slotId: coverSlot.slotId, status: "needs_user_action", selected: null, candidates: [candidate, hardCandidate], technicalStatus: "no_eligible_candidate", manualAction: { originalVisualTarget: { location: "坦桑尼亚", subject: "草原飞机" }, selectableCandidates: hardOnly ? [] : [candidate], rejectedCandidates: [hardCandidate], userRequiredActions: ["choose_existing_candidate", "upload_real_image", "explicit_single_slot_search"] } };
-  const dayResult = { slotId: daySlot.slotId, status: "needs_user_action", selected: null, candidates: [], technicalStatus: "no_eligible_candidate", manualAction: { originalVisualTarget: { location: "塞伦盖蒂", subject: "游猎" }, selectableCandidates: [], rejectedCandidates: [], userRequiredActions: ["upload_real_image", "explicit_single_slot_search"] } };
-  const imageResults = oneSlot ? [coverResult] : [coverResult, dayResult];
-  store.createProject({ projectId, flowKind: "simple_skill_v1", status: "partial", currentStage: "剩余图片人工补齐", progress: 75, activePlanId: null, planIds: [], executionRunIds: [], activeExecutionRunId: null, inputFingerprint: "fingerprint" });
-  store.activatePlan(projectId, { planId, preparedData, copyTasks: [], imageSlots, slotBindings: { "image:cover:primary": { module: "cover", fieldPath: "heroImage", imageIndex: 0, required: true }, "image:day:1:primary": { module: "day", dayIndex: 0, spotIndex: 0, fieldPath: "days.0.spots.0.images.0", imageIndex: 0, required: true } } });
-  store.saveExecutionRun(projectId, { executionRunId, projectId, planId, inputFingerprint: "fingerprint", flowKind: "simple_skill_v1", status: "partial", progress: 75, executionEnabled: false, currentStage: "剩余图片人工补齐", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-  store.saveFinalResult(projectId, executionRunId, { projectId, pipelineStatus: "partial", copyExecution: { status: "success", results: [], metrics: { modelCalls: 0 } }, imageExecution: { status: "needs_user_action", results: imageResults, metrics: { automaticFollowupRounds: 0 } }, unresolvedItems: imageSlots.map((slot) => ({ kind: "image", id: slot.slotId, status: "needs_user_action", required: true, requiredAction: "needs_user_action", selectableCandidateIds: slot.slotId === coverSlot.slotId && !hardOnly ? [candidate.candidateId] : [] })), renderStatus: "blocked_by_required_items", outputPath: null, data: preparedData, manualImageCompletion: { slotIds: imageSlots.map((slot) => slot.slotId), plannerModelCalls: 0, copyModelCalls: 0, rendererCalls: 0 } });
-  return { root, store, projectId, executionRunId, candidate, hardCandidate };
-}
+import { fixture } from './support/manual-image-fixture.mjs';
+
+test("保存先于慢 Renderer 返回；新版本不被旧渲染覆盖", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  let calls = 0;
+  const render = async ({ mode }) => { if (++calls === 1) await wait; return { status: 'success', mode, outputPath: `render-${calls}.png` }; };
+  const first = await chooseSimpleImageCandidate({ ...value, slotId: 'image:cover:primary', candidateId: value.candidate.candidateId, render, deferRender: true });
+  assert.equal(first.renderPending, true);
+  assert.equal(first.canEnterFinal, false);
+  assert.equal(buildSimpleManualImagePayload(value.store, value.projectId).project.data.heroImage, value.candidate.localUrl);
+  const secondPromise = chooseSimpleImageCandidate({ ...value, slotId: 'image:day:1:primary', candidateId: value.hardCandidate.candidateId, manualConfirmed: true, render });
+  // Release only once the second binding has really been committed.
+  while (value.store.getFinalResult(value.projectId, value.executionRunId).manualImageCompletion.version < 2) await new Promise(resolve => setTimeout(resolve, 5));
+  release();
+  const second = await secondPromise;
+  assert.equal(second.project.data.heroImage, value.candidate.localUrl);
+  assert.equal(second.project.data.days[0].spots[0].images[0].src, value.hardCandidate.localUrl);
+  assert.equal(second.manualVersion, 2);
+  assert.equal(second.canEnterFinal, true);
+});
+
+test("后台重搜保留等待期间的新选择，合并候选并反馈新增数", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  const render = async ({ mode }) => ({ status: 'success', mode, outputPath: 'test.png' });
+  const searching = researchSimpleImageSlot({ ...value, slotId: 'image:cover:primary', render, runImage: async () => { await wait; return { results: [{ slotId: 'image:cover:primary', status: 'not_found', candidates: [{ candidateId: 'new', localUrl: '/image-assets/test/new.jpg' }] }] }; } });
+  await chooseSimpleImageCandidate({ ...value, slotId: 'image:cover:primary', candidateId: value.candidate.candidateId, render });
+  release();
+  const result = await searching;
+  assert.equal(result.newCandidateCount, 1);
+  assert.equal(result.project.data.heroImage, value.candidate.localUrl);
+  assert.ok(result.project.data.imageCandidates.some(item => item.candidateId === 'new'));
+});
+
+test("Renderer 异常不丢图片；保存异常必须抛出", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = await chooseSimpleImageCandidate({ ...value, slotId: 'image:cover:primary', candidateId: value.candidate.candidateId, render: async () => { throw new Error('render offline'); } });
+  assert.equal(result.project.data.heroImage, value.candidate.localUrl);
+  assert.equal(result.renderPending, false);
+  assert.equal(result.canEnterFinal, false);
+  value.store.saveFinalResult = () => { throw new Error('disk full'); };
+  await assert.rejects(chooseSimpleImageCandidate({ ...value, slotId: 'image:cover:primary', candidateId: value.candidate.candidateId }), /disk full/);
+});
+
+test("返回图片载荷保留等待期间文案，丢弃迟到的旧版本", async () => {
+  const current = { manualVersion: 2, project: { data: { title: '正在编辑的标题', heroImage: 'old', days: [] } } };
+  const incoming = { manualVersion: 3, project: { data: { title: '服务器旧标题', heroImage: 'new', simpleImageSlotBindings: { cover: { module: 'cover', fieldPath: 'heroImage' } } } } };
+  const next = mergeManualImagePayload(current, incoming);
+  assert.equal(next.project.data.title, '正在编辑的标题');
+  assert.equal(next.project.data.heroImage, 'new');
+  assert.equal(mergeManualImagePayload(next, { ...incoming, manualVersion: 1 }), next);
+});
 
 test("前端载荷展示人工图片位，并只开放明确可选候选", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));

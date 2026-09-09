@@ -79,7 +79,7 @@ export function copyRequestJson({ failTargetId = null, delayMs = 60 } = {}) {
       if (task.moduleType === "day") value = `当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。`;
       if (task.moduleType === "day_notice") value = "当天移动与体验较为集中，建议提前整理随身用品，轻装参与。";
       if (task.moduleType === "day_spot") value = "围绕这一项真实活动说明体验方式与客户价值。";
-      if (task.moduleType === "visual_card") value = { cardTitle: '草原体验', cardDescription: '围绕这一项真实活动说明体验方式与客户价值。' };
+      if (task.moduleType === "visual_card") value = { cardTitle: task.facts.entityDisplayName || '草原体验', cardDescription: '围绕这一项真实活动说明体验方式与客户价值。' };
       if (task.moduleType === "notes") value = [
         { title: "行前准备", icon: "calendar", tone: "gold", items: ["请根据本次目的地与活动安排准备合适衣物和随身用品，具体清单由定制师在出发前协助复核。"] },
         { title: "活动与安全", icon: "security", tone: "gold", items: ["参加游猎与营地活动时请遵循现场人员指引，相关时效要求以出发前正式通知为准。"] },

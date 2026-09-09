@@ -14,11 +14,18 @@ test("4174正式入口复用原Workspace五步前端而非简化项目页", () =
   assert.match(diagnostic, /智能体内部诊断/);
 });
 
-test("智能体浏览器存储使用独立命名空间且首批项目不显示删除入口", () => {
+test("智能体浏览器存储使用独立命名空间且项目支持移入回收站和恢复", () => {
   assert.match(workspace, /sheyou-agent-users-v1/);
   assert.match(workspace, /sheyou-agent-session-v1/);
   assert.match(workspace, /sheyou-agent-projects-v1/);
-  assert.match(workspace, /onDelete=\{agentMode \? undefined : setDeleteProject\}/);
+  assert.match(workspace, /onTrash=\{agentMode \? setTrashProject : undefined\}/);
+  assert.match(workspace, /onRestore=\{agentMode \? restoreProject : undefined\}/);
+  assert.match(workspace, /trashedAt: Date\.now\(\)/);
+  assert.match(workspace, /trashedAt: null/);
+  assert.match(workspace, /项目、原始资料、运行记录和成品都会完整保留/);
+  assert.match(workspace, /正在执行的生成任务不会因此取消/);
+  assert.match(workspace, /!project\.trashedAt/);
+  assert.match(workspace, /writeStorage\(storageKeys\.projects, next\); setProjects\(next\)/);
 });
 
 test("Simple项目直达编辑页复用全局工作台Header", () => {
@@ -46,6 +53,33 @@ test("生成步骤默认使用定制师视角并把管理员运行信息折叠",
   assert.match(workspace, /screen === "editor" && currentProject/);
   assert.match(workspace, /existingOnly=\{agentMode\}/);
   assert.match(workspace, /ready_for_editor/);
+});
+
+test("客户行程制作进度使用单列卡并保留真实子任务状态", () => {
+  const progressView = workspace.slice(workspace.indexOf("function AgentProgressOverview"), workspace.indexOf("function AgentGenerationStep"));
+  const progressCss = workspaceCss.slice(workspaceCss.indexOf(".agent-progress-overview"), workspaceCss.indexOf(".agent-stage-banner"));
+  assert.match(progressView, /客户行程制作进度/);
+  assert.match(progressView, /已用时/);
+  assert.match(progressView, /getDesignerCurrentAction\(snapshot\)/);
+  assert.match(progressView, /正在处理图片/);
+  assert.match(progressView, /agent-progress-headline/);
+  assert.match(progressView, /agent-progress-track/);
+  assert.doesNotMatch(progressView, /<footer>/);
+  assert.doesNotMatch(progressCss, /grid-template-columns:\s*minmax\(240px/);
+  assert.match(progressCss, /border-radius:\s*12px/);
+});
+
+test("生成页全宽对齐并明确区分运行完成和终止状态", () => {
+  const generation = workspace.slice(workspace.indexOf("function AgentProgressOverview"), workspace.indexOf("function CandidatePreview"));
+  assert.match(generation, /display\.failed \? "生成已终止"/);
+  assert.match(generation, /display\.completed \? "生成完成"/);
+  assert.match(generation, /failed:\s*"失败"/);
+  assert.match(generation, /pending:\s*display\.failed \? "未执行"/);
+  assert.match(generation, /agentFailurePresentation/);
+  assert.match(workspaceCss, /\.agent-workspace-generation \.generation-main[^}]+padding-right:\s*5vw[^}]+padding-left:\s*5vw/);
+  assert.match(workspaceCss, /\.agent-designer-summary > header \{ max-width:\s*none/);
+  assert.match(workspaceCss, /\.agent-fact-assurance[^}]+max-width:\s*none/);
+  assert.match(workspaceCss, /\.agent-custom-priorities[^}]+max-width:\s*none/);
 });
 
 test("等待确认保留在生成页并从当前任务继续", () => {
