@@ -144,16 +144,17 @@ function Highlights({ items = [], title = "产品亮点" }) {
   if (!items.length) return null;
   return <section className="content-section card-panel highlights" data-edit-path="highlights"><div className="panel-heading"><h2>{title}</h2><span>PRODUCT<br />HIGHLIGHTS</span></div><div className="highlight-list">{items.map((item, index) => {
     const [title, description] = item.includes("：") ? item.split(/：(.*)/s) : [item, ""];
-    return <div className="highlight-item" key={`${item}-${index}`} data-edit-path={`highlights.${index}`}><span className="crown-disc"><Icon name="crown" size={52} tone="light" /></span><p><strong>{title}</strong>{description && <>：{description}</>}</p></div>;
+    return <div className="highlight-item" key={`${item}-${index}`} data-edit-path={`highlights.${index}`}><span className="crown-disc"><Icon name="crown" size={52} tone="light" /></span><div className="highlight-copy"><h3>{title}</h3>{description && <p>{description}</p>}</div></div>;
   })}</div></section>;
 }
 
 function Overview({ days, title = "行程总览" }) {
   return <section className="content-section card-panel overview" data-edit-path="overview"><div className="panel-heading"><h2>{title}</h2><span>ITINERARY<br />OVERVIEW</span></div><div className="overview-list">{days.map((day, index) => {
-    const route = day.routeNodes?.length ? day.routeNodes.join(" → ") : day.city;
+    const routeNodes = day.routeNodes?.length ? day.routeNodes : [day.city];
+    const route = routeNodes.join(" → ");
     return <article className="overview-day-card" key={`${day.date}-${day.city}-${index}`} data-edit-path={`overview.${index}`}>
       <div className="overview-day-index"><span>DAY</span><strong>{String(index + 1).padStart(2, "0")}</strong></div>
-      <div className="overview-day-main"><h3>{route}</h3><p>{day.theme || route}</p>{day.overviewNote && <div className="overview-day-meta"><span><Icon name="vehicle" size={28} />{day.overviewNote}</span></div>}</div>
+      <div className="overview-day-main"><h3>{routeNodes.map((node, nodeIndex) => <span className="overview-route-step" key={`${node}-${nodeIndex}`}>{nodeIndex > 0 && <span className="overview-route-arrow" aria-hidden="true">→</span>}<span className="overview-route-node">{node}</span></span>)}</h3><p>{day.theme || route}</p>{day.overviewNote && <div className="overview-day-meta"><span><Icon name="vehicle" size={28} />{day.overviewNote}</span></div>}</div>
     </article>;
   })}</div></section>;
 }
