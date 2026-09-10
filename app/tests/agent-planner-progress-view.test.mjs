@@ -17,6 +17,7 @@ test("Simple Pipeline 六阶段使用定制师可理解的业务语言", () => {
     "检查费用和重要信息",
     "生成并检查行程长图",
   ]);
+  assert.deepEqual(SIMPLE_DESIGNER_STAGES.map((stage) => stage.shortLabel), ["资料", "规划", "文案", "图片", "检查", "长图"]);
 });
 
 test("默认实时状态把内部图片路径转换为客户行程动作", () => {

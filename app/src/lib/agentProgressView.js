@@ -1,20 +1,20 @@
 export const SIMPLE_DESIGNER_STAGES = [
-  { key: "parser", label: "读取并整理行程资料" },
-  { key: "planner", label: "梳理整程节奏与亮点" },
-  { key: "copy_skill", label: "完善客户版行程文案" },
-  { key: "image_skill", label: "匹配酒店、体验与交通图片" },
-  { key: "program_writeback", label: "检查费用和重要信息" },
-  { key: "renderer", label: "生成并检查行程长图" },
+  { key: "parser", label: "读取并整理行程资料", shortLabel: "资料" },
+  { key: "planner", label: "梳理整程节奏与亮点", shortLabel: "规划" },
+  { key: "copy_skill", label: "完善客户版行程文案", shortLabel: "文案" },
+  { key: "image_skill", label: "匹配酒店、体验与交通图片", shortLabel: "图片" },
+  { key: "program_writeback", label: "检查费用和重要信息", shortLabel: "检查" },
+  { key: "renderer", label: "生成并检查行程长图", shortLabel: "长图" },
 ];
 
 export const AGENT_DESIGNER_STAGES = [
-  { key: "planning", label: "梳理整程节奏与亮点" },
-  { key: "verification", label: "核对重要行程事实" },
-  { key: "copy", label: "完善客户版行程文案" },
-  { key: "brand_review", label: "检查客户表达与重要信息" },
-  { key: "images", label: "匹配酒店、体验与交通图片" },
-  { key: "render", label: "生成行程长图" },
-  { key: "final_checks", label: "检查最终交付内容" },
+  { key: "planning", label: "梳理整程节奏与亮点", shortLabel: "整理" },
+  { key: "verification", label: "核对重要行程事实", shortLabel: "核对" },
+  { key: "copy", label: "完善客户版行程文案", shortLabel: "文案" },
+  { key: "brand_review", label: "检查客户表达与重要信息", shortLabel: "检查" },
+  { key: "images", label: "匹配酒店、体验与交通图片", shortLabel: "图片" },
+  { key: "render", label: "生成行程长图", shortLabel: "长图" },
+  { key: "final_checks", label: "检查最终交付内容", shortLabel: "完成" },
 ];
 
 function cleanText(value) {

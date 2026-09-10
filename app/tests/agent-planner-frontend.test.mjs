@@ -42,7 +42,7 @@ test("生成步骤默认使用定制师视角并把管理员运行信息折叠",
   assert.match(workspace, /SIMPLE_DESIGNER_STAGES/);
   assert.match(workspace, /run\.progress\.stages/);
   assert.match(workspace, /run\?\.events\?\.at\(-1\)/);
-  assert.match(workspace, /aria-valuenow=\{progress\.percent\}/);
+  assert.match(workspace, /aria-valuenow=\{safeProgress\}/);
   assert.match(generation, /本次定制摘要/);
   assert.match(generation, /已按你的确认制作/);
   assert.match(generation, /本次定制重点/);
@@ -63,15 +63,26 @@ test("客户行程制作进度使用单列卡并保留真实子任务状态", ()
   assert.match(progressView, /getDesignerCurrentAction\(snapshot\)/);
   assert.match(progressView, /正在处理图片/);
   assert.match(progressView, /agent-progress-headline/);
-  assert.match(progressView, /agent-progress-track/);
+  assert.match(progressView, /agent-progress-route/);
+  assert.match(progressView, /agent-progress-mascot/);
+  assert.match(progressView, /style=\{\{ left: `\$\{mascotProgress\}%` \}\}/);
+  assert.match(progressView, /useAnimatedProgress\(safeProgress/);
+  assert.match(progressView, /progress\.stages\.map/);
+  assert.doesNotMatch(progressView, /setInterval|setTimeout|Math\.random/);
   assert.doesNotMatch(progressView, /<footer>/);
   assert.doesNotMatch(progressCss, /grid-template-columns:\s*minmax\(240px/);
   assert.match(progressCss, /border-radius:\s*12px/);
+  assert.match(progressCss, /left \.68s cubic-bezier\(\.22,\.61,\.36,1\)/);
+  assert.match(progressCss, /agent-progress-mascot-body[^}]+transform:\s*scaleX\(-1\)/);
+  assert.match(progressCss, /agent-progress-route-node-complete i::after/);
+  assert.match(progressCss, /agent-progress-route-node-active i::after/);
+  assert.match(progressCss, /agent-list-pulse/);
+  assert.match(workspaceCss, /prefers-reduced-motion/);
 });
 
 test("生成页全宽对齐并明确区分运行完成和终止状态", () => {
   const generation = workspace.slice(workspace.indexOf("function AgentProgressOverview"), workspace.indexOf("function CandidatePreview"));
-  assert.match(generation, /display\.failed \? "生成已终止"/);
+  assert.match(generation, /display\.failed \? "本次生成已停止"/);
   assert.match(generation, /display\.completed \? "生成完成"/);
   assert.match(generation, /failed:\s*"失败"/);
   assert.match(generation, /pending:\s*display\.failed \? "未执行"/);
@@ -80,6 +91,19 @@ test("生成页全宽对齐并明确区分运行完成和终止状态", () => {
   assert.match(workspaceCss, /\.agent-designer-summary > header \{ max-width:\s*none/);
   assert.match(workspaceCss, /\.agent-fact-assurance[^}]+max-width:\s*none/);
   assert.match(workspaceCss, /\.agent-custom-priorities[^}]+max-width:\s*none/);
+});
+
+test("终止态保留品牌进度并只局部提示失败", () => {
+  const progressView = workspace.slice(workspace.indexOf("function AgentProgressOverview"), workspace.indexOf("function AgentGenerationStep"));
+  const progressCss = workspaceCss.slice(workspaceCss.indexOf(".agent-progress-overview"), workspaceCss.indexOf(".agent-stage-banner"));
+  assert.match(progressView, /display\.failed \? "本次生成已停止"/);
+  assert.match(progressView, /agent-progress-stop-tag/);
+  assert.match(progressView, /后续步骤未继续执行/);
+  assert.match(progressView, /failedStageIndex \/ \(progress\.stages\.length - 1\) \* 100/);
+  assert.match(progressCss, /agent-progress-route-failed \.agent-progress-mascot-body[^}]+agent-mascot-idle/);
+  assert.match(progressCss, /agent-progress-route-node-failed i[^}]+border-color:\s*#b65a4d/);
+  assert.match(progressCss, /li\.agent-progress-failed[^}]+linear-gradient/);
+  assert.doesNotMatch(progressCss, /agent-progress-card-failed \.agent-progress-route-track span[^}]+background:\s*var\(--ws-danger\)/);
 });
 
 test("等待确认保留在生成页并从当前任务继续", () => {

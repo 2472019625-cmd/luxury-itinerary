@@ -329,10 +329,42 @@ function buildAgentProgress(snapshot) {
   return { stages, percent, planActive };
 }
 
+function useAnimatedProgress(target, enabled = true) {
+  const [displayValue, setDisplayValue] = useState(target);
+  const valueRef = useRef(target);
+  useEffect(() => {
+    const next = Math.max(0, Math.min(100, Number(target) || 0));
+    const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (!enabled || reducedMotion || Math.abs(next - valueRef.current) < 1) {
+      valueRef.current = next;
+      setDisplayValue(next);
+      return undefined;
+    }
+    const start = valueRef.current;
+    const delta = next - start;
+    const startedAt = performance.now();
+    const duration = 420;
+    let frameId = 0;
+    const animate = (now) => {
+      const time = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - time, 3);
+      const value = Math.round(start + delta * eased);
+      valueRef.current = value;
+      setDisplayValue(value);
+      if (time < 1) frameId = requestAnimationFrame(animate);
+    };
+    frameId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frameId);
+  }, [enabled, target]);
+  return displayValue;
+}
+
 function AgentProgressOverview({ snapshot, elapsed }) {
   const progress = buildAgentProgress(snapshot);
   const display = agentDisplayState(snapshot);
   progress.stages = displayAgentStages(progress.stages, display);
+  const safeProgress = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+  const animatedProgress = useAnimatedProgress(safeProgress, !display.failed && !display.disconnected);
   const labels = { complete: "已完成", active: "进行中", waiting: "等待确认", failed: "失败", cancelled: "已取消", pending: display.failed ? "未执行" : "等待处理", unknown: "状态待确认" };
   const latestEvent = snapshot?.executionRun?.events?.at(-1);
   const waitingReason = latestEvent?.waitingReason ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_confirmation" ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_user_action" ? "部分内容需要在编辑页补充或确认，不影响你先查看和调整草稿。" : "";
@@ -350,16 +382,28 @@ function AgentProgressOverview({ snapshot, elapsed }) {
     return false;
   }) || progress.stages.find((stage) => stage.state === "active") || progress.stages.find((stage) => stage.state === "waiting");
   const failedStage = progress.stages.find((stage) => stage.state === "failed");
+  const failedStageIndex = failedStage ? progress.stages.findIndex((stage) => stage.key === failedStage.key) : -1;
+  const mascotProgress = display.failed && failedStageIndex >= 0 && progress.stages.length > 1 ? failedStageIndex / (progress.stages.length - 1) * 100 : safeProgress;
   const failure = agentFailurePresentation(snapshot, failedStage?.label);
-  const primaryStatus = display.disconnected ? "正在重新获取制作状态" : display.failed ? "生成已终止" : display.completed ? "生成完成" : actionStage ? `${actionStage.state === "waiting" ? "等待确认：" : "正在"}${actionStage.label}` : detailedAction;
-  const auxiliaryParts = display.disconnected ? ["以下为最后已知进度，后台任务可能仍在继续"] : display.failed ? [`本次生成在「${failure.stageLabel}」遇到问题，已停止继续处理`, failure.userMessage] : display.completed ? ["客户版行程已制作完成，可以继续调整文案、图片和版式"] : [detailedAction !== primaryStatus ? detailedAction : "", imageProgressText].filter(Boolean);
+  const primaryStatus = display.disconnected ? "正在重新获取制作状态" : display.failed ? "本次生成已停止" : display.completed ? "生成完成" : actionStage ? `${actionStage.state === "waiting" ? "等待确认：" : "正在"}${actionStage.label}` : detailedAction;
+  const auxiliaryParts = display.disconnected ? ["以下为最后已知进度，后台任务可能仍在继续"] : display.failed ? [`停止于「${failure.stageLabel}」；${failure.userMessage}，后续步骤未继续执行`] : display.completed ? ["客户版行程已制作完成，可以继续调整文案、图片和版式"] : [detailedAction !== primaryStatus ? detailedAction : "", imageProgressText].filter(Boolean);
   const auxiliaryStatus = [...new Set(auxiliaryParts)].join(" · ");
   const displayMode = display.failed ? "failed" : display.completed ? "completed" : display.disconnected ? "disconnected" : "running";
   return <section className={`agent-progress-overview agent-progress-card-${displayMode}`} aria-labelledby="designer-progress-title">
     <header><h2 id="designer-progress-title">客户行程制作进度</h2><span>{display.disconnected ? "最后同步" : "已用时"} {Math.floor(elapsed / 60)}分{elapsed % 60}秒</span></header>
-    <div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress.percent} aria-label="客户行程制作进度">
-      <div className="agent-progress-headline"><strong>{progress.percent}<sup>%</sup></strong><div><h3 aria-live="polite">{primaryStatus}</h3>{auxiliaryStatus && <p aria-live="polite">{auxiliaryStatus}</p>}</div></div>
-      <div className="agent-progress-track"><span style={{ width: `${progress.percent}%` }} /></div>
+    <div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={safeProgress} aria-label="客户行程制作进度">
+      <div className="agent-progress-headline"><strong><span>{animatedProgress}</span><sup>%</sup></strong><div><div className="agent-progress-status-line"><h3 aria-live="polite">{primaryStatus}</h3>{display.failed && <span className="agent-progress-stop-tag">已终止</span>}</div>{auxiliaryStatus && <p aria-live="polite">{auxiliaryStatus}</p>}</div></div>
+      <div className={`agent-progress-route agent-progress-route-${displayMode}`}>
+        <div className="agent-progress-route-inner">
+          <div className="agent-progress-mascot" style={{ left: `${mascotProgress}%` }} aria-hidden="true">
+            <span className="agent-progress-mascot-body"><img src="/assets/logos/logo-gold.svg" alt="" /></span>
+          </div>
+          <div className="agent-progress-route-track"><span style={{ width: `${safeProgress}%` }} /></div>
+          <div className="agent-progress-route-nodes" aria-hidden="true">
+            {progress.stages.map((stage, index) => <span className={`agent-progress-route-node agent-progress-route-node-${stage.state}`} style={{ left: `${progress.stages.length > 1 ? index / (progress.stages.length - 1) * 100 : 0}%` }} key={stage.key}><i /><b>{stage.shortLabel}</b></span>)}
+          </div>
+        </div>
+      </div>
     </div>
     <ol>{progress.stages.map((stage) => <li className={`agent-progress-${stage.state}`} key={stage.key}><i aria-hidden="true">{stage.state === "complete" && <UiIcon name="included" size={13} />}</i><span>{stage.label}</span><em>{labels[stage.state]}</em></li>)}</ol>
     {waitingReason && <p className="agent-progress-wait">{waitingReason}</p>}
