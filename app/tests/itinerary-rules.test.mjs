@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   compactProofPoints,
+  EXPERIENCE_STATUS,
   formatTravelerCount,
   inferOvernightType,
   isUsableFinalImageSource,
@@ -96,6 +97,35 @@ test("splits an included core experience from optional paid sub-experiences", ()
   assert.equal(day.spots[1].name, '清晨热气球 Safari');
   assert.equal(day.spots[1].status, 'optional_paid');
   assert.match(day.spots[1].sourceEvidence[0], /自费/);
+});
+
+test("routeNodes keep route-significant optional experiences without mixing fee status into the route", () => {
+  const sourceDays = [
+    { city: "塞伦盖蒂西部", description: "游猎日，独立包车敞篷越野游猎，可自费跟随向导徒步/夜间游猎。", hotel: "Singita Faru Faru Lodge", spots: [] },
+    { city: "塞伦盖蒂西部", description: "游猎日，独立包车敞篷越野游猎，可自费参加清晨热气球Safari。", hotel: "Singita Sabora Tented Camp", spots: [] },
+    { city: "塞伦盖蒂西部", description: "游猎日，可自费参观马赛部落。", hotel: "Singita Sabora Tented Camp", spots: [] },
+    { city: "塞伦盖蒂西部", description: "游猎日，视情况参观格鲁梅蒂反偷猎观察站。", hotel: "Singita Sabora Tented Camp", spots: [] },
+  ];
+  const normalized = normalizeItineraryFacts({ days: sourceDays }, { mapDates: false });
+
+  assert.deepEqual(normalized.days[0].routeNodes, ["塞伦盖蒂西部", "徒步 Safari", "夜间游猎", "Singita Faru Faru Lodge"]);
+  assert.deepEqual(normalized.days[1].routeNodes, ["塞伦盖蒂西部", "热气球", "Singita Sabora Tented Camp"]);
+  assert.deepEqual(normalized.days[2].routeNodes, ["塞伦盖蒂西部", "马赛部落参访"]);
+  assert.deepEqual(normalized.days[3].routeNodes, ["塞伦盖蒂西部", "格鲁梅蒂反偷猎观察站"]);
+  assert.equal(normalized.days[0].spots[1].status, EXPERIENCE_STATUS.OPTIONAL_PAID);
+  assert.equal(normalized.days[1].spots[1].feeBoundary, "excluded");
+});
+
+test("routeNodes still exclude generic daily activity and leisure descriptions", () => {
+  const day = normalizeDayFacts({
+    city: "塞伦盖蒂西部",
+    description: "酒店早餐后全天游猎，沿途欣赏风景，下午泳池放松并观看动物。",
+    hotel: "Singita Sabora Tented Camp",
+    spots: [],
+  }, 2, 7);
+
+  assert.deepEqual(day.routeNodes, ["塞伦盖蒂西部", "Singita Sabora Tented Camp"]);
+  assert.ok(!day.routeNodes.some((node) => /全天游猎|欣赏风景|早餐|泳池|观看动物/.test(node)));
 });
 
 test('classifies hotel-night, vehicle guarantee and fee conflicts as blockers', () => {

@@ -66,6 +66,73 @@ test("recognizes compact Chinese headers without treating meals as hotels", asyn
   assert.ok(!result.report.warnings.includes("false"));
 });
 
+test("原始亮点按换行、编号和 bullet 拆分并保留单元格来源", async () => {
+  const rows = [
+    ["肯尼亚2日行程"],
+    ["产品亮点：\n1. 顶奢连住｜国际品牌+私保营地\n• C位蹲守｜独赏天国之渡\n3、草原飞机接驳｜拒绝长途拉车"],
+    ["日期", "简要行程", "详细", "用餐", "参考酒店", "用车"],
+    ["DAY 1", "内罗毕→安博塞利", "抵达入住", "晚餐", "Angama Amboseli", "草原飞机"],
+    ["DAY 2", "安博塞利→内罗毕", "返程", "早餐", "无住宿", "商务车"],
+  ];
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet["!merges"] = [XLSX.utils.decode_range("A2:F2")];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "行程");
+  const buffer = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+  const result = await importItineraryWorkbook(new File([buffer], "多行亮点.xlsx"), { days: [] });
+
+  assert.deepEqual(result.data.sourcePosterHighlights, [
+    "顶奢连住｜国际品牌+私保营地",
+    "C位蹲守｜独赏天国之渡",
+    "草原飞机接驳｜拒绝长途拉车",
+  ]);
+  assert.equal(result.report.sourcePosterHighlightRawCount, 1);
+  assert.equal(result.report.highlightCount, 3);
+  assert.ok(result.data.sourceImportCoverage.sourcePosterHighlights.every((item) => item.sourceEvidence.some((source) => source.sheet === "行程" && source.address === "A2")));
+});
+
+test("DAY 描述中的特别体验不计入原始亮点", async () => {
+  const rows = [
+    ["肯尼亚2日野趣"],
+    ["日期", "简要行程", "详细", "用餐", "参考酒店", "用车"],
+    ["DAY 1", "内罗毕→安博塞利", "特别体验：傍晚游猎与落日茶歇", "晚餐", "Sopa Lodge", "游猎车"],
+    ["DAY 2", "安博塞利→内罗毕", "返程", "早餐", "无住宿", "商务车"],
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "行程");
+  const buffer = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+  const result = await importItineraryWorkbook(new File([buffer], "无原始亮点.xlsx"), { days: [] });
+
+  assert.deepEqual(result.data.sourcePosterHighlights, []);
+  assert.equal(result.report.sourcePosterHighlightRawCount, 0);
+  assert.equal(result.report.highlightCount, 0);
+});
+
+test("合并单元格中的行程亮点按换行拆分并保留来源", async () => {
+  const rows = [
+    ["肯尼亚8日野趣"],
+    ["行程亮点：\n迁徙前线 | 直击天国之渡\n临湖臻选 | 坐拥纳瓦沙胜景\n推窗即见 | 乞力马扎罗雪山\n私享座驾 | 畅行无界旷野"],
+    ["日期", "简要行程", "详细", "用餐", "参考酒店", "用车"],
+    ["DAY 1", "内罗毕→安博塞利", "抵达入住", "晚餐", "Soroi Amboseli Camp", "四驱越野车"],
+  ];
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet["!merges"] = [XLSX.utils.decode_range("A2:F2")];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "行程单");
+  const buffer = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+  const result = await importItineraryWorkbook(new File([buffer], "行程亮点.xlsx"), { days: [] });
+
+  assert.deepEqual(result.data.sourcePosterHighlights, [
+    "迁徙前线 | 直击天国之渡",
+    "临湖臻选 | 坐拥纳瓦沙胜景",
+    "推窗即见 | 乞力马扎罗雪山",
+    "私享座驾 | 畅行无界旷野",
+  ]);
+  assert.equal(result.report.sourcePosterHighlightRawCount, 1);
+  assert.equal(result.report.highlightCount, 4);
+  assert.ok(result.data.sourceImportCoverage.sourcePosterHighlights.every((item) => item.sourceEvidence.some((source) => source.sheet === "行程单" && source.address === "A2")));
+});
+
 test("酒店 sourceEvidence 保留过滤前的真实 DAY 4—DAY 6 编号", async () => {
   const rows = [
     ["坦桑尼亚6日行程"],

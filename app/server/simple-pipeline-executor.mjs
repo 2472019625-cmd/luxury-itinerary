@@ -11,6 +11,7 @@ import { runImageSearchSkill } from "./simple-image-skill.mjs";
 import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
 import { applyApprovedFixedModules, SIMPLE_PIPELINE_DEFAULT_ORIGIN } from "./simple-fixed-modules.mjs";
+import { SIMPLE_PIPELINE_PROGRESS } from "./simple-pipeline-progress.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const disabledLegacyCapabilities = new Set(["brand_reviewer", "review_decision", "finding_package", "copy_regeneration", "image_second_round", "targeted_image_research", "stage_budget"]);
@@ -124,7 +125,7 @@ export async function runSimplePipeline({
     flowKind: "simple_skill_v1",
     status: "planning",
     currentStage: "Planner",
-    progress: 10,
+    progress: SIMPLE_PIPELINE_PROGRESS.parserComplete,
     createdAt: now,
     updatedAt: now,
     inputFingerprint,
@@ -184,13 +185,13 @@ export async function runSimplePipeline({
       callCounts: { parserCalls: 1, plannerModelCalls: Math.max(plannerAttemptFiles.length, Number(error.attemptUsages?.length || 0)), copyBusinessBatches: 0, copyModelCalls: 0, copyFactsResearchCalls: 0, imageBusinessBatches: 0, imageSearchCalls: 0, imageCommonsCalls: 0, imagePageExtractionCalls: 0, imageDownloadAttempts: 0, imageVisualJudgmentCalls: 0, rendererCalls: 0 },
       plannerAttemptFiles,
     };
-    const failedRun = { executionRunId, projectId, planId: null, inputFingerprint, flowKind: "simple_skill_v1", status: "failed", progress: 10, executionEnabled: false, currentStage: "Planner failure", error: errorRecord, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const failedRun = { executionRunId, projectId, planId: null, inputFingerprint, flowKind: "simple_skill_v1", status: "failed", progress: SIMPLE_PIPELINE_PROGRESS.parserComplete, executionEnabled: false, currentStage: "Planner failure", error: errorRecord, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     try {
       for (const attempt of error.attempts || []) store.saveAttempt(projectId, attempt);
       store.saveExecutionRun(projectId, failedRun);
       const finalResultRef = store.saveFinalResult(projectId, executionRunId, failureResult);
       store.updateExecutionRun(projectId, { ...failedRun, finalResultRef, updatedAt: new Date().toISOString() });
-      store.updateProject(projectId, { status: "failed", currentStage: "Planner failure", progress: 10, executionEnabled: false, lastError: errorRecord.message, errorCode, finalResultRef, outputPath: null });
+      store.updateProject(projectId, { status: "failed", currentStage: "Planner failure", progress: SIMPLE_PIPELINE_PROGRESS.parserComplete, executionEnabled: false, lastError: errorRecord.message, errorCode, finalResultRef, outputPath: null });
       error.projectId = projectId;
       error.finalResultRef = finalResultRef;
     } catch (persistenceError) {
@@ -214,21 +215,27 @@ export async function runSimplePipeline({
   emit({ stage: "planner", phase: "finished", durationMs: timingsMs.planner, copyTaskCount: simplePlan.copyTasks.length, imageSlotCount: simplePlan.imageSlots.length });
 
   const executionRunId = randomUUID();
-  const initialRun = { executionRunId, projectId, planId: simplePlan.planId, inputFingerprint, flowKind: "simple_skill_v1", status: "running", progress: 30, executionEnabled: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  const initialRun = { executionRunId, projectId, planId: simplePlan.planId, inputFingerprint, flowKind: "simple_skill_v1", status: "running", progress: SIMPLE_PIPELINE_PROGRESS.plannerComplete, executionEnabled: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   const runPersistStartedAt = Date.now();
   try { store.saveExecutionRun(projectId, initialRun); }
   catch (error) { const wrapped = new Error(`项目保存失败：${error.message}`); wrapped.code = "project_save_failed"; throw wrapped; }
   finally { timingsMs.persistence += elapsed(runPersistStartedAt); }
-  emit({ stage: "execution", phase: "started", projectId, executionRunId, progress: 30 });
+  emit({ stage: "execution", phase: "started", projectId, executionRunId, progress: SIMPLE_PIPELINE_PROGRESS.plannerComplete });
 
   const copyStartedAt = Date.now();
   emit({ stage: "copy_skill", phase: "started", targetCount: simplePlan.copyTasks.length, startedAtMs: copyStartedAt });
   let copyFinishedAt = null;
-  const copyPromise = runCopy({ itineraryContext: simplePlan.itineraryContext, tasks: simplePlan.copyTasks, ...copyOptions, signal, onCapabilityCall: capabilityEvent }).finally(() => { copyFinishedAt = Date.now(); });
+  const copyPromise = runCopy({ itineraryContext: simplePlan.itineraryContext, tasks: simplePlan.copyTasks, ...copyOptions, signal, onCapabilityCall: capabilityEvent })
+    .then((result) => { emit({ stage: "copy_skill", phase: "finished", status: result.status }); return result; })
+    .catch((error) => { emit({ stage: "copy_skill", phase: "failed", status: "failed", error: { code: error?.code || "copy_skill_failed", message: error?.message || String(error) } }); throw error; })
+    .finally(() => { copyFinishedAt = Date.now(); });
   const imageStartedAt = Date.now();
   emit({ stage: "image_skill", phase: "started", slotCount: simplePlan.imageSlots.length, startedAtMs: imageStartedAt });
   let imageFinishedAt = null;
-  const imagePromise = runImage({ slots: simplePlan.imageSlots, root, ...imageOptions, signal, onCapabilityCall: capabilityEvent }).finally(() => { imageFinishedAt = Date.now(); });
+  const imagePromise = runImage({ slots: simplePlan.imageSlots, root, ...imageOptions, signal, onCapabilityCall: capabilityEvent })
+    .then((result) => { emit({ stage: "image_skill", phase: "finished", status: result.status }); return result; })
+    .catch((error) => { emit({ stage: "image_skill", phase: "failed", status: "failed", error: { code: error?.code || "image_skill_failed", message: error?.message || String(error) } }); throw error; })
+    .finally(() => { imageFinishedAt = Date.now(); });
   const [copySettled, imageSettled] = await Promise.allSettled([copyPromise, imagePromise]);
   copyFinishedAt ||= Date.now();
   imageFinishedAt ||= Date.now();
@@ -248,6 +255,7 @@ export async function runSimplePipeline({
   emit({ stage: "skills", phase: "finished", parallelEvidence });
 
   const writebackStartedAt = Date.now();
+  emit({ stage: "program_writeback", phase: "started" });
   const writeback = applyResults({ preparedData: simplePlan.preparedData, copyTasks: simplePlan.copyTasks, copyExecution, imageSlots: simplePlan.imageSlots, slotBindings: simplePlan.slotBindings, imageExecution });
   timingsMs.programWriteback = elapsed(writebackStartedAt);
   emit({ stage: "program_writeback", phase: "finished", durationMs: timingsMs.programWriteback, unresolvedCount: writeback.unresolvedItems.length });
@@ -278,7 +286,7 @@ export async function runSimplePipeline({
   emit({ stage: "renderer", phase: "finished", mode: renderExecution.mode, durationMs: timingsMs.renderer, status: renderExecution.status });
 
   const pipelineStatus = statusFor(writeback.unresolvedItems, renderExecution.status);
-  const progress = pipelineStatus === "complete" ? 100 : pipelineStatus === "awaiting_user_action" ? 85 : 75;
+  const progress = pipelineStatus === "complete" ? SIMPLE_PIPELINE_PROGRESS.complete : (renderExecution.status === "success" ? SIMPLE_PIPELINE_PROGRESS.rendererComplete : SIMPLE_PIPELINE_PROGRESS.writebackComplete);
   timingsMs.total = elapsed(totalStartedAt);
   const legacyEvidence = runtimeLegacyEvidence(capabilityEvents, copyExecution, imageExecution);
   const result = {

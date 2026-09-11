@@ -10,6 +10,7 @@ import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
 import { AGENT_DESIGNER_STAGES, SIMPLE_DESIGNER_STAGES, getDesignerCurrentAction, getDesignerHighlights, getDesignerSummary, getDesignerTripTitle } from './lib/agentProgressView.js';
 import { readAgentSnapshot, agentDisplayState, displayAgentStages, agentElapsed, agentFailurePresentation } from './lib/agentConnection.js';
 import { buildCustomerTravelEntityData } from './lib/travelEntityDisplay.js';
+import { normalizeHighlightForDisplay } from './lib/highlightDisplay.js';
 import { PlanView } from "./AgentPlanner.jsx";
 
 const STORAGE_USERS = "sheyou-workspace-users-v1";
@@ -167,28 +168,70 @@ export function AppHeader({ user, project, saved, canGenerate, onHome, onLogout,
   </header>;
 }
 
-function ProjectList({ user, projects, onCreate, onOpen, onDelete, onTrash, onRestore }) {
+function projectCoverSource(project) {
+  return project.thumbnailUrl || project.data?.heroThumbnail || project.data?.heroImage || "";
+}
+
+function projectStatusLabel(project) {
+  const versionCount = project.versions?.length || 0;
+  if (versionCount) return { label: `正式版 v${versionCount}.0`, tone: "formal" };
+  const stage = project.workflowStage;
+  if (["simple-running", "generating"].includes(stage)) return { label: "制作中", tone: "working" };
+  if (["uploaded", "confirmed"].includes(stage)) return { label: "待继续", tone: "waiting" };
+  if (["needs-copy-revision", "blocked"].includes(stage)) return { label: "待调整", tone: "attention" };
+  return { label: "草稿编辑中", tone: "draft" };
+}
+
+function projectTripMeta(project) {
+  const days = project.data?.days?.length || 0;
+  const customerName = String(project.customerName || project.data?.customerName || "").trim();
+  const adults = Number(project.data?.adults ?? project.data?.travelers ?? 0);
+  const children = Number(project.data?.children ?? 0);
+  const travelerCount = Math.max(0, adults) + Math.max(0, children);
+  const travelerText = customerName
+    ? `客户：${customerName}${travelerCount ? ` · ${travelerCount}位` : ""}`
+    : travelerCount ? `出行人：${travelerCount}位` : "";
+  return { daysText: days ? `${days}天${days > 1 ? `${days - 1}晚` : ""}` : "", travelerText };
+}
+
+function ProjectThumbnail({ project, inactive = false }) {
+  const destination = String(project.data?.destination || "").trim();
+  const initial = (destination || project.title || "旅").slice(0, 1);
+  const cover = projectCoverSource(project);
+  return <div className={`project-thumb${inactive ? " project-thumb-inactive" : ""}`}><span className="project-thumb-placeholder"><UiIcon name="itinerary" size={22} /><b>{initial}</b></span>{cover && <img src={cover} alt={`${project.title}封面`} loading="lazy" decoding="async" onError={(event) => { event.currentTarget.hidden = true; }} />}</div>;
+}
+
+function ProjectList({ user, projects, exitingProjectIds = [], onCreate, onOpen, onDelete, onTrash, onRestore, onPermanentDelete, onClearTrash }) {
   const [query, setQuery] = useState("");
   const [view, setView] = useState("active");
+  const [displayMode, setDisplayMode] = useState("list");
   const trashEnabled = Boolean(onTrash && onRestore);
   const ownedProjects = projects.filter((project) => project.ownerId === user.id);
   const trashCount = ownedProjects.filter((project) => Boolean(project.trashedAt)).length;
+  const activeCount = ownedProjects.length - trashCount;
   const visible = ownedProjects.filter((project) => {
     const inSelectedView = trashEnabled ? (view === "trash" ? Boolean(project.trashedAt) : !project.trashedAt) : true;
-    return inSelectedView && `${project.title}${project.data.destination}`.toLowerCase().includes(query.toLowerCase());
+    return inSelectedView && `${project.title}${project.data?.destination || ""}${project.customerName || ""}`.toLowerCase().includes(query.toLowerCase());
   });
+  const exiting = new Set(exitingProjectIds);
+  const emptyBecauseOfSearch = Boolean(query.trim());
   return <main className="projects-page">
-    <header className="projects-heading"><div><small>{view === "trash" ? "RECYCLE BIN" : "MY JOURNEYS"}</small><h1>{view === "trash" ? "回收站" : "我的项目"}</h1><p>{view === "trash" ? "这里的项目仍完整保留，可以随时恢复到项目列表。" : "每一份草稿都会自动保存，正式版本可随时重新下载。"}</p></div><div className="projects-heading-actions">{trashEnabled && <Button onClick={() => { setView(view === "trash" ? "active" : "trash"); setQuery(""); }}>{view === "trash" ? "返回我的项目" : `回收站${trashCount ? `（${trashCount}）` : ""}`}</Button>}{view === "active" && <Button tone="primary" icon="itinerary" onClick={onCreate}>新建行程</Button>}</div></header>
-    <div className="project-search"><UiIcon name="itinerary" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索项目名称或目的地" /></div>
-    {visible.length ? <div className="project-list">{visible.map((project) => <article key={project.id} className={`project-row${view === "trash" ? " project-row-trashed" : ""}`} onClick={view === "active" ? () => onOpen(project) : undefined}>
-      <div className="project-thumb">{project.data.heroImage ? <img src={project.data.heroImage} alt="" onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add("project-thumb-missing"); }} /> : <span>缺图</span>}</div>
-      <div className="project-copy"><small>{project.data.destination || "目的地待确认"}</small><h2>{project.title}</h2><span>{view === "trash" ? `移入时间 ${formatTime(project.trashedAt)}` : `最后编辑 ${formatTime(project.updatedAt)}`}</span></div>
-      <div className="project-version"><strong>{project.versions?.length || 0}</strong><span>正式版本</span></div>
-      {onDelete && <button className="row-delete" onClick={(event) => { event.stopPropagation(); onDelete(project); }} aria-label="删除项目">删除</button>}
-      {trashEnabled && view === "active" && <button className="row-project-action" onClick={(event) => { event.stopPropagation(); onTrash(project); }} aria-label={`将${project.title}移入回收站`}>移入回收站</button>}
-      {trashEnabled && view === "trash" && <button className="row-project-action row-restore" onClick={(event) => { event.stopPropagation(); onRestore(project); }} aria-label={`恢复${project.title}`}>恢复</button>}
-      {view === "active" && <span className="row-open">打开项目 <UiIcon name="return" size={16} /></span>}
-    </article>)}</div> : <div className="empty-projects"><UiIcon name="itinerary" size={42} /><h2>{view === "trash" ? "回收站是空的" : "还没有匹配的项目"}</h2><p>{view === "trash" ? "移入回收站的项目会显示在这里。" : "上传原始报价表，开始第一份客户行程。"}</p>{view === "active" && <Button tone="primary" onClick={onCreate}>创建项目</Button>}</div>}
+    <header className="projects-heading"><div><small>{view === "trash" ? "RECYCLE BIN" : "MY JOURNEYS"}</small><div className="projects-title-line"><h1>{view === "trash" ? "回收站" : "我的项目"}</h1><span>{view === "trash" ? `${trashCount} 个待处理项目` : `${activeCount} 个项目`}</span></div><p>{view === "trash" ? "已删除项目可在这里恢复或永久删除。" : "每一份草稿都会自动保存，正式版本可随时重新下载。"}</p></div><div className="projects-heading-actions">{view === "trash" && trashCount > 0 && <button className="clear-trash-action" onClick={() => onClearTrash(ownedProjects.filter((project) => project.trashedAt))}>清空回收站</button>}{trashEnabled && <Button onClick={() => { setView(view === "trash" ? "active" : "trash"); setQuery(""); }}>{view === "trash" ? "返回我的项目" : `回收站${trashCount ? `（${trashCount}）` : ""}`}</Button>}{view === "active" && <Button tone="primary" icon="itinerary" onClick={onCreate}>新建行程</Button>}</div></header>
+    <div className="projects-toolbar"><div className="project-search"><UiIcon name="itinerary" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={view === "trash" ? "搜索已删除的项目名称或目的地" : "搜索项目名称、目的地或客户"} /></div>{view === "active" && <div className="project-view-toggle" aria-label="项目展示方式"><button className={displayMode === "list" ? "active" : ""} aria-pressed={displayMode === "list"} onClick={() => setDisplayMode("list")}>列表</button><button className={displayMode === "card" ? "active" : ""} aria-pressed={displayMode === "card"} onClick={() => setDisplayMode("card")}>卡片</button></div>}</div>
+    {visible.length ? view === "trash" ? <div className="trash-project-grid">{visible.map((project) => <article key={project.id} className={`trash-project-card${exiting.has(project.id) ? " project-item-exiting" : ""}`}>
+      <ProjectThumbnail project={project} inactive />
+      <div className="trash-project-copy">{project.data?.destination && <small>{project.data.destination}</small>}<h2>{project.title}</h2><span>删除时间 · {formatTime(project.trashedAt)}</span></div>
+      <div className="trash-card-actions"><button className="row-project-action row-restore" onClick={() => onRestore(project)} aria-label={`恢复${project.title}`}>恢复</button><button className="row-project-action row-permanent-delete" onClick={() => onPermanentDelete(project)} aria-label={`永久删除${project.title}`}>永久删除</button></div>
+    </article>)}</div> : <div className={`project-list project-list-${displayMode}`}>{visible.map((project) => {
+      const status = projectStatusLabel(project);
+      const meta = projectTripMeta(project);
+      return <article key={project.id} className={`project-row project-row-${displayMode}${exiting.has(project.id) ? " project-item-exiting" : ""}`} onClick={() => onOpen(project)}>
+        <ProjectThumbnail project={project} />
+        <div className="project-copy">{project.data?.destination && <small>{project.data.destination}</small>}<div className="project-name-line"><h2>{project.title}</h2><span className={`project-status-tag project-status-${status.tone}`}>{status.label}</span></div><div className="project-meta"><span>最后编辑 · {formatTime(project.updatedAt)}</span>{meta.daysText && <span>{meta.daysText}</span>}{meta.travelerText && <span>{meta.travelerText}</span>}</div></div>
+        {onDelete && <button className="row-delete" onClick={(event) => { event.stopPropagation(); onDelete(project); }} aria-label="删除项目">删除</button>}
+        <div className="project-row-actions"><button className="row-open" onClick={(event) => { event.stopPropagation(); onOpen(project); }}>打开项目 <UiIcon name="return" size={16} /></button>{trashEnabled && <button className="row-trash-action" title="移入回收站" onClick={(event) => { event.stopPropagation(); onTrash(project); }} aria-label={`将${project.title}移入回收站`}><UiIcon name="trash" size={17} /></button>}</div>
+      </article>;
+    })}</div> : <div className={`empty-projects${view === "trash" ? " empty-projects-trash" : ""}`}><UiIcon name="itinerary" size={36} /><h2>{emptyBecauseOfSearch ? "没有匹配的项目" : view === "trash" ? "回收站是空的" : "还没有项目"}</h2><p>{emptyBecauseOfSearch ? "换个项目名称或目的地试试。" : view === "trash" ? "移入回收站的项目会显示在这里。" : "上传原始报价表，开始第一份客户行程。"}</p>{view === "active" && !emptyBecauseOfSearch && <Button tone="primary" onClick={onCreate}>创建项目</Button>}</div>}
   </main>;
 }
 
@@ -221,7 +264,7 @@ function UploadStep({ project, onFiles, onContinue }) {
     </div>
     {parseError && <p className="upload-error"><UiIcon name="warning" />{parseError}</p>}
     {project.files?.length > 0 && <div className="file-list"><header><strong>已选择 {project.files.length} 个文件</strong><span>共 {formatFileSize(project.files.reduce((sum, file) => sum + (file.size || 0), 0))}</span></header>{project.files.map((file) => <div key={`${file.name}-${file.size}`}><UiIcon name="included" /><span><strong>{file.name}</strong><small>{formatFileSize(file.size)}</small></span></div>)}</div>}
-    {project.recognition && <div className="recognition-strip"><div><strong>{project.recognition.dayCount}</strong><span>逐日行程</span></div><div><strong>{project.recognition.hotelCount}</strong><span>住宿名称</span></div><div><strong>{project.recognition.highlightCount}</strong><span>原始亮点</span></div><div><strong>{project.recognition.internalFilteredCount}</strong><span>内部信息已隔离</span></div></div>}
+    {project.recognition && <div className="recognition-strip"><div><strong>{project.recognition.dayCount}</strong><span>逐日行程</span></div><div><strong>{project.recognition.hotelCount}</strong><span>住宿名称</span></div><div><strong>{project.data.sourcePosterHighlights?.length || 0}</strong><span>原始亮点</span></div><div><strong>{project.recognition.internalFilteredCount}</strong><span>内部信息已隔离</span></div></div>}
     <div className="flow-footer"><Button tone="primary" disabled={!project.files?.length || parsing} onClick={onContinue}>确认识别结果</Button></div>
   </section></main>;
 }
@@ -251,7 +294,7 @@ function ConfirmStep({ project, onChange, onContinue, onBack, agentMode = false,
       {!validation.valid && <div className="validation-errors" role="alert"><strong>生成前需要确认</strong>{validation.errors.map((error) => <p key={error}>{error}</p>)}</div>}
       <label>项目名称<input value={project.title} onChange={(event) => onChange(data, { title: event.target.value })} /></label>
       <label>特殊需求<textarea rows="4" value={project.requirements || ""} onChange={(event) => onChange(data, { requirements: event.target.value })} placeholder="饮食偏好、节奏、房型、长者儿童等" /></label>
-    </div><aside className="recognition-summary"><h2>识别摘要</h2><div><strong>{data.days.length}</strong><span>行程天数</span></div><div><strong>{data.hotels?.length || 0}</strong><span>住宿信息</span></div><div><strong>{project.recognition?.highlightCount || 0}</strong><span>原始亮点</span></div><hr /><h3><UiIcon name="warning" />需要留意</h3>{(project.recognition?.warnings?.length ? project.recognition.warnings : ["请确认日期、人数与客户称呼后继续。"]).map((warning) => <p className="warning-note" key={warning}>{warning}</p>)}<p className="soft-note">已隔离 {project.recognition?.internalFilteredCount || 0} 条疑似供应商成本、利润或内部报价说明，不会进入客户成品。</p></aside></div>
+    </div><aside className="recognition-summary"><h2>识别摘要</h2><div><strong>{data.days.length}</strong><span>行程天数</span></div><div><strong>{data.hotels?.length || 0}</strong><span>住宿信息</span></div><div><strong>{data.sourcePosterHighlights?.length || 0}</strong><span>原始亮点</span></div><hr /><h3><UiIcon name="warning" />需要留意</h3>{(project.recognition?.warnings?.length ? project.recognition.warnings : ["请确认日期、人数与客户称呼后继续。"]).map((warning) => <p className="warning-note" key={warning}>{warning}</p>)}<p className="soft-note">已隔离 {project.recognition?.internalFilteredCount || 0} 条疑似供应商成本、利润或内部报价说明，不会进入客户成品。</p></aside></div>
     <div className="flow-footer"><Button onClick={onBack}>返回上传</Button><Button tone="primary" disabled={!data.destination || !project.title || !validation.valid || (agentMode && (agentSnapshot?.confirmations || []).some((item) => item.status === "pending" && !agentDecisions[item.confirmationId]))} onClick={onContinue}>{agentMode ? "保存确认并继续" : "确认并生成内容"}</Button></div>
   </section></main>;
 }
@@ -299,8 +342,25 @@ function buildAgentProgress(snapshot) {
     const backend = new Map((activeJob?.stages || []).map((stage) => [stage.id, stage]));
     const states = { complete: "complete", running: "active", failed: "failed", cancelled: "cancelled", pending: "pending" };
     const stages = SIMPLE_DESIGNER_STAGES.map((definition) => {
-      const actual = backend.get(definition.key);
-      return { ...definition, state: states[actual?.status] || (project.status === "complete" ? "complete" : "pending"), progress: actual?.status === "complete" ? 1 : 0 };
+      const actualStages = (definition.sourceKeys || [definition.key]).map((key) => backend.get(key));
+      const statuses = actualStages.map((stage) => stage?.status || "pending");
+      let state = project.status === "complete" ? "complete" : "pending";
+      if (statuses.includes("failed")) state = "failed";
+      else if (statuses.length && statuses.every((status) => status === "complete")) state = "complete";
+      else if (statuses.some((status) => status === "running" || status === "complete")) state = "active";
+      else if (statuses.includes("cancelled")) state = "cancelled";
+      else if (statuses.length) state = states[statuses[0]] || "pending";
+      let stageProgress = state === "complete" ? 1 : state === "active" ? 0.12 : 0;
+      if (definition.key === "content_creation") {
+        const copy = activeJob?.copyTaskProgress;
+        const images = activeJob?.imageSlotProgress;
+        const copyStage = backend.get("copy_skill");
+        const imageStage = backend.get("image_skill");
+        const copyRatio = copy?.total > 0 ? Math.min(1, copy.completed / copy.total) : copyStage?.status === "complete" ? 1 : 0;
+        const imageRatio = images?.total > 0 ? Math.min(1, images.completed / images.total) : imageStage?.status === "complete" ? 1 : 0;
+        stageProgress = state === "complete" ? 1 : (copyRatio * 18 + imageRatio * 60) / 78;
+      }
+      return { ...definition, state, progress: stageProgress };
     });
     return { stages, percent: Number(activeJob?.progress ?? run?.progress ?? project.progress ?? 0), planActive: Boolean(plan) };
   }
@@ -333,30 +393,46 @@ function useAnimatedProgress(target, enabled = true) {
   const [displayValue, setDisplayValue] = useState(target);
   const valueRef = useRef(target);
   useEffect(() => {
-    const next = Math.max(0, Math.min(100, Number(target) || 0));
+    const next = Math.round(Math.max(0, Math.min(100, Number(target) || 0)));
     const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     if (!enabled || reducedMotion || Math.abs(next - valueRef.current) < 1) {
       valueRef.current = next;
       setDisplayValue(next);
       return undefined;
     }
-    const start = valueRef.current;
-    const delta = next - start;
-    const startedAt = performance.now();
-    const duration = 420;
     let frameId = 0;
+    let lastStepAt = performance.now();
     const animate = (now) => {
-      const time = Math.min(1, (now - startedAt) / duration);
-      const eased = 1 - Math.pow(1 - time, 3);
-      const value = Math.round(start + delta * eased);
-      valueRef.current = value;
-      setDisplayValue(value);
-      if (time < 1) frameId = requestAnimationFrame(animate);
+      if (now - lastStepAt >= 80) {
+        const direction = next > valueRef.current ? 1 : -1;
+        valueRef.current += direction;
+        setDisplayValue(valueRef.current);
+        lastStepAt = now;
+      }
+      if (valueRef.current !== next) frameId = requestAnimationFrame(animate);
     };
     frameId = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frameId);
   }, [enabled, target]);
   return displayValue;
+}
+
+function agentRouteProgress(stages, completed = false) {
+  if (completed) return 100;
+  const activeIndex = stages.findIndex((stage) => ["active", "waiting", "failed", "unknown"].includes(stage.state));
+  let fallbackIndex = 0;
+  for (let index = stages.length - 1; index >= 0; index -= 1) {
+    if (stages[index].state === "complete") {
+      fallbackIndex = index;
+      break;
+    }
+  }
+  const index = activeIndex >= 0 ? activeIndex : fallbackIndex;
+  const stage = stages[index] || stages[0];
+  const start = Number(stage?.routePosition || 0);
+  const end = Number(stages[index + 1]?.routePosition ?? 100);
+  const ratio = stage?.state === "complete" ? 1 : Math.max(0, Math.min(0.92, Number(stage?.progress || 0)));
+  return Math.round(start + (end - start) * ratio);
 }
 
 function AgentProgressOverview({ snapshot, elapsed }) {
@@ -365,16 +441,21 @@ function AgentProgressOverview({ snapshot, elapsed }) {
   progress.stages = displayAgentStages(progress.stages, display);
   const safeProgress = Math.max(0, Math.min(100, Number(progress.percent) || 0));
   const animatedProgress = useAnimatedProgress(safeProgress, !display.failed && !display.disconnected);
+  const routeTarget = agentRouteProgress(progress.stages, display.completed);
+  const animatedRouteProgress = useAnimatedProgress(routeTarget, !display.failed && !display.disconnected);
   const labels = { complete: "已完成", active: "进行中", waiting: "等待确认", failed: "失败", cancelled: "已取消", pending: display.failed ? "未执行" : "等待处理", unknown: "状态待确认" };
   const latestEvent = snapshot?.executionRun?.events?.at(-1);
   const waitingReason = latestEvent?.waitingReason ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_confirmation" ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_user_action" ? "部分内容需要在编辑页补充或确认，不影响你先查看和调整草稿。" : "";
   const imageSlots = snapshot?.activeJob?.imageSlotProgress;
+  const copyTasks = snapshot?.activeJob?.copyTaskProgress;
   const detailedAction = getDesignerCurrentAction(snapshot);
-  const imageProgressText = imageSlots?.total > 0 ? `正在处理图片 ${imageSlots.completed} / ${imageSlots.total}` : "";
+  const copyComplete = copyTasks?.total > 0 && copyTasks.completed >= copyTasks.total;
+  const imageComplete = imageSlots?.total > 0 && imageSlots.completed >= imageSlots.total;
+  const imageActive = imageSlots?.total > 0 && !imageComplete;
+  const copyActive = copyTasks?.total > 0 && !copyComplete;
   const actionStage = progress.stages.find((stage) => {
     if (stage.state !== "active") return false;
-    if (/文案|介绍/.test(detailedAction)) return stage.key === "copy_skill" || stage.key === "copy";
-    if (/图片|主视觉/.test(detailedAction)) return stage.key === "image_skill" || stage.key === "images";
+    if (/文案|介绍|图片|主视觉/.test(detailedAction)) return stage.key === "content_creation" || stage.key === "copy" || stage.key === "images";
     if (/读取|整理/.test(detailedAction)) return stage.key === "parser";
     if (/节奏|亮点/.test(detailedAction)) return stage.key === "planner" || stage.key === "planning";
     if (/费用|原始资料|晚数/.test(detailedAction)) return stage.key === "program_writeback" || stage.key === "final_checks" || stage.key === "verification";
@@ -382,25 +463,29 @@ function AgentProgressOverview({ snapshot, elapsed }) {
     return false;
   }) || progress.stages.find((stage) => stage.state === "active") || progress.stages.find((stage) => stage.state === "waiting");
   const failedStage = progress.stages.find((stage) => stage.state === "failed");
-  const failedStageIndex = failedStage ? progress.stages.findIndex((stage) => stage.key === failedStage.key) : -1;
-  const mascotProgress = display.failed && failedStageIndex >= 0 && progress.stages.length > 1 ? failedStageIndex / (progress.stages.length - 1) * 100 : safeProgress;
+  const mascotProgress = animatedRouteProgress;
   const failure = agentFailurePresentation(snapshot, failedStage?.label);
-  const primaryStatus = display.disconnected ? "正在重新获取制作状态" : display.failed ? "本次生成已停止" : display.completed ? "生成完成" : actionStage ? `${actionStage.state === "waiting" ? "等待确认：" : "正在"}${actionStage.label}` : detailedAction;
-  const auxiliaryParts = display.disconnected ? ["以下为最后已知进度，后台任务可能仍在继续"] : display.failed ? [`停止于「${failure.stageLabel}」；${failure.userMessage}，后续步骤未继续执行`] : display.completed ? ["客户版行程已制作完成，可以继续调整文案、图片和版式"] : [detailedAction !== primaryStatus ? detailedAction : "", imageProgressText].filter(Boolean);
-  const auxiliaryStatus = [...new Set(auxiliaryParts)].join(" · ");
+  const contentHeadline = imageActive && !copyActive ? "正在为这份客户行程挑选合适的视觉素材" : imageActive && copyActive ? "正在完善客户文案与视觉素材" : copyActive ? "正在把确认资料整理成客户可读的行程内容" : "";
+  const primaryStatus = display.disconnected ? "正在重新获取制作状态" : display.failed ? "本次生成已停止" : display.completed ? "生成完成" : contentHeadline || (actionStage ? `${actionStage.state === "waiting" ? "等待确认：" : "正在"}${actionStage.label}` : detailedAction);
+  const auxiliaryParts = display.disconnected ? ["以下为最后已知进度，后台任务可能仍在继续"] : display.failed ? [`停止于「${failure.stageLabel}」；${failure.userMessage}，后续步骤未继续执行`] : display.completed ? ["客户版行程已制作完成，可以继续调整文案、图片和版式"] : [
+    copyTasks?.total > 0 ? copyComplete ? "客户文案已整理完成" : `正在完善客户文案 ${copyTasks.completed} / ${copyTasks.total}` : "",
+    imageSlots?.total > 0 ? imageComplete ? `图片位已完成匹配 ${imageSlots.completed} / ${imageSlots.total}` : `已完成 ${imageSlots.completed} / ${imageSlots.total} 个图片位` : "",
+    detailedAction !== primaryStatus ? detailedAction : "",
+  ].filter(Boolean);
+  const progressNote = !display.failed && !display.completed && imageActive ? "图片会逐张核对地点、主体和清晰度，因此通常比文案整理需要更长时间。" : "";
   const displayMode = display.failed ? "failed" : display.completed ? "completed" : display.disconnected ? "disconnected" : "running";
   return <section className={`agent-progress-overview agent-progress-card-${displayMode}`} aria-labelledby="designer-progress-title">
     <header><h2 id="designer-progress-title">客户行程制作进度</h2><span>{display.disconnected ? "最后同步" : "已用时"} {Math.floor(elapsed / 60)}分{elapsed % 60}秒</span></header>
     <div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={safeProgress} aria-label="客户行程制作进度">
-      <div className="agent-progress-headline"><strong><span>{animatedProgress}</span><sup>%</sup></strong><div><div className="agent-progress-status-line"><h3 aria-live="polite">{primaryStatus}</h3>{display.failed && <span className="agent-progress-stop-tag">已终止</span>}</div>{auxiliaryStatus && <p aria-live="polite">{auxiliaryStatus}</p>}</div></div>
+      <div className="agent-progress-headline"><strong><span>{animatedProgress}</span><sup>%</sup></strong><div><div className="agent-progress-status-line"><h3 aria-live="polite">{primaryStatus}</h3>{display.failed && <span className="agent-progress-stop-tag">已终止</span>}</div>{auxiliaryParts.length > 0 && <div className="agent-progress-details" aria-live="polite">{[...new Set(auxiliaryParts)].map((item) => <span key={item}>{item}</span>)}</div>}{progressNote && <p className="agent-progress-note">{progressNote}</p>}</div></div>
       <div className={`agent-progress-route agent-progress-route-${displayMode}`}>
         <div className="agent-progress-route-inner">
           <div className="agent-progress-mascot" style={{ left: `${mascotProgress}%` }} aria-hidden="true">
             <span className="agent-progress-mascot-body"><img src="/assets/logos/logo-gold.svg" alt="" /></span>
           </div>
-          <div className="agent-progress-route-track"><span style={{ width: `${safeProgress}%` }} /></div>
+          <div className="agent-progress-route-track"><span style={{ width: `${animatedRouteProgress}%` }} /></div>
           <div className="agent-progress-route-nodes" aria-hidden="true">
-            {progress.stages.map((stage, index) => <span className={`agent-progress-route-node agent-progress-route-node-${stage.state}`} style={{ left: `${progress.stages.length > 1 ? index / (progress.stages.length - 1) * 100 : 0}%` }} key={stage.key}><i /><b>{stage.shortLabel}</b></span>)}
+            {progress.stages.map((stage) => <span className={`agent-progress-route-node agent-progress-route-node-${stage.state}`} style={{ left: `${stage.routePosition ?? 0}%` }} key={stage.key}><i /><b>{stage.shortLabel}</b></span>)}
           </div>
         </div>
       </div>
@@ -496,8 +581,7 @@ function versionSnapshot(data) {
 }
 
 function parseHighlight(value = "") {
-  const match = String(value).match(/^([^：:]+)[：:](.*)$/s);
-  return match ? { title: match[1], description: match[2] } : { title: value, description: "" };
+  return normalizeHighlightForDisplay(value);
 }
 
 function imageList(item) {
@@ -898,6 +982,17 @@ function TrashDialog({ project, onCancel, onConfirm }) {
   return <div className="modal-backdrop"><section className="confirm-dialog"><UiIcon name="warning" size={34} /><h2>将“{project.title}”移入回收站？</h2><p>项目、原始资料、运行记录和成品都会完整保留，可随时从回收站恢复。正在执行的生成任务不会因此取消。</p><div><Button onClick={onCancel}>取消</Button><Button tone="primary" onClick={onConfirm}>移入回收站</Button></div></section></div>;
 }
 
+function PermanentDeleteDialog({ project, projects, busy, onCancel, onConfirm }) {
+  const clearing = Array.isArray(projects);
+  const count = projects?.length || 0;
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="permanent-delete-title"><section className="confirm-dialog permanent-delete-dialog"><UiIcon name="warning" size={30} /><h2 id="permanent-delete-title">{clearing ? "清空回收站？" : "永久删除项目？"}</h2><p>{clearing ? `回收站中的 ${count} 个项目删除后将无法恢复，包括生成结果和项目内保存的数据。` : `「${project.title}」删除后将无法恢复，包括该项目的生成结果和项目内保存的数据。`}</p><div><Button disabled={busy} onClick={onCancel}>取消</Button><Button tone="danger" disabled={busy} onClick={onConfirm}>{busy ? "正在删除…" : "永久删除"}</Button></div></section></div>;
+}
+
+function ProjectToast({ feedback }) {
+  if (!feedback) return null;
+  return <div className={`project-toast project-toast-${feedback.tone}`} role={feedback.tone === "error" ? "alert" : "status"}><UiIcon name={feedback.tone === "error" ? "warning" : "included"} size={17} /><span>{feedback.message}</span></div>;
+}
+
 export function Workspace({ initialData, ItineraryComponent, agentMode = false }) {
   const storageKeys = agentMode ? AGENT_STORAGE : FIXED_STORAGE;
   const [users, setUsers] = useState(() => window.__sheyouServerUser ? [window.__sheyouServerUser] : readStorage(storageKeys.users, []));
@@ -916,11 +1011,20 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   const [profileOpen, setProfileOpen] = useState(false);
   const [deleteProject, setDeleteProject] = useState(null);
   const [trashProject, setTrashProject] = useState(null);
+  const [permanentDelete, setPermanentDelete] = useState(null);
+  const [projectActionBusy, setProjectActionBusy] = useState(false);
+  const [projectFeedback, setProjectFeedback] = useState(null);
+  const [exitingProjectIds, setExitingProjectIds] = useState([]);
   const [agentSnapshot, setAgentSnapshot] = useState(null);
   const [agentDecisions, setAgentDecisions] = useState({});
   const saveTimer = useRef(null);
   const generationInFlightRef = useRef(false);
   const currentProject = projects.find((project) => project.id === projectId);
+  useEffect(() => {
+    if (!projectFeedback) return undefined;
+    const timer = setTimeout(() => setProjectFeedback(null), 2200);
+    return () => clearTimeout(timer);
+  }, [projectFeedback]);
   useEffect(() => { window.scrollTo({ top: 0, left: 0, behavior: "instant" }); }, [screen]);
   useEffect(() => {
     if (!agentMode || !currentProject?.agentProjectId || !["confirm", "generate"].includes(screen)) return undefined;
@@ -967,11 +1071,56 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     return () => { stopped = true; clearTimeout(timer); };
   }, [agentMode, currentProject?.agentProjectId, screen, agentSnapshot?.project?.activeJobId]);
   const commitProjects = (next) => { setProjects(next); try { writeStorage(storageKeys.projects, next); setSaveState('saved'); } catch (error) { setSaveState('error'); alert(error.message); } };
-  const commitProjectLifecycle = (next) => {
+  const showProjectFeedback = (message, tone = "success") => setProjectFeedback({ message, tone, id: Date.now() });
+  const commitProjectLifecycle = (next, successMessage) => {
     try { writeStorage(storageKeys.projects, next); setProjects(next); setSaveState("saved"); return true; }
-    catch (error) { setSaveState("error"); alert(error.message); return false; }
+    catch { setSaveState("error"); showProjectFeedback("操作失败，请重试", "error"); return false; }
   };
-  const restoreProject = (project) => commitProjectLifecycle(projects.map((item) => item.id === project.id ? { ...item, trashedAt: null, restoredAt: Date.now() } : item));
+  const beginProjectExit = async (ids) => {
+    setExitingProjectIds(ids);
+    await new Promise((resolve) => setTimeout(resolve, 220));
+  };
+  const finishProjectExit = (ids) => setExitingProjectIds((current) => current.filter((id) => !ids.includes(id)));
+  const moveProjectToTrash = async (project) => {
+    setTrashProject(null);
+    await beginProjectExit([project.id]);
+    const saved = commitProjectLifecycle(projects.map((item) => item.id === project.id ? { ...item, trashedAt: Date.now() } : item));
+    finishProjectExit([project.id]);
+    if (saved) showProjectFeedback("已移入回收站");
+  };
+  const restoreProject = async (project) => {
+    await beginProjectExit([project.id]);
+    const saved = commitProjectLifecycle(projects.map((item) => item.id === project.id ? { ...item, trashedAt: null, restoredAt: Date.now() } : item));
+    finishProjectExit([project.id]);
+    if (saved) showProjectFeedback("项目已恢复");
+  };
+  const permanentlyDeleteProjects = async (targets) => {
+    setProjectActionBusy(true);
+    const deletedIds = [];
+    try {
+      for (const project of targets) {
+        if (project.agentProjectId) {
+          const apiBase = project.flowKind === "simple_skill_v1" ? "/api/simple/projects" : "/api/agent/projects";
+          const response = await fetch(`${apiBase}/${project.agentProjectId}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
+          if (!response.ok) throw new Error("project_delete_failed");
+        }
+        deletedIds.push(project.id);
+      }
+      setPermanentDelete(null);
+      await beginProjectExit(deletedIds);
+      const deleted = new Set(deletedIds);
+      if (!commitProjectLifecycle(projects.filter((item) => !deleted.has(item.id)))) throw new Error("local_delete_failed");
+      finishProjectExit(deletedIds);
+      showProjectFeedback(targets.length > 1 ? "回收站已清空" : "项目已永久删除");
+    } catch {
+      if (deletedIds.length) {
+        const deleted = new Set(deletedIds);
+        commitProjectLifecycle(projects.filter((item) => !deleted.has(item.id)));
+      }
+      finishProjectExit(deletedIds);
+      showProjectFeedback("操作失败，请重试", "error");
+    } finally { setProjectActionBusy(false); }
+  };
   const updateProject = (nextProject, immediate = false) => {
     const next = { ...nextProject, updatedAt: Date.now() };
     const collection = projects.map((item) => item.id === next.id ? next : item);
@@ -1221,7 +1370,7 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   if (!user) return <AuthScreen storageKeys={storageKeys} onAuth={(nextUser) => { setUsers(readStorage(storageKeys.users, [])); setUser(nextUser); }} />;
   return <div className={`workspace-shell${agentMode ? " workspace-agent-mode" : ""}`}><AppHeader user={user} project={currentProject && !["list", "admin"].includes(screen) ? currentProject : null} saved={saveState} canGenerate={agentMode ? false : copyExportEligibility(currentProject || {}).allowed} onHome={() => setScreen("list")} onLogout={logout} onAdmin={() => setAdminOpen(true)} onProfile={() => setProfileOpen(true)} onGenerate={() => setScreen('versions')} />
     {agentMode && <div className="agent-mode-strip"><span>定制师智能工作台 · 独立项目数据</span><strong>确认信息优先 · 完成后可继续调整</strong></div>}
-    {screen === "list" && <ProjectList user={user} projects={projects} onCreate={createProject} onOpen={openProject} onDelete={agentMode ? undefined : setDeleteProject} onTrash={agentMode ? setTrashProject : undefined} onRestore={agentMode ? restoreProject : undefined} />}
+    {screen === "list" && <ProjectList user={user} projects={projects} exitingProjectIds={exitingProjectIds} onCreate={createProject} onOpen={openProject} onDelete={agentMode ? undefined : setDeleteProject} onTrash={agentMode ? setTrashProject : undefined} onRestore={agentMode ? restoreProject : undefined} onPermanentDelete={agentMode ? (project) => setPermanentDelete({ project }) : undefined} onClearTrash={agentMode ? (items) => setPermanentDelete({ projects: items }) : undefined} />}
     {screen === "upload" && currentProject && <UploadStep project={currentProject} onFiles={async (files, recognition, sourceSha256) => agentMode ? attachAgentProject(currentProject, files, recognition, sourceSha256) : updateProject({ ...currentProject, workflowStage: "uploaded", title: recognition.data.title || currentProject.title, data: { ...recognition.data, designer: currentProject.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type })) }, true)} onContinue={() => setScreen("confirm")} />}
     {screen === "confirm" && currentProject && <ConfirmStep project={currentProject} agentMode={agentMode} agentSnapshot={agentSnapshot} agentDecisions={agentDecisions} onAgentDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onChange={(data, metadata = {}) => updateProject({ ...currentProject, ...metadata, data })} onBack={() => setScreen("upload")} onContinue={() => agentMode ? continueAgent().catch((error) => setGenerationError(error?.message || "无法继续")) : (() => { setProgress(0); setGenerationError(""); setGenerationStatus({ phase: "queued", status: "idle", currentAction: "尚未开始", stats: {}, elapsedMs: 0 }); setScreen("generate"); })()} />}
     {screen === "generate" && currentProject && (agentMode ? <AgentGenerationStep project={currentProject} snapshot={agentSnapshot} error={generationError} decisions={agentDecisions} onDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onConfirm={() => continueAgent().catch((error) => setGenerationError(error?.message || "无法保存确认"))} onRetryImage={(slotId) => retryAgentImage(slotId).catch((error) => setGenerationError(error?.message || "无法重新搜索图片"))} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onCancel={() => cancelAgent().catch((error) => setGenerationError(error?.message || "无法取消任务"))} /> : <GenerationStep project={currentProject} progress={progress} status={generationStatus} error={generationError} onStart={generateProject} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onRevision={() => { updateProject({ ...currentProject, revisionMode: true }, true); setScreen('editor'); }} />)}
@@ -1230,6 +1379,8 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     {adminOpen && <AdminPanel users={users} projects={projects} onClose={() => setAdminOpen(false)} onToggle={(target) => { const next = users.map((item) => item.id === target.id ? { ...item, active: item.active === false } : item); setUsers(next); writeStorage(storageKeys.users, next); }} onReset={(target) => { const next = users.map((item) => item.id === target.id ? { ...item, pin: "123456" } : item); setUsers(next); writeStorage(storageKeys.users, next); alert(`${target.name} 的PIN已重置为 123456`); }} />}
     {profileOpen && <ProfilePanel user={user} onClose={() => setProfileOpen(false)} onSave={(profile, syncProjects) => { const nextUsers = users.map((item) => item.id === user.id ? { ...item, name: profile.name || item.name, profile } : item); const nextUser = nextUsers.find((item) => item.id === user.id); setUsers(nextUsers); setUser(nextUser); writeStorage(storageKeys.users, nextUsers); if (syncProjects) { const nextProjects = projects.map((item) => item.ownerId === user.id ? { ...item, data: { ...item.data, designer: clone(profile) }, updatedAt: Date.now() } : item); commitProjects(nextProjects); } setProfileOpen(false); }} />}
     {!agentMode && deleteProject && <DeleteDialog project={deleteProject} onCancel={() => setDeleteProject(null)} onConfirm={() => { commitProjects(projects.filter((item) => item.id !== deleteProject.id)); setDeleteProject(null); }} />}
-    {agentMode && trashProject && <TrashDialog project={trashProject} onCancel={() => setTrashProject(null)} onConfirm={() => { const saved = commitProjectLifecycle(projects.map((item) => item.id === trashProject.id ? { ...item, trashedAt: Date.now() } : item)); if (saved) setTrashProject(null); }} />}
+    {agentMode && trashProject && <TrashDialog project={trashProject} onCancel={() => setTrashProject(null)} onConfirm={() => moveProjectToTrash(trashProject)} />}
+    {agentMode && permanentDelete && <PermanentDeleteDialog project={permanentDelete.project} projects={permanentDelete.projects} busy={projectActionBusy} onCancel={() => !projectActionBusy && setPermanentDelete(null)} onConfirm={() => permanentlyDeleteProjects(permanentDelete.projects || [permanentDelete.project])} />}
+    <ProjectToast feedback={projectFeedback} />
   </div>;
 }

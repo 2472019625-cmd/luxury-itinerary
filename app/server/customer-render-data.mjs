@@ -1,5 +1,6 @@
 import { dayVisualCards } from '../src/lib/dayVisualCards.js';
 import { buildCustomerTravelEntityData } from '../src/lib/travelEntityDisplay.js';
+import { normalizeHighlightsForDisplay } from '../src/lib/highlightDisplay.js';
 
 const ROOT_FIELDS = new Set([
   'title','subtitle','destination','travelers','adults','children','startDate','endDate','dayCount','heroImage','heroFocus',
@@ -21,6 +22,7 @@ function clean(value) {
 export function selectCustomerRenderData(data = {}, { locale = data?.locale || 'zh-CN' } = {}) {
   const displayData = buildCustomerTravelEntityData(data, { locale });
   const result = Object.fromEntries(Object.entries(displayData).filter(([key]) => ROOT_FIELDS.has(key)).map(([key, value]) => [key, clean(value)]));
+  result.highlights = normalizeHighlightsForDisplay(result.highlights);
   if (displayData.simpleImageSlotBindings) result.days = (displayData.days || []).map((day, index) => ({ ...result.days[index], spots: dayVisualCards(day, index, displayData.simpleImageSlotBindings).map(({ spot }) => clean(spot)) }));
   return result;
 }

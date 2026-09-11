@@ -49,3 +49,19 @@ test("执行端点创建计划级授权运行并异步启动", async () => {
     assert.equal(response.status,202); assert.equal(value.executionRun.planId,"plan1"); assert.equal(value.executionRun.executionEnabled,true); assert.equal(value.executionRun.authorization.planId,"plan1");
   } finally { await new Promise((resolve)=>server.close(resolve)); }
 });
+
+test("回收站永久删除会终止活动任务且不受残留 activeJobId 阻拦", async () => {
+  const runtime = createAgentPlannerServer({ port: 0, workspaceRoot: mkdtempSync(path.join(tmpdir(), "agent-force-delete-")), modelConfig: { apiKey: "test" } });
+  runtime.store.createProject({ projectId: "delete-active", flowKind: "agent_v1", status: "running", activeJobId: "job-active", activePlanId: null, planIds: [], executionRunIds: [] });
+  runtime.jobs.set("job-active", { jobId: "job-active", projectId: "delete-active", status: "running", cancelRequested: false });
+  runtime.controllers.set("job-active", new AbortController());
+  await new Promise((resolve) => runtime.server.listen(0, "127.0.0.1", resolve));
+  const port = runtime.server.address().port;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/agent/projects/delete-active`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
+    assert.equal(response.status, 200);
+    assert.equal(runtime.store.getProject("delete-active"), null);
+    assert.equal(runtime.jobs.has("job-active"), false);
+    assert.equal(runtime.controllers.has("job-active"), false);
+  } finally { await new Promise((resolve) => runtime.server.close(resolve)); }
+});

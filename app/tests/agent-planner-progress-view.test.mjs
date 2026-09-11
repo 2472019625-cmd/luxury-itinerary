@@ -8,16 +8,16 @@ import {
   getDesignerTripTitle,
 } from "../src/lib/agentProgressView.js";
 
-test("Simple Pipeline 六阶段使用定制师可理解的业务语言", () => {
+test("Simple Pipeline 将并发文案与图片归纳为五个定制师可理解的展示阶段", () => {
   assert.deepEqual(SIMPLE_DESIGNER_STAGES.map((stage) => stage.label), [
-    "读取并整理行程资料",
-    "梳理整程节奏与亮点",
-    "完善客户版行程文案",
-    "匹配酒店、体验与交通图片",
-    "检查费用和重要信息",
-    "生成并检查行程长图",
+    "整理你上传的行程资料",
+    "梳理路线与体验重点",
+    "完善客户文案与视觉素材",
+    "核对客户行程重要信息",
+    "排版并检查客户版长图",
   ]);
-  assert.deepEqual(SIMPLE_DESIGNER_STAGES.map((stage) => stage.shortLabel), ["资料", "规划", "文案", "图片", "检查", "长图"]);
+  assert.deepEqual(SIMPLE_DESIGNER_STAGES.map((stage) => stage.shortLabel), ["资料", "规划", "内容制作", "检查", "长图"]);
+  assert.deepEqual(SIMPLE_DESIGNER_STAGES[2].sourceKeys, ["copy_skill", "image_skill"]);
 });
 
 test("默认实时状态把内部图片路径转换为客户行程动作", () => {

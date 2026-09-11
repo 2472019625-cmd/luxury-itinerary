@@ -1,0 +1,20 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+const dir=path.resolve('../audit/evidence/image-cache-ab/7e69635a-ed03-43a8-b26f-ec9d24f4cc4c');
+const read=async p=>JSON.parse(await fs.readFile(path.join(dir,p),'utf8'));
+const [a,b,ta,tb]=await Promise.all(['A/result.json','B/result.json','A/trace.json','B/trace.json'].map(read));
+const sources=(trace,queries)=>trace.filter(t=>t.kind==='search'&&JSON.stringify(t.input.queries)===JSON.stringify(queries)).map(t=>({result:t.result,error:t.error}));
+const summary=r=>({durationMs:r.metrics.durationMs,pageHTTP:r.metrics.resourceReuse.pages.networkRequests,downloads:r.metrics.resourceReuse.images.networkRequests,visionCalls:r.metrics.batchVisionCalls,found:r.results.filter(x=>x.selected).length,missing:r.results.filter(x=>!x.selected).length,pageHits:r.metrics.resourceReuse.pages.hits,imageHits:r.metrics.resourceReuse.images.hits,retries:r.metrics.technicalRetries});
+const rows=a.results.map((x,i)=>{
+ const y=b.results[i];assert.equal(x.slotId,y.slotId);assert.deepEqual(x.queriesUsed,y.queriesUsed);
+ const compact=s=>({status:s.status,ms:s.durationMs,selected:s.selected?.imageUrl||null,rejections:s.candidates.map(c=>({url:c.imageUrl,reason:c.rejection,judgment:c.hardJudgment})),technicalStatus:s.technicalStatus});
+ return {slot:x.slotId,A:compact(x),B:compact(y),sameSelected:(x.selected?.imageUrl||null)===(y.selected?.imageUrl||null),sameSearchResponse:JSON.stringify(sources(ta,x.queriesUsed))===JSON.stringify(sources(tb,y.queriesUsed)),sameCandidates:JSON.stringify(x.candidates.map(c=>[c.imageUrl,c.sha256]))===JSON.stringify(y.candidates.map(c=>[c.imageUrl,c.sha256]))};
+});
+const report={A:summary(a),B:summary(b),sameSelected:rows.filter(r=>r.sameSelected).length,sameSearchResponse:rows.filter(r=>r.sameSearchResponse).length,rows};
+await fs.writeFile(path.join(dir,'review.json'),JSON.stringify(report,null,2));
+const seconds=ms=>(ms/1000).toFixed(1)+'s';
+const lines=['# 固定28 Slot缓存A/B实测','', '仅Image Skill；A关闭资源复用，B开启；实时外部响应存在波动。','', '|Slot|A耗时|B耗时|A状态|B状态|采用URL一致|搜索响应一致|','|---|---:|---:|---|---|---|---|',...rows.map(r=>`|${r.slot}|${seconds(r.A.ms)}|${seconds(r.B.ms)}|${r.A.status}|${r.B.status}|${r.sameSelected}|${r.sameSearchResponse}|`),''];
+for(const r of rows)lines.push('## '+r.slot,'','A selected: '+(r.A.selected||'无'),'','B selected: '+(r.B.selected||'无'),'','A拒绝：'+r.A.rejections.filter(x=>x.reason).map(x=>`${x.reason}: ${x.url}`).join('\n\n'),'','B拒绝：'+r.B.rejections.filter(x=>x.reason).map(x=>`${x.reason}: ${x.url}`).join('\n\n'),'');
+await fs.writeFile(path.join(dir,'review.md'),lines.join('\n'));
+console.log(JSON.stringify({...report,rows:rows.map(({A,B,...r})=>({...r,A:A.status,B:B.status}))}));

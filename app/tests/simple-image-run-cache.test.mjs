@@ -62,10 +62,13 @@ test('单次执行共享原始HTML与图片技术结果，语义排序、来源�
   assert.equal(fetches,2); assert.equal(downloads,4); assert.equal(judged.length,4);
 });
 
-test('Slot进度只作展示，不进入百分比能力完成事件', async () => {
+test('图片与文案真实完成数进入总百分比', async () => {
   const server = await readFile(new URL('../server/agent-planner-app.mjs',import.meta.url),'utf8');
   const frontend = await readFile(new URL('../src/Workspace.jsx',import.meta.url),'utf8');
-  assert.match(server,/event\.capabilityId === "image_slot_progress"[\s\S]*?job\.imageSlotProgress[\s\S]*?return;/);
-  assert.match(server,/Math\.min\(74, Math\.max\(progress \+ 1, 35\)\)/);
+  assert.match(server,/event\.capabilityId === "image_slot_progress"[\s\S]*?job\.imageSlotProgress/);
+  assert.match(server,/event\.capabilityId === "copy_task_progress"[\s\S]*?job\.copyTaskProgress/);
+  assert.match(server,/calculateSimplePipelineProgress/);
+  assert.doesNotMatch(server,/Math\.min\(74/);
+  assert.match(frontend,/copyTasks\.completed.*copyTasks\.total/);
   assert.match(frontend,/imageSlots\.completed.*imageSlots\.total/);
 });

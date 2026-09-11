@@ -74,8 +74,11 @@ test("Copy 按全局、DAY、notes形成三个物理批次并按 targetId 隔离
   assert.deepEqual(result.results.map((item) => item.status), ["success", "success", "failed", "success"]);
   assert.equal(result.results[2].error.code, "invalid_output_schema");
   assert.equal(result.results[0].targetPath, "highlights.0");
-  assert.deepEqual([...new Set(events.map((event) => event.capabilityId))], ["copy_writer"]);
-  assert.deepEqual([...new Set(events.map((event) => event.batchKind))].sort(), ["days", "global", "notes"]);
+  assert.deepEqual([...new Set(events.map((event) => event.capabilityId))].sort(), ["copy_task_progress", "copy_writer"]);
+  assert.deepEqual([...new Set(events.map((event) => event.batchKind).filter(Boolean))].sort(), ["days", "global", "notes"]);
+  const progressEvents = events.filter((event) => event.capabilityId === "copy_task_progress");
+  assert.equal(progressEvents.at(-1).completedTasks, input.length);
+  assert.equal(progressEvents.at(-1).totalTasks, input.length);
 });
 
 test("无 researchRequest 不触发联网，合理体验化表达不要求 Excel 原句", async () => {

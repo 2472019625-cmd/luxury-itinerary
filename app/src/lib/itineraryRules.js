@@ -11,7 +11,7 @@ const TRAVEL_TIME_PLACEHOLDER = /^(?:待确认|以最终确认(?:安排)?为准|
 const SUMMARY_ACTIVITY_NODE = /(?:全天|半日|上午|下午|清晨|傍晚)?(?:私人|专属|核心区)?(?:游猎|观光|参观|活动|自由活动|休整)$/i;
 const TERMINAL_ROUTE_NODE = /送机|离境|返程|行程结束|登机/i;
 const HOTEL_NODE = /hotel|resort|lodge|camp|villa|营地|酒店|度假村|山庄/i;
-const INDEPENDENT_EXPERIENCE = /夜间游猎|夜游|徒步游猎|步行\s*safari|丛林徒步|热气球|观星|星空床|村庄|部落|博物馆|中心|观景台|购物中心|国家公园|保护区|机场|airport|hill|museum|center|centre/i;
+const INDEPENDENT_EXPERIENCE = /夜间游猎|夜游|night\s+safari|徒步游猎|步行\s*safari|丛林徒步|热气球|观星|星空床|村庄|部落|反偷猎观察站|观察站|博物馆|中心|观景台|购物中心|国家公园|保护区|机场|airport|hill|museum|center|centre|observation\s+post/i;
 
 export const EXPERIENCE_STATUS = Object.freeze({
   INCLUDED: "included",
@@ -33,6 +33,25 @@ function cleanText(value) {
 
 function unique(values) {
   return [...new Set(values.map(cleanText).filter(Boolean))];
+}
+
+export function normalizeSourcePosterHighlights(values = []) {
+  const source = Array.isArray(values) ? values : [values];
+  const heading = /^(?:海报下方亮点|海报亮点|产品亮点|行程亮点|特别体验)\s*[：:]?\s*/u;
+  const marker = /(?:^|\n)\s*(?:[•·▪◦●○◆◇✓✔*-]|\d{1,2}\s*[、.．)）-])\s*/gu;
+  const stripMarker = (value) => cleanText(value)
+    .replace(/^(?:[•·▪◦●○◆◇✓✔*-]\s*|\d{1,2}\s*[、.．)）-]\s*)/u, "")
+    .trim();
+  const items = source.flatMap((value) => {
+    const withoutHeading = cleanText(value).replace(heading, "");
+    if (!withoutHeading) return [];
+    const marked = withoutHeading.replace(marker, "\n");
+    return marked
+      .split(/\n+|；(?=\s*(?:[•·▪◦●○◆◇✓✔*-]|\d{1,2}\s*[、.．)）-]))/u)
+      .map(stripMarker)
+      .filter(Boolean);
+  });
+  return unique(items);
 }
 
 function stableTextId(value) {
@@ -217,7 +236,9 @@ function daySource(day = {}) {
 }
 
 function routeNodeKey(value) {
-  return normalizeName(value).replace(/(?:国家公园|自然保护区|私人保护区|保护区)$/, "");
+  return normalizeName(value)
+    .replace(/(?:参访)$/, "")
+    .replace(/(?:国家公园|自然保护区|私人保护区|保护区)$/, "");
 }
 
 function cleanExtractedRouteNode(value) {
@@ -244,11 +265,13 @@ function extractDetailedRouteNodes(description, baseLocations = []) {
       if (value) candidates.push({ value, index: match.index || 0, raw: match[0] });
     }
   };
-  addMatches(/[\u3400-\u9fffA-Za-z·'’.-]{2,30}(?:国际机场|机场|国家公园|私人保护区|自然保护区|保护区|观景台|博物馆|购物中心|中心|村庄|部落)/gu);
+  addMatches(/[\u3400-\u9fffA-Za-z·'’.-]{2,30}(?:国际机场|机场|国家公园|私人保护区|自然保护区|保护区|反偷猎观察站|观察站|观景台|博物馆|购物中心|中心|村庄|部落)/gu);
   addMatches(/\b[A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*\s+(?:购物中心|酒店|营地)/g);
-  addMatches(/\b(?:[A-Z][A-Za-z'’.-]*\s+){0,5}(?:International\s+Airport|Airport|Observation\s+Hill|National\s+Park|Game\s+Reserve|Nature\s+Reserve|Museum|Centre|Center)\b/g);
-  addMatches(/夜间游猎|徒步游猎|步行\s*(?:Safari|游猎)|丛林徒步|热气球(?:之旅|\s*Safari)?|营地观星|观星/gi, (value) => {
+  addMatches(/\b(?:[A-Z][A-Za-z'’.-]*\s+){0,5}(?:International\s+Airport|Airport|Observation\s+Hill|National\s+Park|Game\s+Reserve|Nature\s+Reserve|Museum|Centre|Center|Observation\s+Post)\b/g);
+  addMatches(/夜间游猎|night\s+safari|徒步游猎|徒步(?=\s*[\/／、或]\s*夜间游猎)|步行\s*(?:Safari|游猎)|丛林徒步|清晨热气球(?:之旅|\s*Safari)?|热气球(?:之旅|\s*Safari)?|营地观星|观星/gi, (value) => {
     if (/步行/i.test(value)) return "步行 Safari";
+    if (/徒步/i.test(value)) return "徒步 Safari";
+    if (/night\s+safari/i.test(value)) return "夜间游猎";
     if (/热气球/i.test(value)) return "热气球";
     return cleanText(value);
   });
@@ -264,11 +287,7 @@ function extractDetailedRouteNodes(description, baseLocations = []) {
   }
   return candidates
     .sort((left, right) => left.index - right.index)
-    .filter((candidate) => {
-      const sentenceStart = Math.max(description.lastIndexOf("。", candidate.index - 1), description.lastIndexOf("；", candidate.index - 1), description.lastIndexOf("\n", candidate.index - 1));
-      const prefix = description.slice(sentenceStart + 1, candidate.index);
-      return candidate.value.length >= 2 && candidate.value.length <= 60 && !/(?:可自费|亦可|可选择|可选|或可|视情况)/.test(`${prefix} ${candidate.raw || ""}`);
-    });
+    .filter((candidate) => candidate.value.length >= 2 && candidate.value.length <= 60);
 }
 
 function extractNamedAirports(value) {
@@ -283,19 +302,38 @@ function extractNamedAirports(value) {
 }
 
 function independentSpotNodes(day, description) {
-  return (day.spots || []).map((spot, index) => {
-    let name = cleanText(spot.name);
-    if (spot.optional || spot.status === EXPERIENCE_STATUS.OPTIONAL_PAID || spot.status === EXPERIENCE_STATUS.PENDING) return null;
-    if (/热气球/.test(name)) name = "热气球";
-    if (/步行\s*(?:Safari|游猎)/i.test(name)) name = "步行 Safari";
+  return (day.spots || []).flatMap((spot, index) => {
+    const sourceName = cleanText(spot.name);
+    const significant = [];
+    const add = (pattern, value) => {
+      const match = sourceName.match(pattern);
+      if (match) significant.push({ value, sourceOffset: match.index || 0 });
+    };
+    add(/徒步游猎|丛林徒步|徒步(?=.*夜间游猎)/i, "徒步 Safari");
+    add(/步行\s*(?:Safari|游猎)/i, "步行 Safari");
+    add(/夜间游猎|夜游|night\s+safari/i, "夜间游猎");
+    add(/热气球/i, "热气球");
+    add(/马赛部落/i, "马赛部落参访");
+    add(/反偷猎观察站/i, "反偷猎观察站参访");
+
+    if (significant.length) {
+      return significant.map((item) => {
+        const at = description.indexOf(item.value) >= 0
+          ? description.indexOf(item.value)
+          : Math.max(description.indexOf(sourceName), 0) + item.sourceOffset;
+        return { value: item.value, index: at };
+      });
+    }
+
+    let name = sourceName;
     if (/营地观星/.test(name)) {
       if (/观星/.test(description)) name = "营地观星";
       else if (/星空床/.test(description)) name = "星空床";
-      else return null;
+      else return [];
     }
     const evidence = cleanText((spot.sourceEvidence || [])[0] || spot.description);
     const at = Math.max(description.indexOf(name), description.indexOf(evidence));
-    return { value: name, index: at >= 0 ? at : description.length + index };
+    return [{ value: name, index: at >= 0 ? at : description.length + index }];
   }).filter((item) => item?.value && INDEPENDENT_EXPERIENCE.test(item.value) && !SUMMARY_ACTIVITY_NODE.test(item.value));
 }
 
@@ -471,6 +509,7 @@ function normalizeName(value) {
 
 export function normalizeItineraryFacts(data = {}, { mapDates = true } = {}) {
   let next = structuredClone(data);
+  next.sourcePosterHighlights = normalizeSourcePosterHighlights(next.sourcePosterHighlights || []);
   const dayCount = next.days?.length || 0;
   const sourceDays = next.days || [];
   const knownAirports = unique(sourceDays.flatMap((day) => {

@@ -12,6 +12,7 @@ import { transportConfigurationLabels, transportProductName, transportUsageLabel
 import { dayVisualCards } from './lib/dayVisualCards.js';
 import { coverLayout } from './lib/coverLayout.js';
 import { buildCustomerTravelEntityData, sameTravelEntityName } from './lib/travelEntityDisplay.js';
+import { normalizeHighlightsForDisplay } from './lib/highlightDisplay.js';
 const VisualBindingsContext = React.createContext(undefined);
 
 const ICON = "/assets/icons/";
@@ -141,10 +142,10 @@ function DiningOverview({ items = [], policy, title = "特色餐饮", introTitle
 }
 
 function Highlights({ items = [], title = "产品亮点" }) {
-  if (!items.length) return null;
-  return <section className="content-section card-panel highlights" data-edit-path="highlights"><div className="panel-heading"><h2>{title}</h2><span>PRODUCT<br />HIGHLIGHTS</span></div><div className="highlight-list">{items.map((item, index) => {
-    const [title, description] = item.includes("：") ? item.split(/：(.*)/s) : [item, ""];
-    return <div className="highlight-item" key={`${item}-${index}`} data-edit-path={`highlights.${index}`}><span className="crown-disc"><Icon name="crown" size={52} tone="light" /></span><div className="highlight-copy"><h3>{title}</h3>{description && <p>{description}</p>}</div></div>;
+  const highlights = normalizeHighlightsForDisplay(items);
+  if (!highlights.length) return null;
+  return <section className="content-section card-panel highlights" data-edit-path="highlights"><div className="panel-heading"><h2>{title}</h2><span>PRODUCT<br />HIGHLIGHTS</span></div><div className="highlight-list">{highlights.map(({ title: itemTitle, description }, index) => {
+    return <div className="highlight-item" key={`${itemTitle}-${index}`} data-edit-path={`highlights.${index}`}><span className="crown-disc"><Icon name="crown" size={52} tone="light" /></span><div className="highlight-copy"><h3>{itemTitle}</h3>{description && <p>{description}</p>}</div></div>;
   })}</div></section>;
 }
 

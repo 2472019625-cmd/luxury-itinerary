@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import { addDays, normalizeItineraryFacts, splitRouteNodes } from "./itineraryRules.js";
+import { addDays, normalizeItineraryFacts, normalizeSourcePosterHighlights, splitRouteNodes } from "./itineraryRules.js";
 import { transportUsageLabel } from './transportPresentation.js';
 
 const INTERNAL_PATTERNS = [
@@ -176,11 +176,57 @@ function extractDays(sheets) {
   return days.sort((a, b) => a.sourceDay - b.sourceDay).map(({ sourceDay, ...day }) => day);
 }
 
-function sourceHighlights(lines) {
-  const start = lines.findIndex((line) => /海报下方亮点|产品亮点/.test(line));
-  const nearby = start >= 0 ? lines.slice(start + 1, start + 10) : [];
-  const inline = start >= 0 ? lines[start].replace(/^.*?(?:海报下方亮点|产品亮点)\s*[：:]?\s*/, "").trim() : "";
-  return unique([inline, ...nearby.flatMap((line) => line.split(/\n|；/)).filter((line) => /[｜|：:]/.test(line))]).slice(0, 6);
+const HIGHLIGHT_HEADING = /^(?:海报下方亮点|海报亮点|产品亮点|行程亮点|特别体验)\s*[：:]?\s*/u;
+const HIGHLIGHT_BOUNDARY = /^(?:日期|天数|简要行程|详细行程|行程内容|报价|费用|退改|取消|住宿|参考酒店|用车|交通|餐食|备注|说明)/u;
+
+function extractSourceHighlights(sheets) {
+  const rawEntries = [];
+  const evidence = [];
+  const coverageTargets = [];
+  for (const sheet of sheets) {
+    for (let rowIndex = 0; rowIndex < sheet.rows.length; rowIndex += 1) {
+      const row = sheet.rows[rowIndex] || [];
+      if (row.some((value) => dayNumber(value))) continue;
+      const values = row.map(text);
+      const headingIndex = values.findIndex((value) => HIGHLIGHT_HEADING.test(value));
+      if (headingIndex < 0) continue;
+      const headingValue = values[headingIndex];
+      const headingAddress = XLSX.utils.encode_cell({ r: rowIndex, c: headingIndex });
+      coverageTargets.push({ sheet: sheet.name, address: headingAddress, target: "sourcePosterHighlights" });
+      evidence.push({ sheet: sheet.name, address: headingAddress, raw: headingValue });
+      const inline = headingValue.replace(HIGHLIGHT_HEADING, "").trim();
+      if (inline) rawEntries.push(inline);
+      if (inline || values.filter(Boolean).length > 1) {
+        for (let columnIndex = headingIndex + 1; columnIndex < values.length; columnIndex += 1) {
+          if (!values[columnIndex]) continue;
+          const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+          rawEntries.push(values[columnIndex]);
+          evidence.push({ sheet: sheet.name, address, raw: values[columnIndex] });
+          coverageTargets.push({ sheet: sheet.name, address, target: "sourcePosterHighlights" });
+        }
+        continue;
+      }
+      for (let nextRow = rowIndex + 1; nextRow < sheet.rows.length; nextRow += 1) {
+        const nextValues = (sheet.rows[nextRow] || []).map(text).filter(Boolean);
+        if (!nextValues.length) continue;
+        if (nextValues.some((value) => dayNumber(value) || HIGHLIGHT_BOUNDARY.test(value))) break;
+        nextValues.forEach((value) => {
+          const columnIndex = (sheet.rows[nextRow] || []).map(text).indexOf(value);
+          const address = XLSX.utils.encode_cell({ r: nextRow, c: Math.max(0, columnIndex) });
+          rawEntries.push(value);
+          evidence.push({ sheet: sheet.name, address, raw: value });
+          coverageTargets.push({ sheet: sheet.name, address, target: "sourcePosterHighlights" });
+        });
+      }
+    }
+  }
+  const items = normalizeSourcePosterHighlights(rawEntries);
+  return {
+    rawEntries,
+    items,
+    evidence: items.map((item) => ({ text: item, sourceEvidence: evidence.filter((entry) => normalizeSourcePosterHighlights([entry.raw]).includes(item)) })),
+    coverageTargets,
+  };
 }
 
 function cleanListItem(value) {
@@ -623,7 +669,7 @@ function buildCellCoverage(sheets, explicitTargets = new Map()) {
         const mapped = reverseMap[columnIndex];
         let disposition = explicitTarget ? 'customer_field' : internal ? 'internal_retained' : mapped ? 'customer_field' : 'unrecognized';
         let target = explicitTarget || (internal ? 'audit.importCoverage' : mapped ? `days[].${mapped}` : '');
-        if (/海报下方亮点|产品亮点/.test(value)) { disposition = 'customer_field'; target = 'sourcePosterHighlights'; }
+        if (HIGHLIGHT_HEADING.test(value)) { disposition = 'customer_field'; target = 'sourcePosterHighlights'; }
         else if (/元\s*\/?\s*人\s*起|[wW万]\s*起/.test(value) && !internal) { disposition = 'customer_field'; target = 'totalPrice'; }
         else if (rowIndex < 3 && destinationFrom(value)) { disposition = 'customer_field'; target = 'destination/title'; }
         coverage.push({ sheet: sheet.name, address, raw: value, disposition, target, reason: disposition === 'unrecognized' ? '未匹配当前确定性字段，需在确认页人工核对' : '' });
@@ -638,8 +684,10 @@ export async function importItineraryWorkbook(file, baseData) {
   if (!/\.(xlsx|xls)$/i.test(file.name)) throw new Error("第一版目前仅支持 Excel 报价单（.xlsx / .xls）");
   const { sheets, lines } = parseWorkbook(await file.arrayBuffer());
   const expenses = extractExpenseSections(sheets);
+  const highlightExtraction = extractSourceHighlights(sheets);
   const explicitTargets = new Map();
   expenses.coverageTargets.forEach((item) => explicitTargets.set(`${item.sheet}!${item.address}`, item.target));
+  highlightExtraction.coverageTargets.forEach((item) => explicitTargets.set(`${item.sheet}!${item.address}`, item.target));
   ["included", "excluded", "cancellation"].forEach((section) => expenses[section].forEach((item, index) => explicitTargets.set(`${item.sheet}!${item.address}`, `${section}.${index}`)));
   const joined = lines.join("\n");
   const priceFacts = extractPriceFacts(sheets, joined);
@@ -661,7 +709,7 @@ export async function importItineraryWorkbook(file, baseData) {
     sourceEvidence: unique(days.flatMap((day, dayIndex) => day.hotel.includes(name) || name.includes(day.hotel) ? [`DAY ${dayIndex + 1} 住宿：${day.hotel}`, day.description] : [])).slice(0, 6),
     images: [],
   }));
-  const highlights = sourceHighlights(lines);
+  const highlights = highlightExtraction.items;
   const internalMatches = unique(lines.filter((line) => INTERNAL_PATTERNS.some((pattern) => pattern.test(line))));
   const diningExtraction = extractDiningExperiences(days);
   const diningExperiences = diningExtraction.customerExperiences;
@@ -669,6 +717,7 @@ export async function importItineraryWorkbook(file, baseData) {
   const transportSummary = buildTransportSummary(days);
   const sourceImportCoverage = {
     workbookName: file.name,
+    sourcePosterHighlights: highlightExtraction.evidence,
     included: expenses.included,
     excluded: expenses.excluded,
     cancellation: expenses.cancellation,
@@ -721,6 +770,7 @@ export async function importItineraryWorkbook(file, baseData) {
       sheetNames: sheets.map((sheet) => sheet.name),
       dayCount: days.length,
       hotelCount: hotels.length,
+      sourcePosterHighlightRawCount: highlightExtraction.rawEntries.length,
       highlightCount: highlights.length,
       includedCount: expenses.included.length,
       excludedCount: expenses.excluded.length,

@@ -236,6 +236,13 @@ export async function runCopyWriterSkill({
   const seen = new Set();
   const validTasks = [];
   const resultById = new Map();
+  const emitTaskProgress = () => onCapabilityCall?.({
+    phase: "task_progress",
+    capabilityId: "copy_task_progress",
+    batchId,
+    completedTasks: Math.min(tasks.length, resultById.size),
+    totalTasks: tasks.length,
+  });
   for (const [index, task] of tasks.entries()) {
     const resultKey = task?.targetId || `invalid-${index}`;
     const errors = validateCopyTask(task);
@@ -244,6 +251,7 @@ export async function runCopyWriterSkill({
     if (errors.length) resultById.set(resultKey, interfaceFailure(task, errors));
     else validTasks.push(task);
   }
+  emitTaskProgress();
 
   let modelCalls = 0;
   let transportAttempts = 0;
@@ -319,6 +327,7 @@ export async function runCopyWriterSkill({
       resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: { code: error?.code || "copy_facts_research_failed", message: error?.message || String(error) }, warnings: [] });
     }
   }));
+  emitTaskProgress();
 
   const writerTasks = validTasks.map((task) => writerTaskById.get(task.targetId)).filter(Boolean);
   const physicalBatches = partitionCopyTasks(writerTasks);
@@ -382,9 +391,12 @@ export async function runCopyWriterSkill({
       transportAttempts += attempts;
       for (const task of batchTasks) resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: { code: error?.code || "copy_request_failed", message: error?.message || String(error) }, warnings: [] });
       onCapabilityCall?.({ phase: "finished", capabilityId: "copy_writer", callId, batchId, batchKind, targetCount: batchTasks.length, durationMs: Date.now() - callStartedAt, attemptCount: attempts, failed: true, reason: error?.message || String(error) });
+    } finally {
+      emitTaskProgress();
     }
   }));
 
+  emitTaskProgress();
   const results = tasks.map((task, index) => resultById.get(task?.targetId || `invalid-${index}`)).filter(Boolean);
   const researchResults = tasks.map((task) => researchResultById.get(task?.targetId)).filter(Boolean);
   return { batchId, status: batchStatus(results), results, researchResults, warnings, metrics: { businessBatches: physicalBatches.length, physicalBatches: physicalBatches.length, modelCalls, transportAttempts, researchCalls, researchTransportAttempts, automaticBusinessRetryRounds: 0, reasoningEffort, modelMs, researchMs, durationMs: Date.now() - startedAt } };

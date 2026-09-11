@@ -1,0 +1,12 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { importItineraryWorkbook } from '../src/lib/itineraryImport.js';
+import { createProductionDefaultData } from '../src/lib/itineraryRules.js';
+const file = process.argv[2];
+if (!file) throw new Error('Excel path required');
+const buffer = await fs.readFile(file);
+const { data, report } = await importItineraryWorkbook({ name: path.basename(file), arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) }, createProductionDefaultData());
+const response = await fetch('http://127.0.0.1:4175/api/simple/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ facts: data, report, sourceName: path.basename(file) }) });
+const value = await response.json();
+if (!response.ok) throw new Error(value.error);
+console.log(JSON.stringify(value));

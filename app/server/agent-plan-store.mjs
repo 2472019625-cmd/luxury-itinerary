@@ -1,5 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+
+export function removeDirectoryTree(directory) {
+  if (!existsSync(directory)) return false;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory() && !entry.isSymbolicLink()) removeDirectoryTree(target);
+    else unlinkSync(target);
+  }
+  rmdirSync(directory);
+  return true;
+}
 
 function writeJson(file, value) {
   mkdirSync(path.dirname(file), { recursive: true });
@@ -15,8 +26,17 @@ function writeText(file, value) {
 }
 
 export class AgentPlanStore {
-  constructor(root) { this.root = path.resolve(root); }
-  projectDir(projectId) { return path.join(this.root, projectId); }
+  constructor(root) { this.root = path.resolve(root); this.deletedProjectIds = new Set(); }
+  assertWritableProject(projectId) {
+    if (this.deletedProjectIds.has(String(projectId || ""))) throw new Error("项目已永久删除");
+  }
+  projectDir(projectId) {
+    const id = String(projectId || "");
+    if (!id || id === "." || id === ".." || path.basename(id) !== id || id.includes("/") || id.includes("\\")) throw new Error("项目编号无效");
+    const directory = path.resolve(this.root, id);
+    if (path.dirname(directory) !== this.root) throw new Error("项目目录无效");
+    return directory;
+  }
   projectFile(projectId) { return path.join(this.projectDir(projectId), "project.json"); }
   planFile(projectId, planId) { return path.join(this.projectDir(projectId), "plans", `${planId}.json`); }
   attemptFile(projectId, attemptId) { return path.join(this.projectDir(projectId), "attempts", `${attemptId}.json`); }
@@ -30,6 +50,7 @@ export class AgentPlanStore {
   plannerRawFile(projectId, index) { return path.join(this.plannerAttemptDir(projectId), `planner-attempt-${index}-raw.txt`); }
   plannerParseFile(projectId, index) { return path.join(this.plannerAttemptDir(projectId), `planner-attempt-${index}-parse.json`); }
   createProject(project) {
+    this.deletedProjectIds.delete(String(project.projectId || ""));
     if (existsSync(this.projectFile(project.projectId))) throw new Error("项目已存在");
     writeJson(this.projectFile(project.projectId), project);
     return project;
@@ -38,7 +59,7 @@ export class AgentPlanStore {
     const file = this.projectFile(projectId);
     return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
   }
-  saveAttempt(projectId, attempt) { writeJson(this.attemptFile(projectId, attempt.attemptId), attempt); }
+  saveAttempt(projectId, attempt) { this.assertWritableProject(projectId); writeJson(this.attemptFile(projectId, attempt.attemptId), attempt); }
   savePlannerModelAttempt(projectId, attempt = {}) {
     if (!this.getProject(projectId)) throw new Error("项目不存在");
     let index = 1;
@@ -92,6 +113,7 @@ export class AgentPlanStore {
     return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
   }
   saveConfirmations(projectId, confirmations) {
+    this.assertWritableProject(projectId);
     for (const confirmation of confirmations) writeJson(this.confirmationFile(projectId, confirmation.confirmationId), confirmation);
     return this.updateProject(projectId, { confirmationIds: confirmations.map((item) => item.confirmationId) });
   }
@@ -103,6 +125,7 @@ export class AgentPlanStore {
     }).filter(Boolean);
   }
   saveExecutionRun(projectId, run) {
+    this.assertWritableProject(projectId);
     writeJson(this.executionRunFile(projectId, run.executionRunId), run);
     const project = this.getProject(projectId);
     const executionRunIds = project.executionRunIds?.includes(run.executionRunId) ? project.executionRunIds : [...(project.executionRunIds || []), run.executionRunId];
@@ -122,6 +145,7 @@ export class AgentPlanStore {
     return run;
   }
   saveTaskResult(projectId, executionRunId, taskId, result) {
+    this.assertWritableProject(projectId);
     writeJson(this.taskResultFile(projectId, executionRunId, taskId), result);
     return path.relative(this.projectDir(projectId), this.taskResultFile(projectId, executionRunId, taskId)).replaceAll("\\", "/");
   }
@@ -130,10 +154,12 @@ export class AgentPlanStore {
     return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
   }
   saveEvidence(projectId, executionRunId, evidenceId, evidence) {
+    this.assertWritableProject(projectId);
     writeJson(this.evidenceFile(projectId, executionRunId, evidenceId), evidence);
     return path.relative(this.projectDir(projectId), this.evidenceFile(projectId, executionRunId, evidenceId)).replaceAll("\\", "/");
   }
   saveFinalResult(projectId, executionRunId, result) {
+    this.assertWritableProject(projectId);
     writeJson(this.finalResultFile(projectId, executionRunId), result);
     return path.relative(this.projectDir(projectId), this.finalResultFile(projectId, executionRunId)).replaceAll("\\", "/");
   }
@@ -149,5 +175,12 @@ export class AgentPlanStore {
     const project = this.getProject(projectId);
     if (!project?.activePlanId) return project ? { project, plan: null } : null;
     return { project, plan: this.getPlan(projectId, project.activePlanId) };
+  }
+  deleteProject(projectId) {
+    const directory = this.projectDir(projectId);
+    const existed = existsSync(directory);
+    this.deletedProjectIds.add(String(projectId));
+    if (existed) removeDirectoryTree(directory);
+    return existed;
   }
 }

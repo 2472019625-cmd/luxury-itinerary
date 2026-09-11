@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { createDemoAuth } from "./demo-auth.mjs";
 import { servePublicStatic } from "./public-static.mjs";
@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { AgentPlanStore } from "./agent-plan-store.mjs";
+import { AgentPlanStore, removeDirectoryTree } from "./agent-plan-store.mjs";
 import { AGENT_CAPABILITY_VERSION } from "../config/agent-capabilities.mjs";
 import { AGENT_RULE_PROFILE_VERSION } from "../config/agent-rule-profile.mjs";
 import { AGENT_PROMPT_VERSION, buildAgentFactBasis, fingerprintFacts, generateAgentPlan } from "./agent-trip-planner.mjs";
@@ -17,6 +17,7 @@ import { applyRuntimeImageConfirmations, enrichPendingImageConfirmations, imageC
 import { evaluateAgentImageCompletion } from "./agent-image-plan.mjs";
 import { runImageSearchSkill } from "./simple-image-skill.mjs";
 import { runSimplePipeline } from "./simple-pipeline-executor.mjs";
+import { calculateSimplePipelineProgress } from "./simple-pipeline-progress.mjs";
 import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, uploadSimpleImage } from "./simple-manual-images.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -106,31 +107,40 @@ export function createAgentPlannerServer(options = {}) {
     const now = new Date().toISOString();
     if (event.capabilityId === "image_slot_progress" && event.phase === "slot_progress") {
       job.imageSlotProgress = { completed: event.completedSlots, total: event.totalSlots };
-      job.updatedAt = now;
-      return;
+    }
+    if (event.capabilityId === "copy_task_progress" && event.phase === "task_progress") {
+      job.copyTaskProgress = { completed: event.completedTasks, total: event.totalTasks };
     }
     const stage = event.stage === "capability"
-      ? (event.capabilityId === "copy_writer" || event.capabilityId === "copy_facts_research" ? "copy_skill" : "image_skill")
+      ? (["copy_writer", "copy_facts_research", "copy_task_progress"].includes(event.capabilityId) ? "copy_skill" : "image_skill")
       : event.stage;
     const states = { ...job.stageStates };
     if (states[stage] && event.phase === "started") states[stage] = "running";
     if (event.stage !== "capability" && states[stage] && event.phase === "finished") states[stage] = event.status === "failed" ? "failed" : "complete";
+    if (event.stage !== "capability" && states[stage] && event.phase === "failed") states[stage] = "failed";
     if (event.stage === "skills" && event.phase === "finished") {
-      states.copy_skill = "complete";
-      states.image_skill = "complete";
+      if (states.copy_skill === "running") states.copy_skill = "complete";
+      if (states.image_skill === "running") states.image_skill = "complete";
     }
-    let progress = Number(job.progress || 1);
-    if (event.stage === "parser") progress = Math.max(progress, event.phase === "finished" ? 8 : 2);
-    if (event.stage === "planner") progress = event.phase === "finished" ? Math.max(progress, 30) : Math.min(28, Math.max(progress + (event.phase === "progress" ? 1 : 2), 10));
-    if (["copy_skill", "image_skill"].includes(event.stage) && event.phase === "started") progress = Math.max(progress, 34);
-    if (event.stage === "capability" && event.phase === "finished") progress = Math.min(74, Math.max(progress + 1, 35));
-    if (event.stage === "skills" && event.phase === "finished") progress = Math.max(progress, 75);
-    if (event.stage === "program_writeback" && event.phase === "finished") progress = Math.max(progress, 82);
-    if (event.stage === "renderer") progress = Math.max(progress, event.phase === "finished" ? 96 : 88);
-    if (event.stage === "pipeline" && event.phase === "finished") progress = Number(event.progress || progress);
+    if (event.stage === "planner" && event.phase === "finished") {
+      job.copyTaskProgress = { completed: 0, total: Number(event.copyTaskCount || 0) };
+      job.imageSlotProgress = { completed: 0, total: Number(event.imageSlotCount || 0) };
+    }
+    if (event.stage === "copy_skill" && event.phase === "started") job.copyTaskProgress = { completed: 0, total: Number(event.targetCount || 0) };
+    if (event.stage === "image_skill" && event.phase === "started") job.imageSlotProgress = { completed: 0, total: Number(event.slotCount || 0) };
+    const failed = event.phase === "failed" || (event.stage !== "capability" && event.status === "failed");
+    const targetProgress = calculateSimplePipelineProgress({
+      stageStates: states,
+      copy: job.copyTaskProgress,
+      image: job.imageSlotProgress,
+      pipelineComplete: event.stage === "pipeline" && event.phase === "finished" && event.status === "complete",
+    });
+    const progress = failed ? Number(job.progress || 1) : Math.max(Number(job.progress || 1), targetProgress);
     const finishedAction = event.stage === "capability" && event.phase === "finished";
     const completedActions = Number(job.completedActions || 0) + (finishedAction ? 1 : 0);
-    const detailMessage = event.detail?.message || event.detail?.currentAction;
+    const detailMessage = event.detail?.message || event.detail?.currentAction
+      || (event.capabilityId === "copy_task_progress" ? `正在生成文案 ${event.completedTasks} / ${event.totalTasks}` : "")
+      || (event.capabilityId === "image_slot_progress" ? `正在处理图片 ${event.completedSlots} / ${event.totalSlots}` : "");
     const target = event.target ? ` · ${event.target}` : "";
     Object.assign(job, {
       stageStates: states,
@@ -151,6 +161,34 @@ export function createAgentPlannerServer(options = {}) {
     const executionRun = project?.activeExecutionRunId ? simpleStore.getExecutionRun(projectId, project.activeExecutionRunId) : null;
     const result = executionRun ? simpleStore.getFinalResult(projectId, executionRun.executionRunId) : null;
     return { project: project || job.project, plan, executionRun, result, activeJob: job, confirmations: [] };
+  };
+  const removeOutputFile = (candidate) => {
+    if (!candidate) return;
+    const outputRoot = path.resolve(root, "output");
+    const file = path.resolve(candidate);
+    if (file.startsWith(`${outputRoot}${path.sep}`) && file !== outputRoot && existsSync(file)) rmSync(file, { force: true });
+  };
+  const deleteSimpleProject = (projectId) => {
+    const controller = simpleControllers.get(projectId);
+    const job = simpleJobs.get(projectId);
+    controller?.abort();
+    if (job) Object.assign(job, { status: "cancelled", currentAction: "已永久删除", updatedAt: new Date().toISOString() });
+    const project = simpleStore.getProject(projectId);
+    const activeRun = project?.activeExecutionRunId ? simpleStore.getExecutionRun(projectId, project.activeExecutionRunId) : null;
+    const result = activeRun ? simpleStore.getFinalResult(projectId, activeRun.executionRunId) : null;
+    const outputDirectory = path.resolve(root, "output", "simple-pipeline", projectId);
+    const allowedOutputParent = path.resolve(root, "output", "simple-pipeline");
+    if (path.dirname(outputDirectory) === allowedOutputParent && existsSync(outputDirectory)) removeDirectoryTree(outputDirectory);
+    const batchId = result?.imageExecution?.batchId;
+    if (batchId) {
+      const assetDirectory = path.resolve(root, "output", "image-assets", `simple-${batchId}`);
+      const assetRoot = path.resolve(root, "output", "image-assets");
+      if (path.dirname(assetDirectory) === assetRoot && existsSync(assetDirectory)) removeDirectoryTree(assetDirectory);
+    }
+    const existed = simpleStore.deleteProject(projectId);
+    simpleJobs.delete(projectId);
+    simpleControllers.delete(projectId);
+    return existed;
   };
   const startSimplePipeline = (payload) => {
     const projectId = randomUUID();
@@ -192,12 +230,16 @@ export function createAgentPlannerServer(options = {}) {
           onEvent: (event) => updateSimpleJob(job, event),
         });
         job.status = result.pipelineStatus;
-        job.progress = result.pipelineStatus === "complete" ? 100 : result.pipelineStatus === "awaiting_user_action" ? 85 : 75;
+        job.progress = result.pipelineStatus === "complete" ? 100 : job.progress;
         job.currentAction = result.pipelineStatus === "complete" ? "新版流程已完成" : result.pipelineStatus === "awaiting_user_action" ? "需要补充必需图片" : "部分责任单元需要处理";
       } catch (failure) {
         job.status = controller.signal.aborted ? "cancelled" : "failed";
         job.currentAction = controller.signal.aborted ? "已取消" : "新版流程执行失败";
         job.error = failure.message || String(failure);
+        const runningStages = Object.entries(job.stageStates).filter(([, status]) => status === "running").map(([id]) => id);
+        const failedStage = runningStages.at(-1);
+        if (failedStage) job.stageStates = { ...job.stageStates, [failedStage]: controller.signal.aborted ? "cancelled" : "failed" };
+        job.stages = simpleStageDefinitions.map(([id, label]) => ({ id, label, status: job.stageStates[id] }));
       } finally {
         job.updatedAt = new Date().toISOString();
         simpleControllers.delete(projectId);
@@ -221,13 +263,15 @@ export function createAgentPlannerServer(options = {}) {
       const finalRun = await executor.execute(project.projectId, executionRun, { signal: controller?.signal });
       const status = finalRun.status === "complete" ? "complete" : finalRun.status === "cancelled" ? "cancelled" : finalRun.status === "waiting_confirmation" ? "waiting_confirmation" : "failed";
       Object.assign(job, { status, message: status === "complete" ? "完整成品已通过全部检查" : status === "waiting_confirmation" ? "等待处理关键确认" : status === "cancelled" ? "已取消" : "执行失败", updatedAt: new Date().toISOString() });
-      store.updateProject(project.projectId, { activeJobId: null });
+      if (store.getProject(project.projectId)) store.updateProject(project.projectId, { activeJobId: null });
     } catch (failure) {
-      for (const attempt of failure.attempts || []) store.saveAttempt(project.projectId, attempt);
+      if (store.getProject(project.projectId)) for (const attempt of failure.attempts || []) store.saveAttempt(project.projectId, attempt);
       const status = job.cancelRequested ? "cancelled" : "failed";
       Object.assign(job, { status, message: status === "cancelled" ? "已取消" : phase === "planning" ? "规划失败" : "执行失败", error: failure.message, validationErrors: failure.validationErrors || [], updatedAt: new Date().toISOString() });
-      if (phase === "planning") store.updateProject(project.projectId, { status: status === "cancelled" ? "cancelled" : "planning_failed", currentStage: status === "cancelled" ? "已取消" : "生成中断", activeJobId: null, lastError: failure.message });
-      else store.updateProject(project.projectId, { activeJobId: null });
+      if (store.getProject(project.projectId)) {
+        if (phase === "planning") store.updateProject(project.projectId, { status: status === "cancelled" ? "cancelled" : "planning_failed", currentStage: status === "cancelled" ? "已取消" : "生成中断", activeJobId: null, lastError: failure.message });
+        else store.updateProject(project.projectId, { activeJobId: null });
+      }
     } finally {
       controllers.delete(job.jobId);
     }
@@ -256,7 +300,7 @@ export function createAgentPlannerServer(options = {}) {
         job.status = finalRun.status === "complete" ? "complete" : finalRun.status;
         job.message = finalRun.status === "complete" ? "完整成品已通过全部检查" : finalRun.status === "waiting_confirmation" ? "等待处理关键确认" : finalRun.status === "cancelled" ? "已取消" : "执行结束";
       } catch (failure) { job.status = "failed"; job.message = "执行失败"; job.error = failure.message; }
-      finally { job.updatedAt = new Date().toISOString(); controllers.delete(job.jobId); store.updateProject(project.projectId, { activeJobId: null }); }
+      finally { job.updatedAt = new Date().toISOString(); controllers.delete(job.jobId); if (store.getProject(project.projectId)) store.updateProject(project.projectId, { activeJobId: null }); }
     });
     return job;
   };
@@ -301,6 +345,15 @@ export function createAgentPlannerServer(options = {}) {
       } catch (failure) { return json(response, 400, { error: failure.message || "无法启动新版 Simple Pipeline" }); }
     }
     const simpleProjectMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)$/);
+    if (request.method === "DELETE" && simpleProjectMatch) {
+      try {
+        const payload = await requestBody(request).catch(() => ({}));
+        if (payload.confirmed !== true) return json(response, 400, { error: "永久删除需要明确确认" });
+        const projectId = decodeURIComponent(simpleProjectMatch[1]);
+        const existed = deleteSimpleProject(projectId);
+        return json(response, 200, { deleted: true, existed });
+      } catch (failure) { return json(response, 400, { error: failure.message || "项目永久删除失败", code: failure.code || "project_delete_failed" }); }
+    }
     if (request.method === "GET" && simpleProjectMatch) {
       const active = simpleProjectPayload(decodeURIComponent(simpleProjectMatch[1]));
       return active ? json(response, 200, active) : json(response, 404, { error: "Simple Pipeline 项目不存在" });
@@ -576,6 +629,26 @@ export function createAgentPlannerServer(options = {}) {
       return job ? json(response, 200, job) : json(response, 404, { error: "规划任务不存在" });
     }
     const projectMatch = url.pathname.match(/^\/api\/agent\/projects\/([^/]+)$/);
+    if (request.method === "DELETE" && projectMatch) {
+      try {
+        const payload = await requestBody(request).catch(() => ({}));
+        if (payload.confirmed !== true) return json(response, 400, { error: "永久删除需要明确确认" });
+        const projectId = decodeURIComponent(projectMatch[1]);
+        const project = store.getProject(projectId);
+        const projectJobs = [...jobs.values()].filter((job) => job.projectId === projectId);
+        for (const job of projectJobs) {
+          Object.assign(job, { cancelRequested: true, status: "cancelled", message: "已永久删除", updatedAt: new Date().toISOString() });
+          controllers.get(job.jobId)?.abort();
+        }
+        const activeRun = project?.activeExecutionRunId ? store.getExecutionRun(projectId, project.activeExecutionRunId) : null;
+        const result = activeRun ? store.getFinalResult(projectId, activeRun.executionRunId) : null;
+        removeOutputFile(result?.outputFile);
+        removeOutputFile(result?.qaFile);
+        const existed = store.deleteProject(projectId);
+        for (const [jobId, job] of jobs) if (job.projectId === projectId) { jobs.delete(jobId); controllers.delete(jobId); }
+        return json(response, 200, { deleted: true, existed });
+      } catch (failure) { return json(response, 400, { error: failure.message || "项目永久删除失败", code: failure.code || "project_delete_failed" }); }
+    }
     if (request.method === "GET" && projectMatch) {
       const active = projectPayload(projectMatch[1]);
       return active ? json(response, 200, active) : json(response, 404, { error: "规划项目不存在" });

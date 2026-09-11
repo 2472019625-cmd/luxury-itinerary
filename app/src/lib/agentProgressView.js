@@ -1,10 +1,9 @@
 export const SIMPLE_DESIGNER_STAGES = [
-  { key: "parser", label: "读取并整理行程资料", shortLabel: "资料" },
-  { key: "planner", label: "梳理整程节奏与亮点", shortLabel: "规划" },
-  { key: "copy_skill", label: "完善客户版行程文案", shortLabel: "文案" },
-  { key: "image_skill", label: "匹配酒店、体验与交通图片", shortLabel: "图片" },
-  { key: "program_writeback", label: "检查费用和重要信息", shortLabel: "检查" },
-  { key: "renderer", label: "生成并检查行程长图", shortLabel: "长图" },
+  { key: "parser", sourceKeys: ["parser"], label: "整理你上传的行程资料", shortLabel: "资料", routePosition: 0 },
+  { key: "planner", sourceKeys: ["planner"], label: "梳理路线与体验重点", shortLabel: "规划", routePosition: 22 },
+  { key: "content_creation", sourceKeys: ["copy_skill", "image_skill"], label: "完善客户文案与视觉素材", shortLabel: "内容制作", routePosition: 44 },
+  { key: "program_writeback", sourceKeys: ["program_writeback"], label: "核对客户行程重要信息", shortLabel: "检查", routePosition: 78 },
+  { key: "renderer", sourceKeys: ["renderer"], label: "排版并检查客户版长图", shortLabel: "长图", routePosition: 92 },
 ];
 
 export const AGENT_DESIGNER_STAGES = [
