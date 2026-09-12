@@ -680,7 +680,7 @@ export function compactProofPoints(points, fallback = []) {
 export function createProductionDefaultData() {
   return {
     title: "新的深度定制游", subtitle: "", destination: "", dayCount: 0,
-    startDate: null, endDate: null, adults: null, children: 0, travelers: null,
+    startDate: null, endDate: null, adults: null, children: null, travelers: null,
     heroImage: "", heroFocus: "50% 50%", sourcePosterHighlights: [], highlights: [],
     hotels: [], diningExperiences: [], transportSummary: [], days: [],
     included: [], excluded: [], cancellation: [], pendingConfirmations: [], priceNotes: [], totalPrice: null, priceUnit: "元 / 人起",

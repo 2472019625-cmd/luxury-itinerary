@@ -130,6 +130,6 @@ export function getDesignerSummary(snapshot) {
   const status = snapshot?.project?.status || snapshot?.activeJob?.status || "";
   if (["complete", "ready_for_editor"].includes(status)) return "客户版行程已经制作完成。日期、酒店、路线和费用仍按你确认的资料保留，现在可以继续调整文案、图片和版式。";
   if (["partial", "awaiting_user_action"].includes(status)) return "已按你确认的资料生成可编辑草稿。日期、酒店、路线和费用保持不变，未完成内容可在编辑页继续补充。";
-  if (["failed", "planning_failed", "execution_failed"].includes(status)) return "已确认的日期、酒店、路线和费用信息仍然保留；当前制作暂时中断，可查看管理员详情定位原因。";
+  if (["failed", "planning_failed", "execution_failed"].includes(status)) return "已确认的日期、酒店、路线和费用信息仍然保留；本次制作未完成，请根据页面提示重新尝试。";
   return "已保留你确认的日期、酒店、路线和费用信息，正在完善客户版文案与配图。";
 }

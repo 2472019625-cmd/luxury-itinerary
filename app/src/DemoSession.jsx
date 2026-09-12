@@ -7,7 +7,7 @@ export function DemoSession({children}) {
   useEffect(()=>{
     let alive=true;
     const original=window.fetch;
-    const clear=()=>{window.__sheyouServerUser=null;setState({enabled:true,user:null});};
+    const clear=()=>{window.__sheyouServerUser=null;setState(current=>({enabled:true,user:null,registrationEnabled:current?.registrationEnabled}));};
     const logout=async()=>{
       try {const res=await original('/api/auth/logout',{method:'POST'});if(!res.ok)throw Error();clear();}
       catch{setError('退出失败，请检查连接后重试');}
@@ -27,9 +27,12 @@ export function DemoSession({children}) {
   },[]);
   if(error)return <main className="auth-screen"><p role="alert">{error}</p><button onClick={()=>location.reload()}>重新连接</button></main>;
   if(!state)return <main className="auth-screen">正在验证登录状态…</main>;
-  if(state.enabled && !state.user)return <AuthScreen serverLogin={async(login,password)=>{
+  if(state.enabled && !state.user)return <AuthScreen registrationEnabled={state.registrationEnabled} serverLogin={async(login,password)=>{
     const res=await fetch('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({login,password})});
     const data=await res.json();if(!res.ok)throw Error(data.error || '登录失败');return data.user;
-  }} onAuth={user=>{window.__sheyouServerUser=user;setState({enabled:true,user});}}/>;
+  }} serverRegister={async({invite,name,login,password})=>{
+    const res=await fetch('/api/auth/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({invite,name,login,password})});
+    const data=await res.json();if(!res.ok)throw Error(data.error || '注册失败');return data.user;
+  }} onAuth={user=>{window.__sheyouServerUser=user;setState(current=>({enabled:true,user,registrationEnabled:current?.registrationEnabled}));}}/>;
   return children;
 }

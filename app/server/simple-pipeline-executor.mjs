@@ -64,6 +64,7 @@ export async function runSimplePipeline({
   sourceFile,
   sourceData,
   projectId: suppliedProjectId,
+  ownerId,
   baseData = {},
   root = appRoot,
   storeRoot = path.join(root, "output", "simple-pipeline", "projects"),
@@ -133,6 +134,7 @@ export async function runSimplePipeline({
     planIds: [],
     executionRunIds: [],
     factBasis: buildAgentFactBasis(parsedData, imported.report || {}),
+    ...(ownerId ? { ownerId } : {}),
   };
   const persistStartedAt = Date.now();
   try {

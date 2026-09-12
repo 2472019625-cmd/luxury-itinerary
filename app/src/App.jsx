@@ -13,6 +13,7 @@ import { dayVisualCards } from './lib/dayVisualCards.js';
 import { coverLayout } from './lib/coverLayout.js';
 import { buildCustomerTravelEntityData, sameTravelEntityName } from './lib/travelEntityDisplay.js';
 import { normalizeHighlightsForDisplay } from './lib/highlightDisplay.js';
+import { deriveFeaturedCardLayout } from './lib/featuredCardLayout.js';
 const VisualBindingsContext = React.createContext(undefined);
 
 const ICON = "/assets/icons/";
@@ -128,11 +129,10 @@ function Cover({ data }) {
 function DiningOverview({ items = [], policy, title = "特色餐饮", introTitle, introCopy }) {
   if (!items.length) return null;
   const isOdd = items.length % 2 === 1;
-  const hasFeatured = items.some((item) => item.layout === "wide");
+  const { entries, hasFeatured } = deriveFeaturedCardLayout(items, "dining");
   const resolvedIntroTitle = introTitle || "值得专门期待的特色用餐";
   const resolvedIntroCopy = introCopy || "从特色美食、品饮体验到不同的用餐方式，每一项都以清楚的餐饮重点和体验差异，说明它为什么值得期待。";
-  return <section className="journey-feature-section dining-section" data-edit-path="dining"><SectionTitle en="CULINARY JOURNEY" zh={title} /><div className="feature-intro"><span>{resolvedIntroTitle}</span><p>{resolvedIntroCopy}</p></div><div className={`dining-grid${isOdd ? " dining-grid-odd" : ""}${hasFeatured ? " dining-grid-featured" : ""}`}>{items.map((item, itemIndex) => {
-    const isWide = item.layout === "wide";
+  return <section className="journey-feature-section dining-section" data-edit-path="dining"><SectionTitle en="CULINARY JOURNEY" zh={title} /><div className="feature-intro"><span>{resolvedIntroTitle}</span><p>{resolvedIntroCopy}</p></div><div className={`dining-grid${isOdd ? " dining-grid-odd" : ""}${hasFeatured ? " dining-grid-featured" : ""}`}>{entries.map(({ item, originalIndex: itemIndex, isFeatured: isWide }) => {
     const images = (item.images?.length ? item.images : item.image ? [item.image] : []).slice(0, 2);
     return <article className={`dining-card${isWide ? " dining-card-wide" : ""}`} key={item.id || item.title} data-edit-path={`dining.${itemIndex}`}>
     {images.length > 0 ? <div className={`dining-image dining-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${item.id || item.title}-${imageIndex}`} src={image.src || image} alt={image.label || `${item.title}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`dining.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="餐饮图片待补充" compact className="card-missing-image" data-edit-path={`dining.${itemIndex}`} data-edit-image="0" />}
@@ -163,8 +163,8 @@ function Overview({ days, title = "行程总览" }) {
 function HotelsOverview({ hotels = [], policy, title = "臻选下榻", introTitle = "住进风景深处，也住进旅程的黄金位置", introCopy = "每一处下榻都服务于路线节奏：或更接近游猎现场，或以完整度假体验承接长途移动后的松弛时刻。" }) {
   if (!hotels.length) return null;
   const isOdd = hotels.length % 2 === 1;
-  const hasFeatured = hotels.some((hotel) => hotel.layout === "wide");
-  return <section className="journey-feature-section hotels-section" data-edit-path="hotels"><SectionTitle en="SIGNATURE STAYS" zh={title} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`hotel-grid${isOdd ? " hotel-grid-odd" : ""}${hasFeatured ? " hotel-grid-featured" : ""}`}>{hotels.map((hotel, hotelIndex) => <article className={`hotel-card${hotel.layout === "wide" ? " hotel-card-wide" : ""}${hotel.images?.[0] ? "" : " hotel-card-no-image"}`} key={hotel.id || hotel.officialName} data-edit-path={`hotels.${hotelIndex}`}>
+  const { entries, hasFeatured } = deriveFeaturedCardLayout(hotels, "hotel");
+  return <section className="journey-feature-section hotels-section" data-edit-path="hotels"><SectionTitle en="SIGNATURE STAYS" zh={title} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`hotel-grid${isOdd ? " hotel-grid-odd" : ""}${hasFeatured ? " hotel-grid-featured" : ""}`}>{entries.map(({ item: hotel, originalIndex: hotelIndex, isFeatured }) => <article className={`hotel-card${isFeatured ? " hotel-card-wide" : ""}${hotel.images?.[0] ? "" : " hotel-card-no-image"}`} key={hotel.id || hotel.officialName} data-edit-path={`hotels.${hotelIndex}`}>
     {hotel.images?.[0] ? <div className="hotel-image"><SafeImage src={hotel.images[0].src || hotel.images[0]} alt={hotel.shortName || hotel.officialName} fallbackLabel="酒店图片待补充" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" style={{ objectPosition: hotel.images[0].focus || "50% 50%" }} /></div> : <MissingImageState label="酒店图片待补充" compact className="card-missing-image" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" />}
     <div className="hotel-copy"><div className="hotel-kicker"><span>{hotel.region}</span><em>{hotel.nights}晚</em></div><h3>{hotel.shortName || hotel.officialName}</h3>{hotel.shortName && hotel.officialName && !sameTravelEntityName(hotel.shortName, hotel.officialName) && <p className="hotel-official-name">{hotel.officialName}</p>}
       {hotel.editorialCopy && <p className="hotel-editorial">{hotel.editorialCopy}</p>}
@@ -176,9 +176,8 @@ function HotelsOverview({ hotels = [], policy, title = "臻选下榻", introTitl
 function TransportOverview({ items = [], disclaimer, title = "全程交通", introTitle = "移动不是赶路，而是旅程体验的一部分", introCopy = "城市接送、专属游猎、草原飞行与海上衔接各司其职，让跨区域移动保持私密、舒适与从容。" }) {
   if (!items.length) return null;
   const isOdd = items.length % 2 === 1;
-  const hasFeatured = items.some((item) => item.layout === "wide");
-  return <section className="journey-feature-section transport-section" data-edit-path="transport"><SectionTitle en="TRAVEL IN COMFORT" zh={title} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`transport-grid${isOdd ? " transport-grid-odd" : ""}${hasFeatured ? " transport-grid-featured" : ""}`}>{items.map((item, itemIndex) => {
-    const isWide = item.layout === "wide";
+  const { entries, hasFeatured } = deriveFeaturedCardLayout(items, "transport");
+  return <section className="journey-feature-section transport-section" data-edit-path="transport"><SectionTitle en="TRAVEL IN COMFORT" zh={title} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`transport-grid${isOdd ? " transport-grid-odd" : ""}${hasFeatured ? " transport-grid-featured" : ""}`}>{entries.map(({ item, originalIndex: itemIndex, isFeatured: isWide }) => {
     const configurationLabels = transportConfigurationLabels(item);
     return <article className={`transport-card${isWide ? " transport-card-wide" : ""}`} key={item.id || item.category} data-edit-path={`transport.${itemIndex}`}>
     {item.images?.length > 0 ? <div className={`transport-image transport-image-count-${Math.min(item.images.length, 2)}`}>{item.images.slice(0, 2).map((image, imageIndex) => <SafeImage key={`${item.id}-${imageIndex}`} src={image.src || image} alt={`${item.category}${imageIndex ? "内部空间" : "出行场景"}`} data-edit-path={`transport.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="交通图片待补充" compact className="card-missing-image" data-edit-path={`transport.${itemIndex}`} data-edit-image="0" />}
@@ -369,7 +368,8 @@ function StyleProofA({ data }) {
 }
 
 export function App() {
-  if (window.location.pathname.startsWith("/agent-diagnostics") || window.location.pathname.startsWith("/agent/projects/") || window.location.pathname.startsWith("/simple/projects/")) return <AgentWorkspace ItineraryComponent={Itinerary} />;
+  if (window.location.pathname.startsWith("/agent-diagnostics") || window.location.pathname.startsWith("/agent/projects/")) { window.location.replace("/agent"); return null; }
+  if (window.location.pathname.startsWith("/simple/projects/")) return <AgentWorkspace ItineraryComponent={Itinerary} />;
   if (window.location.pathname.startsWith("/agent-planner")) return <AgentPlanner />;
   const params = new URLSearchParams(window.location.search);
   const exportMode = params.get("export") === "1";

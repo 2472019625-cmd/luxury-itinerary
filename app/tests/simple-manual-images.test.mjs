@@ -74,7 +74,11 @@ test("前端载荷展示人工图片位，并只开放明确可选候选", async
   assert.equal(payload.imageReview.slots.length, 2);
   const candidates = payload.imageReview.slots[0].candidates;
   assert.equal(candidates.find((item) => item.candidateId === value.candidate.candidateId).status, "manual_review");
-  assert.equal(candidates.find((item) => item.candidateId === value.hardCandidate.candidateId).status, "hard_rejected");
+  const hardCandidate = candidates.find((item) => item.candidateId === value.hardCandidate.candidateId);
+  assert.equal(hardCandidate.status, "hard_rejected");
+  assert.equal(hardCandidate.autoReviewStatus, "auto_rejected");
+  assert.equal(hardCandidate.manualOnly, true);
+  assert.ok(hardCandidate.localPreviewUrl);
 });
 
 test("硬拒绝候选未经风险确认不能人工采用", async (t) => {

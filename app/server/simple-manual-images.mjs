@@ -85,15 +85,22 @@ function selectableIds(result, imageResult) {
 
 function frontendCandidate(candidate, slotId, binding, canSelect) {
   const hard = candidate.hardJudgment || {};
+  const hardRejected = isHardRejectedCandidate(candidate);
+  const reviewTimeout = candidate.reviewTimeout === true || candidate.autoReviewStatus === "review_timeout";
   return {
     ...candidate,
     slotId,
     pipelineSlotId: slotId,
     fieldPath: binding?.fieldPath || "",
     localPreviewUrl: candidate.localUrl || candidate.publicUrl || "",
-    status: canSelect ? "manual_review" : "hard_rejected",
-    adoptable: canSelect,
-    libraryEligible: canSelect,
+    status: hardRejected ? "hard_rejected" : "manual_review",
+    autoReviewStatus: hardRejected ? "auto_rejected" : reviewTimeout ? "review_timeout" : candidate.autoReviewStatus || (canSelect ? "not_auto_selected" : "manual_only"),
+    autoRejected: hardRejected,
+    reviewTimeout,
+    notAutoSelected: candidate.selected !== true,
+    manualOnly: candidate.selected !== true,
+    adoptable: canSelect && !hardRejected,
+    libraryEligible: canSelect && !hardRejected,
     manualSelectable: Boolean(candidate.localUrl?.startsWith('/image-assets/')),
     reason: candidate.rejectionReason || candidate.matchReason || candidate.reason || "暂无审核说明",
     terminalAudit: {
@@ -109,6 +116,7 @@ function frontendCandidate(candidate, slotId, binding, canSelect) {
 
 function candidateCanBeSelected(result, imageResult, candidate) {
   if (!candidate?.candidateId || !(candidate.localUrl || candidate.publicUrl)) return false;
+  if (isHardRejectedCandidate(candidate)) return false;
   if (selectableIds(result, imageResult).has(candidate.candidateId)) return true;
   if (candidate.candidateId === imageResult.selected?.candidateId) return true;
   const hard = candidate.hardJudgment;
@@ -279,6 +287,18 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
   job.catch(error => console.error("Manual image verification failed:", error.message)).finally(() => { if (manualRenders.get(key) === job) manualRenders.delete(key); });
   if (!deferRender) await job;
   return buildSimpleManualImagePayload(store, project.projectId);
+}
+
+const HARD_REJECTION_CODES = new Set([
+  "wrong_hotel", "wrong_location", "wrong_activity", "wrong_transport_type", "wrong_subject",
+  "watermark", "ai_generated", "subject_not_clear", "subject_too_small", "subject_not_primary",
+  "low_quality_unusable", "non_photographic", "broken", "forbid",
+  "hotel_identity_mismatch", "place_mismatch", "activity_mismatch", "subject_mismatch",
+  "technical_unusable", "low_resolution", "low_quality",
+]);
+
+function isHardRejectedCandidate(candidate = {}) {
+  return candidate.autoRejected === true || HARD_REJECTION_CODES.has(String(candidate.rejection || candidate.hardJudgment?.hardRejectCode || ""));
 }
 
 export async function chooseSimpleImageCandidate({ store, root, projectId, slotId, candidateId, manualConfirmed = false, render, deferRender = false } = {}) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {existsSync,mkdtempSync,writeFileSync,rmSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {scryptSync} from 'node:crypto';
@@ -39,4 +39,31 @@ test('shared Demo auth: deny anonymous, origin, cookie, logout, expiry, throttle
 
 test('production configuration fails closed',()=>{
  assert.throws(()=>createDemoAuth({enabled:true}),/requires/);
+});
+
+test('designer registration creates a persistent independent account without an admin role',async t=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'sheyou-users-')),file=path.join(dir,'auth.json'),usersFile=path.join(dir,'users.json');
+ const salt='b'.repeat(32),password='legacy-password';
+ writeFileSync(file,JSON.stringify({name:'dsy',login:'dsy',salt,hash:scryptSync(password,salt,64).toString('hex')}));
+ const origin='https://sheyou-ai.cn';
+ const auth=createDemoAuth({enabled:true,file,usersFile,inviteCode:'TEAM-INVITE',origin,secure:false});
+ const server=createServer(async(req,res)=>{
+  if(await auth(req,res,new URL(req.url,'http://localhost')))return;
+  res.setHeader('content-type','application/json');res.end(JSON.stringify({user:req.authUser || null}));
+ });
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ t.after(()=>{server.close();rmSync(dir,{recursive:true,force:true});});
+ const url=`http://127.0.0.1:${server.address().port}`;
+ const request=(p,options={})=>fetch(url+p,{...options,headers:{host:'sheyou-ai.cn','x-forwarded-for':'203.0.113.2',origin,'content-type':'application/json',...options.headers}});
+ const registered=await request('/api/auth/register',{method:'POST',body:JSON.stringify({invite:'TEAM-INVITE',name:'张三',login:'zhangsan',password:'safe-password'})});
+ assert.equal(registered.status,200);
+ const registeredBody=await registered.json();
+ assert.match(registeredBody.user.id,/^user-/);
+ assert.equal('isAdmin' in registeredBody.user,false);
+ assert.equal(existsSync(usersFile),true);
+ const cookie=registered.headers.get('set-cookie').split(';')[0];
+ const own=await (await request('/whoami',{headers:{cookie}})).json();
+ assert.equal(own.user.id,registeredBody.user.id);
+ const duplicate=await request('/api/auth/register',{method:'POST',body:JSON.stringify({invite:'TEAM-INVITE',name:'另一个人',login:'zhangsan',password:'another-password'})});
+ assert.equal(duplicate.status,409);
 });

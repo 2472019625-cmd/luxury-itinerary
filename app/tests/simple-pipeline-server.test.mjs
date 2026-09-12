@@ -1,10 +1,54 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { scryptSync } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AgentPlanStore } from "../server/agent-plan-store.mjs";
 import { createAgentPlannerServer } from "../server/agent-planner-app.mjs";
+
+test("Simple 项目按登录定制师隔离且旧项目只归 dsy 兼容账号", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-owner-auth-"));
+  const simpleStore = new AgentPlanStore(path.join(root, "projects"));
+  simpleStore.createProject({ projectId:"mine", flowKind:"simple_skill_v1", ownerId:"shared-demo", status:"complete", activePlanId:null, planIds:[], executionRunIds:[] });
+  simpleStore.createProject({ projectId:"other", flowKind:"simple_skill_v1", ownerId:"user-other", status:"complete", activePlanId:null, planIds:[], executionRunIds:[] });
+  simpleStore.createProject({ projectId:"legacy", flowKind:"simple_skill_v1", status:"complete", activePlanId:null, planIds:[], executionRunIds:[] });
+  const authFile = path.join(root, "auth.json");
+  const salt = "c".repeat(32);
+  const password = "dsy-password";
+  await writeFile(authFile, JSON.stringify({ name:"dsy", login:"dsy", salt, hash:scryptSync(password,salt,64).toString("hex") }));
+  const origin = "https://sheyou-ai.cn";
+  const runtime = createAgentPlannerServer({
+    port:0,
+    workspaceRoot:path.join(root,"agent"),
+    simpleStore,
+    simplePipelineRunner:async ({ projectId, ownerId }) => {
+      simpleStore.createProject({ projectId, ownerId, flowKind:"simple_skill_v1", status:"complete", activePlanId:null, planIds:[], executionRunIds:[] });
+      return { pipelineStatus:"complete" };
+    },
+    auth:{ enabled:true, file:authFile, usersFile:path.join(root,"users.json"), inviteCode:"TEAM-INVITE", origin, secure:false },
+  });
+  await new Promise((resolve) => runtime.server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise((resolve) => runtime.server.close(resolve)); await rm(root, { recursive:true, force:true }); });
+  const url = `http://127.0.0.1:${runtime.server.address().port}`;
+  const headers = { host:"sheyou-ai.cn", "x-forwarded-for":"203.0.113.3", origin, "content-type":"application/json" };
+  const login = await fetch(`${url}/api/auth/login`, { method:"POST", headers, body:JSON.stringify({ login:"dsy", password }) });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get("set-cookie").split(";")[0];
+  const get = id => fetch(`${url}/api/simple/projects/${id}`, { headers:{ ...headers, cookie } });
+  assert.equal((await get("mine")).status, 200);
+  assert.equal((await get("other")).status, 404);
+  assert.equal((await get("legacy")).status, 200);
+  assert.equal(simpleStore.getProject("legacy").ownerId, "shared-demo");
+  const registered = await fetch(`${url}/api/auth/register`, { method:"POST", headers, body:JSON.stringify({ invite:"TEAM-INVITE", name:"张三", login:"zhangsan", password:"safe-password" }) });
+  assert.equal(registered.status, 200);
+  const otherCookie = registered.headers.get("set-cookie").split(";")[0];
+  assert.equal((await fetch(`${url}/api/simple/projects/mine`, { headers:{ ...headers, cookie:otherCookie } })).status, 404);
+  const created = await fetch(`${url}/api/simple/projects`, { method:"POST", headers:{ ...headers, cookie:otherCookie }, body:JSON.stringify({ facts:{ destination:"肯尼亚", days:[{ title:"抵达" }] } }) });
+  assert.equal(created.status, 202);
+  const createdBody = await created.json();
+  assert.match(runtime.simpleJobs.get(createdBody.projectId).project.ownerId, /^user-/);
+});
 
 test("员工端确认后创建 simple_skill_v1 运行而不是旧 agent_v1", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-pipeline-server-"));

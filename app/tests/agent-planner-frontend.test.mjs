@@ -6,12 +6,14 @@ const app = readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
 const workspace = readFileSync(new URL("../src/Workspace.jsx", import.meta.url), "utf8");
 const diagnostic = readFileSync(new URL("../src/AgentWorkspace.jsx", import.meta.url), "utf8");
 const workspaceCss = readFileSync(new URL("../src/workspace.css", import.meta.url), "utf8");
+const confirmationActions = readFileSync(new URL("../src/lib/confirmationActionItems.js", import.meta.url), "utf8");
 
 test("4174正式入口复用原Workspace五步前端而非简化项目页", () => {
   assert.match(app, /<Workspace[^>]+agentMode=/);
   assert.match(workspace, /上传资料[\s\S]+确认信息[\s\S]+生成内容[\s\S]+编辑预览[\s\S]+下载版本/);
-  assert.match(app, /agent-diagnostics/);
-  assert.match(diagnostic, /智能体内部诊断/);
+  assert.match(app, /agent-diagnostics[\s\S]+window\.location\.replace\("\/agent"\)/);
+  assert.match(diagnostic, /function SimpleManualImagePage/);
+  assert.doesNotMatch(diagnostic, /智能体内部诊断|管理员/);
 });
 
 test("智能体浏览器存储使用独立命名空间且项目管理形成回收站闭环", () => {
@@ -31,6 +33,8 @@ test("智能体浏览器存储使用独立命名空间且项目管理形成回�
   assert.match(workspace, /project-thumb-placeholder/);
   assert.match(workspace, /className="row-trash-action" title="移入回收站"/);
   assert.match(workspace, /<UiIcon name="trash" size=\{17\}/);
+  assert.match(workspace, /className="workspace-recent-trash" title="移入回收站"/);
+  assert.match(workspace, /<WorkspaceHome[\s\S]{0,400}onTrash=\{setTrashProject\}/);
   assert.doesNotMatch(workspace.slice(workspace.indexOf("function ProjectThumbnail"), workspace.indexOf("function UploadStep")), />缺图</);
   assert.doesNotMatch(workspace.slice(workspace.indexOf("function PermanentDeleteDialog"), workspace.indexOf("export function Workspace")), /window\.(alert|confirm)/);
   assert.match(workspace, /项目、原始资料、运行记录和成品都会完整保留/);
@@ -47,6 +51,26 @@ test("智能体浏览器存储使用独立命名空间且项目管理形成回�
   assert.match(workspaceCss, /grid-template-columns:\s*repeat\(3/);
 });
 
+test("智能体工作台首页只负责开始和进入唯一项目列表", () => {
+  assert.match(workspace, /function WorkspaceHome/);
+  assert.match(workspace, /开始创建新行程/);
+  assert.match(workspace, /projects=\{activeProjects\}/);
+  assert.match(workspace, /onProjects=\{\(\) => setScreen\("list"\)\}/);
+  assert.match(workspace, /onOpen=\{openProject\}/);
+  assert.match(workspace, /\.sort\(\(left, right\).*updatedAt/);
+  assert.match(workspace, /\.slice\(0, 3\)/);
+  assert.match(workspace, /workspace-journey-route-reference\.png/);
+  assert.match(workspace, /最近项目/);
+  assert.match(workspace, /useState\(\(\) => agentMode \? "home" : "list"\)/);
+  assert.equal((workspace.match(/function ProjectList/g) || []).length, 1);
+  assert.match(workspace, /<ProjectList user=\{user\} projects=\{projects\}/);
+  assert.match(workspace, />打开 <span aria-hidden="true">›<\/span>/);
+  assert.doesNotMatch(workspace, />打开项目 <UiIcon/);
+  assert.match(workspaceCss, /\.workspace-home/);
+  assert.match(workspaceCss, /grid-template-columns:\s*minmax\(360px, \.43fr\) minmax\(0, \.57fr\)/);
+  assert.match(workspaceCss, /\.workspace-recent-grid/);
+});
+
 test("Simple项目直达编辑页复用全局工作台Header", () => {
   assert.match(workspace, /export function AppHeader/);
   assert.match(diagnostic, /<div className="workspace-shell workspace-agent-mode"><AppHeader/);
@@ -55,23 +79,59 @@ test("Simple项目直达编辑页复用全局工作台Header", () => {
   assert.doesNotMatch(desktopNarrow, /header-brand span[^}]+display:\s*none/);
 });
 
-test("生成步骤默认使用定制师视角并把管理员运行信息折叠", () => {
+test("生成步骤只展示定制师可理解的状态且不暴露技术运行信息", () => {
   const generation = workspace.slice(workspace.indexOf("function AgentGenerationStep"), workspace.indexOf("function CandidatePreview"));
-  assert.match(generation, /PlanView project=\{agentProject\} plan=\{plan\}/);
   assert.match(workspace, /SIMPLE_DESIGNER_STAGES/);
   assert.match(workspace, /run\.progress\.stages/);
-  assert.match(workspace, /run\?\.events\?\.at\(-1\)/);
   assert.match(workspace, /aria-valuenow=\{safeProgress\}/);
   assert.match(generation, /本次定制摘要/);
   assert.match(generation, /已按你的确认制作/);
   assert.match(generation, /本次定制重点/);
-  assert.match(generation, /管理员运行详情/);
-  assert.doesNotMatch(generation, /<details[^>]+open/);
-  assert.match(generation, /次下游调用/);
+  assert.doesNotMatch(generation, /管理员运行详情|projectId|executionRunId|次下游调用|当前内部动作/);
   assert.doesNotMatch(generation, /mini-itinerary|当前项目/);
   assert.match(workspace, /screen === "editor" && currentProject/);
   assert.match(workspace, /existingOnly=\{agentMode\}/);
   assert.match(workspace, /ready_for_editor/);
+});
+
+test("产品前端只有定制师角色且确认页不展示技术警告", () => {
+  const confirm = workspace.slice(workspace.indexOf("function ConfirmStep"), workspace.indexOf("function GenerationStep"));
+  assert.doesNotMatch(workspace, /function AdminPanel|user\.isAdmin|首位注册用户将自动成为管理员/);
+  assert.match(workspace, /<small>定制师<\/small>/);
+  assert.doesNotMatch(confirm, /recognition\?\.warnings|内部信息已隔离|schema|slot|pipeline/i);
+  assert.match(workspace, /行程关键信息已确认完整/);
+  assert.match(confirm, /buildConfirmationActionItems/);
+  assert.match(confirm, /if \(pending\.length\) return setModalMessage/);
+  assert.match(confirm, /确认并开始生成/);
+  assert.match(confirmationActions, /field:startDate/);
+  assert.match(confirmationActions, /field:endDate/);
+  assert.match(confirmationActions, /field:adults/);
+  assert.match(confirmationActions, /source:multiPricePeriod/);
+  assert.match(confirmationActions, /原报价包含 \$\{price\.count\} 个价格档期/);
+  assert.match(workspace, /selection\?\.mode === "custom"/);
+  assert.doesNotMatch(workspace.slice(workspace.indexOf("function PriceOfferConfirmation"), workspace.indexOf("function ConfirmationPreview")), /适用档期/);
+});
+
+test("上传识别成功后自动进入确认页且不再展示重复统计", () => {
+  const upload = workspace.slice(workspace.indexOf("function UploadStep"), workspace.indexOf("function AgentConfirmationPanel"));
+  assert.doesNotMatch(upload, /recognition-strip|内部信息已隔离/);
+  assert.match(upload, /await onFiles\(\[workbook\], recognition, sourceSha256\);\s*onContinue\(\);/);
+  assert.doesNotMatch(upload, />确认识别结果</);
+  assert.match(workspace, /className="recognition-overview"/);
+});
+
+test("确认页展示、实时表单和继续门禁共用同一 actionItems 派生", () => {
+  const confirm = workspace.slice(workspace.indexOf("function ConfirmStep"), workspace.indexOf("function GenerationStep"));
+  const continuation = workspace.slice(workspace.indexOf("const continueAgent"), workspace.indexOf("const retryAgentImage"));
+  assert.match(confirm, /<ConfirmationStatus actionItems=\{actionItems\}/);
+  assert.doesNotMatch(confirm, /ConfirmationActionList|需要你确认/);
+  assert.match(confirm, /onChange=\{\(event\) => update\("startDate"/);
+  assert.match(confirm, /onChange=\{\(event\) => update\("endDate"/);
+  assert.match(confirm, /update\("adults"/);
+  assert.match(confirm, /childrenConfirmed \? data\.children : ""/);
+  assert.match(confirmationActions, /field:children/);
+  assert.match(continuation, /buildConfirmationActionItems/);
+  assert.match(continuation, /if \(actionItems\.length > 0\)/);
 });
 
 test("客户行程制作进度使用单列卡并保留真实子任务状态", () => {

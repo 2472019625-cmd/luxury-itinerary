@@ -190,14 +190,14 @@ export function createAgentPlannerServer(options = {}) {
     simpleControllers.delete(projectId);
     return existed;
   };
-  const startSimplePipeline = (payload) => {
+  const startSimplePipeline = (payload, ownerId) => {
     const projectId = randomUUID();
     const now = new Date().toISOString();
     const job = {
       jobId: randomUUID(), projectId, flowKind: "simple_skill_v1", status: "running", progress: 1,
       currentAction: "正在准备新版 Simple Pipeline", completedActions: 0, totalWorkItems: 0,
       stageStates: simpleStageState(), stages: simpleStageDefinitions.map(([id, label]) => ({ id, label, status: "pending" })),
-      project: { projectId, flowKind: "simple_skill_v1", status: "planning", currentStage: "资料解析", progress: 1, createdAt: now, updatedAt: now },
+      project: { projectId, flowKind: "simple_skill_v1", status: "planning", currentStage: "资料解析", progress: 1, ...(ownerId ? { ownerId } : {}), createdAt: now, updatedAt: now },
       createdAt: now, updatedAt: now,
     };
     const controller = new AbortController();
@@ -208,6 +208,7 @@ export function createAgentPlannerServer(options = {}) {
       try {
         const result = await simplePipelineRunner({
           projectId,
+          ownerId,
           sourceData,
           root,
           adapters: { store: simpleStore },
@@ -333,14 +334,46 @@ export function createAgentPlannerServer(options = {}) {
   };
 
   const authenticate = createDemoAuth(options.auth);
+  const authorizeProject = (request, response, projectStore, projectId, fallbackProject) => {
+    if (request.authDisabled || request.authInternal) return true;
+    const currentUserId = request.authUser?.id;
+    const stored = projectStore.getProject(projectId);
+    const project = stored || fallbackProject;
+    if (!project) return true;
+    if (!project.ownerId && currentUserId === "shared-demo") {
+      if (stored) projectStore.updateProject(projectId, { ownerId: currentUserId });
+      else project.ownerId = currentUserId;
+      return true;
+    }
+    if (project.ownerId !== currentUserId) {
+      json(response, 404, { error: "项目不存在" });
+      return false;
+    }
+    return true;
+  };
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${port}`);
     if (await authenticate(request, response, url)) return;
+    const simpleOwnerMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)/);
+    if (simpleOwnerMatch) {
+      const projectId = decodeURIComponent(simpleOwnerMatch[1]);
+      if (!authorizeProject(request, response, simpleStore, projectId, simpleJobs.get(projectId)?.project)) return;
+    }
+    const agentOwnerMatch = url.pathname.match(/^\/api\/agent\/projects\/([^/]+)/);
+    if (agentOwnerMatch) {
+      const projectId = decodeURIComponent(agentOwnerMatch[1]);
+      if (!authorizeProject(request, response, store, projectId)) return;
+    }
+    const agentJobOwnerMatch = url.pathname.match(/^\/api\/agent\/jobs\/([^/]+)/);
+    if (agentJobOwnerMatch) {
+      const job = jobs.get(decodeURIComponent(agentJobOwnerMatch[1]));
+      if (job && !authorizeProject(request, response, store, job.projectId)) return;
+    }
     if (request.method === "POST" && url.pathname === "/api/simple/projects") {
       try {
         const payload = await requestBody(request);
         if (!payload?.facts?.days?.length) return json(response, 400, { error: "没有识别到可执行的逐日行程" });
-        const job = startSimplePipeline(payload);
+        const job = startSimplePipeline(payload, request.authUser?.id);
         return json(response, 202, { projectId: job.projectId, flowKind: job.flowKind, status: job.status, progress: job.progress });
       } catch (failure) { return json(response, 400, { error: failure.message || "无法启动新版 Simple Pipeline" }); }
     }
@@ -443,7 +476,7 @@ export function createAgentPlannerServer(options = {}) {
         const factBasis = buildAgentFactBasis(payload.facts, payload.report);
         const inputFingerprint = fingerprintFacts({ factBasis, sourceSha256: payload.sourceSha256 || null });
         const now = new Date().toISOString();
-        let project = store.createProject({ projectId: randomUUID(), flowKind: "agent_v1", executionEnabled: false, status: "preparing", currentStage: "正在准备", activePlanId: null, planIds: [], confirmationIds: [], executionRunIds: [], activeExecutionRunId: null, activeJobId: null, inputFingerprint, source: { name: String(payload.sourceName || payload.report?.workbookName || "行程资料.xlsx"), sha256: String(payload.sourceSha256 || ""), parser: "deterministic-itinerary-import-v1" }, factBasis, versions: { ruleProfileVersion: AGENT_RULE_PROFILE_VERSION, capabilityConfigVersion: AGENT_CAPABILITY_VERSION, promptVersion: AGENT_PROMPT_VERSION, executionConfigVersion: EXECUTION_CONFIG_VERSION }, createdAt: now, updatedAt: now });
+        let project = store.createProject({ projectId: randomUUID(), flowKind: "agent_v1", executionEnabled: false, status: "preparing", currentStage: "正在准备", activePlanId: null, planIds: [], confirmationIds: [], executionRunIds: [], activeExecutionRunId: null, activeJobId: null, inputFingerprint, ...(request.authUser?.id ? { ownerId:request.authUser.id } : {}), source: { name: String(payload.sourceName || payload.report?.workbookName || "行程资料.xlsx"), sha256: String(payload.sourceSha256 || ""), parser: "deterministic-itinerary-import-v1" }, factBasis, versions: { ruleProfileVersion: AGENT_RULE_PROFILE_VERSION, capabilityConfigVersion: AGENT_CAPABILITY_VERSION, promptVersion: AGENT_PROMPT_VERSION, executionConfigVersion: EXECUTION_CONFIG_VERSION }, createdAt: now, updatedAt: now });
         store.saveSourceData(project.projectId, { facts: payload.facts, report: payload.report || {}, sourceName: payload.sourceName || null, sourceSha256: payload.sourceSha256 || null, inputFingerprint, savedAt: now });
         const confirmations = analyzeAgentPreflight(factBasis);
         if (confirmations.length) {
