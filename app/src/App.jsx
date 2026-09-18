@@ -229,10 +229,11 @@ function DayNotices({ notices }) {
   return <div className="day-notices"><div className="day-notice day-notice-tip"><Icon name="warning" size={34} tone="gold" /><div><strong>今日贴士</strong><p>{notice.text}</p></div></div></div>;
 }
 
-function SpotCard({ spot, dayIndex, spotIndex, imageIndexBase = 0 }) {
+function SpotCard({ spot, dayIndex, spotIndex, spotId, slotId, imageIndexBase = 0 }) {
   // DAY cards do not show status badges; keep the underlying business facts intact.
-  const images = (spot.images?.length ? spot.images : spot.image ? [{ src: spot.image, focus: spot.focus, fit: spot.fit }] : []).slice(0, 2);
-  return <article className="spot-card" data-edit-path={`days.${dayIndex}.spots.${spotIndex}`}>{images.length > 0 ? <div className={`spot-image spot-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${spot.name}-${imageIndex}`} src={image.src || image} alt={image.label || `${spot.name}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`days.${dayIndex}.spots.${spotIndex}`} data-edit-image={imageIndexBase + imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="体验图片待补充" compact className="card-missing-image" data-edit-path={`days.${dayIndex}.spots.${spotIndex}`} data-edit-image={imageIndexBase} />}<div className="spot-copy"><h4>{spot.name}</h4><p>{spot.experience || spot.description}</p>{spot.reminder && <small>{spot.reminder}</small>}</div></article>;
+  const images = (spot.images?.length ? spot.images : spot.image ? [{ src: spot.image, focus: spot.focus, fit: spot.fit }] : []).filter((image) => typeof image === "string" ? Boolean(image) : Boolean(image?.src)).slice(0, 2);
+  const identity = { "data-edit-path": `days.${dayIndex}.spots.${spotIndex}`, "data-edit-spot-id": spotId || undefined, "data-edit-slot-id": slotId || undefined };
+  return <article className="spot-card" {...identity}>{images.length > 0 ? <div className={`spot-image spot-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${spot.name}-${imageIndex}`} src={image.src || image} alt={image.label || `${spot.name}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} {...identity} data-edit-image={imageIndexBase + imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="体验图片待补充" compact className="card-missing-image" {...identity} data-edit-image={imageIndexBase} />}<div className="spot-copy"><h4>{spot.name}</h4><p>{spot.experience || spot.description}</p>{spot.reminder && <small>{spot.reminder}</small>}</div></article>;
 }
 
 function SpotGallery({ spots = [], dayIndex }) {
@@ -241,7 +242,7 @@ function SpotGallery({ spots = [], dayIndex }) {
   if (!cards.length) return null;
   const groups = [];
   for (let index = 0; index < cards.length; index += 4) groups.push(cards.slice(index, index + 4));
-  return <div className="spot-galleries">{groups.map((group, groupIndex) => <div className={`spot-gallery spot-count-${group.length}`} key={groupIndex}>{group.map(({ spot, spotIndex, imageIndex, slotId }) => <SpotCard key={slotId || spotIndex} spot={spot} dayIndex={dayIndex} spotIndex={spotIndex} imageIndexBase={imageIndex} />)}</div>)}</div>;
+  return <div className="spot-galleries">{groups.map((group, groupIndex) => <div className={`spot-gallery spot-count-${group.length}`} key={groupIndex}>{group.map(({ spot, spotId, spotIndex, imageIndex, slotId }) => <SpotCard key={slotId || spotId || spotIndex} spot={spot} dayIndex={dayIndex} spotIndex={spotIndex} spotId={spotId} slotId={slotId} imageIndexBase={imageIndex} />)}</div>)}</div>;
 }
 
 function DaySection({ day, index }) {

@@ -18,7 +18,8 @@ import { evaluateAgentImageCompletion } from "./agent-image-plan.mjs";
 import { runImageSearchSkill } from "./simple-image-skill.mjs";
 import { runSimplePipeline } from "./simple-pipeline-executor.mjs";
 import { calculateSimplePipelineProgress } from "./simple-pipeline-progress.mjs";
-import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, uploadSimpleImage } from "./simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, uploadSimpleImage } from "./simple-manual-images.mjs";
+import { retrySimpleCopyTarget, retrySimpleCopyTargets, retrySimpleRenderer } from "./simple-targeted-repair.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const clientDir = path.join(root, "dist", "client");
@@ -407,6 +408,14 @@ export function createAgentPlannerServer(options = {}) {
       try { return json(response, 200, buildSimpleManualImagePayload(simpleStore, decodeURIComponent(simpleManualMatch[1]))); }
       catch (failure) { return json(response, failure.code === "simple_project_incomplete" ? 409 : 404, { error: failure.message, code: failure.code || "simple_project_not_found" }); }
     }
+    const simpleDayEditorMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/day-editor\/(\d+)$/);
+    if (request.method === "PUT" && simpleDayEditorMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await saveSimpleDayEditor({ store: simpleStore, root, deferRender: true, projectId: decodeURIComponent(simpleDayEditorMatch[1]), dayIndex: Number(simpleDayEditorMatch[2]), ...payload });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "day_editor_save_failed" }); }
+    }
     const simpleCandidateMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images\/([^/]+)\/(select|reject)$/);
     if (request.method === "POST" && simpleCandidateMatch) {
       try {
@@ -452,6 +461,78 @@ export function createAgentPlannerServer(options = {}) {
         });
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_research_failed" }); }
+    }
+    const simpleImageBatchRetryMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/repair\/images$/);
+    if (request.method === "POST" && simpleImageBatchRetryMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await researchSimpleImageSlots({
+          deferRender: true,
+          store: simpleStore,
+          root,
+          projectId: decodeURIComponent(simpleImageBatchRetryMatch[1]),
+          slotIds: Array.isArray(payload.slotIds) ? payload.slotIds : undefined,
+          runImage: runImageSearchSkill,
+          imageOptions: {
+            searchApiKey: searchModelConfig.apiKey,
+            searchBaseUrl: searchModelConfig.baseUrl,
+            searchModel: searchModelConfig.imageSearchModel,
+            visionApiKey: visionModelConfig.apiKey,
+            visionBaseUrl: visionModelConfig.baseUrl,
+            visionModel: visionModelConfig.model,
+            maxQueriesPerSlot: 3,
+            sourcePagesPerSlot: 8,
+            downloadsPerSlot: 12,
+            visionCandidatesPerSlot: 6,
+            concurrency: { slots: 2, search: 2, pages: 4, downloads: 3, vision: 3 },
+          },
+        });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "repair_in_progress" ? 409 : 400, { error: failure.message, code: failure.code || "batch_image_retry_failed" }); }
+    }
+    const simpleCopyBatchRetryMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/repair\/copy$/);
+    if (request.method === "POST" && simpleCopyBatchRetryMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await retrySimpleCopyTargets({
+          store: simpleStore,
+          root,
+          projectId: decodeURIComponent(simpleCopyBatchRetryMatch[1]),
+          targetIds: Array.isArray(payload.targetIds) ? payload.targetIds : undefined,
+          copyOptions: {
+            ...modelConfig,
+            researchApiKey: searchModelConfig.apiKey,
+            researchBaseUrl: searchModelConfig.baseUrl,
+            researchModel: searchModelConfig.model,
+          },
+        });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "repair_in_progress" ? 409 : 400, { error: failure.message, code: failure.code || "batch_copy_retry_failed" }); }
+    }
+    const simpleCopyRetryMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/repair\/copy\/([^/]+)$/);
+    if (request.method === "POST" && simpleCopyRetryMatch) {
+      try {
+        const result = await retrySimpleCopyTarget({
+          store: simpleStore,
+          root,
+          projectId: decodeURIComponent(simpleCopyRetryMatch[1]),
+          targetId: decodeURIComponent(simpleCopyRetryMatch[2]),
+          copyOptions: {
+            ...modelConfig,
+            researchApiKey: searchModelConfig.apiKey,
+            researchBaseUrl: searchModelConfig.baseUrl,
+            researchModel: searchModelConfig.model,
+          },
+        });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "repair_in_progress" ? 409 : 400, { error: failure.message, code: failure.code || "targeted_copy_retry_failed" }); }
+    }
+    const simpleRendererRetryMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/repair\/renderer$/);
+    if (request.method === "POST" && simpleRendererRetryMatch) {
+      try {
+        const result = await retrySimpleRenderer({ store: simpleStore, root, projectId: decodeURIComponent(simpleRendererRetryMatch[1]) });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "repair_in_progress" ? 409 : 400, { error: failure.message, code: failure.code || "targeted_renderer_retry_failed" }); }
     }
     const simpleOutputMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/output$/);
     if (["GET", "HEAD"].includes(request.method) && simpleOutputMatch) {

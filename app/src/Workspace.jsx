@@ -13,6 +13,7 @@ import { readAgentSnapshot, agentDisplayState, displayAgentStages, agentElapsed,
 import { buildCustomerTravelEntityData } from './lib/travelEntityDisplay.js';
 import { normalizeHighlightForDisplay } from './lib/highlightDisplay.js';
 import { buildConfirmationActionItems, currentPriceSelection, isChildCountConfirmed, listPriceOffers, matchingPriceOffers, priceOfferKey } from './lib/confirmationActionItems.js';
+import { createManualDayCard, daySpotIdentity, deleteDaySpotPreservingSlots, reorderDaySpots, resolveDayPreviewSpotIndex, resolveDaySpotIndex } from './lib/dayEditorState.js';
 
 const STORAGE_USERS = "sheyou-workspace-users-v1";
 const STORAGE_SESSION = "sheyou-workspace-session-v1";
@@ -486,6 +487,7 @@ function GenerationStep({ project, progress, status, error, onStart, onEdit, onR
 function buildAgentProgress(snapshot) {
   const project = snapshot?.project;
   const plan = snapshot?.plan;
+  const run = snapshot?.executionRun;
   if (project?.flowKind === "simple_skill_v1") {
     const activeJob = snapshot?.activeJob;
     const backend = new Map((activeJob?.stages || []).map((stage) => [stage.id, stage]));
@@ -776,11 +778,12 @@ function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, on
   </section></div>;
 }
 
-export function Editor({ project, ItineraryComponent, onProject, onVersions, onResearchSlot, onChooseImage, onOpenImagePicker, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, copyRepairState, defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
+export function Editor({ project, ItineraryComponent, onProject, onPersistDayEditor, onVersions, onResearchSlot, onChooseImage, onOpenImagePicker, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, onRetryCopy, onRetryAllCopy, onRetryAllImages, onRetryRenderer, copyRepairState, issueActionState, blockingItems = [], defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
   const [selection, setSelection] = useState(initialSelection || { module: "days", itemIndex: Math.min(2, project.data.days.length - 1), subItemIndex: null, imageIndex: 0 });
   const [tab, setTab] = useState(initialTab);
   const [historyTick, setHistoryTick] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pendingPickerSlotId, setPendingPickerSlotId] = useState("");
   useEffect(() => { if (pickerOpen) onOpenImagePicker?.(); }, [pickerOpen]);
   const [imageOperations, setImageOperations] = useState({});
   const [imageMessage, setImageMessage] = useState('');
@@ -805,13 +808,20 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
     } finally { activeImageActions.current.delete(key); }
   };
   const previewRef = useRef(null);
+  const inspectorRef = useRef(null);
   const fileRef = useRef(null);
   const designerFileRef = useRef(null);
+  const [dayInfoOpen, setDayInfoOpen] = useState(false);
+  const [daySettingsOpen, setDaySettingsOpen] = useState(false);
+  const [finalIssuesOpen, setFinalIssuesOpen] = useState(false);
+  const [dragSpotId, setDragSpotId] = useState(null);
   const historyRef = useRef({ undo: [], redo: [], group: null, at: 0 });
   const visibility = project.visibility || {};
   const viewData = useMemo(() => visibilityData(buildCustomerTravelEntityData(project.data), visibility), [project.data, visibility]);
   const selectedModule = MODULES.find((module) => module.id === selection.module) || MODULES[0];
   const selectedDay = selection.module === "days" ? project.data.days[selection.itemIndex] : null;
+  const selectedSpotIndex = selection.module === "days" ? resolveDaySpotIndex(selectedDay, selection) : -1;
+  const selectedSpot = selectedSpotIndex >= 0 ? selectedDay?.spots?.[selectedSpotIndex] : null;
   const hasImages = ["cover", "hotels", "dining", "transport", "days"].includes(selection.module);
   const copyReview = project.data.copyQuality || project.aiGeneration?.contentQuality;
   const copyReviewIssues = collectCopyIssues(copyReview);
@@ -838,7 +848,14 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
       next.copyQuality = { ...(next.copyQuality || {}), passed: false, status: 'needs_copy_revision', needsReview: true, blocked: false, checkedAt: null, manualEditPendingRecheck: true };
       next.humanReview = { ...(next.humanReview || {}), exportWithCopyWarningsConfirmed: false };
     }
-    commit({ ...project, workflowStage: imageOnly ? project.workflowStage : 'needs-copy-revision', revisionMode: imageOnly ? project.revisionMode : true, data: next }, group);
+    const nextProject = { ...project, workflowStage: imageOnly ? project.workflowStage : 'needs-copy-revision', revisionMode: imageOnly ? project.revisionMode : true, data: next };
+    commit(nextProject, group);
+    return nextProject;
+  };
+  const updateDayData = (updater, group, options) => {
+    const nextProject = updateData(updater, group);
+    onPersistDayEditor?.(nextProject, selection.itemIndex, options);
+    return nextProject;
   };
   const restore = (direction) => {
     const history = historyRef.current;
@@ -873,19 +890,38 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
     const targetBox = target.getBoundingClientRect();
     stage.scrollTo({ top: Math.max(0, stage.scrollTop + targetBox.top - stageBox.top - 28), behavior });
   };
+  const matchingDataNode = (root, attribute, value) => {
+    if (!root || value == null || value === "") return null;
+    return [...root.querySelectorAll(`[${attribute}]`)].find((node) => node.getAttribute(attribute) === String(value)) || null;
+  };
+  const previewNodeForSelection = (value = selection) => matchingDataNode(previewRef.current, "data-edit-slot-id", value.slotId)
+    || matchingDataNode(previewRef.current, "data-edit-spot-id", value.spotId)
+    || previewRef.current?.querySelector(`[data-edit-path="${selectionPath(value)}"]`);
+  const inspectorNodeForSelection = (value = selection) => matchingDataNode(inspectorRef.current, "data-day-slot-id", value.slotId)
+    || matchingDataNode(inspectorRef.current, "data-day-spot-id", value.spotId);
   const choose = (next, nextTab) => {
     historyRef.current.group = null;
     setSelection(next);
-    if (nextTab) setTab(nextTab);
-    requestAnimationFrame(() => centerInCanvas(previewRef.current?.querySelector(`[data-edit-path="${selectionPath(next)}"]`)));
+    if (next.module !== "days" && nextTab) setTab(nextTab);
+    requestAnimationFrame(() => {
+      centerInCanvas(previewNodeForSelection(next));
+      inspectorNodeForSelection(next)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
   };
   const selectModule = (module, itemIndex) => {
     const collections = { highlights: project.data.highlights, overview: project.data.days, hotels: project.data.hotels, dining: project.data.diningExperiences, transport: project.data.transportSummary, notes: project.data.notes };
     const nextIndex = module === "days" ? Math.max(0, itemIndex ?? selection.itemIndex ?? 0) : collections[module]?.length ? Math.max(0, itemIndex ?? 0) : null;
-    choose({ module, itemIndex: nextIndex, subItemIndex: null, imageIndex: 0 }, "copy");
+    choose({ module, itemIndex: nextIndex, subItemIndex: null, imageIndex: 0, spotId: null, slotId: null }, "copy");
   };
   const selectIssueTarget = (targetPath = '') => {
-    let match = targetPath.match(/^days\.(\d+)/);
+    let match = targetPath.match(/^days\.(\d+)\.spots\.(\d+)/);
+    if (match) {
+      const dayIndex = Number(match[1]);
+      const spotIndex = Number(match[2]);
+      const spotId = project.data.days?.[dayIndex]?.spots?.[spotIndex]?.id || null;
+      return choose({ module:'days', itemIndex:dayIndex, subItemIndex:spotIndex, imageIndex:0, spotId, slotId:null }, 'copy');
+    }
+    match = targetPath.match(/^days\.(\d+)/);
     if (match) return selectModule('days', Number(match[1]));
     match = targetPath.match(/^hotels\.(\d+)/);
     if (match) return selectModule('hotels', Number(match[1]));
@@ -895,6 +931,8 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
     if (match) return selectModule('transport', Number(match[1]));
     match = targetPath.match(/^notes\.(\d+)/);
     if (match) return selectModule('notes', Number(match[1]));
+    match = targetPath.match(/^highlights\.(\d+)/);
+    if (match) return selectModule('highlights', Number(match[1]));
     if (targetPath === 'highlights') return selectModule('highlights');
     if (targetPath === 'expenses') return selectModule('expenses');
     return selectModule('cover');
@@ -903,7 +941,7 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
     const editorPage = previewRef.current?.closest(".editor-page");
     if (editorPage) editorPage.scrollTop = 0;
     previewRef.current?.querySelectorAll(".workspace-selected-node").forEach((node) => node.classList.remove("workspace-selected-node"));
-    previewRef.current?.querySelector(`[data-edit-path="${selectionPath()}"]`)?.classList.add("workspace-selected-node");
+    previewNodeForSelection()?.classList.add("workspace-selected-node");
   }, [selection, viewData]);
 
   const onPreviewClick = (event) => {
@@ -912,9 +950,19 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
     const imageContainer = event.target.closest(".hero-frame,.hotel-image,.dining-image,.transport-image,.spot-image,.card-missing-image");
     const imageNode = event.target.closest("[data-edit-image]") || imageContainer?.querySelector("[data-edit-image]");
     const parts = node.dataset.editPath.split(".");
-    const next = { module: parts[0], itemIndex: parts[1] == null ? null : Number(parts[1]), subItemIndex: parts[2] === "spots" ? Number(parts[3]) : null, imageIndex: Number(imageNode?.dataset.editImage || 0) };
+    const module = parts[0];
+    const itemIndex = parts[1] == null ? null : Number(parts[1]);
+    const displayedSpotId = node.dataset.editSpotId || imageNode?.dataset.editSpotId || null;
+    const slotId = imageNode ? (imageNode.dataset.editSlotId || node.dataset.editSlotId || null) : (displayedSpotId ? null : node.dataset.editSlotId || null);
+    const day = module === "days" ? project.data.days?.[itemIndex] : null;
+    const legacySpotIndex = parts[2] === "spots" ? Number(parts[3]) : null;
+    const resolvedSpotIndex = module === "days"
+      ? resolveDayPreviewSpotIndex(day, { spotId: displayedSpotId, slotId, spotIndex: legacySpotIndex })
+      : legacySpotIndex;
+    const spotId = resolvedSpotIndex >= 0 ? day?.spots?.[resolvedSpotIndex]?.id || null : null;
+    const next = { module, itemIndex, spotId, slotId, subItemIndex: resolvedSpotIndex >= 0 ? resolvedSpotIndex : null, imageIndex: Number(imageNode?.dataset.editImage || 0) };
     choose(next, imageNode ? "image" : "copy");
-    if (imageNode && openPickerOnImageClick) {
+    if (imageNode && openPickerOnImageClick && module !== "days") {
       requestAnimationFrame(() => setPickerOpen(true));
     }
   };
@@ -952,8 +1000,8 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
   } else if (selection.module === "days") {
     const day = selectedDay || {};
     const spots = day.spots || [];
-    const spotIndex = Math.min(selection.subItemIndex ?? 0, Math.max(0, spots.length - 1));
-    const spot = spots[spotIndex];
+    const spotIndex = resolveDaySpotIndex(day, selection);
+    const spot = spotIndex >= 0 ? spots[spotIndex] : null;
     copyPanel = <>{selection.subItemIndex == null ? <><Field label="日期" type="date" value={day.date || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].date = value; }, `day-date-${selection.itemIndex}`)} /><Field label="每日主题" value={day.theme} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].theme = value; }, `day-theme-${selection.itemIndex}`)} /><Field label="路线节点（每行一个）" rows={4} value={(day.routeNodes || []).join("\n")} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].routeNodes = splitLines(value); }, `day-route-${selection.itemIndex}`)} /><Field label="交通与节奏" value={day.vehicle || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].vehicle = value; }, `day-vehicle-${selection.itemIndex}`)} /><div className="field-grid-compact"><Field label="预计车程" value={day.estimatedTravelTime || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].estimatedTravelTime = value; }, `day-time-${selection.itemIndex}`)} /><Field label="活动强度" value={day.activityLevel || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].activityLevel = value; }, `day-level-${selection.itemIndex}`)} /></div><Field label="今日行程" rows={8} value={day.description} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].description = value; }, `day-copy-${selection.itemIndex}`)} /><Field label="今日贴士" rows={3} value={(day.dayNotices?.[0]?.text || day.dayNotices?.[0] || "")} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].dayNotices = value ? [{ type: 'tip', text: value }] : []; }, `day-notice-${selection.itemIndex}`)} /></> : null}<ItemPicker label="景点/体验" items={spots} index={spotIndex} getLabel={(value, index) => value.name || `体验${index + 1}`} onSelect={(subItemIndex) => choose({ ...selection, subItemIndex, imageIndex: 0 })} onAdd={() => { updateData((next) => next.days[selection.itemIndex].spots.push({ name: "新体验", description: "", status: "pending", statusLabel: '待确认', feeBoundary: 'pending', sourceEvidence: [], images: [] }), `add-spot-${Date.now()}`); choose({ ...selection, subItemIndex: spots.length, imageIndex: 0 }); }} onDelete={() => { if (!spot) return; if (!window.confirm("确定删除这个景点/体验吗？可以立即撤销。")) return; updateData((next) => { removeExperienceReferences(next, next.days[selection.itemIndex].spots[spotIndex].name); next.days[selection.itemIndex].spots.splice(spotIndex, 1); }, `delete-spot-${Date.now()}`); choose({ ...selection, subItemIndex: spots.length > 1 ? Math.max(0, spotIndex - 1) : null, imageIndex: 0 }); }} onMove={(delta) => { updateData((next) => { const list = next.days[selection.itemIndex].spots; const target = spotIndex + delta; if (target < 0 || target >= list.length) return; [list[spotIndex], list[target]] = [list[target], list[spotIndex]]; }, `move-spot-${Date.now()}`); choose({ ...selection, subItemIndex: spotIndex + delta }); }} />{selection.subItemIndex != null && spot && <><Field label="体验名称" value={spot.name} onChange={(value) => updateData((next) => { const current = next.days[selection.itemIndex].spots[spotIndex]; removeExperienceReferences(next, current.name); current.name = value; synchronizeExperienceStatus(next, selection.itemIndex, spotIndex, current.status || 'pending'); }, `spot-name-${selection.itemIndex}-${spotIndex}`)} /><label>真实状态<select value={spot.status || 'pending'} onChange={(event) => updateData((next) => { synchronizeExperienceStatus(next, selection.itemIndex, spotIndex, event.target.value); }, `spot-status-${selection.itemIndex}-${spotIndex}`)}><option value="included">已包含</option><option value="optional_paid">自费可选</option><option value="reservation_required">需提前预约</option><option value="pending">待确认</option></select></label><Field label="体验介绍" rows={6} value={spot.experience || spot.description || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].spots[spotIndex].description = value; delete next.days[selection.itemIndex].spots[spotIndex].experience; }, `spot-copy-${selection.itemIndex}-${spotIndex}`)} /><Field label="补充提醒" rows={3} value={spot.reminder || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].spots[spotIndex].reminder = value; }, `spot-reminder-${selection.itemIndex}-${spotIndex}`)} /><Button onClick={() => choose({ ...selection, subItemIndex: null }, "copy")}>返回每日信息</Button></>}</>;
   } else if (selection.module === "expenses") copyPanel = <><Field label="行程总价" type="number" value={project.data.totalPrice || ""} onChange={(value) => updateData((next) => { next.totalPrice = value; }, "price-total")} /><Field label="价格单位" value={project.data.priceUnit || ""} onChange={(value) => updateData((next) => { next.priceUnit = value; }, "price-unit")} /><Field label="报价说明（每行一条）" rows={4} value={(project.data.priceNotes || []).join("\n")} onChange={(value) => updateData((next) => { next.priceNotes = splitLines(value); }, "price-notes")} /><Field label="费用包含（每行一条）" rows={6} value={(project.data.included || []).join("\n")} onChange={(value) => updateData((next) => { next.included = splitLines(value); }, "price-included")} /><Field label="费用不含（每行一条）" rows={6} value={(project.data.excluded || []).join("\n")} onChange={(value) => updateData((next) => { next.excluded = splitLines(value); }, "price-excluded")} /><Field label="退改政策（每行一条）" rows={6} value={(project.data.cancellation || []).join("\n")} onChange={(value) => updateData((next) => { next.cancellation = splitLines(value); }, "price-cancellation")} /></>;
   else if (selection.module === "notes") {
@@ -969,24 +1017,63 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
     const pipelineSlotIdByFieldPath = new Map(boundEntries.map(([slotId, binding]) => [binding?.fieldPath, slotId]).filter(([fieldPath]) => fieldPath));
     return buildLayoutImageSlots(project.data).filter((slot) => slot.module === moduleMap[selection.module] && (slot.module !== "day" || slot.dayIndex === selection.itemIndex) && (!simpleBoundMode || pipelineSlotIdByFieldPath.has(slot.fieldPath))).map((slot) => {
       const image = getSlotImage(project.data, slot) || {};
-      return { ...slot, key: slot.slotId, pipelineSlotId: pipelineSlotIdByFieldPath.get(slot.fieldPath) || null, src: image.src || "", focus: image.focus || "50% 50%", fit: image.fit, subItemIndex: slot.spotIndex };
+      const pipelineSlotId = pipelineSlotIdByFieldPath.get(slot.fieldPath) || null;
+      const binding = pipelineSlotId ? bindings[pipelineSlotId] : null;
+      return { ...slot, key: pipelineSlotId || slot.slotId, slotId: pipelineSlotId || slot.slotId, layoutSlotId: slot.slotId, pipelineSlotId, spotId: binding?.spotId || slot.spotId || null, binding, src: image.src || "", focus: image.focus || "50% 50%", fit: image.fit, subItemIndex: slot.spotIndex };
     });
   };
   const slots = collectSlots();
   const simpleBoundMode = Object.keys(project.data.simpleImageSlotBindings || {}).length > 0;
-  const currentSlot = slots.find((slot) => (slot.itemIndex ?? null) === (selection.itemIndex ?? null) && (slot.subItemIndex ?? null) === (selection.subItemIndex ?? null) && slot.imageIndex === selection.imageIndex) || (simpleBoundMode ? null : slots[0]);
+  const currentSlot = slots.find((slot) => selection.slotId && slot.slotId === selection.slotId)
+    || slots.find((slot) => selection.spotId && slot.spotId === selection.spotId && slot.imageIndex === selection.imageIndex)
+    || slots.find((slot) => !selection.spotId && !selection.slotId && (slot.itemIndex ?? null) === (selection.itemIndex ?? null) && (slot.subItemIndex ?? null) === (selection.subItemIndex ?? null) && slot.imageIndex === selection.imageIndex)
+    || (simpleBoundMode ? null : slots[0]);
   const setImage = (src, focus = currentSlot?.focus || "50% 50%", slot = currentSlot, extra = {}) => updateData((next) => {
     if (!slot) return;
     setSlotImage(next, slot, src ? { src, focus, ...extra } : null);
   }, `image-${slot?.slotId || currentSlot?.slotId}`);
   const setFocus = (x, y) => currentSlot && setImage(currentSlot.src, `${Math.round(x)}% ${Math.round(y)}%`);
   const [focusX, focusY] = String(currentSlot?.focus || "50% 50%").match(/[\d.]+/g)?.map(Number) || [50, 50];
-  const selectSlot = (slot) => choose({ ...selection, itemIndex: slot.itemIndex, subItemIndex: slot.subItemIndex, imageIndex: slot.imageIndex }, "image");
+  const selectSlot = (slot) => {
+    const spotIndex = selection.module === "days" ? resolveDaySpotIndex(selectedDay, { spotId: slot.spotId, subItemIndex: slot.subItemIndex }) : slot.subItemIndex;
+    choose({ ...selection, itemIndex: slot.itemIndex, spotId: slot.spotId || null, slotId: slot.slotId, subItemIndex: spotIndex >= 0 ? spotIndex : null, imageIndex: slot.imageIndex }, "image");
+  };
+  const selectBlockingImage = (item, openPicker = false) => {
+    const slotId = item.slotId || item.id;
+    const binding = project.data.simpleImageSlotBindings?.[slotId] || {};
+    const fieldPath = binding.fieldPath || "";
+    let next = { module:"cover", itemIndex:null, subItemIndex:null, imageIndex:0, spotId:null, slotId };
+    let match = fieldPath.match(/^hotels\.(\d+)\.images\.(\d+)$/);
+    if (match) next = { module:"hotels", itemIndex:Number(match[1]), subItemIndex:null, imageIndex:Number(match[2]), spotId:null, slotId };
+    match ||= fieldPath.match(/^diningExperiences\.(\d+)\.images\.(\d+)$/);
+    if (match && fieldPath.startsWith("diningExperiences")) next = { module:"dining", itemIndex:Number(match[1]), subItemIndex:null, imageIndex:Number(match[2]), spotId:null, slotId };
+    const transportMatch = fieldPath.match(/^transportSummary\.(\d+)\.images\.(\d+)$/);
+    if (transportMatch) next = { module:"transport", itemIndex:Number(transportMatch[1]), subItemIndex:null, imageIndex:Number(transportMatch[2]), spotId:null, slotId };
+    const dayMatch = fieldPath.match(/^days\.(\d+)\.spots\.(\d+)\.images\.(\d+)$/);
+    if (dayMatch) {
+      const dayIndex = Number(dayMatch[1]);
+      const fallbackSpotIndex = Number(dayMatch[2]);
+      const stableSpotIndex = binding.spotId ? project.data.days?.[dayIndex]?.spots?.findIndex((spot) => spot.id === binding.spotId) : -1;
+      const spotIndex = stableSpotIndex >= 0 ? stableSpotIndex : fallbackSpotIndex;
+      next = { module:"days", itemIndex:dayIndex, subItemIndex:spotIndex, imageIndex:Number(dayMatch[3]), spotId:binding.spotId || project.data.days?.[dayIndex]?.spots?.[spotIndex]?.id || null, slotId };
+    }
+    choose(next, "image");
+    if (openPicker) setPendingPickerSlotId(slotId);
+  };
+  useEffect(() => {
+    if (!pendingPickerSlotId || currentSlot?.slotId !== pendingPickerSlotId) return;
+    setPendingPickerSlotId("");
+    setPickerOpen(true);
+  }, [pendingPickerSlotId, currentSlot?.slotId]);
+  const retryBlockingImage = (item) => {
+    const slot = { slotId:item.slotId || item.id, pipelineSlotId:item.slotId || item.id, label:item.label || "当前图片" };
+    return imageAction(slot, "search", () => onResearchSlot?.(slot.pipelineSlotId));
+  };
   const selectedItemForImage = () => {
     if (selection.module === "hotels") return project.data.hotels?.[selection.itemIndex];
     if (selection.module === "dining") return project.data.diningExperiences?.[selection.itemIndex];
     if (selection.module === "transport") return project.data.transportSummary?.[selection.itemIndex];
-    if (selection.module === "days") return selectedDay?.spots?.[selection.subItemIndex ?? 0];
+    if (selection.module === "days") return selectedSpot || null;
     return null;
   };
   const canAddImage = selection.module === "cover" ? !currentSlot : selectedItemForImage() && imageList(selectedItemForImage()).length < (selection.module === "hotels" ? 1 : 2);
@@ -996,11 +1083,15 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
   const uploadLocalImage = async (file) => {
     if (!file) return;
     const item = selectedItemForImage();
-    const uploadSlot = currentSlot || {
+    const uploadSlot = currentSlot || (selection.module === "days" ? null : {
       itemIndex: selection.itemIndex,
-      subItemIndex: selection.module === "days" ? (selection.subItemIndex ?? 0) : null,
+      subItemIndex: null,
       imageIndex: item ? imageList(item).length : 0,
-    };
+    });
+    if (!uploadSlot) {
+      setImageMessage("请先在体验卡片中选择一个图片位置");
+      return;
+    }
     try {
       if (onUploadImage) {
         await imageAction(uploadSlot, 'upload', () => onUploadImage(file, uploadSlot));
@@ -1044,14 +1135,104 @@ export function Editor({ project, ItineraryComponent, onProject, onVersions, onR
   const moduleFailures = (project.data.imageFailures || []).filter((failure) => String(failure.slot || "").startsWith(failurePrefix));
   const imagePanel = <div className="image-inspector"><div className="image-library"><header><strong>本模块图片位置</strong><span>{slots.filter((slot) => slot.src).length} / {slots.length}</span></header><div className="image-thumbnails">{slots.map((slot) => <button key={slot.key} className={currentSlot?.key === slot.key ? "active" : ""} onClick={() => selectSlot(slot)}>{slot.src ? <img src={slot.src} alt={slot.label} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add("thumbnail-load-failed"); }} /> : <span className="empty-slot-thumb">缺图</span>}<span>{slot.label}</span></button>)}</div>{!slots.some((slot) => slot.src) && <div className="empty-image-state"><strong>当前模块暂时缺图</strong><span>可以打开换图窗口，从本次行程图片中选择或本地上传。</span>{moduleFailures.map((failure) => <small key={failure.slot}>{failure.label}：{failure.error}</small>)}</div>}</div>{currentSlot && <>{currentSlot.src ? <><div className="focus-preview" onPointerDown={(event) => { const box = event.currentTarget.getBoundingClientRect(); event.currentTarget.setPointerCapture(event.pointerId); setFocus((event.clientX - box.left) / box.width * 100, (event.clientY - box.top) / box.height * 100); }} onPointerMove={(event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const box = event.currentTarget.getBoundingClientRect(); setFocus(Math.max(0, Math.min(100, (event.clientX - box.left) / box.width * 100)), Math.max(0, Math.min(100, (event.clientY - box.top) / box.height * 100))); }}><img src={currentSlot.src} alt="当前选中图片" style={{ objectPosition: currentSlot.focus }} /><span style={{ left: `${focusX}%`, top: `${focusY}%` }} /></div><div className="focus-controls"><label>横向焦点 <span>{Math.round(focusX)}%</span><input type="range" min="0" max="100" value={focusX} onChange={(event) => setFocus(Number(event.target.value), focusY)} /></label><label>纵向焦点 <span>{Math.round(focusY)}%</span><input type="range" min="0" max="100" value={focusY} onChange={(event) => setFocus(focusX, Number(event.target.value))} /></label></div></> : <div className="empty-image-state"><strong>这个位置还没有图片</strong><span>空位置不会显示破图，也不会阻止继续编辑。</span></div>}<div className="image-actions"><Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button>{currentSlot.src && <Button onClick={() => setFocus(50, 50)}>恢复居中</Button>}</div></>}<input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { uploadLocalImage(event.target.files?.[0]); event.target.value = ""; }} />{currentSlot?.src && selection.module !== "cover" && <button className="delete-image-button" onClick={deleteImage}>删除当前图片</button>}<p className="image-source">自动图片已经下载保存并检查；本地素材请确认使用权。</p></div>;
 
+  const dayStatusOptions = [
+    ["included", "已包含"],
+    ["optional_paid", "自费可选"],
+    ["reservation_required", "需提前预约"],
+    ["pending", "待确认"],
+  ];
+  const daySpots = selectedDay?.spots || [];
+  const dayImageDone = slots.filter((slot) => slot.src).length;
+  const selectedBinding = currentSlot?.slotId ? project.data.simpleImageSlotBindings?.[currentSlot.slotId] : null;
+  const addExperienceCard = () => {
+    const spotId = uid("spot");
+    const slotId = `manual:day:${selection.itemIndex + 1}:${spotId}:primary`;
+    const nextProject = updateData((next) => {
+      createManualDayCard(next, selection.itemIndex, { spotId, slotId });
+      synchronizeExperienceStatus(next, selection.itemIndex, next.days[selection.itemIndex].spots.length - 1, "pending");
+    }, `add-day-card-${spotId}`);
+    choose({ module: "days", itemIndex: selection.itemIndex, subItemIndex: daySpots.length, imageIndex: 0, spotId, slotId });
+    onPersistDayEditor?.(nextProject, selection.itemIndex, { immediate: true });
+  };
+  const deleteExperienceCard = (spot, spotIndex, slotId) => {
+    const spotId = daySpotIdentity(spot, selection.itemIndex, spotIndex);
+    if (!window.confirm(`确定删除「${spot.name || "这个体验卡片"}」吗？`)) return;
+    const nextProject = updateData((next) => {
+      removeExperienceReferences(next, spot.name);
+      deleteDaySpotPreservingSlots(next, selection.itemIndex, spotId);
+    }, `delete-day-card-${spotId}-${Date.now()}`);
+    choose({ module: "days", itemIndex: selection.itemIndex, subItemIndex: null, imageIndex: 0, spotId: null, slotId: null });
+    onPersistDayEditor?.(nextProject, selection.itemIndex, { immediate: true, deletedSlotId: slotId });
+  };
+  const reorderExperience = (targetSpot, targetIndex) => {
+    if (!dragSpotId) return;
+    const targetSpotId = daySpotIdentity(targetSpot, selection.itemIndex, targetIndex);
+    if (dragSpotId !== targetSpotId) updateDayData((next) => { reorderDaySpots(next, selection.itemIndex, dragSpotId, targetSpotId); }, `reorder-spot-${selection.itemIndex}-${Date.now()}`, { immediate: true });
+    setSelection((current) => ({ ...current, spotId: dragSpotId, slotId: null, subItemIndex: targetIndex, imageIndex: 0 }));
+    setDragSpotId(null);
+  };
+  const selectedDaySlotTools = currentSlot && <div className="day-slot-tools">
+    {currentSlot.src ? <div className="day-slot-focus-preview"><img src={currentSlot.src} alt="当前图片" style={{ objectPosition: currentSlot.focus }} /></div> : <div className="day-slot-empty"><UiIcon name="itinerary" /><span>上传真实图片后，这张卡片才会进入中间客户预览</span></div>}
+    {selectedBinding?.useSpotCopy === false && <div className="day-visual-copy"><Field label="卡片标题" value={selectedBinding.cardTitle || ""} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardTitle = value; }, `visual-title-${currentSlot.slotId}`)} /><Field label="图片下方文字" rows={3} value={selectedBinding.cardDescription || ""} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardDescription = value; }, `visual-copy-${currentSlot.slotId}`)} /></div>}
+    <div className="day-inline-image-actions">{selectedBinding?.manualEditorCard ? <Button tone="primary" onClick={() => fileRef.current?.click()}>{currentSlot.src ? "更换上传图片" : "上传体验图片"}</Button> : <Button tone="primary" onClick={() => setPickerOpen(true)}>处理图片</Button>}{currentSlot.src && <Button onClick={() => setFocus(50, 50)}>恢复居中</Button>}{currentSlot.src && !selectedBinding?.manualEditorCard && <button className="day-image-danger" onClick={deleteImage}>删除图片</button>}</div>
+  </div>;
+  const dayPanel = selection.module === "days" && <div className="day-editor-flow">
+    <section className={`day-editor-section day-info-section ${dayInfoOpen ? "is-open" : ""}`}>
+      <button className="day-section-toggle" onClick={() => setDayInfoOpen((value) => !value)} aria-expanded={dayInfoOpen}><span><UiIcon name="itinerary" /><strong>当天信息</strong></span><em>{dayInfoOpen ? "收起" : "编辑"}</em></button>
+      <div className="day-info-summary"><p><span>主题</span><b>{selectedDay?.theme || "待补充"}</b></p><p><span>路线</span><b>{selectedDay?.routeNodes?.join(" → ") || selectedDay?.city || "待补充"}</b></p><p><span>交通</span><b>{selectedDay?.vehicle || "待补充"}</b></p></div>
+      {dayInfoOpen && <div className="day-info-fields"><Field label="日期" type="date" value={selectedDay?.date || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].date = value; }, `day-date-${selection.itemIndex}`)} /><Field label="每日主题" value={selectedDay?.theme || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].theme = value; }, `day-theme-${selection.itemIndex}`)} /><Field label="路线节点（每行一个）" rows={4} value={(selectedDay?.routeNodes || []).join("\n")} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].routeNodes = splitLines(value); }, `day-route-${selection.itemIndex}`)} /><Field label="交通与节奏" value={selectedDay?.vehicle || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].vehicle = value; }, `day-vehicle-${selection.itemIndex}`)} /><div className="field-grid-compact"><Field label="预计车程" value={selectedDay?.estimatedTravelTime || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].estimatedTravelTime = value; }, `day-time-${selection.itemIndex}`)} /><Field label="活动强度" value={selectedDay?.activityLevel || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].activityLevel = value; }, `day-level-${selection.itemIndex}`)} /></div><Field label="今日行程" rows={7} value={selectedDay?.description || ""} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].description = value; }, `day-copy-${selection.itemIndex}`)} /><Field label="今日贴士" rows={3} value={(selectedDay?.dayNotices?.[0]?.text || selectedDay?.dayNotices?.[0] || "")} onChange={(value) => updateData((next) => { next.days[selection.itemIndex].dayNotices = value ? [{ type: "tip", text: value }] : []; }, `day-notice-${selection.itemIndex}`)} /></div>}
+    </section>
+    <section className="day-editor-section day-card-editor-section">
+      <header className="day-section-heading"><span><UiIcon name="calendar" /><strong>体验卡片</strong><em>{slots.length}张 · {dayImageDone}张已显示</em></span><Button onClick={addExperienceCard}>新增体验卡片</Button></header>
+      <p className="day-card-editor-hint">这里与中间预览一一对应；可选缺图位会保留在编辑器中，但不会进入客户成品。</p>
+      <div className="day-image-plan-list">{slots.map((slot) => {
+        const binding = project.data.simpleImageSlotBindings?.[slot.slotId] || slot.binding || {};
+        const spotIndex = binding.useSpotCopy === false ? -1 : resolveDaySpotIndex(selectedDay, { spotId: slot.spotId, subItemIndex: slot.subItemIndex });
+        const spot = spotIndex >= 0 ? daySpots[spotIndex] : null;
+        const active = currentSlot?.slotId === slot.slotId;
+        const title = binding.useSpotCopy === false ? binding.cardTitle || "行程体验" : spot?.name || String(slot.label || "体验卡片").split("｜")[0];
+        const summary = binding.useSpotCopy === false ? binding.cardDescription || "暂无图片说明" : spot?.description || spot?.experience || "暂无体验介绍";
+        const status = spot ? dayStatusOptions.find(([value]) => value === (spot.status || "pending"))?.[1] || "待确认" : slot.src ? "已采用" : "待处理";
+        const draggable = Boolean(spot?.id);
+        return <article key={slot.slotId} className={`day-card-editor-item ${active ? "is-active" : ""}`} data-day-slot-id={slot.slotId} data-day-spot-id={spot?.id || undefined} draggable={draggable} onDragStart={() => draggable && setDragSpotId(spot.id)} onDragEnd={() => setDragSpotId(null)} onDragOver={(event) => draggable && event.preventDefault()} onDrop={() => draggable && reorderExperience(spot, spotIndex)}>
+          <button className="day-card-editor-summary" onClick={() => selectSlot(slot)} aria-expanded={active}><span className="day-drag-handle" title={draggable ? "拖动排序" : "独立视觉卡片"}><UiIcon name="process" /></span><span className="day-experience-thumb">{slot.src ? <img src={slot.src} alt="" /> : <UiIcon name="itinerary" />}</span><span className="day-experience-copy"><strong>{title}</strong><em>{status}</em><small>{summary.slice(0, 72)}</small><small className="day-card-visibility">{slot.src ? "正在中间预览显示" : binding.manualEditorCard ? "上传图片后显示" : `${slot.editorImageRequired || slot.required ? "必需" : "可选"}图片待处理`}</small></span><UiIcon name="return" /></button>
+          {active && <div className="day-experience-fields">{spot && <><Field label="体验名称" value={spot.name || ""} onChange={(value) => updateDayData((next) => { const current = next.days[selection.itemIndex].spots[spotIndex]; removeExperienceReferences(next, current.name); current.name = value; synchronizeExperienceStatus(next, selection.itemIndex, spotIndex, current.status || "pending"); }, `spot-name-${spot.id}`)} /><div className="day-status-field"><span>包含情况</span><div>{dayStatusOptions.map(([value, label]) => <button key={value} className={(spot.status || "pending") === value ? "active" : ""} onClick={() => updateDayData((next) => { synchronizeExperienceStatus(next, selection.itemIndex, spotIndex, value); }, `spot-status-${spot.id}`)}>{label}</button>)}</div></div><Field label="图片下方文字" rows={5} value={spot.experience || spot.description || ""} onChange={(value) => updateDayData((next) => { next.days[selection.itemIndex].spots[spotIndex].description = value; delete next.days[selection.itemIndex].spots[spotIndex].experience; }, `spot-copy-${spot.id}`)} /><Field label="补充提醒" rows={3} value={spot.reminder || ""} onChange={(value) => updateDayData((next) => { next.days[selection.itemIndex].spots[spotIndex].reminder = value; }, `spot-reminder-${spot.id}`)} /></>}{selectedDaySlotTools}{binding.manualEditorCard === true && spot && <button className="day-delete-experience" onClick={() => deleteExperienceCard(spot, spotIndex, slot.slotId)}><UiIcon name="trash" />删除这张体验卡片</button>}</div>}
+        </article>;
+      })}</div>
+    </section>
+    <section className={`day-editor-section day-module-settings ${daySettingsOpen ? "is-open" : ""}`}><button className="day-section-toggle" onClick={() => setDaySettingsOpen((value) => !value)} aria-expanded={daySettingsOpen}><span><UiIcon name="city" /><strong>模块设置</strong></span><em>{daySettingsOpen ? "收起" : "展开"}</em></button>{daySettingsOpen && <div className="day-settings-content"><p>每日行程是客户成品的固定模块，不能隐藏。</p><label className="switch"><input type="checkbox" checked disabled /><span /></label></div>}</section>
+    <input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { uploadLocalImage(event.target.files?.[0]); event.target.value = ""; }} />
+  </div>;
+
   const title = selection.module === "days" ? `DAY ${String(selection.itemIndex + 1).padStart(2, "0")} · ${selectedDay?.theme || selectedDay?.city || "每日行程"}` : selectedModule.label;
-  return <main className="editor-page"><StepRail active={3} maxStep={canOpenVersions ? 4 : 3} onStep={(step) => step === 4 && canOpenVersions && onVersions()} /><div className="editor-grid">
+  const blockingCopyItems = blockingItems.filter((item) => item.action === "retry_copy");
+  const blockingImageItems = blockingItems.filter((item) => item.action === "handle_image");
+  return <main className="editor-page"><StepRail active={3} maxStep={canOpenVersions ? 4 : 3} onStep={(step) => step === 4 && canOpenVersions && onVersions()} /><div className={`editor-grid ${selection.module === "days" ? "editor-grid-day" : ""}`}>
     <aside className="structure-panel"><header><span><UiIcon name="itinerary" />行程结构</span></header><nav>{MODULES.map((module) => module.id === "days" ? <div key={module.id} className="day-nav-group"><button className={selection.module === "days" ? "active" : ""} onClick={() => selectModule("days", selection.itemIndex)}><span className="nav-dot" />每日行程</button><div>{project.data.days.map((day, index) => <button key={index} className={selection.module === "days" && selection.itemIndex === index ? "active" : ""} onClick={() => selectModule("days", index)}><span>DAY {String(index + 1).padStart(2, "0")}</span><em>{day.city || day.theme}</em></button>)}</div></div> : <button key={module.id} className={selection.module === module.id ? "active" : ""} onClick={() => selectModule(module.id)}><span className="nav-dot" />{module.label}{visibility[module.id] === false && <small>已隐藏</small>}</button>)}</nav></aside>
     <section className="canvas-stage" ref={previewRef} onClick={onPreviewClick} tabIndex="0" aria-label="行程长图预览，使用滚轮、PageDown、Home 或 End 浏览"><div className="workspace-itinerary"><ItineraryComponent data={viewData} /></div></section>
-    <aside className="inspector-panel"><header><div><small>{project.revisionMode ? 'REVISION MODE' : 'EDIT CONTENT'}</small><h2>{title}</h2></div><div className="history-actions"><button disabled={!historyRef.current.undo.length} onClick={() => restore("undo")} title="撤销 Ctrl+Z"><UiIcon name="return" />撤销</button><button disabled={!historyRef.current.redo.length} onClick={() => restore("redo")} title="重做 Ctrl+Shift+Z"><UiIcon name="process" />重做</button></div></header>{statusNotice && <div className="copy-review-banner" role="status"><strong>{statusNotice.title || "当前可编辑，正式成品尚未开放"}</strong><span>{statusNotice.message || statusNotice}</span>{Array.isArray(statusNotice.items) && statusNotice.items.length > 0 && <ul>{statusNotice.items.map((item) => <li key={item}>{item}</li>)}</ul>}</div>}{(copyReview?.needsReview || copyReview?.blocked || project.revisionMode) && <div className="copy-review-banner" role="status"><strong>修订模式 · {copyIssueTargets.length} 个修改位置</strong><span>底层共发现 {copyReviewIssues.length} 条检查记录；图片和版面已保留。普通文案建议可继续修订，也可在正式版本页确认后按当前内容导出；事实、费用、安全或结构问题仍会阻止。</span><div className="copy-review-actions"><Button tone="primary" disabled={copyRepairState?.busy || !copyIssueTargets.some((target) => target.aiRepairable)} onClick={() => onRepairCopy?.('')}>{copyRepairState?.busy && !copyRepairState.targetPath ? 'AI正在修正…' : 'AI修正全部可修项'}</Button><Button disabled={copyRepairState?.busy} onClick={() => onRecheckCopy?.()}>重新检查全部</Button></div>{copyRepairState?.message && <span className="copy-repair-state">{copyRepairState.message}</span>}<div className="copy-review-details">{copyIssueTargets.map((target) => <section key={target.targetPath}><button className="copy-issue-target" onClick={() => selectIssueTarget(target.targetPath)}><b>{target.label}</b><small>{target.ruleIds.join('/') || 'COPY'} · {target.issues.length}条记录</small></button>{target.issues.map((issue, index) => <p key={`${target.targetPath}-${index}`}><em>{issue.ruleIds?.join('/') || issue.ruleId || 'COPY'}</em>{issue.message}</p>)}<div className="copy-target-actions"><Button disabled={copyRepairState?.busy} onClick={() => target.aiRepairable ? onRepairCopy?.(target.targetPath) : onReviewFacts?.()}>{copyRepairState?.busy && copyRepairState.targetPath === target.targetPath ? '正在修正…' : target.aiRepairable ? 'AI修正这项' : '返回确认原始事实'}</Button></div></section>)}</div></div>}<div className="inspector-tabs"><button className={tab === "copy" ? "active" : ""} onClick={() => setTab("copy")}>文案</button>{hasImages && <button className={tab === "image" ? "active" : ""} onClick={() => setTab("image")}>图片</button>}</div>
+    <aside className="inspector-panel" ref={inspectorRef}><header><div><small>{project.revisionMode ? 'REVISION MODE' : 'EDIT CONTENT'}</small><h2>{title}</h2></div><div className="history-actions"><button disabled={!historyRef.current.undo.length} onClick={() => restore("undo")} title="撤销 Ctrl+Z"><UiIcon name="return" />撤销</button><button disabled={!historyRef.current.redo.length} onClick={() => restore("redo")} title="重做 Ctrl+Shift+Z"><UiIcon name="process" />重做</button>{selection.module === "days" && <button onClick={() => setDaySettingsOpen((value) => !value)} title="更多设置">更多</button>}</div></header>{statusNotice && <div className="copy-review-banner" role="status"><strong>{statusNotice.title || "当前可编辑，正式成品尚未开放"}</strong><span>{statusNotice.message || statusNotice}</span>{Array.isArray(statusNotice.items) && statusNotice.items.length > 0 && <ul>{statusNotice.items.map((item) => <li key={item}>{item}</li>)}</ul>}</div>}{(copyReview?.needsReview || copyReview?.blocked || project.revisionMode) && <div className="copy-review-banner" role="status"><strong>修订模式 · {copyIssueTargets.length} 个修改位置</strong><span>底层共发现 {copyReviewIssues.length} 条检查记录；图片和版面已保留。普通文案建议可继续修订，也可在正式版本页确认后按当前内容导出；事实、费用、安全或结构问题仍会阻止。</span><div className="copy-review-actions"><Button tone="primary" disabled={copyRepairState?.busy || !copyIssueTargets.some((target) => target.aiRepairable)} onClick={() => onRepairCopy?.('')}>{copyRepairState?.busy && !copyRepairState.targetPath ? 'AI正在修正…' : 'AI修正全部可修项'}</Button><Button disabled={copyRepairState?.busy} onClick={() => onRecheckCopy?.()}>重新检查全部</Button></div>{copyRepairState?.message && <span className="copy-repair-state">{copyRepairState.message}</span>}<div className="copy-review-details">{copyIssueTargets.map((target) => <section key={target.targetPath}><button className="copy-issue-target" onClick={() => selectIssueTarget(target.targetPath)}><b>{target.label}</b><small>{target.ruleIds.join('/') || 'COPY'} · {target.issues.length}条记录</small></button>{target.issues.map((issue, index) => <p key={`${target.targetPath}-${index}`}><em>{issue.ruleIds?.join('/') || issue.ruleId || 'COPY'}</em>{issue.message}</p>)}<div className="copy-target-actions"><Button disabled={copyRepairState?.busy} onClick={() => target.aiRepairable ? onRepairCopy?.(target.targetPath) : onReviewFacts?.()}>{copyRepairState?.busy && copyRepairState.targetPath === target.targetPath ? '正在修正…' : target.aiRepairable ? 'AI修正这项' : '返回确认原始事实'}</Button></div></section>)}</div></div>}{selection.module === "days" ? <div className="inspector-body day-inspector-body">{dayPanel}</div> : <><div className="inspector-tabs"><button className={tab === "copy" ? "active" : ""} onClick={() => setTab("copy")}>文案</button>{hasImages && <button className={tab === "image" ? "active" : ""} onClick={() => setTab("image")}>图片</button>}</div>
       {tab === "copy" && <div className="inspector-body">{copyPanel}</div>}
       {tab === "image" && <div className="inspector-body">{imagePanel}</div>}
-      <footer className="module-toggle"><div><UiIcon name="city" /><span><strong>模块显示</strong><small>{selectedModule.required ? "品牌固定模块" : "控制是否进入正式版本"}</small></span></div><label className="switch"><input type="checkbox" checked={selectedModule.required || visibility[selectedModule.id] !== false} disabled={selectedModule.required} onChange={(event) => updateVisibility(event.target.checked)} /><span /></label></footer>
+      <footer className="module-toggle"><div><UiIcon name="city" /><span><strong>模块显示</strong><small>{selectedModule.required ? "品牌固定模块" : "控制是否进入正式版本"}</small></span></div><label className="switch"><input type="checkbox" checked={selectedModule.required || visibility[selectedModule.id] !== false} disabled={selectedModule.required} onChange={(event) => updateVisibility(event.target.checked)} /><span /></label></footer></>}
+      {onVersions && <footer className={`editor-final-step${canOpenVersions ? " is-ready" : ` is-locked${finalIssuesOpen ? " is-expanded" : ""}`}`}>
+        {canOpenVersions ? <div className="editor-final-summary"><strong>本次行程已具备正式下载条件</strong><small>进入最后一步查看并下载2000px高清长图。</small></div> : <button type="button" className="editor-final-toggle" aria-expanded={finalIssuesOpen} onClick={() => setFinalIssuesOpen((value) => !value)}><span><strong>{`正式下载还差 ${blockingItems.length || "少量"} 项`}</strong><small>{finalIssuesOpen ? "处理完成后即可进入下载版本" : "收起时不占用编辑空间"}</small></span><em>{finalIssuesOpen ? "收起" : "展开处理"}</em></button>}
+        {!canOpenVersions && finalIssuesOpen && (blockingCopyItems.length > 1 || blockingImageItems.length > 1) && <div className="editor-batch-actions"><div><b>批量处理失败项</b><small>同类任务并发执行，整批完成后统一保存和检查版面。</small></div><div>
+          {blockingCopyItems.length > 1 && <button className="is-primary" disabled={issueActionState?.busy} onClick={() => onRetryAllCopy?.(blockingCopyItems.map((item) => item.id)).catch(() => {})}>{issueActionState?.busy && issueActionState.targetId === "copy:all" ? `正在生成 ${blockingCopyItems.length} 项…` : `重新生成全部失败文案（${blockingCopyItems.length}）`}</button>}
+          {blockingImageItems.length > 1 && <button disabled={issueActionState?.busy} onClick={() => onRetryAllImages?.(blockingImageItems.map((item) => item.id)).catch(() => {})}>{issueActionState?.busy && issueActionState.targetId === "image:all" ? `正在搜索 ${blockingImageItems.length} 张…` : `重搜全部缺图（${blockingImageItems.length}）`}</button>}
+        </div></div>}
+        {!canOpenVersions && finalIssuesOpen && blockingItems.length > 0 && <div className="editor-blocking-list">{blockingItems.map((item) => {
+          const busy = issueActionState?.busy && issueActionState.targetId === item.id;
+          return <article key={`${item.kind}:${item.id}`}><div><b>{item.label}</b><small>{item.message}</small></div><div className="editor-blocking-actions">
+            {(item.kind === "copy" || item.kind === "image") && <button onClick={() => { setFinalIssuesOpen(false); item.kind === "image" ? selectBlockingImage(item) : selectIssueTarget(item.targetPath); }}>查看位置</button>}
+            {item.action === "retry_copy" && <button className="is-primary" disabled={issueActionState?.busy} onClick={() => onRetryCopy?.(item.id).catch(() => {})}>{busy ? "正在生成…" : "重新生成这项"}</button>}
+            {item.action === "handle_image" && <><button disabled={issueActionState?.busy || Boolean(imageOperations[item.id]?.searching)} onClick={() => retryBlockingImage(item)}>{imageOperations[item.id]?.searching ? "正在搜索…" : "重新搜索这张"}</button><button className="is-primary" disabled={issueActionState?.busy} onClick={() => selectBlockingImage(item, true)}>选择或上传</button></>}
+            {item.action === "retry_renderer" && <button className="is-primary" disabled={issueActionState?.busy} onClick={() => onRetryRenderer?.().catch(() => {})}>{busy ? "正在检查…" : "重新检查成品"}</button>}
+            {item.action === "review_facts" && onReviewFacts && <button className="is-primary" onClick={onReviewFacts}>返回确认信息</button>}
+          </div></article>;
+        })}</div>}
+        {issueActionState?.message && !canOpenVersions && finalIssuesOpen && <p className="editor-final-feedback" role="status">{issueActionState.message}</p>}
+        {(canOpenVersions || finalIssuesOpen) && <Button tone={canOpenVersions ? "primary" : "secondary"} disabled={!canOpenVersions} onClick={onVersions}>{canOpenVersions ? "查看并下载" : "等待补齐"}</Button>}
+      </footer>}
     </aside>
   </div>{imageMessage && !pickerOpen && <div className="manual-image-feedback" role="status" aria-live="polite">{imageMessage}</div>}{pickerOpen && currentSlot && <ImagePickerModal key={currentSlot.slotId} operation={imageOperations[currentSlot.slotId]} data={project.data} targetSlot={currentSlot} onClose={() => setPickerOpen(false)} onChoose={chooseLibraryImage} onResearch={onResearchSlot ? researchCurrentSlot : undefined} onUpload={uploadLocalImage} />}</main>;
 }
@@ -1061,7 +1242,9 @@ export function VersionsStep({ project, exporting, exportError, onExport, onBack
   const ready = humanReviewReady(humanReview);
   const exportEligibility = copyExportEligibility(project);
   const warningAccepted = !exportEligibility.requiresWarningAcknowledgement || humanReview.exportWithCopyWarningsConfirmed === true;
+  const latestVersion = project.versions?.[project.versions.length - 1];
   return <main className="flow-page"><StepRail active={4} onStep={(step) => step === 3 && onBack()} /><section className="flow-content versions-content"><header className="flow-heading"><small>STEP 05</small><h1>正式版本</h1><p>每次生成都会冻结当时内容，之后仍可返回草稿继续修改。</p></header>
+    {existingOnly && latestVersion?.downloadUrl && <div className="export-hero export-ready-hero"><div><UiIcon name="included" size={32} /><h2>正式成品已生成</h2><p>已经完成2000px长图排版与检查，可以直接下载交付。</p></div><a className="ws-button ws-button-primary" href={latestVersion.downloadUrl} download>下载高清长图</a></div>}
     {!existingOnly && <div className="export-hero"><div><UiIcon name="included" size={32} /><h2>{exporting > 0 && exporting < 100 ? "正在生成高清成品" : "生成新的正式版本"}</h2><p>{exporting > 0 && exporting < 100 ? "正在排版并检查超长页尾，请保持此页面打开。" : "输出一张供客户查看的2000px高清长图。"}</p>{exportEligibility.hardBlocked && <p className="export-error">当前仍有事实、费用、安全或结构问题，必须先处理后才能正式导出。</p>}{exportEligibility.hasWarnings && <label><input type="checkbox" checked={humanReview.exportWithCopyWarningsConfirmed === true} onChange={(event) => onReviewDecision('exportWithCopyWarningsConfirmed', event.target.checked)} /> 我已查看全部文案待修项，仍确认按当前内容生成正式版本</label>}<label><input type="checkbox" checked={humanReview.aestheticConfirmed === true} onChange={(event) => onReviewDecision('aestheticConfirmed', event.target.checked)} /> 我已查看完整预览，确认整体审美、层级和客户可读性</label><label><input type="checkbox" checked={humanReview.licenseReviewed === true} onChange={(event) => onReviewDecision('licenseReviewed', event.target.checked)} /> 我已核对最终图片来源和使用权；授权不明素材会在正式发布前替换</label>{!ready && <p className="export-error">人工复核不会阻止进入编辑器，但生成正式客户版本前必须留下确认记录。</p>}{exporting > 0 && exporting < 100 && <div className="export-progress"><span style={{ width: `${exporting}%` }} /><strong>{exporting}%</strong></div>}{exportError && <p className="export-error">{exportError}</p>}</div><Button tone="primary" disabled={!exportEligibility.allowed || !warningAccepted || !ready || (exporting > 0 && exporting < 100)} onClick={onExport}>生成版本</Button></div>}
     <div className="version-list"><header><h2>版本历史</h2><span>{project.versions?.length || 0} 个版本</span></header>{project.versions?.length ? project.versions.slice().reverse().map((version, index) => <article key={version.id}><div className="version-index">V{String(project.versions.length - index).padStart(2, "0")}</div><div><strong>{version.name}</strong><span>{formatTime(version.createdAt)} · 2000px</span></div><div className="version-downloads">{version.downloadUrl ? <a href={version.downloadUrl} download>下载高清长图</a> : <span>旧版未生成文件</span>}</div></article>) : <div className="empty-versions">还没有正式版本，点击上方按钮生成。</div>}</div>
   </section></main>;
