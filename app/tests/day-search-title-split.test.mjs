@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildImageQueries, buildImageConstraints } from '../server/simple-image-skill.mjs';
-import { validateCopyCommitments } from '../server/simple-copy-skill.mjs';
+import { validateCopyCommitments, validateVisualCardSubjectRetention } from '../server/simple-copy-skill.mjs';
 import { dayVisualCards } from '../src/lib/dayVisualCards.js';
 import { selectCustomerRenderData } from '../server/customer-render-data.mjs';
 
 test('DAY query直接使用searchIntent，客户标题不改变查询和图片硬条件', () => {
-  const slot = { moduleType: 'day', location: 'Naboisho私人保护区', primaryVisualSubject: 'Naboisho保护区中一只花豹栖于树上', subject: 'Naboisho保护区中一只花豹栖于树上', searchIntent: 'Naboisho leopard safari' };
-  assert.deepEqual(buildImageQueries(slot, 2), ['Naboisho leopard safari', 'Naboisho leopard safari photos']);
+  const slot = { moduleType: 'day', location: 'Naboisho私人保护区', primaryVisualSubject: 'Naboisho保护区中一只花豹栖于树上', subject: 'Naboisho保护区中一只花豹栖于树上', searchIntent: ['Naboisho leopard safari', 'leopard tracking safari'] };
+  assert.deepEqual(buildImageQueries(slot, 2), ['Naboisho leopard safari', 'leopard tracking safari']);
   const changed = {...slot, cardTitle: '客户编辑的新标题', cardDescription: '客户编辑的新描述'};
   assert.deepEqual(buildImageQueries(changed), buildImageQueries(slot));
   assert.deepEqual(buildImageConstraints(changed), buildImageConstraints(slot));
@@ -31,4 +31,12 @@ test('视觉卡对象的标题和描述仍经过原有承诺检查', () => {
   assert.ok(validateCopyCommitments({cardTitle:'保证看到花豹',cardDescription:'观察草原'},task).length);
   assert.ok(validateCopyCommitments({cardTitle:'花豹追踪',cardDescription:'保证看到花豹'},task).length);
   assert.deepEqual(validateCopyCommitments({cardTitle:'花豹追踪',cardDescription:'跟随向导寻找花豹踪迹。'},task),[]);
+});
+
+test('明确视觉主体不能被DAY视觉卡降级为泛化游猎标题', () => {
+  const leopard = { moduleType: 'visual_card', facts: { visualSubject: 'Naboisho保护区中一只花豹栖于树上', titleCoreSubject: '花豹追踪' } };
+  assert.match(validateVisualCardSubjectRetention({ cardTitle: '傍晚游猎', cardDescription: '进入保护区观察。' }, leopard)[0], /丢失了明确视觉主体/);
+  assert.deepEqual(validateVisualCardSubjectRetention({ cardTitle: 'Naboisho私保区追踪花豹', cardDescription: '进入保护区观察。' }, leopard), []);
+  const generic = { moduleType: 'visual_card', facts: { visualSubject: '马赛马拉全天游猎' } };
+  assert.deepEqual(validateVisualCardSubjectRetention({ cardTitle: '马赛马拉全天游猎', cardDescription: '进入草原观察。' }, generic), []);
 });

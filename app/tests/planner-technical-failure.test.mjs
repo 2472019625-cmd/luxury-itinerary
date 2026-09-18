@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { requestDeepSeekJson } from "../server/deepseek-client.mjs";
 import { buildAgentFactBasis, fingerprintFacts, generateAgentPlan } from "../server/agent-trip-planner.mjs";
 import { runSimplePipeline } from "../server/simple-pipeline-executor.mjs";
-import { createWorkbookFile, plannerRequestJson } from "./helpers/simple-pipeline-fixture.mjs";
+import { copyRequestJson, createWorkbookFile, plannerRequestJson } from "./helpers/simple-pipeline-fixture.mjs";
 
 function sseResponse(content, finishReason = "stop") {
   const encoder = new TextEncoder();
@@ -45,52 +45,120 @@ test("Planner 纯语法修复后仍通过冻结业务 schema 校验", async () =
   assert.ok(result.attempts[0].parseResult.operations.some((item) => item.type === "inserted_missing_comma"));
 });
 
-test("Planner 技术重试耗尽后落盘 failed/final-result，且下游保持未启动", async (t) => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "planner-terminal-failure-"));
+test("Planner 技术补救耗尽后失败开放，不进行第二次业务规划", async () => {
+  const factBasis = buildAgentFactBasis({
+    destination: "肯尼亚",
+    sourcePosterHighlights: ["私家定制"],
+    days: [{ route: "机场至市区", description: "抵达后入住" }],
+  });
+  let calls = 0;
+  const result = await generateAgentPlan({
+    project: { projectId: "planner-fail-open", inputFingerprint: fingerprintFacts(factBasis), factBasis, activePlanId: null, planIds: [] },
+    simpleSkillContract: true,
+    requestJson: async () => {
+      calls += 1;
+      throw Object.assign(new Error("模型没有返回完整JSON"), {
+        code: "planner_json_invalid",
+        attemptUsages: [
+          { attempt: 1, outcome: "empty_content", thinkingType: "enabled" },
+          { attempt: 2, outcome: "empty_content", thinkingType: "disabled" },
+        ],
+      });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.attempts.length, 1);
+  assert.equal(result.attempts[0].attemptUsages.length, 2);
+  assert.equal(result.attempts[0].status, "failed_open");
+  assert.equal(result.plan.validation.failOpen, true);
+  assert.equal(result.plan.validation.correctionUsed, false);
+  assert.equal(result.plan.validation.plannerBusinessRuns, 1);
+  assert.equal(result.plan.validation.plannerModelCalls, 2);
+  assert.equal(result.plan.validation.technicalRetryUsed, true);
+  assert.equal(result.plan.capabilityCallStats.find((item) => item.capabilityId === "trip_planner")?.actualCalls, 2);
+  assert.equal(result.plan.imagePlan.slots.length, 0);
+});
+
+test("Planner 恢复充足预算并只允许一次底层空答案补救", async () => {
+  const factBasis = buildAgentFactBasis({
+    destination: "肯尼亚",
+    sourcePosterHighlights: ["私家定制"],
+    days: [{ route: "保护区", description: "观察野生动物" }],
+  });
+  const fixture = plannerRequestJson({ delayMs: 0 });
+  let businessInvocations = 0;
+  const result = await generateAgentPlan({
+    project: { projectId: "planner-technical-recovery", inputFingerprint: fingerprintFacts(factBasis), factBasis, activePlanId: null, planIds: [] },
+    simpleSkillContract: true,
+    requestJson: async (options) => {
+      businessInvocations += 1;
+      assert.equal(options.reasoningEffort, "high");
+      assert.equal(options.maxTokens, 30000);
+      assert.equal(options.emptyContentRetries, 1);
+      const response = await fixture(options);
+      return {
+        ...response,
+        attemptUsages: [
+          { attempt: 1, outcome: "empty_content", thinkingType: "enabled" },
+          { attempt: 2, outcome: "accepted", thinkingType: "disabled" },
+        ],
+      };
+    },
+  });
+  assert.equal(businessInvocations, 1);
+  assert.equal(result.attempts.length, 1);
+  assert.equal(result.plan.validation.correctionUsed, false);
+  assert.equal(result.plan.validation.plannerBusinessRuns, 1);
+  assert.equal(result.plan.validation.plannerModelCalls, 2);
+  assert.equal(result.plan.validation.technicalRetryUsed, true);
+  assert.equal(result.plan.capabilityCallStats.find((item) => item.capabilityId === "trip_planner")?.actualCalls, 2);
+});
+
+test("真实 Pipeline 中 Planner 技术补救耗尽不触发业务重规划，Copy、Image 与 Step4 草稿继续", async (t) => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "planner-pipeline-fail-open-"));
   t.after(() => rm(tempRoot, { recursive: true, force: true }));
-  const storeRoot = path.join(tempRoot, "projects");
-  const downstreamCalls = { copy: 0, image: 0, renderer: 0 };
-  let failure;
-  try {
-    await runSimplePipeline({
-      sourceFile: createWorkbookFile(),
-      storeRoot,
-      adapters: {
-        planAgent: async ({ onModelAttempt }) => {
-          await onModelAttempt({ attempt: 1, rawContent: '{"summary":"broken-1', parseResult: { status: "invalid_json", repaired: false, operations: [], parseError: "unterminated string", repairError: "没有可确定执行的纯语法修复" } });
-          await onModelAttempt({ attempt: 2, rawContent: '{"summary":"broken-2', parseResult: { status: "invalid_json", repaired: false, operations: [], parseError: "unterminated string", repairError: "没有可确定执行的纯语法修复" } });
-          const error = new Error("DeepSeek 接口连续 2 次未返回完整合法JSON");
-          error.code = "planner_json_invalid";
-          error.attemptUsages = [{ attempt: 1 }, { attempt: 2 }];
-          throw error;
-        },
-        runCopy: async () => { downstreamCalls.copy += 1; },
-        runImage: async () => { downstreamCalls.image += 1; },
-        render: async () => { downstreamCalls.renderer += 1; },
+  let plannerCalls = 0;
+  let knowledgeCalls = 0;
+  let rendererCalls = 0;
+  const result = await runSimplePipeline({
+    sourceFile: createWorkbookFile(),
+    root: path.resolve(import.meta.dirname, ".."),
+    storeRoot: path.join(tempRoot, "projects"),
+    plannerOptions: {
+      requestJson: async () => {
+        plannerCalls += 1;
+        throw Object.assign(new Error("Planner 没有返回完整JSON"), {
+          code: "planner_json_invalid",
+          attemptUsages: [
+            { attempt: 1, outcome: "empty_content", thinkingType: "enabled" },
+            { attempt: 2, outcome: "empty_content", thinkingType: "disabled" },
+          ],
+        });
       },
-    });
-  } catch (error) {
-    failure = error;
-  }
-  assert.ok(failure);
-  assert.ok(failure.projectId);
-  assert.ok(failure.finalResultRef?.endsWith("final-result.json"));
-  assert.deepEqual(downstreamCalls, { copy: 0, image: 0, renderer: 0 });
-  const projectDir = path.join(storeRoot, failure.projectId);
-  const project = JSON.parse(await readFile(path.join(projectDir, "project.json"), "utf8"));
-  const finalResult = JSON.parse(await readFile(path.join(projectDir, failure.finalResultRef), "utf8"));
-  assert.equal(project.status, "failed");
-  assert.equal(project.currentStage, "Planner failure");
-  assert.equal(project.errorCode, "planner_json_invalid");
-  assert.equal(finalResult.pipelineStatus, "failed");
-  assert.equal(finalResult.unresolvedItems[0].error.code, "planner_system_failure");
-  assert.deepEqual(finalResult.stageStatus, { parser: "success", planner: "failed", copy: "not_started", image: "not_started", programWriteback: "not_started", renderer: "not_started" });
-  assert.equal(finalResult.callCounts.plannerModelCalls, 2);
-  assert.equal(finalResult.callCounts.copyModelCalls, 0);
-  assert.equal(finalResult.callCounts.imageSearchCalls, 0);
-  assert.equal(finalResult.callCounts.rendererCalls, 0);
-  assert.equal(await readFile(path.join(projectDir, "planner-attempts", "planner-attempt-1-raw.txt"), "utf8"), '{"summary":"broken-1');
-  assert.equal(await readFile(path.join(projectDir, "planner-attempts", "planner-attempt-2-raw.txt"), "utf8"), '{"summary":"broken-2');
-  const parseRecord = JSON.parse(await readFile(path.join(projectDir, "planner-attempts", "planner-attempt-2-parse.json"), "utf8"));
-  assert.equal(parseRecord.parseResult.status, "invalid_json");
+    },
+    copyOptions: { requestJson: copyRequestJson({ delayMs: 0 }) },
+    imageOptions: {
+      sourceMode: "knowledge_only",
+      adapters: {
+        searchKnowledgeImages: async () => { knowledgeCalls += 1; return { status: "completed", records: [], candidates: [] }; },
+      },
+    },
+    adapters: {
+      render: async ({ mode }) => {
+        rendererCalls += 1;
+        assert.equal(mode, "draft");
+        return { status: "success", mode, outputPath: "planner-fail-open-draft.png", rendererCalls: 1 };
+      },
+    },
+  });
+  assert.equal(plannerCalls, 1);
+  assert.equal(result.callCounts.plannerModelCalls, 2);
+  assert.ok(result.callCounts.copyModelCalls > 0);
+  assert.equal(knowledgeCalls, 0);
+  assert.equal(rendererCalls, 1);
+  assert.equal(result.render.mode, "draft");
+  assert.notEqual(result.pipelineStatus, "failed");
+  assert.ok(result.imageExecution.results.length > 0);
+  assert.ok(result.imageExecution.results.every((item) => item.technicalStatus === "planner_slot_unresolved"));
+  assert.ok(result.unresolvedItems.some((item) => item.kind === "image" && item.technicalStatus === "planner_slot_unresolved"));
 });

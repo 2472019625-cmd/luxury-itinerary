@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { resolveTravelEntity } from "../src/lib/travelEntityDisplay.js";
+import { normalizeTravelEntityName, resolveTravelEntity } from "../src/lib/travelEntityDisplay.js";
+import { TRAVEL_ENTITY_REGISTRY } from "../src/data/travelEntityRegistry.js";
 
 const stringSchema = Object.freeze({ type: "string", minLength: 1 });
 const subtitleSchema = Object.freeze({ type: "string", minLength: 1, maxLength: 76 });
@@ -57,6 +58,94 @@ function copyTask({ targetId, targetPath, moduleType, facts, plannerGoal, releva
 
 function slot({ slotId, moduleType, required, location = "", hotel = "", activity = "", subject = "", visualGoal, visualContext, copyTargetId, aspectRatio = "16:9", userLocked = false }) {
   return { slotId, moduleType, required, location, hotel, activity, subject, visualGoal, visualContext, copyTargetId, aspectRatio, userLocked };
+}
+
+function plannedSearchIntent(plan = {}) {
+  const unified = [
+    clean(plan.fidelityQuery),
+    ...(Array.isArray(plan.alternateQueries) ? plan.alternateQueries.map(clean) : []),
+  ].filter(Boolean);
+  if (unified.length) return unique(unified).slice(0, 4);
+  return Array.isArray(plan.searchIntent) ? plan.searchIntent.map(clean).filter(Boolean) : clean(plan.searchIntent) ? [clean(plan.searchIntent)] : [];
+}
+
+function plannedLocation(plan = {}, fallback = "") {
+  return clean(plan.location) || clean(fallback);
+}
+
+function plannedLocationRole(plan = {}) {
+  return ["scope_only", "visual_identity"].includes(plan.locationRole) ? plan.locationRole : "scope_only";
+}
+
+function plannedQueryFields(plan = {}) {
+  const queries = plannedSearchIntent(plan);
+  const hasPlannerSlot = Boolean(plan.role || plan.slotId || plan.primaryVisualSubject || plan.fidelityQuery || (plan.searchIntent && plannedSearchIntent(plan).length));
+  return {
+    locationRole: plannedLocationRole(plan),
+    fidelityQuery: clean(plan.fidelityQuery) || queries[0] || "",
+    alternateQueries: Array.isArray(plan.alternateQueries)
+      ? unique(plan.alternateQueries).slice(0, 3)
+      : queries.slice(1, 4),
+    searchIntent: queries,
+    queryCore: plannedQueryCore(plan),
+    plannerSlotStatus: plan.plannerSlotStatus || (hasPlannerSlot ? "ready" : "unresolved"),
+    needsUserAction: plan.needsUserAction === true || !hasPlannerSlot,
+    plannerValidationIssues: Array.isArray(plan.plannerValidationIssues) ? structuredClone(plan.plannerValidationIssues) : !hasPlannerSlot ? [{ code: "image_search_plan_missing", message: "Planner单次输出未提供该图片位，已保留到Step4人工处理" }] : [],
+    plannerLocalRepairs: Array.isArray(plan.plannerLocalRepairs) ? structuredClone(plan.plannerLocalRepairs) : [],
+    sourceEvidence: unique(Array.isArray(plan.sourceRefs) ? plan.sourceRefs : []),
+  };
+}
+
+const NON_DAY_ROLE_SOURCES = Object.freeze({
+  hotel: { sourceKey: "hotels", dataKey: "hotels" },
+  dining: { sourceKey: "diningExperiences", dataKey: "diningExperiences" },
+  transport: { sourceKey: "transport", dataKey: "transportSummary" },
+});
+
+function sourceIndexesForRole(slot = {}, roleType) {
+  const sourceKey = NON_DAY_ROLE_SOURCES[roleType]?.sourceKey;
+  if (!sourceKey) return [];
+  const escaped = sourceKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(?:^|\\.)${escaped}(?:\\[(\\d+)\\]|\\.(\\d+))(?:\\.|$)`);
+  return unique((Array.isArray(slot.sourceRefs) ? slot.sourceRefs : []).flatMap((ref) => {
+    const match = clean(ref).replace(/^factBasis\./, "").match(pattern);
+    return match ? [String(Number(match[1] ?? match[2]))] : [];
+  })).map(Number).filter(Number.isInteger);
+}
+
+export function normalizeNonDayPlannerImageRoles(agentPlan = {}, data = {}) {
+  const slots = Array.isArray(agentPlan.imagePlan?.slots) ? agentPlan.imagePlan.slots : [];
+  const proposedRoles = slots.map((slot) => {
+    const roleMatch = /^(hotel|dining|transport):(\d+)$/.exec(clean(slot?.role));
+    if (!roleMatch) return null;
+    const roleType = roleMatch[1];
+    const indexes = sourceIndexesForRole(slot, roleType);
+    const targetCount = Array.isArray(data[NON_DAY_ROLE_SOURCES[roleType].dataKey]) ? data[NON_DAY_ROLE_SOURCES[roleType].dataKey].length : 0;
+    if (indexes.length !== 1 || indexes[0] < 0 || indexes[0] >= targetCount) return null;
+    return `${roleType}:${indexes[0] + 1}`;
+  });
+  const counts = new Map(proposedRoles.filter(Boolean).map((role) => [role, (proposedRoles.filter((item) => item === role)).length]));
+  const normalizedSlots = slots.map((slot, index) => {
+    const normalizedRole = proposedRoles[index];
+    if (!normalizedRole || counts.get(normalizedRole) !== 1) return slot;
+    return { ...slot, role: normalizedRole };
+  });
+  return {
+    ...agentPlan,
+    imagePlan: { ...(agentPlan.imagePlan || {}), slots: normalizedSlots },
+  };
+}
+
+function plannedQueryCore(plan = {}) {
+  const core = plan.queryCore && typeof plan.queryCore === "object" ? plan.queryCore : {};
+  return {
+    subject: clean(core.subject),
+    action: clean(core.action),
+    identity: clean(core.identity),
+    subjectEn: clean(core.subjectEn),
+    actionEn: clean(core.actionEn),
+    identityEn: clean(core.identityEn),
+  };
 }
 
 function dayRole(agentPlan, index) {
@@ -254,18 +343,156 @@ function geographicDayLocation(day = {}, hotelNames = [], fallback = "") {
 }
 
 // Image geography deliberately does not change Copy's existing context.
-function imageDayLocation(day, hotels, fallback) {
+function validImageLocation(value) {
+  const candidate = clean(value)
+    .replace(/[（(]\s*(?:车程|飞行|行驶)?\s*(?:约)?\s*\d+(?:[.～~—–-]\d+)?\s*(?:小时|分钟|天|晚|公里|km|hrs?)[^）)]*[）)]/gi, "")
+    .replace(/^(?:抵达|探访|游览|参观|前往|探索)\s*/i, "")
+    .replace(/全天游猎$/, "")
+    .trim();
+  if (!candidate || /^[（(]?\s*[）)]?$/.test(candidate)) return "";
+  if (/^[（(]?\s*\d+(?:[.～~—–-]\d+)?\s*(?:小时|分钟|天|晚|公里|km|hrs?)\s*[）)]?$/i.test(candidate)) return "";
+  return candidate;
+}
+
+function imageDayLocationCandidates(day, hotels) {
   const lodging = hotels.find((hotel) => [hotel.officialName, hotel.shortName].some((name) => name && [day.hotel, day.hotelOfficialName, day.hotelShortName].includes(name)));
   const hotelNames = new Set(hotels.flatMap(hotel => [hotel.officialName, hotel.shortName]).filter(Boolean));
-  const isPlace = (value) => value && !hotelNames.has(value) && !/夜间|游猎|星空|观星|入住|退房|接送|送机|离境|sundowner|westgate|safari|酒店|营地|hotel|lodge|camp|体验|晚宴|早餐|热气球|观景台|博物馆|长颈鹿中心|机场/i.test(value);
-  const nodes = unique(day.routeNodes || []).filter(isPlace);
+  const isPlace = (value) => value && !hotelNames.has(value) && !/夜间|游猎|星空|观星|入住|退房|接送|送机|离境|sundowner|westgate|safari|酒店|营地|hotel|lodge|camp|体验|晚宴|早餐|热气球|机场/i.test(value);
+  const nodes = unique(day.routeNodes || []).map(validImageLocation).filter(isPlace);
   const regions = nodes.filter(value => /公园|保护区|核心区|地区|national park|reserve|conservancy/i.test(value));
-  const cities = unique(String(day.city || '').split(/[\n·→✈🚗-]+/u).map(value => clean(value).replace(/^抵达/, '').replace(/全天游猎$/, ''))).filter(isPlace);
-  return clean(regions.at(-1) || cities.at(-1) || nodes.at(-1) || (isPlace(lodging?.region) && lodging.region) || fallback);
+  const cities = unique(String(day.city || '').split(/[\n·→✈🚗]+|\s+[-–—]\s+/u).map(validImageLocation)).filter(isPlace);
+  const lodgingRegion = validImageLocation(lodging?.region);
+  return { nodes, regions, cities, lodging, lodgingRegion: isPlace(lodgingRegion) ? lodgingRegion : "" };
+}
+
+function entityNames(entity = {}) {
+  return unique([entity.canonicalName, ...(entity.aliases || []), ...Object.values(entity.displayNames || {})]);
+}
+
+function embeddedVisualEntities(value) {
+  const key = normalizeTravelEntityName(value);
+  return TRAVEL_ENTITY_REGISTRY.filter((entity) => ["attraction", "restaurant"].includes(entity.entityType)
+    && entityNames(entity).some((name) => {
+      const nameKey = normalizeTravelEntityName(name);
+      return nameKey.length >= 4 && key.includes(nameKey);
+    }));
+}
+
+function isVisualIdentity(value, subject) {
+  const key = normalizeTravelEntityName(value);
+  if (!key) return false;
+  const contextualViewpoint = /(?:observation\s+hill|观景山|观景台|viewpoint|observation\s+deck)/i.test(value)
+    && /(?:俯瞰|眺望|远眺|从山顶看|overlook|from\s+(?:the\s+)?(?:hill|viewpoint))/i.test(subject)
+    && /(?:湿地|象群|大象|动物|草原|湖泊|河流|wetland|elephants?|wildlife|savanna|lake|river)/i.test(subject)
+    && !/(?:外观|入口|招牌|标识|建筑|exterior|entrance|signage|building|architecture)/i.test(subject);
+  if (contextualViewpoint) return false;
+  if (embeddedVisualEntities(subject).some((entity) => entityNames(entity).some((name) => normalizeTravelEntityName(name) === key))) return true;
+  return /(?:observation\s+hill|giraffe\s+cent(?:re|er)|karen\s+blixen\s+museum|kilimanjaro|mara\s+river|乞力马扎罗|马拉河|长颈鹿中心|凯伦.{0,6}博物馆|安博塞利观景山)/i.test(value);
+}
+
+function hotelIdentityTokens(hotel = {}) {
+  return unique([hotel.officialName, hotel.shortName, hotel.name].flatMap((name) => clean(name).split(/[^\p{L}\p{N}]+/u)))
+    .filter((token) => token.length >= 4 && !/^(?:hotel|lodge|resort|camp|safari|tented|the)$/i.test(token));
+}
+
+function cleanDayVisualSubject(value, day, hotels) {
+  const original = clean(value);
+  if (!original) return "";
+  let result = original.replace(/[（(][^）)]*(?:自费|可选|待确认)[^）)]*[）)]/g, "");
+  const candidates = imageDayLocationCandidates(day, hotels);
+  const ordinaryLocations = unique([...candidates.nodes, ...candidates.cities, candidates.lodgingRegion])
+    .sort((left, right) => right.length - left.length);
+  for (const location of ordinaryLocations) {
+    if (isVisualIdentity(location, original)) continue;
+    result = result.replace(new RegExp(location.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu"), " ");
+  }
+  for (const entity of embeddedVisualEntities(original)) {
+    if (isVisualIdentity(entity.canonicalName, original)) continue;
+    for (const name of entityNames(entity).sort((left, right) => right.length - left.length)) {
+      result = result.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu"), " ");
+    }
+  }
+  for (const token of hotelIdentityTokens(candidates.lodging)) {
+    result = result.replace(new RegExp(`${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*(?:酒店|度假村|营地|Hotel|Lodge|Resort|Camp)?`, "giu"), " ");
+  }
+  result = clean(result)
+    .replace(/^从\s*(?=俯瞰|眺望|远眺)/, "")
+    .replace(/^(?:在|位于|湖畔|畔|核心区|私人保护区)+/g, "")
+    .replace(/^[的与和、，,:：;；\-—–]+|[的与和、，,:：;；\-—–]+$/g, "")
+    .trim();
+  return result || original;
+}
+
+function imageSlotLocation(day, hotels, fallback, { subject = "", spot = null } = {}) {
+  const candidates = imageDayLocationCandidates(day, hotels);
+  const subjectText = clean(subject);
+  const spotEvidence = clean([spot?.name, spot?.description, ...(spot?.sourceEvidence || [])].join(" "));
+  const dayText = clean(day.description);
+  const subjectAnchor = (() => {
+    const normalized = subjectText.replace(/\s+/g, "");
+    const compactDay = dayText.replace(/\s+/g, "");
+    for (let length = Math.min(14, normalized.length); length >= 3; length -= 1) {
+      for (let start = 0; start + length <= normalized.length; start += 1) {
+        const fragment = normalized.slice(start, start + length);
+        if (compactDay.includes(fragment)) return fragment;
+      }
+    }
+    return "";
+  })();
+  const subjectPlace = subjectText.match(/^([\p{Script=Han}A-Za-z·.'’\-\s]{2,24}?(?:国家公园|自然保护区|私人保护区|保护区|博物馆|中心|岛))(?=上|内|中|的|导览|徒步|游览|参观|火山|与|\s|$)/u)?.[1] || "";
+  const ranked = unique([subjectPlace, ...candidates.nodes, ...candidates.cities, candidates.lodgingRegion])
+    .map((value, index) => {
+      const normalizedValue = value.toLocaleLowerCase("en");
+      const normalizedSubject = subjectText.toLocaleLowerCase("en");
+      const normalizedSpot = spotEvidence.toLocaleLowerCase("en");
+      let score = longestSharedRun(value, `${subjectText} ${spotEvidence}`) * 10;
+      if (normalizedSpot.includes(normalizedValue)) score = Math.max(score, 2000 + value.length);
+      if (normalizedSubject.includes(normalizedValue)) score = Math.max(score, 3000 + value.length);
+      if (subjectAnchor) {
+        const compactDay = dayText.replace(/\s+/g, "").toLocaleLowerCase("en");
+        const locationIndex = compactDay.indexOf(normalizedValue.replace(/\s+/g, ""));
+        const anchorIndex = compactDay.indexOf(subjectAnchor.toLocaleLowerCase("en"));
+        if (locationIndex >= 0 && anchorIndex >= 0) {
+          const proximityBase = locationIndex <= anchorIndex ? 2500 : 1800;
+          score = Math.max(score, proximityBase - Math.min(1000, Math.abs(locationIndex - anchorIndex) * 5));
+        }
+      }
+      return { value, index, score };
+    })
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  const explicitEntity = embeddedVisualEntities(subject)[0];
+  const evidencedLocation = ranked[0]?.score > 0 ? ranked[0].value : "";
+  const viewpointContext = explicitEntity?.entityType === "attraction"
+    && /(?:observation\s+hill|观景山|观景台|viewpoint|observation\s+deck)/i.test(entityNames(explicitEntity).join(" "))
+    && /(?:俯瞰|眺望|远眺|从山顶看|overlook|from\s+(?:the\s+)?(?:hill|viewpoint))/i.test(subjectText)
+    && !/(?:外观|入口|招牌|标识|建筑|exterior|entrance|signage|building|architecture)/i.test(subjectText);
+  const regionEntity = TRAVEL_ENTITY_REGISTRY.find((entity) => entity.entityType === "place"
+    && entityNames(entity).some((name) => normalizeTravelEntityName(name) === normalizeTravelEntityName(explicitEntity?.region)));
+  const regionLabel = clean(regionEntity?.displayNames?.["zh-CN"] || explicitEntity?.region);
+  const entityLocation = viewpointContext ? unique([explicitEntity.canonicalName, regionLabel]).join(" / ") : explicitEntity?.region;
+  const geographic = clean(entityLocation || evidencedLocation || candidates.regions.at(-1) || candidates.cities.at(-1) || candidates.nodes.at(-1) || candidates.lodgingRegion || fallback);
+  const hotelMentioned = candidates.lodging && hotelIdentityTokens(candidates.lodging).some((token) => normalizeTravelEntityName(subject).includes(normalizeTravelEntityName(token)));
+  const hotelName = clean(candidates.lodging?.officialName || candidates.lodging?.shortName);
+  const scopeFallbackLocations = ranked
+    .filter((item) => item.value !== geographic && item.score > 0)
+    .map((item) => item.value);
+  return {
+    location: unique([geographic, hotelMentioned ? hotelName : ""]).join(" / "),
+    routeNodes: unique([geographic, hotelMentioned ? hotelName : ""]),
+    scopeFallbackLocations,
+  };
 }
 
 function plannedImageSlot(agentPlan = {}, role) {
-  return (agentPlan.imagePlan?.slots || []).find((item) => item.role === role) || {};
+  const found = (agentPlan.imagePlan?.slots || []).find((item) => item.role === role);
+  if (found) return found;
+  const issues = (agentPlan.validation?.errors || []).filter((item) => Array.isArray(item.slotRoles) && item.slotRoles.includes(role));
+  return {
+    role,
+    plannerSlotStatus: "unresolved",
+    needsUserAction: true,
+    plannerValidationIssues: issues.length ? issues : [{ code: "image_search_plan_missing", message: `Planner单次输出未提供 ${role} 图片位` }],
+  };
 }
 
 function ensureDaySpot(data, index) {
@@ -367,7 +594,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
   data.days.forEach((_day, index) => ensureDaySpot(data, index));
   const dayNoticeBases = data.days.map((_day, index) => prepareDayNotice(data, index));
   const normalizedRoles = normalizedDayRoles(agentPlan, data.days);
-  const effectiveAgentPlan = { ...agentPlan, dayRoles: normalizedRoles };
+  const effectiveAgentPlan = normalizeNonDayPlannerImageRoles({ ...agentPlan, dayRoles: normalizedRoles }, data);
 
   const itineraryContext = {
     destination: data.destination,
@@ -568,40 +795,57 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
 
   const imageSlots = [];
   const slotBindings = {};
-  const addSlot = (value, binding) => { imageSlots.push(value); slotBindings[value.slotId] = binding; };
+  const addSlot = (value, binding) => {
+    imageSlots.push({ ...value, destination: clean(value.destination || data.destination) });
+    slotBindings[value.slotId] = binding;
+  };
   const coverPlan = plannedImageSlot(effectiveAgentPlan, "cover");
   const coverSubject = clean(coverPlan.primaryVisualSubject) || clean(data.destination);
   addSlot(slot({
     slotId: "image:cover:primary", moduleType: "cover", required: true,
-    location: clean(data.destination), subject: coverSubject,
+    location: plannedLocation(coverPlan, data.destination), subject: coverSubject,
     visualGoal: `只以${coverSubject || data.destination || "本次目的地代表性场景"}作为封面唯一核心视觉焦点，并为标题保留清晰空间`,
     visualContext: { destination: data.destination, productTheme: agentPlan.summary?.visualTheme || "", journeyVisualStory: clean(agentPlan.imagePlan?.visualStory), singleFocus: true, avoid: [] },
     copyTargetId: "copy:cover:title", aspectRatio: "5:3", userLocked: Boolean(data.imageLocks?.["image:cover:primary"]),
   }), { module: "cover", fieldPath: "heroImage", imageIndex: 0, required: true });
+  Object.assign(imageSlots.at(-1), plannedQueryFields(coverPlan));
 
   data.hotels.forEach((hotel, index) => {
     const slotId = `image:hotel:${hotel.id || index + 1}:primary`;
     const copyTargetId = `copy:hotel:${hotel.id || index + 1}`;
-    addSlot(slot({ slotId, moduleType: "hotel", required: true, location: clean(hotel.region), hotel: clean(hotel.officialName), subject: clean(hotel.officialName), visualGoal: `确认并展示${hotel.officialName || hotel.shortName}最能体现真实住宿品质的代表性空间`, visualContext: { region: hotel.region, hotelPositioning: hotel.selectionReason || "", signatureExperience: hotel.signatureExperience || "", avoid: [] }, copyTargetId, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "hotel", itemIndex: index, fieldPath: `hotels.${index}.images.0`, imageIndex: 0, required: true });
+    const hotelPlan = plannedImageSlot(effectiveAgentPlan, `hotel:${index + 1}`);
+    const hotelSubject = clean(hotelPlan.primaryVisualSubject) || clean(hotel.officialName);
+    const hotelDuty = clean(hotelPlan.visualDuty) || `确认并展示${hotel.officialName || hotel.shortName}最能体现真实住宿品质的代表性空间`;
+    addSlot(slot({ slotId, moduleType: "hotel", required: true, location: plannedLocation(hotelPlan, hotel.region), hotel: clean(hotel.officialName), subject: hotelSubject, visualGoal: hotelDuty, visualContext: { region: hotel.region, hotelPositioning: hotel.selectionReason || "", signatureExperience: hotel.signatureExperience || "", avoid: [] }, copyTargetId, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "hotel", itemIndex: index, fieldPath: `hotels.${index}.images.0`, imageIndex: 0, required: true });
+    Object.assign(imageSlots.at(-1), { primaryVisualSubject: hotelSubject, visualDuty: hotelDuty, ...plannedQueryFields(hotelPlan) });
   });
   data.diningExperiences.forEach((item, index) => {
     const slotId = `image:dining:${item.id || index + 1}:primary`;
-    addSlot(slot({ slotId, moduleType: "dining", required: false, location: clean(item.location), activity: clean(item.title), subject: clean(item.officialName || item.title), visualGoal: `展示${item.title || "特色餐饮"}真实的用餐形态、环境与体验氛围`, visualContext: { location: item.location, experience: item.title, status: item.status || item.feeBoundary || "", avoid: [] }, copyTargetId: `copy:dining:${item.id || index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "dining", itemIndex: index, fieldPath: `diningExperiences.${index}.images.0`, imageIndex: 0, required: false });
+    const diningPlan = plannedImageSlot(effectiveAgentPlan, `dining:${index + 1}`);
+    const diningSubject = clean(diningPlan.primaryVisualSubject) || clean(item.officialName || item.title);
+    const diningDuty = clean(diningPlan.visualDuty) || `展示${item.title || "特色餐饮"}真实的用餐形态、环境与体验氛围`;
+    addSlot(slot({ slotId, moduleType: "dining", required: false, location: plannedLocation(diningPlan, item.location), activity: clean(item.title), subject: diningSubject, visualGoal: diningDuty, visualContext: { location: item.location, experience: item.title, status: item.status || item.feeBoundary || "", avoid: [] }, copyTargetId: `copy:dining:${item.id || index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "dining", itemIndex: index, fieldPath: `diningExperiences.${index}.images.0`, imageIndex: 0, required: false });
+    Object.assign(imageSlots.at(-1), { primaryVisualSubject: diningSubject, visualDuty: diningDuty, ...plannedQueryFields(diningPlan) });
   });
   data.transportSummary.forEach((item, index) => {
     const slotId = `image:transport:${item.id || index + 1}:primary`;
-    addSlot(slot({ slotId, moduleType: "transport", required: false, location: clean(item.location || data.destination), activity: clean(item.category), subject: clean(item.modelGuaranteed ? item.model : item.category), visualGoal: `准确展示${item.category || "本次主要交通方式"}及其真实移动体验，不形成未确认车型承诺`, visualContext: { destination: data.destination, category: item.category, serviceLevel: item.serviceLevel, usageLabel: item.usageLabel, modelGuaranteed: item.modelGuaranteed === true ? "已确认车型" : "车型未保证", avoid: [] }, copyTargetId: `copy:transport:${item.id || index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "transport", itemIndex: index, fieldPath: `transportSummary.${index}.images.0`, imageIndex: 0, required: false });
+    const transportPlan = plannedImageSlot(effectiveAgentPlan, `transport:${index + 1}`);
+    const transportSubject = clean(transportPlan.primaryVisualSubject) || clean(item.modelGuaranteed ? item.model : item.category);
+    const transportDuty = clean(transportPlan.visualDuty) || `准确展示${item.category || "本次主要交通方式"}及其真实移动体验，不形成未确认车型承诺`;
+    addSlot(slot({ slotId, moduleType: "transport", required: false, location: plannedLocation(transportPlan, item.location || data.destination), activity: clean(item.category), subject: transportSubject, visualGoal: transportDuty, visualContext: { destination: data.destination, category: item.category, serviceLevel: item.serviceLevel, usageLabel: item.usageLabel, modelGuaranteed: item.modelGuaranteed === true ? "已确认车型" : "车型未保证", avoid: [] }, copyTargetId: `copy:transport:${item.id || index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "transport", itemIndex: index, fieldPath: `transportSummary.${index}.images.0`, imageIndex: 0, required: false });
+    Object.assign(imageSlots.at(-1), { primaryVisualSubject: transportSubject, visualDuty: transportDuty, ...plannedQueryFields(transportPlan) });
   });
   data.days.forEach((day, index) => {
     const role = dayRole(effectiveAgentPlan, index);
-    const planned = (effectiveAgentPlan.imagePlan?.slots || []).filter((item) => item.role === `day:${index + 1}` || String(item.role || "").startsWith(`day:${index + 1}:`));
+    const rawPlanned = (effectiveAgentPlan.imagePlan?.slots || []).filter((item) => item.role === `day:${index + 1}` || String(item.role || "").startsWith(`day:${index + 1}:`));
+    const planned = rawPlanned;
     const ordered = [...planned].sort((a, b) => Number(b.required === true) - Number(a.required === true));
     if (ordered.length > 4) throw new Error(`DAY ${index + 1} 图片位超过4个，请在 Planner 中收敛辅助视觉`);
     const imageIndices = new Map();
     (ordered.length ? ordered : [{}]).forEach((dayPlan, visualIndex) => {
-    const primarySubject = clean(dayPlan.primaryVisualSubject) || clean(role.primaryVisualSubject) || clean(selectPrimaryDaySpot(day, role, {}).spot?.name || day.theme);
+    const rawPrimarySubject = clean(dayPlan.primaryVisualSubject) || clean(role.primaryVisualSubject) || clean(selectPrimaryDaySpot(day, role, {}).spot?.name || day.theme);
     // A storage binding is not a semantic fallback: never replace the planned subject.
-    const normalizedSubject = primarySubject.toLowerCase().replace(/\s+/g, '');
+    const normalizedSubject = rawPrimarySubject.toLowerCase().replace(/\s+/g, '');
     const matchedIndex = (day.spots || []).findIndex((spot) => clean(spot.name).toLowerCase().replace(/\s+/g, '') === normalizedSubject);
     const spotIndex = matchedIndex >= 0 ? matchedIndex : 0;
     const referencedIndices = [...new Set((dayPlan.sourceRefs || []).flatMap(ref => {
@@ -609,9 +853,11 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
       return match && Number(match[1]) === index && day.spots?.[Number(match[2])] ? [Number(match[2])] : [];
     }))];
     const primarySpot = matchedIndex >= 0 ? day.spots[matchedIndex] : referencedIndices.length === 1 ? day.spots[referencedIndices[0]] : null;
+    const primarySubject = cleanDayVisualSubject(rawPrimarySubject, day, data.hotels);
     const imageIndex = imageIndices.get(spotIndex) || 0;
     imageIndices.set(spotIndex, imageIndex + 1);
-    const location = imageDayLocation(day, data.hotels, data.destination);
+    const slotLocation = imageSlotLocation(day, data.hotels, data.destination, { subject: rawPrimarySubject, spot: primarySpot });
+    const location = plannedLocation(dayPlan, slotLocation.location);
     const status = clean(primarySpot?.status || primarySpot?.feeBoundary);
     const statusLabel = clean(primarySpot?.statusLabel || (status === "optional_paid" ? "自费可选" : status === "included" ? "已包含" : status ? "待确认" : ""));
     const optionalBoundary = ["optional_paid", "reservation_required", "pending"].includes(status) ? `；该视觉重点为${statusLabel}，不得暗示已包含` : "";
@@ -628,8 +874,8 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     const visualCopyPath = `simpleImageSlotBindings.${slotId.replace(/:/g, '_')}`;
     copyTasks.push(copyTask({
       targetId: `copy:visual:${slotId}`, targetPath: visualCopyPath, moduleType: 'visual_card',
-      facts: { visualSubject: primarySubject, ...resolvedEntityFacts, daySourceFacts: dayFactText(day), sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], experiences: (day.spots || []).map(spotCopyFacts), matchedSpot: matchedIndex >= 0 ? spotCopyFacts(primarySpot) : null, status, statusLabel, feeBoundary: primarySpot?.feeBoundary || '' },
-      plannerGoal: `为当前视觉体验返回{cardTitle,cardDescription}。cardTitle是短、直接的客户体验名称，不是图片画面提示词，不写姿态、构图、光线等非核心细节。cardDescription写1—2句怎么体验、为什么值得，只使用本日真实事实，不总结整天，不复制泛化Spot全文，不新增事实或费用承诺。有准确匹配Spot时优先复用其适合本体验的短描述。卡片不显示状态标签，但描述不得暗示未购买体验已包含。${entityDisplay.entity ? `当前实体的客户展示名为“${entityDisplay.displayName}”，cardTitle必须原样使用，不得重译或展开官方名称。` : '当前视觉主题未解析为确定实体时，不得擅自创造新的实体译名。'}`,
+      facts: { visualSubject: primarySubject, titleCoreSubject: primarySubject, ...resolvedEntityFacts, daySourceFacts: dayFactText(day), sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], experiences: (day.spots || []).map(spotCopyFacts), matchedSpot: matchedIndex >= 0 ? spotCopyFacts(primarySpot) : null, status, statusLabel, feeBoundary: primarySpot?.feeBoundary || '' },
+      plannerGoal: `为当前视觉体验返回{cardTitle,cardDescription}。cardTitle的第一职责是准确说出图片展示的核心主体：必须保留visualSubject/titleCoreSubject中最有辨识度的实体、动物、景点或体验，不得在已有明确主体时退化成“清晨游猎、傍晚游猎、全天游猎”等泛化标题。可以删去姿态、构图、光线等非核心画面描述，但不能丢失核心主体；图片不匹配时应由图片流程处理，不能用泛标题掩盖。不得把英文searchIntent当作客户标题，也不得新增事实。cardDescription写1—2句怎么体验、为什么值得，只使用本日真实事实，不总结整天，不复制泛化Spot全文，不新增事实或费用承诺。有准确匹配Spot时优先复用其适合本体验的短描述。卡片不显示状态标签，但描述不得暗示未购买体验已包含。${entityDisplay.entity ? `当前实体的客户展示名为“${entityDisplay.displayName}”，cardTitle必须原样使用，不得重译或展开官方名称。` : '当前视觉主题未解析为确定实体时，不得擅自创造新的实体译名。'}`,
       relevantContext: { dayRole: role.role, visualSubject: primarySubject, otherVisualSubjects: ordered.map(item => item.primaryVisualSubject).filter(item => item !== primarySubject) },
       layoutHints: { placement: 'visual_card', slotId }, outputSchema: { type: 'object', required: ['cardTitle', 'cardDescription'], additionalProperties: false, properties: { cardTitle: { type: 'string', minLength: 2, maxLength: 48 }, cardDescription: { type: 'string', minLength: 12, maxLength: 160 } } }, required,
     }));
@@ -637,9 +883,9 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
       slotId, moduleType: "day", required,
       location, activity: primarySubject, subject: primarySubject,
       visualGoal: unique([dayPlan.visualDuty, dayPlan.differentiation || role.differenceFromAdjacent, primarySubject]).join("；") + optionalBoundary,
-      visualContext: { dayIndex: index, dayRole: role.role || "", differenceFromAdjacent: role.differenceFromAdjacent || "", routeNodes: day.routeNodes || [], geographicLocation: location, primaryVisualSubject: primarySubject, allActivities: (day.spots || []).map((spot) => ({ name: spot.name, description: spot.description, status: spot.status, statusLabel: spot.statusLabel, feeBoundary: spot.feeBoundary })), experienceStatus: status, statusLabel, feeBoundary: primarySpot?.feeBoundary || "", sourceExperience: primarySpot?.description || day.description, daySourceFacts: dayFactText(day), adjacentVisualResponsibilities: [dayRole(effectiveAgentPlan, index - 1).role, dayRole(effectiveAgentPlan, index + 1).role].filter(Boolean), avoid: [] },
+      visualContext: { dayIndex: index, dayRole: role.role || "", differenceFromAdjacent: role.differenceFromAdjacent || "", routeNodes: slotLocation.routeNodes, scopeFallbackLocations: slotLocation.scopeFallbackLocations, geographicLocation: location, primaryVisualSubject: primarySubject, allActivities: (day.spots || []).map((spot) => ({ name: spot.name, description: spot.description, status: spot.status, statusLabel: spot.statusLabel, feeBoundary: spot.feeBoundary })), experienceStatus: status, statusLabel, feeBoundary: primarySpot?.feeBoundary || "", sourceExperience: primarySpot?.description || day.description, daySourceFacts: dayFactText(day), adjacentVisualResponsibilities: [dayRole(effectiveAgentPlan, index - 1).role, dayRole(effectiveAgentPlan, index + 1).role].filter(Boolean), avoid: [] },
       copyTargetId: `copy:day:${index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]),
-    }), primaryVisualSubject: primarySubject, searchIntent: dayPlan.searchIntent || "", sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], visualTier: required ? "primary" : "supporting", removable: !required }, { module: "day", dayIndex: index, itemIndex: index, spotIndex, fieldPath: `days.${index}.spots.${spotIndex}.images.${imageIndex}`, imageIndex, required, visualSubject: primarySubject, useSpotCopy: matchedIndex >= 0 });
+    }), primaryVisualSubject: primarySubject, visualDuty: clean(dayPlan.visualDuty) || primarySubject, ...plannedQueryFields(dayPlan), sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], visualTier: required ? "primary" : "supporting", removable: !required }, { module: "day", dayIndex: index, itemIndex: index, spotIndex, fieldPath: `days.${index}.spots.${spotIndex}.images.${imageIndex}`, imageIndex, required, visualSubject: primarySubject, useSpotCopy: matchedIndex >= 0 });
     });
   });
 

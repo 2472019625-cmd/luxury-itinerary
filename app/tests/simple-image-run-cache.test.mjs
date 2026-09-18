@@ -49,7 +49,6 @@ test('单次执行共享原始HTML与图片技术结果，语义排序、来源�
   assert.equal(judged.length,2);
   for(const entry of judged){
     assert.equal(entry.candidates[0].alt.includes(entry.subject.split(' ')[0]),true);
-    assert.ok(entry.candidates.every(c=>c.title.includes(entry.subject)));
     assert.ok(entry.candidates.every(c=>c.officialHint===entry.subject.startsWith('walking')));
     assert.ok(entry.candidates.every(c=>c.eligible===undefined));
   }

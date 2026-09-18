@@ -134,8 +134,13 @@ export function applySimpleSkillResults({ preparedData, copyTasks = [], copyExec
     }
     setSlotImage(data, binding, null);
     const status = result?.status || "failed";
-    if (slot.required) unresolvedItems.push(unresolved("image", slot.slotId, status, true, { technicalStatus: result?.technicalStatus || "missing_skill_result", requiredAction: status === "not_found" || status === "needs_user_action" ? "needs_user_action" : "fix_failed_slot" }));
-    imageWriteback.push({ slotId: slot.slotId, fieldPath: binding.fieldPath, status: slot.required ? status : "removed_optional" });
+    const plannerUnresolved = result?.technicalStatus === "planner_slot_unresolved" || slot.plannerSlotStatus === "unresolved" || slot.needsUserAction === true;
+    if (slot.required || plannerUnresolved) unresolvedItems.push(unresolved("image", slot.slotId, status, slot.required, {
+      technicalStatus: result?.technicalStatus || (plannerUnresolved ? "planner_slot_unresolved" : "missing_skill_result"),
+      requiredAction: plannerUnresolved || status === "not_found" || status === "needs_user_action" ? "needs_user_action" : "fix_failed_slot",
+      ...(plannerUnresolved ? { plannerValidationIssues: result?.plannerValidationIssues || slot.plannerValidationIssues || [] } : {}),
+    }));
+    imageWriteback.push({ slotId: slot.slotId, fieldPath: binding.fieldPath, status: slot.required || plannerUnresolved ? status : "removed_optional" });
   }
 
   if (!isDeepStrictEqual(beforeFacts, protectedFacts(data))) {

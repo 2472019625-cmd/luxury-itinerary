@@ -4,6 +4,9 @@ import path from "node:path";
 import sharp from "sharp";
 import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
+import { downloadCandidate } from "./image-download.mjs";
+import { refreshKnowledgeMatchedFile } from "./knowledge-image-search.mjs";
+import { candidateQualification, isHardRejectedCandidate } from "./image-candidate-eligibility.mjs";
 import { getSlotImage, setSlotImage } from "../src/lib/imageSlots.js";
 
 const MIME_EXTENSIONS = Object.freeze({ "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" });
@@ -147,23 +150,26 @@ function selectableIds(result, imageResult) {
 
 function frontendCandidate(candidate, slotId, binding, canSelect) {
   const hard = candidate.hardJudgment || {};
-  const hardRejected = isHardRejectedCandidate(candidate);
+  const qualificationStatus = candidateQualification(candidate);
+  const hardRejected = qualificationStatus === "rejected";
   const reviewTimeout = candidate.reviewTimeout === true || candidate.autoReviewStatus === "review_timeout";
   return {
     ...candidate,
     slotId,
     pipelineSlotId: slotId,
     fieldPath: binding?.fieldPath || "",
-    localPreviewUrl: candidate.localUrl || candidate.publicUrl || "",
-    status: hardRejected ? "hard_rejected" : "manual_review",
+    localPreviewUrl: candidate.localPreviewUrl || candidate.previewUrl || candidate.localUrl || candidate.publicUrl || candidate.imageUrl || "",
+    status: hardRejected ? "hard_rejected" : qualificationStatus === "eligible" ? "eligible_not_selected" : "manual_review",
     autoReviewStatus: hardRejected ? "auto_rejected" : reviewTimeout ? "review_timeout" : candidate.autoReviewStatus || (canSelect ? "not_auto_selected" : "manual_only"),
     autoRejected: hardRejected,
+    qualificationStatus,
     reviewTimeout,
+    candidateStatus: candidate.selected === true ? "selected" : candidate.candidateStatus || (hardRejected ? "review_rejected" : reviewTimeout ? "review_timeout" : "not_auto_reviewed"),
     notAutoSelected: candidate.selected !== true,
     manualOnly: candidate.selected !== true,
     adoptable: canSelect && !hardRejected,
     libraryEligible: canSelect && !hardRejected,
-    manualSelectable: Boolean(candidate.localUrl?.startsWith('/image-assets/')) && !hardRejected,
+    manualSelectable: canSelect && !hardRejected,
     reason: candidate.rejectionReason || candidate.matchReason || candidate.reason || "暂无审核说明",
     terminalAudit: {
       relevance: hard.subjectMatch === true && hard.activityMatch !== false ? "主体相符" : "主体不符",
@@ -177,12 +183,11 @@ function frontendCandidate(candidate, slotId, binding, canSelect) {
 }
 
 function candidateCanBeSelected(result, imageResult, candidate) {
-  if (!candidate?.candidateId || !(candidate.localUrl || candidate.publicUrl)) return false;
+  if (!candidate?.candidateId || !(candidate.localUrl || candidate.publicUrl || candidate.localPreviewUrl || candidate.previewUrl || (candidate.sourceKind === "knowledge_library" && candidate.knowledgeMatchedFile && (candidate.knowledgeQueryIds?.length || candidate.knowledgeQueryId)))) return false;
   if (isHardRejectedCandidate(candidate)) return false;
   if (selectableIds(result, imageResult).has(candidate.candidateId)) return true;
   if (candidate.candidateId === imageResult.selected?.candidateId) return true;
-  const hard = candidate.hardJudgment;
-  return !candidate.rejection && hard?.eligible === true && hard.locationMatch !== false && hard.hotelIdentityMatch !== false && hard.activityMatch !== false && hard.subjectMatch !== false && hard.watermarkFree !== false && hard.nonAI !== false && hard.photographic !== false && hard.technicalUsable !== false;
+  return candidateQualification(candidate) === "eligible";
 }
 
 function slotReviewStatus(imageResult = {}, candidates = []) {
@@ -388,30 +393,126 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
   return buildSimpleManualImagePayload(store, project.projectId);
 }
 
-const HARD_REJECTION_CODES = new Set([
-  "wrong_hotel", "wrong_location", "wrong_activity", "wrong_transport_type", "wrong_subject",
-  "watermark", "ai_generated", "subject_not_clear", "subject_too_small", "subject_not_primary",
-  "low_quality_unusable", "non_photographic", "broken", "forbid",
-  "hotel_identity_mismatch", "place_mismatch", "activity_mismatch", "subject_mismatch",
-  "technical_unusable", "low_resolution", "low_quality",
-]);
-
-function isHardRejectedCandidate(candidate = {}) {
-  return candidate.autoRejected === true || HARD_REJECTION_CODES.has(String(candidate.rejection || candidate.hardJudgment?.hardRejectCode || ""));
+function csvValues(value) {
+  return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
-export async function chooseSimpleImageCandidate({ store, root, projectId, slotId, candidateId, manualConfirmed = false, render, deferRender = false } = {}) {
+async function localizeKnowledgeCandidate({
+  candidate, root, projectId, knowledgeImageConfig = {}, downloadImage = downloadCandidate,
+  refreshMatchedFile = refreshKnowledgeMatchedFile,
+} = {}) {
+  if (candidate.localUrl?.startsWith("/image-assets/")) return { candidate, attempts: 0, success: 0, saved: 0, durationMs: 0 };
+  if (candidate.sourceKind !== "knowledge_library" || !candidate.knowledgeMatchedFile) {
+    throw Object.assign(new Error("该候选没有可延迟下载的知识库原件"), { code: "candidate_original_missing" });
+  }
+  const startedAt = Date.now();
+  const baseUrl = String(knowledgeImageConfig.knowledgeBaseUrl || process.env.IMAGE_KNOWLEDGE_BASE_URL || "").replace(/\/$/, "");
+  const trustedOrigins = knowledgeImageConfig.trustedKnowledgeOrigins || csvValues(process.env.IMAGE_KNOWLEDGE_DOWNLOAD_ORIGINS);
+  const requestTimeoutMs = Number(knowledgeImageConfig.knowledgeRequestTimeoutMs || process.env.IMAGE_KNOWLEDGE_REQUEST_TIMEOUT_MS || 30_000);
+  const queryIds = candidate.knowledgeQueryIds?.length ? candidate.knowledgeQueryIds : [candidate.knowledgeQueryId].filter(Boolean);
+  let matchedFile = candidate.knowledgeMatchedFile;
+  let attempts = 0;
+  const directory = path.join(root, "output", "image-assets", `simple-manual-${projectId}`);
+  const publicPrefix = `/image-assets/simple-manual-${projectId}`;
+  const download = async () => {
+    attempts += 1;
+    const downloaded = await downloadImage({ ...candidate, imageUrl: matchedFile.url, title: matchedFile.filename || candidate.sourceTitle || candidate.title }, { directory, publicPrefix, trustedKnowledgeOrigins: trustedOrigins });
+    return {
+      ...candidate,
+      filePath: downloaded.filePath,
+      publicUrl: downloaded.publicUrl,
+      localUrl: downloaded.publicUrl,
+      sha256: downloaded.sha256,
+      width: downloaded.width,
+      height: downloaded.height,
+      bytes: downloaded.bytes,
+      contentType: downloaded.contentType,
+      originalDownloaded: true,
+      originalDownloadStatus: "success",
+      knowledgeMatchedFile: { ...matchedFile, url: null },
+    };
+  };
+  try {
+    if (!matchedFile.url) matchedFile = await refreshMatchedFile({ baseUrl, queryIds, candidate, requestTimeoutMs });
+    try {
+      const localized = await download();
+      return { candidate: localized, attempts, success: 1, saved: 1, durationMs: Date.now() - startedAt };
+    } catch (error) {
+      if (!baseUrl || !queryIds.length || !/\b(?:401|403|404)\b|expired|失效|签名/i.test(error?.message || "")) throw error;
+      matchedFile = await refreshMatchedFile({ baseUrl, queryIds, candidate, requestTimeoutMs });
+      const localized = await download();
+      return { candidate: localized, attempts, success: 1, saved: 1, durationMs: Date.now() - startedAt };
+    }
+  } catch (error) {
+    error.code ||= "preview_found_original_download_failed";
+    error.originalDownloadAttempts = attempts;
+    error.originalDownloadDurationMs = Date.now() - startedAt;
+    throw error;
+  }
+}
+
+function originalDownloadFailureCode(error) {
+  const message = `${error?.code || ""} ${error?.message || ""}`;
+  if (/unsupported|不支持的图片格式|invalid format/i.test(message)) return "unsupported_format";
+  if (/too[_ -]?large|文件过大|资源上限|invalid size/i.test(message)) return "file_too_large";
+  if (/resolution|分辨率不足|low[_ -]?resolution/i.test(message)) return "resolution_failed";
+  return "preview_found_original_download_failed";
+}
+
+function patchCandidateInImageResult(imageResult, candidateId, patch) {
+  const update = (candidate) => candidate?.candidateId === candidateId ? { ...candidate, ...patch } : candidate;
+  return {
+    ...imageResult,
+    selected: imageResult.selected ? update(imageResult.selected) : imageResult.selected,
+    candidates: (imageResult.candidates || []).map(update),
+    manualAction: imageResult.manualAction ? {
+      ...imageResult.manualAction,
+      selectableCandidates: (imageResult.manualAction.selectableCandidates || []).map(update),
+      rejectedCandidates: (imageResult.manualAction.rejectedCandidates || []).map(update),
+    } : imageResult.manualAction,
+  };
+}
+
+export async function chooseSimpleImageCandidate({ store, root, projectId, slotId, candidateId, manualConfirmed = false, render, deferRender = false, knowledgeImageConfig, downloadImage, refreshMatchedFile } = {}) {
   let context = projectContext(store, projectId);
   assertPlannedImageSlot(context, slotId);
   let imageResults = context.result.imageExecution?.results || [];
   let current = imageResults.find((item) => item.slotId === slotId);
   if (!current) throw Object.assign(new Error("该图片位没有已保存结果"), { code: "slot_result_missing" });
   const source = imageResults.find((item) => selectedCandidate(item, candidateId));
-  const candidate = source && selectedCandidate(source, candidateId);
+  let candidate = source && selectedCandidate(source, candidateId);
   if (!candidate) throw Object.assign(new Error("当前项目中找不到该候选"), { code: "candidate_not_found" });
   if (isHardRejectedCandidate(candidate)) throw Object.assign(new Error("该候选命中硬拒绝条件，不能采用"), { code: "candidate_hard_rejected" });
   const overridesAutomaticJudgment = source.slotId !== slotId || !candidateCanBeSelected(context.result, current, candidate);
   if (overridesAutomaticJudgment && !manualConfirmed) throw Object.assign(new Error("未确认图片风险，不能采用"), { code: "manual_confirmation_required" });
+  let delayedOriginal = { attempts: 0, success: 0, saved: 0, durationMs: 0 };
+  if (!candidate.localUrl?.startsWith("/image-assets/") && candidate.sourceKind === "knowledge_library") {
+    try {
+      delayedOriginal = await localizeKnowledgeCandidate({ candidate, root, projectId, knowledgeImageConfig, downloadImage, refreshMatchedFile });
+      candidate = delayedOriginal.candidate;
+    } catch (error) {
+      const failureCode = originalDownloadFailureCode(error);
+      const failedPatch = {
+        originalDownloaded: false,
+        originalDownloadStatus: "failed",
+        originalDownloadFailureCode: failureCode,
+        originalDownloadFailureReason: error?.message || String(error),
+        autoReviewStatus: "original_download_failed",
+      };
+      const nextResults = imageResults.map((item) => patchCandidateInImageResult(item, candidateId, failedPatch));
+      const previousMetrics = context.result.imageExecution?.metrics || {};
+      const imageExecution = { ...context.result.imageExecution, results: nextResults, metrics: {
+        ...previousMetrics,
+        matchedFileDownloadAttempts: Number(previousMetrics.matchedFileDownloadAttempts || 0) + Number(error?.originalDownloadAttempts || 0),
+        originalDownloadTimeMs: Number(previousMetrics.originalDownloadTimeMs || 0) + Number(error?.originalDownloadDurationMs || 0),
+      } };
+      const sourceResult = nextResults.find((item) => item.slotId === source.slotId);
+      if (sourceResult) store.saveTaskResult(projectId, context.run.executionRunId, `image-${source.slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, sourceResult);
+      store.saveFinalResult(projectId, context.run.executionRunId, { ...context.result, imageExecution, updatedAt: new Date().toISOString() });
+      error.code = failureCode;
+      throw error;
+    }
+  }
   try {
     if (!candidate.localUrl?.startsWith('/image-assets/')) throw new Error('missing local asset');
     const assets = await realpath(path.join(root, 'output', 'image-assets'));
@@ -443,7 +544,15 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
     manualAction: { ...(current.manualAction || {}), resolvedBy: "choose_existing_candidate", selectedCandidateId: candidateId, resolvedAt: new Date().toISOString() },
   };
   const nextResults = imageResults.map((item) => item.slotId === slotId ? nextCurrent : movedFrom.includes(item.slotId) ? { ...item, status: 'needs_user_action', selected: null, candidates: candidatePool(item), matchReason: '图片已由用户移动至其他位置', manualAction: { ...item.manualAction, movedTo: slotId, humanDecision } } : item);
-  const imageExecution = { ...context.result.imageExecution, results: nextResults, metrics: { ...(context.result.imageExecution?.metrics || {}), automaticFollowupRounds: 0 } };
+  const previousMetrics = context.result.imageExecution?.metrics || {};
+  const imageExecution = { ...context.result.imageExecution, results: nextResults, metrics: {
+    ...previousMetrics,
+    automaticFollowupRounds: 0,
+    matchedFileDownloadAttempts: Number(previousMetrics.matchedFileDownloadAttempts || 0) + delayedOriginal.attempts,
+    matchedFileDownloadSuccess: Number(previousMetrics.matchedFileDownloadSuccess || 0) + delayedOriginal.success,
+    originalDownloadSavedCount: Number(previousMetrics.originalDownloadSavedCount || 0) + delayedOriginal.saved,
+    originalDownloadTimeMs: Number(previousMetrics.originalDownloadTimeMs || 0) + delayedOriginal.durationMs,
+  } };
   for (const item of nextResults.filter((item) => movedFrom.includes(item.slotId))) store.saveTaskResult(projectId, context.run.executionRunId, `image-${item.slotId.replace(/[^a-zA-Z0-9_-]/g, '-')}`, item);
   store.saveTaskResult(projectId, context.run.executionRunId, `image-${slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, nextCurrent);
   return persistResult({ ...context, store, root, imageExecution, render, deferRender, action: { type: "choose_existing_candidate", slotId, candidateId, humanDecision } });

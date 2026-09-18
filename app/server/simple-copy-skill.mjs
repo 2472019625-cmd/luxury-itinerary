@@ -106,6 +106,38 @@ function sourceIncludes(source, value) {
   return clean(source).toLowerCase().includes(clean(value).toLowerCase());
 }
 
+const VISUAL_SUBJECT_CONCEPTS = Object.freeze([
+  /(?:大象|象群|elephants?)/i,
+  /(?:花豹|豹类|leopards?)/i,
+  /(?:猎豹|cheetahs?)/i,
+  /(?:狮群|狮子|lions?)/i,
+  /(?:角马|wildebeest)/i,
+  /(?:非洲五霸|五霸|big five|predator safari|掠食者)/i,
+  /(?:迁徙|渡河|river crossing|migration)/i,
+  /(?:长颈鹿|giraffes?)/i,
+  /(?:热气球|hot air balloon|balloon safari)/i,
+  /(?:星空床|星空寝|star bed|sleep[ -]?out|outdoor bed)/i,
+  /(?:徒步(?:游猎|safari)?|walking safari)/i,
+  /(?:夜间游猎|night safari|night game drive)/i,
+  /(?:观景台|观景山|viewpoint|observation hill)/i,
+  /(?:欢迎仪式|文化欢迎|welcome ceremony|cultural welcome|maasai welcome)/i,
+  /(?:博物馆|museum|长颈鹿中心|giraffe centre|giraffe center)/i,
+  /(?:酒窖|品酒|wine cellar|wine tasting|丛林早餐|bush breakfast|星空晚宴|starlit dinner|sundowner)/i,
+  /(?:草原飞机|小型飞机|light aircraft|bush plane|airstrip)/i,
+]);
+
+export function validateVisualCardSubjectRetention(value, task = {}) {
+  if (task.moduleType !== "visual_card" || !value || typeof value !== "object") return [];
+  const subject = clean(task.facts?.titleCoreSubject || task.facts?.visualSubject);
+  const title = clean(value.cardTitle);
+  if (!subject || !title) return [];
+  const subjectConcepts = VISUAL_SUBJECT_CONCEPTS.filter((pattern) => pattern.test(subject));
+  if (subjectConcepts.length && !subjectConcepts.some((pattern) => pattern.test(title))) {
+    return [`Visual Card 标题“${title}”丢失了明确视觉主体“${subject}”，不能退化成泛化游猎或体验名称`];
+  }
+  return [];
+}
+
 export function validateCopyCommitments(value, task = {}) {
   const output = task.moduleType === 'visual_card' && value && typeof value === 'object' ? copyText([value.cardTitle, value.cardDescription]) : copyText(value);
   if (!output) return [];
@@ -120,6 +152,7 @@ export function validateCopyCommitments(value, task = {}) {
     const displayName = clean(task.facts.entityDisplayName);
     if (!title.includes(displayName)) errors.push(`Visual Card 标题必须原样使用已确认实体展示名“${displayName}”`);
   }
+  errors.push(...validateVisualCardSubjectRetention(value, task));
   for (const match of output.matchAll(/(?:^|[^\d])((?:[01]?\d|2[0-3])[:：][0-5]\d)[^，。；]{0,12}(?:准时|固定|必须|安排|出发|集合)/g)) {
     const hasConfirmedTime = sourceIncludes(source, match[1]) && /confirmed|已确认|确定|固定|准时|departureTime|startTime/i.test(source);
     if (!hasConfirmedTime) errors.push(`固定钟点承诺“${match[1]}”没有订单或已核验依据`);

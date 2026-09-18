@@ -306,7 +306,7 @@ test("same downloaded content is recorded once per slot attempt", () => {
 
 test("customer render whitelist excludes every internal image review field", () => {
   const clean = selectCustomerRenderData({ title: "客户行程", imageBlueprint: { secret: true }, imageCandidates: [{ terminalAudit: { score: 99 } }], imageReview: { pendingCount: 1 }, imageResearch: { runId: "x" }, imageFailures: [{ reason: "x" }], imageSourceLedger: [{ sourcePage: "x" }], days: [{ theme: "第一天", audit: { score: 1 } }] });
-  assert.deepEqual(Object.keys(clean), ["title", "days"]);
+  assert.deepEqual(Object.keys(clean), ["title", "days", "highlights"]);
   assert.equal(JSON.stringify(clean).includes("audit"), false);
   assert.equal(JSON.stringify(clean).includes("imageCandidates"), false);
 });

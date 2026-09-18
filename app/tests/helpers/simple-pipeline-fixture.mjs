@@ -33,10 +33,26 @@ export function plannerRequestJson({ delayMs = 5 } = {}) {
       ["notes", "旅行准备与注意事项", true],
       ["expenses", "费用与退改", true],
     ].map(([moduleId, label, show]) => ({ moduleId, label, decision: show ? "show" : "hide", contentAction: show ? "optimize" : "hide", reason: show ? "当前结构化事实需要展示" : "当前资料没有适用事实" }));
+    const queryFields = ({ location, locationRole = "scope_only", subject, action = "", identity = "", fidelityQuery, alternateQueries, subjectEn = "", actionEn = "", identityEn = "" }) => ({
+      location,
+      locationRole,
+      queryCore: { subject, action, identity, subjectEn, actionEn, identityEn },
+      fidelityQuery,
+      alternateQueries,
+    });
     const imageSlots = [
-      { slotId: "legacy-cover", role: "cover", label: "封面", required: true, visualDuty: "目的地主视觉", differentiation: "整程总览", searchIntent: facts.destination, removable: false },
-      ...facts.hotels.map((hotel, index) => ({ slotId: `legacy-hotel-${index + 1}`, role: `hotel:${index + 1}`, label: hotel.name, required: true, visualDuty: "酒店真实空间", differentiation: "住宿品质", searchIntent: hotel.name, removable: false })),
-      ...facts.days.map((day, index) => ({ slotId: `legacy-day-${index + 1}`, role: `day:${index + 1}`, label: `DAY ${index + 1}`, required: true, visualDuty: "当日核心体验", differentiation: `第${index + 1}日地点与角色`, searchIntent: `${day.route || ""} ${day.experience || ""}`, removable: false })),
+      { slotId: "legacy-cover", role: "cover", label: "封面", required: true, primaryVisualSubject: "草原野生动物", visualDuty: "目的地主视觉", differentiation: "整程总览", ...queryFields({ location: facts.destination, subject: "草原野生动物", fidelityQuery: "草原野生动物", alternateQueries: ["野生动物游猎", "savanna wildlife"], subjectEn: "savanna wildlife" }), removable: false },
+      ...facts.hotels.map((hotel, index) => { const hotelName = hotel.officialName || hotel.shortName || hotel.name; return { slotId: `legacy-hotel-${index + 1}`, role: `hotel:${index + 1}`, label: hotelName, required: true, primaryVisualSubject: `${hotelName}酒店外观`, visualDuty: "酒店真实空间", differentiation: "住宿品质", ...queryFields({ location: hotel.region || facts.destination, locationRole: "visual_identity", subject: "酒店外观", identity: hotelName, fidelityQuery: `${hotelName} 酒店外观`, alternateQueries: [`${hotelName} exterior`] }), removable: false }; }),
+      ...(facts.diningExperiences || []).map((item, index) => ({ slotId: `legacy-dining-${index + 1}`, role: `dining:${index + 1}`, label: item.title, required: false, primaryVisualSubject: `${item.title}餐桌`, visualDuty: "餐饮真实形态", differentiation: "特色用餐", ...queryFields({ location: item.location || facts.destination, subject: "特色餐食", action: "上桌", fidelityQuery: "特色餐食上桌", alternateQueries: ["餐桌特色菜", "signature dish served"] }), removable: true })),
+      ...(facts.transport || []).map((item, index) => ({ slotId: `legacy-transport-${index + 1}`, role: `transport:${index + 1}`, label: item.category, required: false, primaryVisualSubject: item.category, visualDuty: "交通工具", differentiation: "移动体验", ...queryFields({ location: item.location || facts.destination, subject: item.category, fidelityQuery: item.category, alternateQueries: [`${item.category}乘坐`] }), removable: true })),
+      ...facts.days.map((day, index) => {
+        const isFirst = index === 0;
+        const isLast = index === facts.days.length - 1;
+        const subject = isFirst ? "草原飞机降落" : isLast ? "草原飞机起飞" : "草原象群游猎";
+        const action = isFirst ? "降落" : isLast ? "起飞" : "游猎观察";
+        const alternates = isFirst ? ["轻型飞机抵达"] : isLast ? ["轻型飞机返程"] : ["野生动物观察", "wildlife safari"];
+        return { slotId: `legacy-day-${index + 1}`, role: `day:${index + 1}`, label: `DAY ${index + 1}`, required: true, primaryVisualSubject: subject, visualDuty: "当日核心体验", differentiation: `第${index + 1}日地点与角色`, ...queryFields({ location: day.region || day.city || facts.destination, subject, action, fidelityQuery: subject, alternateQueries: alternates }), removable: false };
+      }),
     ];
     return {
       json: {
@@ -79,7 +95,7 @@ export function copyRequestJson({ failTargetId = null, delayMs = 60 } = {}) {
       if (task.moduleType === "day") value = `当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。`;
       if (task.moduleType === "day_notice") value = "当天移动与体验较为集中，建议提前整理随身用品，轻装参与。";
       if (task.moduleType === "day_spot") value = "围绕这一项真实活动说明体验方式与客户价值。";
-      if (task.moduleType === "visual_card") value = { cardTitle: task.facts.entityDisplayName || '草原体验', cardDescription: '围绕这一项真实活动说明体验方式与客户价值。' };
+      if (task.moduleType === "visual_card") value = { cardTitle: task.facts.entityDisplayName || task.facts.titleCoreSubject || task.facts.visualSubject || '草原体验', cardDescription: '围绕这一项真实活动说明体验方式与客户价值。' };
       if (task.moduleType === "notes") value = [
         { title: "行前准备", icon: "calendar", tone: "gold", items: ["请根据本次目的地与活动安排准备合适衣物和随身用品，具体清单由定制师在出发前协助复核。"] },
         { title: "活动与安全", icon: "security", tone: "gold", items: ["参加游猎与营地活动时请遵循现场人员指引，相关时效要求以出发前正式通知为准。"] },
@@ -121,6 +137,36 @@ export function imageAdapters({ appRoot, failMatcher = () => false, delayMs = 80
       return [{ ...page, imageUrl: `${page.pageUrl}/image.jpg`, width: 1800, height: 1100, fixtureAsset: asset }];
     },
     downloadCandidate: async (candidate) => ({ ...candidate, filePath: candidate.fixtureAsset.filePath, publicUrl: candidate.fixtureAsset.publicUrl, sha256: `fixture-${candidate.fixtureAsset.publicUrl}` }),
-    judgeCandidatesBatch: async ({ slot, candidates }) => candidates.map((candidate, index) => ({ candidateId: candidate.candidateId, score: 90 - index, locationMatch: true, hotelIdentityMatch: true, activityMatch: true, subjectMatch: true, watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true, eligible: true, actualSubject: slot.label || slot.subject || slot.slotId, reason: "结构化事实、主体、地点和来源均匹配", hardRejectCode: "none" })),
+    judgeCandidatesBatch: async ({ slot, candidates }) => candidates.map((candidate, index) => ({
+      candidateId: candidate.candidateId,
+      score: 90 - index,
+      relevance: 90 - index,
+      luxury: 85,
+      cleanliness: 90,
+      composition: 88,
+      matchLevel: "exact",
+      locationMatch: true,
+      visibleLocationConflict: false,
+      hotelIdentityMatch: true,
+      visibleIdentityConflict: false,
+      activityMatch: true,
+      coreActionMatch: true,
+      subjectMatch: true,
+      coreSubjectMatch: true,
+      identityMatch: true,
+      subjectClear: true,
+      subjectLargeEnough: true,
+      subjectPrimary: true,
+      transportType: null,
+      transportTypeMatch: true,
+      watermarkFree: true,
+      nonAI: true,
+      photographic: true,
+      technicalUsable: true,
+      eligible: true,
+      actualSubject: slot.label || slot.subject || slot.slotId,
+      reason: "结构化事实、主体、地点和来源均匹配",
+      hardRejectCode: "none",
+    })),
   };
 }

@@ -82,6 +82,16 @@ export function createAgentPlannerServer(options = {}) {
   const modelConfig = options.modelConfig || { apiKey: process.env.TEXT_MODEL_API_KEY, baseUrl: (process.env.TEXT_MODEL_BASE_URL || "https://api.deepseek.com").replace(/\/$/, ""), model: process.env.TEXT_MODEL_NAME || "deepseek-v4-flash" };
   const searchModelConfig = options.searchModelConfig || { apiKey: process.env.IMAGE_SEARCH_API_KEY, baseUrl: (process.env.IMAGE_SEARCH_BASE_URL || "https://api.vveai.com/v1").replace(/\/$/, ""), model: "gemini-3.7-flash-search", imageSearchModel: process.env.IMAGE_SEARCH_MODEL || "gemini-3.6-flash-search" };
   const visionModelConfig = options.visionModelConfig || { apiKey: process.env.BIGMODEL_API_KEY, baseUrl: (process.env.BIGMODEL_BASE_URL || "https://open.bigmodel.cn/api/paas/v4").replace(/\/$/, ""), model: process.env.BIGMODEL_MODEL || "glm-5.3-flash" };
+  const knowledgeImageConfig = options.knowledgeImageConfig || {
+    sourceMode: process.env.IMAGE_SOURCE_MODE || "web_only",
+    knowledgeBaseUrl: String(process.env.IMAGE_KNOWLEDGE_BASE_URL || "").replace(/\/$/, ""),
+    knowledgeScopeNodeIds: csvValues(process.env.IMAGE_KNOWLEDGE_NODE_IDS),
+    knowledgeTopK: Number(process.env.IMAGE_KNOWLEDGE_TOP_K || 5),
+    knowledgeTimeoutMs: Number(process.env.IMAGE_KNOWLEDGE_TIMEOUT_MS || 120_000),
+    knowledgeRequestTimeoutMs: Number(process.env.IMAGE_KNOWLEDGE_REQUEST_TIMEOUT_MS || 30_000),
+    knowledgePollIntervalMs: Number(process.env.IMAGE_KNOWLEDGE_POLL_INTERVAL_MS || 2_000),
+    trustedKnowledgeOrigins: csvValues(process.env.IMAGE_KNOWLEDGE_DOWNLOAD_ORIGINS),
+  };
   const executor = options.executor || new AgentExecutionEngine({ store, root, origin: `http://127.0.0.1:${port}`, textModelConfig: modelConfig, searchModelConfig, visionModelConfig });
 
   const simpleStageDefinitions = [
@@ -221,6 +231,7 @@ export function createAgentPlannerServer(options = {}) {
             researchModel: searchModelConfig.model,
           },
           imageOptions: {
+            ...knowledgeImageConfig,
             searchApiKey: searchModelConfig.apiKey,
             searchBaseUrl: searchModelConfig.baseUrl,
             searchModel: searchModelConfig.imageSearchModel,
@@ -421,7 +432,7 @@ export function createAgentPlannerServer(options = {}) {
       try {
         const payload = await requestBody(request);
         const input = { store: simpleStore, root, projectId: decodeURIComponent(simpleCandidateMatch[1]), slotId: decodeURIComponent(simpleCandidateMatch[2]), candidateId: String(payload.candidateId || ""), manualConfirmed: payload.manualConfirmed === true };
-        const result = simpleCandidateMatch[3] === "select" ? await chooseSimpleImageCandidate({ ...input, deferRender: true }) : await rejectSimpleImageCandidate(input);
+        const result = simpleCandidateMatch[3] === "select" ? await chooseSimpleImageCandidate({ ...input, deferRender: true, knowledgeImageConfig }) : await rejectSimpleImageCandidate(input);
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_decision_failed" }); }
     }
@@ -446,6 +457,7 @@ export function createAgentPlannerServer(options = {}) {
           slotId: decodeURIComponent(simpleResearchMatch[2]),
           runImage: runImageSearchSkill,
           imageOptions: {
+            ...knowledgeImageConfig,
             searchApiKey: searchModelConfig.apiKey,
             searchBaseUrl: searchModelConfig.baseUrl,
             searchModel: searchModelConfig.imageSearchModel,
@@ -455,8 +467,8 @@ export function createAgentPlannerServer(options = {}) {
             maxQueriesPerSlot: 3,
             sourcePagesPerSlot: 8,
             downloadsPerSlot: 12,
-            visionCandidatesPerSlot: 4,
-            concurrency: { slots: 1, search: 1, pages: 4, downloads: 3, vision: 1 },
+            visionCandidatesPerSlot: 6,
+            concurrency: { slots: 1, search: 1, pages: 4, downloads: 3, vision: 3 },
           },
         });
         return json(response, 200, result);
@@ -474,6 +486,7 @@ export function createAgentPlannerServer(options = {}) {
           slotIds: Array.isArray(payload.slotIds) ? payload.slotIds : undefined,
           runImage: runImageSearchSkill,
           imageOptions: {
+            ...knowledgeImageConfig,
             searchApiKey: searchModelConfig.apiKey,
             searchBaseUrl: searchModelConfig.baseUrl,
             searchModel: searchModelConfig.imageSearchModel,
@@ -549,7 +562,7 @@ export function createAgentPlannerServer(options = {}) {
         return createReadStream(file).pipe(response);
       } catch (failure) { return json(response, 404, { error: failure.message || "正式成品文件不存在" }); }
     }
-    if (request.method === "GET" && url.pathname === "/api/agent/health") return json(response, 200, { ok: true, flowKind: "agent_v1", port, executionEnabled: EXECUTION_ENABLED, executionConfigVersion: EXECUTION_CONFIG_VERSION, plannerConfigured: Boolean(modelConfig.apiKey), factSearchConfigured: Boolean(searchModelConfig.apiKey), imageSearchConfigured: Boolean(searchModelConfig.apiKey), visualAuditConfigured: Boolean(visionModelConfig.apiKey) });
+    if (request.method === "GET" && url.pathname === "/api/agent/health") return json(response, 200, { ok: true, flowKind: "agent_v1", port, executionEnabled: EXECUTION_ENABLED, executionConfigVersion: EXECUTION_CONFIG_VERSION, plannerConfigured: Boolean(modelConfig.apiKey), factSearchConfigured: Boolean(searchModelConfig.apiKey), imageSearchConfigured: Boolean(searchModelConfig.apiKey), imageSourceMode: knowledgeImageConfig.sourceMode, knowledgeImageConfigured: Boolean(knowledgeImageConfig.knowledgeBaseUrl && knowledgeImageConfig.trustedKnowledgeOrigins.length), visualAuditConfigured: Boolean(visionModelConfig.apiKey) });
     if (request.method === "POST" && url.pathname === "/api/agent/projects") {
       try {
         const payload = await requestBody(request);
@@ -797,9 +810,12 @@ export function createAgentPlannerServer(options = {}) {
   return { server, port, store, jobs, controllers, executor, simpleStore, simpleJobs, simpleControllers };
 }
 
+const csvValues = (value) => String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   loadEnvFile(".env.local");
   loadEnvFile(".env.image-search.local");
+  loadEnvFile(".env.knowledge.local");
   const { server, port } = createAgentPlannerServer();
   server.listen(port, "127.0.0.1", () => console.log(`行程成品生成智能体：http://127.0.0.1:${port}/agent`));
 }

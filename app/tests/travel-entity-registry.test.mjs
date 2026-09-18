@@ -66,7 +66,7 @@ test('Planner、图片和 searchIntent 继续使用 canonical/source 名称', ()
   const slot = plan.imageSlots.find((item) => item.moduleType === 'day');
   const visualCopy = plan.copyTasks.find((item) => item.moduleType === 'visual_card');
   assert.equal(slot.subject, 'Observation Hill');
-  assert.equal(slot.searchIntent, 'Amboseli Observation Hill');
+  assert.deepEqual(slot.searchIntent, ['Amboseli Observation Hill']);
   assert.deepEqual(plan.preparedData.days[0].routeNodes, ['Observation Hill']);
   assert.equal(visualCopy.facts.entityCanonicalName, 'Observation Hill');
   assert.equal(visualCopy.facts.entityDisplayName, '安博塞利观景山');

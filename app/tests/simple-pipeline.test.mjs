@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { runSimplePipeline, statusFor } from "../server/simple-pipeline-executor.mjs";
 import { materializeSimpleSkillPlan } from "../server/simple-plan-adapter.mjs";
+import { applySimpleSkillResults } from "../server/simple-pipeline-writeback.mjs";
 import { APPROVED_PAYMENT } from "../server/simple-fixed-modules.mjs";
 import { copyRequestJson, copyResearchFacts, createWorkbookFile, imageAdapters, plannerRequestJson } from "./helpers/simple-pipeline-fixture.mjs";
 
@@ -136,6 +137,28 @@ test("required Copy/system failure 优先于图片 needs_user_action", () => {
   assert.equal(statusFor([imageIssue], "blocked_by_required_items"), "awaiting_user_action");
   assert.equal(statusFor([{ kind: "copy", id: "copy:day:2", status: "failed", required: true }, imageIssue], "blocked_by_required_items"), "partial");
   assert.equal(statusFor([{ kind: "image", id: "image:day:2:primary", status: "failed", required: true }], "blocked_by_required_items"), "partial");
+});
+
+test("可选图片位因 Planner unresolved 时仍保留给 Step4，不按普通缺图移除", () => {
+  const slotId = "image:day:1:supporting:1";
+  const imageSlots = [{
+    slotId,
+    required: false,
+    plannerSlotStatus: "unresolved",
+    needsUserAction: true,
+    plannerValidationIssues: [{ code: "duplicate_visual_responsibility", message: "视觉职责重复" }],
+  }];
+  const slotBindings = { [slotId]: { module: "cover", fieldPath: "heroImage", imageIndex: 0, required: false } };
+  const result = applySimpleSkillResults({
+    preparedData: { heroImage: null, hotels: [], diningExperiences: [], transportSummary: [], days: [], simpleImageSlotBindings: slotBindings },
+    imageSlots,
+    slotBindings,
+    imageExecution: { results: [{ slotId, status: "needs_user_action", technicalStatus: "planner_slot_unresolved", plannerValidationIssues: imageSlots[0].plannerValidationIssues }] },
+  });
+  assert.equal(result.unresolvedItems.length, 1);
+  assert.equal(result.unresolvedItems[0].required, false);
+  assert.equal(result.unresolvedItems[0].technicalStatus, "planner_slot_unresolved");
+  assert.equal(result.imageWriteback[0].status, "needs_user_action");
 });
 
 test("Image Slot 使用地理位置、单一封面焦点和全日事实选择DAY视觉主体", () => {

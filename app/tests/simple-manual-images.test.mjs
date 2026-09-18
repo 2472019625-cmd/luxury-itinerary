@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import sharp from "sharp";
@@ -9,6 +9,35 @@ import { buildLayoutImageSlots } from '../src/lib/imageSlots.js';
 import { createManualDayCard } from '../src/lib/dayEditorState.js';
 
 import { fixture } from './support/manual-image-fixture.mjs';
+
+function installKnowledgePreviewCandidate(value, candidateId = "knowledge-preview-candidate") {
+  const candidate = {
+    candidateId,
+    sourceKind: "knowledge_library",
+    sourceTitle: "knowledge-original.jpg",
+    imageUrl: "/image-assets/test/knowledge-preview.webp",
+    previewUrl: "/image-assets/test/knowledge-preview.webp",
+    localPreviewUrl: "/image-assets/test/knowledge-preview.webp",
+    localUrl: null,
+    originalDownloaded: false,
+    originalDownloadStatus: "not_requested",
+    knowledgeAssetId: "asset-preview-first",
+    knowledgeQueryId: "qry-preview-first",
+    knowledgeQueryIds: ["qry-preview-first"],
+    knowledgeMatchedFile: { relation: "matched_file", url: null, filename: "knowledge-original.jpg", mimeType: "image/jpeg", versionId: "ver-preview-first" },
+    knowledgePreview: { relation: "preview", url: null, filename: "knowledge-preview.webp", mimeType: "image/webp", versionId: "ver-preview-first" },
+    autoReviewStatus: "approved_not_selected",
+    hardJudgment: { locationMatch: true, hotelIdentityMatch: true, activityMatch: true, subjectMatch: true, watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true, eligible: true },
+  };
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  const cover = result.imageExecution.results.find((item) => item.slotId === "image:cover:primary");
+  cover.candidates.push(candidate);
+  cover.manualAction.selectableCandidates.push(candidate);
+  const unresolved = result.unresolvedItems.find((item) => item.id === "image:cover:primary");
+  unresolved.selectableCandidateIds.push(candidateId);
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  return candidate;
+}
 
 test("保存先于慢 Renderer 返回；新版本不被旧渲染覆盖", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
@@ -165,6 +194,96 @@ test("人工确认可采用非硬拒绝的待判断候选，跨位移动并保�
   assert.equal(saved.userSelected, true);
   assert.equal(saved.humanDecision.riskConfirmed, true);
   assert.deepEqual(saved.humanDecision.movedFrom, ['image:cover:primary']);
+});
+
+test("Step4 选择尚未下载原件的知识库 preview 时才下载 matched_file", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const candidate = installKnowledgePreviewCandidate(value);
+  let refreshCalls = 0;
+  let originalDownloads = 0;
+  const payloadBefore = buildSimpleManualImagePayload(value.store, value.projectId);
+  const before = payloadBefore.project.data.imageCandidates.find((item) => item.candidateId === candidate.candidateId);
+  assert.equal(before.localUrl, null);
+  assert.equal(before.localPreviewUrl, "/image-assets/test/knowledge-preview.webp");
+  const payload = await chooseSimpleImageCandidate({
+    ...value,
+    slotId: "image:cover:primary",
+    candidateId: candidate.candidateId,
+    refreshMatchedFile: async ({ queryIds }) => {
+      refreshCalls += 1;
+      assert.deepEqual(queryIds, ["qry-preview-first"]);
+      return { ...candidate.knowledgeMatchedFile, url: "http://192.168.100.210:9000/original/knowledge-original.jpg?token=fresh" };
+    },
+    downloadImage: async (item, { directory, publicPrefix }) => {
+      originalDownloads += 1;
+      assert.match(item.imageUrl, /\/original\/knowledge-original\.jpg/);
+      await mkdir(directory, { recursive: true });
+      const filePath = path.join(directory, "knowledge-original.jpg");
+      await sharp({ create: { width: 1400, height: 900, channels: 3, background: "#79654f" } }).jpeg().toFile(filePath);
+      return { ...item, filePath, publicUrl: `${publicPrefix}/knowledge-original.jpg`, sha256: "knowledge-original-hash", width: 1400, height: 900, bytes: 4096, contentType: "image/jpeg" };
+    },
+    render: async ({ mode }) => ({ status: "success", mode, outputPath: "preview-first-draft.png" }),
+  });
+  assert.equal(refreshCalls, 1);
+  assert.equal(originalDownloads, 1);
+  assert.match(payload.project.data.heroImage, /^\/image-assets\/simple-manual-/);
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId);
+  const selected = saved.imageExecution.results.find((item) => item.slotId === "image:cover:primary").selected;
+  assert.equal(selected.originalDownloaded, true);
+  assert.equal(selected.originalDownloadStatus, "success");
+  assert.equal(selected.knowledgeMatchedFile.url, null);
+  assert.equal(saved.imageExecution.metrics.matchedFileDownloadAttempts, 1);
+  assert.equal(saved.imageExecution.metrics.matchedFileDownloadSuccess, 1);
+});
+
+test("Step4 保留未自动审核的知识库 preview，但不自行升级其内容资格", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  const candidate = {
+    candidateId: "knowledge-not-auto-reviewed",
+    sourceKind: "knowledge_library",
+    sourceTitle: "unreviewed-preview.webp",
+    localPreviewUrl: "/image-assets/test/unreviewed-preview.webp",
+    previewUrl: "/image-assets/test/unreviewed-preview.webp",
+    localUrl: null,
+    knowledgeQueryId: "qry-unreviewed",
+    knowledgeQueryIds: ["qry-unreviewed"],
+    knowledgeMatchedFile: { relation: "matched_file", url: null, filename: "unreviewed-original.jpg", versionId: "ver-unreviewed" },
+    candidateStatus: "not_auto_reviewed",
+    autoReviewStatus: "not_auto_reviewed",
+    selected: false,
+  };
+  result.imageExecution.results.find((item) => item.slotId === "image:cover:primary").candidates.push(candidate);
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const payload = buildSimpleManualImagePayload(value.store, value.projectId);
+  const visible = payload.project.data.imageCandidates.find((item) => item.candidateId === candidate.candidateId);
+  assert.ok(visible);
+  assert.equal(visible.candidateStatus, "not_auto_reviewed");
+  assert.equal(visible.qualificationStatus, "unreviewed");
+  assert.equal(visible.manualSelectable, false);
+  assert.equal(visible.adoptable, false);
+});
+
+test("Step4 延迟下载 matched_file 失败时保留 preview 并记录原件失败", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const candidate = installKnowledgePreviewCandidate(value, "knowledge-preview-download-failed");
+  await assert.rejects(() => chooseSimpleImageCandidate({
+    ...value,
+    slotId: "image:cover:primary",
+    candidateId: candidate.candidateId,
+    refreshMatchedFile: async () => ({ ...candidate.knowledgeMatchedFile, url: "http://192.168.100.210:9000/original/too-large.jpg" }),
+    downloadImage: async () => { throw new Error("文件过大，超过资源上限"); },
+    render: async () => assert.fail("原件失败时不应渲染"),
+  }), (error) => error.code === "file_too_large");
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId);
+  const failed = saved.imageExecution.results.find((item) => item.slotId === "image:cover:primary").candidates.find((item) => item.candidateId === candidate.candidateId);
+  assert.equal(failed.localUrl, null);
+  assert.equal(failed.localPreviewUrl, "/image-assets/test/knowledge-preview.webp");
+  assert.equal(failed.autoReviewStatus, "original_download_failed");
+  assert.equal(failed.originalDownloadStatus, "failed");
+  assert.equal(failed.originalDownloadFailureCode, "file_too_large");
+  assert.equal(saved.imageExecution.metrics.matchedFileDownloadAttempts, 1);
+  assert.equal(saved.imageExecution.results.find((item) => item.slotId === "image:cover:primary").selected, null);
 });
 
 test("人工选择不能使用损坏文件且不修改项目", async (t) => {
