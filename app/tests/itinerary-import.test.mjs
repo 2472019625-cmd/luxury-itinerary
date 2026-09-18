@@ -3,6 +3,24 @@ import test from "node:test";
 import * as XLSX from "xlsx";
 import { importItineraryWorkbook } from "../src/lib/itineraryImport.js";
 
+test('住宿栏陌生名称不依赖酒店品牌词，交通同义配置合并但不同座位保留', async () => {
+  const rows = [['日期','简要行程','详细','用餐','参考酒店','用车'],
+    ['DAY 1','甲地','到达','晚餐','Azure Nyaruswiga','四驱动开顶式越野车'],
+    ['DAY 2','乙地','游猎','早餐','Azure Nyaruswiga','四驱动敞篷式越野车'],
+    ['DAY 3','乙地','游猎','早餐','Unnamed Retreat','7座四驱动敞篷式越野车'],
+    ['DAY 4','乙地','游猎','早餐','Unnamed Retreat','9座四驱动开顶式越野车'],
+    ['DAY 5','返程','离境','早餐','飞机','草原飞机']];
+  const workbook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet(rows),'行程');
+  const file=new File([XLSX.write(workbook,{type:'array',bookType:'xlsx'})],'test.xlsx');
+  const {data}=await importItineraryWorkbook(file,{days:[],highlights:[]});
+  assert.deepEqual(data.hotels.map(h=>[h.officialName,h.nights]),[['Azure Nyaruswiga',2],['Unnamed Retreat',2]]);
+  assert.ok(data.hotels[0].sourceEvidence.some(s=>s.startsWith('DAY 2 住宿')));
+  assert.equal(data.transportSummary.length,4);
+  assert.equal(data.transportSummary[0].usageSegments.length,2);
+  assert.ok(data.transportSummary[0].sourceEvidence.some(s=>s.includes('敞篷式')));
+  assert.deepEqual(data.transportSummary.slice(1,3).map(s=>s.seatCount),[7,9]);
+});
+
 test("imports a standard itinerary workbook and isolates internal quote notes", async () => {
   const rows = [
     ["肯尼亚8日顶奢（8.4W起）"],

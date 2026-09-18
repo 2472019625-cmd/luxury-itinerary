@@ -403,6 +403,45 @@ export function resolveKnowledgeClarification(slot, clarificationNodeIds, hierar
   return resolveKnowledgeScope(slot, hierarchy, { allowedNodeIds: clarificationNodeIds });
 }
 
+// Directory identity may be distributed across brand/location/venue ancestors.
+// This confirms directories only; it never establishes a Slot's Core identity.
+export function confirmHotelDirectory(slot, hierarchy) {
+  const entity = hotelEntityForSlot(slot);
+  const targets = unique([slot.hotel, slot.hotelOfficialName, slot.queryCore?.identity,
+    ...(entity ? entityNames(entity) : [])]);
+  const names = targets.map(name => ({name, tokens: clean(name).toLowerCase().split(/[^\p{L}\p{N}]+/u)
+    .filter(t => t && !/^(?:the|hotel|lodge|camp|resort|tented|member|of|collection)$/i.test(t))}));
+  const fullCandidates = [];
+  const abbreviatedCandidates = [];
+  for (const node of hierarchy?.records || []) {
+    if (GENERIC_NODE_NAMES.has(normalized(node.formalName))) continue;
+    if ([slot.country,slot.destination,slot.visualContext?.destination].filter(Boolean)
+      .some(country => normalized(country) === normalized(node.formalName))) continue;
+    const pathNames = unique([...node.pathSegments, ...node.pathSegments.flatMap(segment =>
+      TRAVEL_ENTITY_REGISTRY.filter(e => entityNames(e).some(n => normalized(n) === normalized(segment))).flatMap(entityNames))]);
+    const tokens = new Set(pathNames.join(' ').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+    const leafTokens = clean(node.formalName).toLowerCase().split(/[^\p{L}\p{N}]+/u);
+    if (names.some(({name, tokens: required}) => normalized(node.formalName) === normalized(name)
+      || (required.length > 0 && required.every(t => tokens.has(t)) && required.some(t => leafTokens.includes(t))))) {
+      fullCandidates.push(node);
+    } else if (leafTokens.length >= 2 && names.some(({tokens: required}) =>
+      leafTokens.every(t => required.includes(t)))) {
+      // Only unique abbreviated roots may be used; activity context cannot
+      // disambiguate two different hotels sharing the same directory name.
+      abbreviatedCandidates.push(node);
+    }
+  }
+  const candidates = fullCandidates.length ? fullCandidates : abbreviatedCandidates;
+  // Once a hotel root is proven, descendant spaces are not competing hotels.
+  const roots = candidates.filter(node => !candidates.some(other => other.nodeId !== node.nodeId
+    && ancestorChain(resolutionForNode(node),hierarchy).some(a => a.nodeId === other.nodeId)));
+  const status = roots.length === 1 ? 'resolved' : roots.length > 1 ? 'ambiguous' : 'unresolved';
+  return {status, reason: status === 'resolved' ? 'hotel_identity_confirmed_by_full_path'
+    : status === 'ambiguous' ? 'entity_directory_ambiguous' : 'entity_directory_unresolved',
+    candidates: roots.map(n => ({nodeId:n.nodeId,fullPath:n.fullPath})),
+    resolution: roots.length === 1 ? resolutionForNode(roots[0], 'hotel_identity_confirmed_by_full_path', targets) : null};
+}
+
 function semanticCategory(slot = {}) {
   const hotelIdentity = clean(slot.hotel || slot.hotelOfficialName || slot.hotelShortName || slot.diningLocation || hotelEntityForSlot(slot)?.canonicalName);
   const subject = clean(slot.primaryVisualSubject || slot.subject);
@@ -553,8 +592,10 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
 
   const hotelScopeBypass = ["configured_scope", "test_adapter_without_hierarchy"].includes(rootResolution?.reason);
   const requestedHotel = clean(slot.hotel || slot.hotelOfficialName || slot.hotelShortName || hotelEntityForSlot(slot)?.canonicalName);
-  const resolvedSpecificHotel = Boolean(rootResolution?.status === "resolved" && rootResolution.node && requestedHotel
-    && identityMatches(rootResolution.node.formalName, requestedHotel));
+  const hotelDirectoryConfirmation = hotelModule ? confirmHotelDirectory(slot, hierarchy) : null;
+  const resolvedSpecificHotel = hotelModule ? Boolean(hotelDirectoryConfirmation?.resolution)
+    : Boolean(rootResolution?.status === "resolved" && rootResolution.node && requestedHotel
+      && identityMatches(rootResolution.node.formalName, requestedHotel));
   const hotelIdentityAnchors = unique([
     requestedHotel,
     ...(hotelEntityForSlot(slot) ? entityNames(hotelEntityForSlot(slot)) : []),
@@ -565,7 +606,8 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
     // hotel-value queries make child-directory guessing unnecessary, and a
     // missing/empty hotel directory must fall through to the existing Web
     // source instead of searching other hotels at region/country level.
-    addScope(scopes, rootResolution, "hotel_root", rootResolution, "entity_identity");
+    const confirmedRoot = hotelDirectoryConfirmation?.resolution || rootResolution;
+    addScope(scopes, confirmedRoot, "hotel_root", confirmedRoot, "entity_identity");
     refined.decision.reason = "hotel_module_locked_to_confirmed_hotel_root";
   } else if (hotelModule && ["hotel_space", "hotel_experience"].includes(purpose)) {
     refined.decision.reason = "hotel_module_specific_directory_unresolved";
@@ -626,19 +668,56 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
     if (!scopes.length) addScope(scopes, rootResolution, "country_scope_unresolved", rootResolution, "country_context");
   }
   if (!scopes.length && rootResolution && !["hotel_space", "hotel_experience"].includes(purpose)) scopes.push({ role: "configured_or_unresolved", resolution: rootResolution, evidenceResolution: rootResolution });
+  const fastPath = explicitEntityRoute(slot);
+  if (fastPath.matched) {
+    // Only a verified entity node may seed this route. A regional resolution
+    // is not evidence that the named venue exists in the library.
+    const targetEntity = ["hotel", "hotel_experience"].includes(fastPath.entityType) ? hotelEntityForSlot(slot) : explicitNamedEntity(slot);
+    const directoryMatches = (node) => fastPath.identityAnchors.some((anchor) => normalized(anchor) === normalized(node.formalName))
+      || Boolean(targetEntity && stronglyReferencedEntities(node.formalName).some((entity) => entity.id === targetEntity.id));
+    const matches = (hierarchy?.records || []).filter(directoryMatches);
+    const rootMatches = rootResolution?.node && directoryMatches(rootResolution.node);
+    const exact = hotelModule ? hotelDirectoryConfirmation?.resolution : rootMatches ? rootResolution : matches.length === 1
+      ? resolutionForNode(matches[0], "explicit_entity_directory", rootResolution?.facts, rootResolution?.mappingKey) : null;
+    scopes.length = 0;
+    const role = ["hotel", "hotel_experience"].includes(fastPath.entityType) ? "hotel_root" : "entity";
+    if (fastPath.identityKnown && exact) addScope(scopes, exact, role, exact, "entity_identity", fastPath.identityAnchors);
+    else if (fastPath.identityKnown && rootResolution?.reason === "test_adapter_without_hierarchy") addScope(scopes, rootResolution, role, rootResolution, "entity_identity", fastPath.identityAnchors);
+    fastPath.hotelDirectoryConfirmation = hotelDirectoryConfirmation;
+    fastPath.knowledgeStopReason = !fastPath.identityKnown ? "identity_unknown" : !scopes.length
+      ? "entity_directory_missing" : null;
+  }
   return {
     purpose,
     scopes,
-    blockedReason: hotelModule && ["hotel_space", "hotel_experience"].includes(purpose) && !scopes.length
+    explicitEntityFastPath: fastPath,
+    blockedReason: fastPath.matched && !scopes.length ? fastPath.knowledgeStopReason : hotelModule && ["hotel_space", "hotel_experience"].includes(purpose) && !scopes.length
       ? "hotel_directory_unresolved"
       : ["hotel_space", "hotel_experience"].includes(purpose) && !scopes.length ? "hotel_scope_and_fallback_unresolved" : null,
-    stopBoundary: hotelModule && ["hotel_space", "hotel_experience"].includes(purpose) ? "hotel_root"
+    stopBoundary: fastPath.matched ? (["hotel", "hotel_experience"].includes(fastPath.entityType) ? "hotel_root" : "entity_identity") : hotelModule && ["hotel_space", "hotel_experience"].includes(purpose) ? "hotel_root"
       : ["hotel_space", "hotel_experience"].includes(purpose) ? (resolvedSpecificHotel || hotelScopeBypass ? "hotel_root" : "country")
       : purpose === "explicit_entity" ? "entity_identity"
         : "country",
-    strategy: "preplanned_progressive_scope_single_batch",
+    strategy: fastPath.matched ? "explicit_entity_fast_path" : "preplanned_progressive_scope_single_batch",
     childScopeDecision: refined.decision,
   };
+}
+
+export function explicitEntityRoute(slot = {}) {
+  const proof = slot.minimumVisualProof || {};
+  const hotelModule = moduleKind(slot) === "hotel";
+  const identityIsCore = slot.exactIdentityRequired;
+  // Routing consumes explicit semantic constraints only. Names, aliases,
+  // purpose classifiers and locationRole cannot establish Core identity.
+  const entityName = clean(slot.queryCore?.identity);
+  const matched = Boolean(entityName) && identityIsCore === true;
+  // Existing registry is used only after the trigger, for directory aliases
+  // and report metadata; it never determines whether identity is required.
+  const targetEntity = matched ? TRAVEL_ENTITY_REGISTRY.find((entity) => entityNames(entity).some((anchor) => normalized(anchor) === normalized(entityName))) : null;
+  const entityType = hotelModule ? "hotel" : slot.entityType || proof.entityType || (targetEntity?.entityType === "hotel" ? "hotel_experience" : targetEntity?.entityType) || "entity";
+  return { matched, entityType: matched ? entityType : null, entityName, identityKnown: Boolean(entityName),
+    identityAnchors: unique([entityName, ...(slot.identityAnchors || proof.identityAnchors || []), ...(targetEntity ? entityNames(targetEntity) : [])]),
+    routingReason: matched ? "explicit_core_identity" : identityIsCore === false ? "identity_not_core" : identityIsCore === true ? "target_identity_missing" : "core_identity_constraint_missing" };
 }
 
 function queryPlanForSlot(slot = {}, scopeResolution = null) {
@@ -1177,13 +1256,13 @@ export function buildKnowledgeVisualTarget(slot = {}) {
     ? visualSubjectWithoutContextEntity(slot)
     : slot.primaryVisualSubject || slot.subject || slot.activity);
   const visualDuty = compactVisualQuery(slot.visualDuty || slot.visualGoal || coreVisualTarget);
-  const exactIdentityRequired = ["hotel_space", "hotel_experience", "explicit_entity", "transport"].includes(purpose);
+  const existingIdentityOrTypeProofRequired = ["hotel_space", "hotel_experience", "explicit_entity", "transport"].includes(purpose);
   return {
     coreVisualTarget,
     visualDuty,
     purpose,
-    exactIdentityRequired,
-    representativeAllowed: !exactIdentityRequired,
+    exactIdentityRequired: slot.exactIdentityRequired === true,
+    representativeAllowed: !existingIdentityOrTypeProofRequired,
   };
 }
 
@@ -1192,8 +1271,8 @@ function buildKnowledgeQueryVisualTarget(slot = {}) {
   const coreVisualTarget = compactVisualQuery(namedEntityIsContextualExperience(slot)
     ? visualSubjectWithoutContextEntity(slot)
     : slot.primaryVisualSubject || slot.subject || slot.activity);
-  const exactIdentityRequired = ["hotel_space", "hotel_experience", "explicit_entity", "transport"].includes(purpose);
-  return { coreVisualTarget, visualDuty: coreVisualTarget, purpose, exactIdentityRequired, representativeAllowed: !exactIdentityRequired };
+  const existingIdentityOrTypeProofRequired = ["hotel_space", "hotel_experience", "explicit_entity", "transport"].includes(purpose);
+  return { coreVisualTarget, visualDuty: coreVisualTarget, purpose, exactIdentityRequired: slot.exactIdentityRequired === true, representativeAllowed: !existingIdentityOrTypeProofRequired };
 }
 
 function searchIntentEnglishSynonyms(slot = {}) {

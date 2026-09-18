@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+import path from 'node:path';
+const directory=path.resolve(process.argv[2]);
+const result=JSON.parse(fs.readFileSync(path.join(directory,'result.json')));
+const saved=JSON.parse(fs.readFileSync(path.join(directory,'report.json')));
+const names={'image:day:5:primary':'DAY5 角马渡河','image:day:2:primary':'DAY2 湿地俯瞰','image:day:4:primary':'DAY4 新月岛徒步','image:day:3:supporting:2':'DAY3 地狱门骑行','image:dining:imported-dining-restaurant-the-carnivore-day-7:primary':'The Carnivore','image:hotel:imported-hotel-1:primary':'Soroi Amboseli Camp'};
+let md='# Web下载前相关性门禁：真实定向测试\n\n结论：未通过可用性验收，不能宣布提速成功。6位全部not_found，下载/审核/采用均为0。本轮结束后停止，未部署、未跑完整Pipeline。\n\n';
+md+=`总wall-clock：${(saved.wallClockMs/1000).toFixed(1)}秒；Knowledge请求0；搜索实际请求${result.metrics.searchCalls}次（14条业务Query，1次技术重试）；页面访问38个，页面提取执行56次，HTTP请求63次（含重试/跳转）。逐Query accessedPages指访问页面数，不等于HTTP次数。\n\n`;
+md+='| 图片位 | 原始提取 | 技术过滤 | resize归并 | 相关性过滤 | 下载池/下载/审核/采用 | Query1/后续访问页 | Slot秒 |\n|---|---:|---:|---:|---:|---|---|---:|\n';
+for(const s of result.results){const q=s.pipelineEvidence.webExecution.queryReports;const n=k=>q.reduce((a,x)=>a+x[k],0);md+=`| ${names[s.slotId]} | ${n('rawResources')} | ${n('technicalFiltered')} | ${n('resizeDuplicates')} | ${n('relevanceFiltered')} | ${n('downloadPool')}/${n('downloadAttempts')}/${n('visionAudits')}/0 | ${q.map(x=>x.accessedPages).join('/')} | ${(s.durationMs/1000).toFixed(1)} |\n`;}
+md+='\n## 未通过项与限制\n\n- 本轮提取255资源：54技术过滤、31缩放归并、170相关性过滤，全部未进入下载。169次是身份文字证据不足，1次是主体证据不足，不等于170张视觉错误。\n- 身份门禁使用queryCore.identity/identityEn整体文字匹配，旧数据含山峰、河流等组合身份，存在过严风险；本轮未修改Planner/exactIdentityRequired/审核。\n- 图片URL只使用末段文件名，漏掉路径中已有的局部实体/类别证据；Carnivore的locations/carnivore/food/01.jpeg被当作仅01.jpeg，不能视为已完成强筛选。\n- 透明说明不足的真实照片可能被拦；没有新Vision结果，不能确认明显正确照片没有被误杀。\n- 网页提取去重、JSON-LD和局部wrapper仍需检查证据归属，不能把页面级描述冒充图片级证据。\n- 默认逻辑页面访问上限派生为有效素材页上限的2倍（默认8），不是旧4页；实际HTTP预算/逐Query网络日志尚未完全闭环。\n- resize归并有31次，但.png.webp等嵌套格式尺寸仍有未合并样本。\n- 定向测试13/13通过；现有simple-image-skill测试82项68通过14失败，整体回归未通过。不得默认为全部是fixture问题。\n- 页面访问失败23个，含403和fetch failed；搜索单次约119—193秒，酒店一次含重试223秒。不能用本轮零下载判断质量或速度改善。\n\n';
+for(const s of result.results){md+=`## ${names[s.slotId]}\n\n结果：${s.status}；${(s.durationMs/1000).toFixed(1)}秒。\n\n`;for(const [i,q]of s.pipelineEvidence.webExecution.queryReports.entries()){md+=`### Query ${i+1}\n\n${q.query}\n\n返回${q.returnedPages}页，访问${q.accessedPages}页，失败${q.pageFailures}页，有效素材${q.effectivePages}页；提取${q.rawResources} → 技术过滤${q.technicalFiltered} → 归并${q.resizeDuplicates} → 相关性过滤${q.relevanceFiltered} → 下载池${q.downloadPool} → 下载${q.downloadAttempts} → 审核${q.visionAudits} → 采用0。\n\n`;}
+md+=`停止原因：${s.pipelineEvidence.webExecution.stopReason}。第二条真实执行：${s.pipelineEvidence.webExecution.executedQueries.length>1?'是':'否'}。\n\n`;
+const examples=s.pipelineEvidence.webCandidateFiltering.filtered.filter(x=>x.status==='filtered_before_download').slice(0,6);for(const c of examples)md+=`- [资源](${c.imageUrl})：${c.reason}；局部证据：${String(c.evidence||'').replace(/\s+/g,' ').slice(0,200)}\n`;md+='\n';}
+fs.writeFileSync(path.join(directory,'test-report.md'),md);console.log(path.join(directory,'test-report.md'));

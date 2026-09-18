@@ -80,7 +80,9 @@ function plannedLocationRole(plan = {}) {
 function plannedQueryFields(plan = {}) {
   const queries = plannedSearchIntent(plan);
   const hasPlannerSlot = Boolean(plan.role || plan.slotId || plan.primaryVisualSubject || plan.fidelityQuery || (plan.searchIntent && plannedSearchIntent(plan).length));
+  const identityValid = typeof plan.exactIdentityRequired === "boolean" && (plan.exactIdentityRequired !== true || Boolean(clean(plan.queryCore?.identity)));
   return {
+    exactIdentityRequired: plan.exactIdentityRequired,
     locationRole: plannedLocationRole(plan),
     fidelityQuery: clean(plan.fidelityQuery) || queries[0] || "",
     alternateQueries: Array.isArray(plan.alternateQueries)
@@ -89,8 +91,8 @@ function plannedQueryFields(plan = {}) {
     searchIntent: queries,
     queryCore: plannedQueryCore(plan),
     plannerSlotStatus: plan.plannerSlotStatus || (hasPlannerSlot ? "ready" : "unresolved"),
-    needsUserAction: plan.needsUserAction === true || !hasPlannerSlot,
-    plannerValidationIssues: Array.isArray(plan.plannerValidationIssues) ? structuredClone(plan.plannerValidationIssues) : !hasPlannerSlot ? [{ code: "image_search_plan_missing", message: "Planner单次输出未提供该图片位，已保留到Step4人工处理" }] : [],
+    needsUserAction: plan.needsUserAction === true || !hasPlannerSlot || !identityValid,
+    plannerValidationIssues: [...(Array.isArray(plan.plannerValidationIssues) ? structuredClone(plan.plannerValidationIssues) : !hasPlannerSlot ? [{ code: "image_search_plan_missing", message: "Planner单次输出未提供该图片位，已保留到Step4人工处理" }] : []), ...(!identityValid ? [{code:"image_exact_identity_invalid",message:"具体身份布尔约束缺失/非法或true但identity为空，未按名称猜测"}] : [])],
     plannerLocalRepairs: Array.isArray(plan.plannerLocalRepairs) ? structuredClone(plan.plannerLocalRepairs) : [],
     sourceEvidence: unique(Array.isArray(plan.sourceRefs) ? plan.sourceRefs : []),
   };

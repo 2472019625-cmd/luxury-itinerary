@@ -33,7 +33,8 @@ export function plannerRequestJson({ delayMs = 5 } = {}) {
       ["notes", "旅行准备与注意事项", true],
       ["expenses", "费用与退改", true],
     ].map(([moduleId, label, show]) => ({ moduleId, label, decision: show ? "show" : "hide", contentAction: show ? "optimize" : "hide", reason: show ? "当前结构化事实需要展示" : "当前资料没有适用事实" }));
-    const queryFields = ({ location, locationRole = "scope_only", subject, action = "", identity = "", fidelityQuery, alternateQueries, subjectEn = "", actionEn = "", identityEn = "" }) => ({
+    const queryFields = ({ location, locationRole = "scope_only", subject, action = "", identity = "", fidelityQuery, alternateQueries, subjectEn = "", actionEn = "", identityEn = "", exactIdentityRequired = false }) => ({
+      exactIdentityRequired,
       location,
       locationRole,
       queryCore: { subject, action, identity, subjectEn, actionEn, identityEn },
@@ -42,7 +43,7 @@ export function plannerRequestJson({ delayMs = 5 } = {}) {
     });
     const imageSlots = [
       { slotId: "legacy-cover", role: "cover", label: "封面", required: true, primaryVisualSubject: "草原野生动物", visualDuty: "目的地主视觉", differentiation: "整程总览", ...queryFields({ location: facts.destination, subject: "草原野生动物", fidelityQuery: "草原野生动物", alternateQueries: ["野生动物游猎", "savanna wildlife"], subjectEn: "savanna wildlife" }), removable: false },
-      ...facts.hotels.map((hotel, index) => { const hotelName = hotel.officialName || hotel.shortName || hotel.name; return { slotId: `legacy-hotel-${index + 1}`, role: `hotel:${index + 1}`, label: hotelName, required: true, primaryVisualSubject: `${hotelName}酒店外观`, visualDuty: "酒店真实空间", differentiation: "住宿品质", ...queryFields({ location: hotel.region || facts.destination, locationRole: "visual_identity", subject: "酒店外观", identity: hotelName, fidelityQuery: `${hotelName} 酒店外观`, alternateQueries: [`${hotelName} exterior`] }), removable: false }; }),
+      ...facts.hotels.map((hotel, index) => { const hotelName = hotel.officialName || hotel.shortName || hotel.name; return { slotId: `legacy-hotel-${index + 1}`, role: `hotel:${index + 1}`, label: hotelName, required: true, primaryVisualSubject: `${hotelName}酒店外观`, visualDuty: "酒店真实空间", differentiation: "住宿品质", ...queryFields({ location: hotel.region || facts.destination, locationRole: "visual_identity", subject: "酒店外观", identity: hotelName, exactIdentityRequired:true, fidelityQuery: `${hotelName} 酒店外观`, alternateQueries: [`${hotelName} exterior`] }), removable: false }; }),
       ...(facts.diningExperiences || []).map((item, index) => ({ slotId: `legacy-dining-${index + 1}`, role: `dining:${index + 1}`, label: item.title, required: false, primaryVisualSubject: `${item.title}餐桌`, visualDuty: "餐饮真实形态", differentiation: "特色用餐", ...queryFields({ location: item.location || facts.destination, subject: "特色餐食", action: "上桌", fidelityQuery: "特色餐食上桌", alternateQueries: ["餐桌特色菜", "signature dish served"] }), removable: true })),
       ...(facts.transport || []).map((item, index) => ({ slotId: `legacy-transport-${index + 1}`, role: `transport:${index + 1}`, label: item.category, required: false, primaryVisualSubject: item.category, visualDuty: "交通工具", differentiation: "移动体验", ...queryFields({ location: item.location || facts.destination, subject: item.category, fidelityQuery: item.category, alternateQueries: [`${item.category}乘坐`] }), removable: true })),
       ...facts.days.map((day, index) => {

@@ -605,7 +605,10 @@ function buildTransportSummary(days) {
     if (!vehicle) return;
     const segments = vehicle.split(/[+＋、，,；;\/]/).map(text).filter(Boolean);
     for (const segment of segments.length ? segments : [vehicle]) {
-      const key = segment.toLowerCase().replace(/\s+/g, "");
+      // Normalize only equivalent configuration wording, not the whole category.
+      // Seats, brands, models and other qualifiers remain in the grouping key.
+      const key = segment.toLowerCase().replace(/\s+/g, "")
+        .replace(/四驱动/g, "四驱").replace(/敞篷式/g, "开顶式");
       const current = grouped.get(key) || {
         id: `imported-transport-${grouped.size + 1}`,
         category: /飞机|航班/.test(segment) ? "草原飞机" : /越野|4x4/i.test(segment) ? "四驱开顶式越野车" : /商务/.test(segment) ? "商务用车" : segment,
@@ -627,7 +630,11 @@ function buildTransportSummary(days) {
 }
 
 function hotelNames(days, lines) {
-  const fromDays = unique(days.map((day) => day.hotel).filter((line) => line && HOTEL_PATTERN.test(line) && !/最终确认|待确认|早餐|午餐|晚餐|用餐/.test(line)));
+  // The accommodation column is evidence of purpose; an unfamiliar proper name
+  // must not need a hotel keyword or a known brand to enter the hotel modules.
+  const fromDays = unique(days.filter(day => !day.overnightType || day.overnightType === "hotel")
+    .map((day) => day.hotel).filter((line) => line && !/最终确认|待确认|早餐|午餐|晚餐|用餐/.test(line)
+      && !/^(?:无|无住宿|不住宿|不含住宿|自行安排|自理|飞机|航班|夜航|返程|[-—–/]+)$/i.test(text(line))));
   if (fromDays.length) return fromDays.slice(0, 8);
   const fromLines = lines.filter((line) => HOTEL_PATTERN.test(line) && line.length >= 4 && line.length <= 90);
   return unique(fromLines

@@ -172,16 +172,35 @@ function objectSemanticText(value = {}) {
   return Object.entries(value).filter(([key, item]) => /name|title|headline|description|caption|alt|label|activity|content/i.test(key) && typeof item === "string").map(([, item]) => item).join(" | ");
 }
 
+function imageLocalAttributes($, element) {
+  const node = $(element);
+  const figure = node.closest('figure');
+  const parent = node.parent();
+  const ownRegion = figure.length ? figure : parent.find('img').length <= 1 && !['body','main','article','section','html','head'].includes(parent.get(0)?.tagName) && parent.text().length < 700 ? parent : null;
+  const localContext = ownRegion ? compactText(ownRegion.clone().find('script,style,nav,header,footer').remove().end().text(), 700) : '';
+  const chrome = node.closest('header,footer,nav,[role="navigation"]').length;
+  const role = node.attr('role');
+  return { imageTitle: node.attr('title') || '', caption: figure.find('figcaption').first().text() || node.attr('data-caption') || '',
+    localContext, entitySectionText: node.closest('figure,.gallery,[data-entity]').attr('data-entity') || '',
+    htmlSignature: `${node.attr('alt') || ''} ${node.attr('class') || ''} ${node.attr('id') || ''}`,
+    pagePosition: chrome ? 'chrome' : node.closest('main,article,figure,.gallery').length ? 'content' : 'other',
+    resourceRole: ['presentation','none'].includes(role) || (chrome && node.closest('a,button,[role="button"]').length && !figure.length) ? 'ui' : 'media' };
+}
+
 export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.pageUrl, maxImages = 36, semanticTerms = [] } = {}) {
   const $ = cheerio.load(html);
   const candidates = [];
   const lexicon = semanticLexicon(semanticTerms);
-  const push = (rawUrl, kind, alt = "", highResHint = false, semanticContext = "") => {
+  const push = (rawUrl, kind, alt = "", highResHint = false, semanticContext = "", attributes = {}) => {
     for (const imageUrl of highResolutionVariants(rawUrl, responseUrl)) {
       const semanticText = compactText([alt, imageUrlSemanticText(imageUrl), semanticContext].filter(Boolean).join(" | "));
       const semantic = semanticAssessment(semanticText, lexicon);
-      if (!imageLike(imageUrl) || candidates.some((item) => item.imageUrl === imageUrl)) continue;
-      candidates.push({ ...page, imageUrl, kind, alt: String(alt).trim().slice(0, 240), highResHint, semanticText, semanticScore: semantic.score, semanticMatches: semantic.matches, genericActivityPenalty: semantic.genericPenalty });
+      if (!imageLike(imageUrl)) continue;
+      const existing = candidates.find(item => item.imageUrl === imageUrl);
+      if (existing) { for (const [key,value] of Object.entries(attributes)) if (value) existing[key]=value; if(alt)existing.alt=String(alt).trim().slice(0,240); continue; }
+      let entityPagePath = '';
+      try { entityPagePath = decodeURIComponent(new URL(responseUrl).pathname); } catch {}
+      candidates.push({ ...page, ...attributes, entityPagePath, imageUrl, kind, alt: String(alt).trim().slice(0, 240), highResHint, semanticText, semanticScore: semantic.score, semanticMatches: semantic.matches, genericActivityPenalty: semantic.genericPenalty });
     }
   };
   [
@@ -195,7 +214,7 @@ export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.
   $('source[srcset], source[data-srcset]').each((_, element) => {
     const node = $(element);
     const context = nodeSemanticContext($, node.closest('picture').get(0) || element);
-    for (const src of srcsetUrls(node.attr('srcset') || node.attr('data-srcset'), responseUrl).slice(0, 2)) push(src, 'picture-srcset', node.attr('title') || '', true, context);
+    for (const src of srcsetUrls(node.attr('srcset') || node.attr('data-srcset'), responseUrl).slice(0, 2)) push(src, 'picture-srcset', node.attr('title') || '', true, context, imageLocalAttributes($, node.closest('picture').get(0) || element));
   });
   $('img').each((_, element) => {
     const node = $(element);
@@ -204,31 +223,32 @@ export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.
     if (/logo|icon|avatar|sprite|favicon|pixel|tracking/i.test(signature)) return;
     const responsive = srcsetUrls(node.attr('srcset') || node.attr('data-srcset') || node.attr('data-lazy-srcset'), responseUrl);
     const context = nodeSemanticContext($, element);
-    responsive.slice(0, 2).forEach((src) => push(src, 'image-srcset', alt, true, context));
+    const attributes = imageLocalAttributes($, element);
+    responsive.slice(0, 2).forEach((src) => push(src, 'image-srcset', alt, true, context, attributes));
     for (const attr of ['data-original', 'data-full', 'data-full-src', 'data-zoom-image', 'data-large-file', 'data-orig-file', 'data-src', 'data-lazy-src', 'data-image', 'src']) {
       const value = node.attr(attr);
-      if (value) push(value, attr === 'src' ? 'page-image' : `lazy-${attr}`, alt, attr !== 'src', context);
+      if (value) push(value, attr === 'src' ? 'page-image' : `lazy-${attr}`, alt, attr !== 'src', context, attributes);
     }
     const anchor = node.closest('a').attr('href');
-    if (anchor && /\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(anchor)) push(anchor, 'gallery-link', alt, true, context);
+    if (anchor && /\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(anchor)) push(anchor, 'gallery-link', alt, true, context, attributes);
   });
   $('[style*="background"], style').each((_, element) => {
     const css = $(element).attr('style') || $(element).text() || '';
     const context = nodeSemanticContext($, element);
-    for (const match of css.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) push(match[1], 'css-background', $(element).attr('aria-label') || '', true, context);
+    for (const match of css.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) push(match[1], 'css-background', $(element).attr('aria-label') || '', true, context, imageLocalAttributes($, element));
   });
   $('a[href]').each((_, element) => {
     const href = $(element).attr('href');
-    if (imageLike(href) && /\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(href)) push(href, 'media-link', $(element).attr('title') || $(element).text(), true, nodeSemanticContext($, element));
+    if (imageLike(href) && /\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(href)) push(href, 'media-link', $(element).attr('title') || $(element).text(), true, nodeSemanticContext($, element), imageLocalAttributes($, element));
   });
   $('script[type="application/ld+json"]').each((_, element) => {
     try {
       const visit = (value, inheritedContext = "") => {
         if (Array.isArray(value)) value.forEach((item) => visit(item, inheritedContext));
         else if (value && typeof value === 'object') {
-          const localContext = compactText(`${inheritedContext} ${objectSemanticText(value)}`);
+          const localContext = /ImageObject/i.test(String(value['@type'] || '')) || value.contentUrl ? compactText(objectSemanticText(value)) : '';
           Object.entries(value).forEach(([key, item]) => { if (/image|photo|contenturl|thumbnail/i.test(key)) visit(item, localContext); else if (item && typeof item === 'object') visit(item, localContext); });
-        } else if (typeof value === 'string' && (imageLike(value) || /^https?:\/\//i.test(value))) push(value, 'json-ld', '', true, inheritedContext);
+        } else if (typeof value === 'string' && (imageLike(value) || /^https?:\/\//i.test(value))) push(value, 'json-ld', '', true, inheritedContext, { structuredImageText: inheritedContext });
       };
       visit(JSON.parse($(element).text()));
     } catch { /* Ignore malformed publisher metadata. */ }

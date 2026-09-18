@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { buildWebExecutionQueries, classifyWebFallback } from "../server/image-web-execution.mjs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,9 +8,64 @@ import sharp from "sharp";
 import { applyKnowledgeSourcePathEvidence, buildImageConstraints, buildImageQueries, buildKnowledgeQueryCacheKey, classifyTransportType, completeVisualJudgment, failedHardRequirement, runImageSearchSkill } from "../server/simple-image-skill.mjs";
 import { judgeCandidatesBatch } from "../server/image-audit.mjs";
 import { searchKnowledgeImages } from "../server/knowledge-image-search.mjs";
-import { buildKnowledgeHierarchy } from "../server/knowledge-scope-resolver.mjs";
+import { buildKnowledgeHierarchy, explicitEntityRoute } from "../server/knowledge-scope-resolver.mjs";
 
 const slot = (id, overrides = {}) => ({ slotId: id, moduleType: "day", required: true, location: "塞伦盖蒂", activity: "全天游猎", subject: "草原环境与游猎行动", searchIntent: ["草原游猎", "野生动物观察"], visualGoal: "表现进入草原后的环境建立", visualContext: { dayRole: "环境建立", avoid: ["与相邻 DAY 相同机位"] }, copyTargetId: `copy-${id}`, aspectRatio: "16:9", userLocked: false, ...overrides });
+
+test("明确实体目录缺失零Knowledge请求；专属体验no_match最多两词且不扩Scope", async (t) => {
+  const hierarchy = buildKnowledgeHierarchy([
+    { node_id: "root", formal_name: "根知识库" },
+    { node_id: "country", formal_name: "肯尼亚", parent_node_id: "root" },
+    { node_id: "region", formal_name: "安博塞利", parent_node_id: "country" },
+    { node_id: "hotel", formal_name: "Angama Amboseli", parent_node_id: "region" },
+  ]);
+  for (const target of [
+    slot("missing-restaurant", { moduleType: "dining", diningLocation: "Cloud Table", location: "安博塞利", country: "肯尼亚", subject: "餐厅内景", activity: "用餐", fidelityQuery: "餐厅内景", alternateQueries: ["restaurant interior"] }),
+    slot("missing-museum", { location: "云川博物馆", region: "安博塞利", country: "肯尼亚", locationRole: "visual_identity", queryCore: { subject: "博物馆建筑", identity: "云川博物馆" }, subject: "博物馆建筑", fidelityQuery: "博物馆建筑", alternateQueries: ["museum exterior"] }),
+    slot("exclusive-no-match", { hotel: "Angama Amboseli", location: "安博塞利", country: "肯尼亚", subject: "专属星空床", activity: "星空床", fidelityQuery: "星空床", alternateQueries: ["star bed", "outdoor bed"] }),
+    slot("exclusive-empty", { hotel: "Angama Amboseli", location: "安博塞利", country: "肯尼亚", subject: "专属星空床", activity: "星空床", fidelityQuery: "星空床", alternateQueries: ["star bed", "outdoor bed"] }),
+  ]) {
+    target.exactIdentityRequired = true;
+    target.queryCore = { ...target.queryCore, identity: target.hotel || target.diningLocation || target.queryCore?.identity };
+    if (target.hotel) target.entityType = "hotel_experience";
+    const root = await mkdtemp(path.join(os.tmpdir(), "entity-fast-path-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const knowledgeCalls = [], webCalls = [];
+    const result = await runImageSearchSkill({
+      root, slots: [target], sourceMode: "knowledge_first", knowledgeBaseUrl: "http://knowledge.invalid",
+      adapters: {
+        loadKnowledgeHierarchy: async () => hierarchy,
+        searchKnowledgeImages: async ({ queries, scopeNodeIds }) => { knowledgeCalls.push({ queries, scopeNodeIds }); return { status: "completed", queryText: queries[0], scopeState: target.slotId === "exclusive-empty" ? "empty" : "no_match", candidates: [], records: [] }; },
+        searchWebBatch: async ({ queries }) => { webCalls.push(queries); return []; },
+        searchCommonsImages: async () => [],
+      },
+    });
+    const evidence = result.results[0].pipelineEvidence;
+    assert.equal(evidence.explicit_entity_fast_path, true);
+    assert.equal(evidence.explicitEntityFastPath.enteredWeb, true);
+    assert.ok(webCalls.length > 0 && webCalls.length <= 2);
+    assert.ok(webCalls.every((queries) => queries.length === 1 && queries[0].includes(evidence.explicitEntityFastPath.entityName)));
+    if (target.slotId.startsWith("exclusive-")) {
+      assert.equal(knowledgeCalls.length, target.slotId === "exclusive-empty" ? 1 : 2);
+      assert.ok(evidence.knowledgeSearch.attempts.every((attempt) => attempt.scopeNodeIds.join() === "hotel"));
+      assert.equal(evidence.explicitEntityFastPath.knowledgeStopReason, target.slotId === "exclusive-empty" ? "entity_directory_empty" : "entity_directory_no_match");
+    } else {
+      assert.equal(knowledgeCalls.length, 0);
+      assert.equal(evidence.knowledgeSearch.status, "entity_directory_missing");
+      assert.equal(evidence.knowledgeSearch.knowledgeQueryExecuted, false);
+      assert.equal(evidence.explicitEntityFastPath.knowledgeStopReason, "entity_directory_missing");
+    }
+  }
+});
+
+test("实体Web保留短Query动作，身份未知或审核未完成不自动放行", () => {
+  const target = { moduleType: "dining", diningLocation: "Cloud Table", region: "Cloud City", subject: "餐厅内景",exactIdentityRequired:true,queryCore:{identity:"Cloud Table"} };
+  const route = { ...explicitEntityRoute(target), knowledgeStopReason: "entity_directory_no_match" };
+  assert.deepEqual(buildWebExecutionQueries(target, ["Cloud Table dining", "restaurant interior"], "explicit_entity", route), ["Cloud Table dining Cloud City", "Cloud Table restaurant interior Cloud City"]);
+  assert.equal(classifyWebFallback({ kind: "no_eligible" }, target, route).allowed, true);
+  assert.equal(classifyWebFallback({ kind: "inconclusive", technicalStatus: "visual_judgment_inconclusive" }, target, route).allowed, false);
+  assert.equal(classifyWebFallback({ kind: "no_candidate" }, target, { ...route, identityKnown: false }).allowed, false);
+});
 const completeAudit = (candidateOrId, overrides = {}) => ({
   candidateId: typeof candidateOrId === "string" ? candidateOrId : candidateOrId.candidateId,
   actualSubject: "测试候选主体",
@@ -300,7 +356,7 @@ test("knowledge_first 遇到末层 empty 仍进入现有 Web 来源 fallback", a
       searchCommonsImages: async () => [],
     },
   });
-  assert.equal(webCalls, 1);
+  assert.equal(webCalls, 2);
   assert.equal(result.metrics.knowledgeFirstWebFallbacks, 1);
   assert.equal(result.results[0].pipelineEvidence.sourceFallback.from, "knowledge_library");
   assert.equal(result.results[0].pipelineEvidence.sourceFallback.to, "web");
@@ -359,13 +415,13 @@ test("酒店按高价值类别逐个查询，第二类找到合格图后立即�
     root,
     sourceMode: "knowledge_only",
     knowledgeBaseUrl: "http://192.168.100.210:8020",
-    knowledgeScopeNodeIds: ["angama-hotel-root"],
     trustedKnowledgeOrigins: ["http://192.168.100.210:9000"],
     slots: [slot("hotel-query-plan", { moduleType: "hotel", hotel: "Angama Amboseli", subject: "酒店外观", activity: "", searchIntent: ["酒店外观", "度假酒店外观", "hotel exterior", "lodge exterior"], visualGoal: "酒店代表图" })],
     visionApiKey: "vision",
     visionBaseUrl: "https://vision.invalid",
     visionModel: "model",
     adapters: {
+      loadKnowledgeHierarchy: async () => buildKnowledgeHierarchy([{ node_id: "angama-hotel-root", formal_name: "Angama Amboseli" }]),
       searchKnowledgeImages: async ({ queries, scopeNodeIds }) => {
         calls.push({ query: queries[0], scopeNodeIds: [...scopeNodeIds] });
         if (queries[0] === "酒店外观") return { status: "completed", queryId: "qry-exterior", queryText: queries[0], scopeState: "no_match", message: "未找到匹配内容", durationMs: 5, records: [], candidates: [] };
@@ -473,7 +529,7 @@ test("酒店目录明确为空时只查一次知识库并交给既有Web来源",
     },
   });
   assert.equal(knowledgeCalls, 1);
-  assert.equal(webCalls, 1);
+  assert.equal(webCalls, 4);
   assert.equal(result.results[0].pipelineEvidence.knowledgeSearch.attempts.length, 1);
 });
 
@@ -1124,11 +1180,11 @@ test("knowledge_only 对无结果、需澄清、失败和超时直接返回，�
 test("knowledge_first 仅在知识库产生最终合格图时停止，否则进入现有公网链路", async (t) => {
   const cases = [
     ["success", "completed", true, true, 0],
-    ["not-found", "completed", false, false, 1],
-    ["clarification", "needs_clarification", false, false, 1],
-    ["failed", "failed", false, false, 1],
-    ["timeout", "timeout", false, false, 1],
-    ["all-rejected", "completed", true, false, 1],
+    ["not-found", "completed", false, false, 4],
+    ["clarification", "needs_clarification", false, false, 4],
+    ["failed", "failed", false, false, 4],
+    ["timeout", "timeout", false, false, 4],
+    ["all-rejected", "completed", true, false, 4],
   ];
   for (const [name, status, hasKnowledgeCandidate, approved, expectedWebCalls] of cases) {
     const root = await mkdtemp(path.join(os.tmpdir(), `knowledge-first-${name}-`));
@@ -1285,12 +1341,12 @@ test("多 slot 单批次并发处理，多 query 且单 slot 失败不影响其�
     assert.ok(result.results[0].queriesUsed.length >= 2);
     assert.equal(result.results[0].status, "success");
     assert.ok(result.results[0].selected.candidateId.startsWith("candidate-"));
-    assert.equal(result.results[0].selected.candidateId, result.results[0].candidates[0].candidateId);
+    assert.equal(result.results[0].selected.candidateId, result.results[0].candidates.find((item) => item.selected).candidateId);
     assert.equal(result.results[1].status, "not_found");
     assert.equal(result.results[2].status, "failed");
     assert.ok(searchPeak > 1);
     assert.ok(result.metrics.concurrencyPeak.slots > 1);
-    assert.equal(result.metrics.searchCalls, 4);
+    assert.equal(result.metrics.searchCalls, 5);
     assert.equal(result.metrics.technicalRetries.search, 1);
     assert.equal(result.metrics.batchVisionCalls, 1);
     assert.equal(result.metrics.topConfirmationCalls, 0);
@@ -1365,10 +1421,10 @@ test("连续相似 DAY 的搜索 query 只保留Planner主体词，差异上下�
         searchCommonsImages: async () => [],
       },
     });
-    assert.equal(result.metrics.searchCalls, 3);
-    assert.equal(captured.length, 3);
+    assert.equal(result.metrics.searchCalls, 6);
+    assert.equal(captured.length, 6);
     const querySets = captured;
-    assert.equal(new Set(querySets.map((queries) => queries.join("\n"))).size, 3);
+    assert.equal(new Set(querySets.map((queries) => queries.join("\n"))).size, 6);
     assert.doesNotMatch(querySets.flat().join(" "), /环境建立|深入观察|地貌转换|相邻 DAY/);
     assert.ok(querySets.flat().every((query) => query.length <= 120));
     assert.doesNotMatch(querySets.flat().join(" "), /狮子|大象|日出|黄昏|热气球/);
@@ -1390,7 +1446,7 @@ test("酒店 slot 不搜索 Commons，普通 slot 每批最多一次", async () 
     });
     assert.equal(commonsCalls, 1);
     assert.equal(result.metrics.commonsCalls, 1);
-    assert.equal(result.metrics.searchCalls, 2);
+    assert.equal(result.metrics.searchCalls, 6);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -1564,7 +1620,7 @@ test("无法形成安全Query的单个图片位转人工且不影响其他Slot",
   assert.equal(result.results.find((item) => item.slotId === "manual").status, "needs_user_action");
   assert.equal(result.results.find((item) => item.slotId === "manual").technicalStatus, "query_core_unrecoverable");
   assert.equal(result.results.find((item) => item.slotId === "safe").status, "not_found");
-  assert.equal(searchCalls, 1);
+  assert.equal(searchCalls, 2);
 });
 
 test("搜索非法JSON类技术错误以完全相同 query 重试一次", async (t) => {
@@ -1579,11 +1635,11 @@ test("搜索非法JSON类技术错误以完全相同 query 重试一次", async 
       searchCommonsImages: async () => [],
     },
   });
-  assert.equal(result.metrics.searchCalls, 2);
+  assert.equal(result.metrics.searchCalls, 3);
   assert.equal(result.metrics.technicalRetries.search, 1);
   assert.equal(result.metrics.automaticFollowupRounds, 0);
   assert.deepEqual(seen[0], seen[1]);
-  assert.equal(seen.length, 2);
+  assert.equal(seen.length, 3);
   assert.equal(result.results[0].pipelineEvidence.controlledFallback.entered, false);
   assert.equal(result.results[0].pipelineEvidence.controlledFallback.reason, "disabled_by_query_scope_plan");
   assert.equal(result.results[0].status, "not_found");
@@ -2184,4 +2240,99 @@ test("默认多图片位与知识库搜索并发上限为4", async (t) => {
   assert.equal(peakSearches, 4);
   assert.equal(result.metrics.concurrencyPeak.slots, 4);
   assert.equal(result.metrics.concurrencyPeak.search, 4);
+});
+test("Web只补结构化身份：普通两条、酒店四类且不使用理想长句", () => {
+  assert.deepEqual(buildWebExecutionQueries({ moduleType: "day", country: "测试国家", primaryVisualSubject: "不该进入搜索的长句" }, ["核心主体动作", "core action", "ignored"]), ["core action", "核心主体动作"]);
+  assert.deepEqual(buildWebExecutionQueries({ moduleType: "hotel", hotel: { officialName: "Official Hotel" } }, ["very specific ideal"]), ["Official Hotel exterior", "Official Hotel suite", "Official Hotel pool", "Official Hotel public space"]);
+  assert.deepEqual(buildWebExecutionQueries({ moduleType: "dining", hotel: "Official Hotel",exactIdentityRequired:true,queryCore:{identity:"Official Hotel"} }, ["户外晚餐"], "hotel_experience"), ["Official Hotel 户外晚餐"]);
+  assert.deepEqual(buildWebExecutionQueries({ moduleType: "dining", hotel: "Context Hotel", country: "Destination" }, ["户外晚餐"], "destination_experience"), ["Destination 户外晚餐"]);
+  assert.deepEqual(buildWebExecutionQueries({ moduleType: "hotel" }, ["suite"]), []);
+});
+
+test("Web fallback区分内容缺失、服务降级、目录缺失与审核故障", () => {
+  const target = { moduleType: "hotel", hotel: "Known Hotel" };
+  for (const status of ["knowledge_failed", "knowledge_timeout"]) assert.equal(classifyWebFallback({ kind: "search_failed", technicalStatus: status }, target).reason, "knowledge_service_degraded_fallback");
+  assert.equal(classifyWebFallback({ kind: "no_eligible" }, target).reason, "content_not_found_fallback");
+  assert.equal(classifyWebFallback({ kind: "inconclusive", technicalStatus: "knowledge_hotel_scope_unresolved" }, target).allowed, true);
+  for (const kind of ["visual_failed", "visual_unavailable"]) assert.equal(classifyWebFallback({ kind }, target).allowed, false);
+  assert.equal(classifyWebFallback({ kind: "inconclusive", technicalStatus: "visual_judgment_inconclusive" }, target).allowed, false);
+  assert.equal(classifyWebFallback({ kind: "no_candidate" }, { moduleType: "hotel" }).allowed, false);
+});
+
+test("Web同一审核波次先排序再采用，不采用模型数组第一张", async (t) => {
+  const result = await runAuditedFixture(t, slot("web-ranked"), { candidateCount: 4, judgments: (candidates) => candidates.map((candidate, index) => ({ candidateId: candidate.candidateId, score: index === 2 ? 99 : 88, relevance: index === 2 ? 99 : 88 })) });
+  const output = result.results[0];
+  assert.equal(output.status, "success");
+  assert.match(output.selected.localUrl, /candidate-3\.jpg$/);
+  assert.equal(output.pipelineEvidence.webExecution.executedQueries.length, 1);
+  assert.equal(output.pipelineEvidence.webExecution.auditBatches[0].candidateIds.length, 4);
+});
+
+test("Web首批普通representative继续看现有池第二批，不能直接搜新词", async (t) => {
+  let wave = 0;
+  const result = await runAuditedFixture(t, slot("web-dynamic"), { candidateCount: 6, judgments: (candidates) => { wave += 1; return candidates.map((candidate, index) => ({ candidateId: candidate.candidateId, matchLevel: wave === 1 ? "representative" : "exact", score: wave === 1 ? 70 : 96 - index, relevance: wave === 1 ? 70 : 96 })); } });
+  const output = result.results[0];
+  assert.equal(output.status, "success");
+  assert.deepEqual(output.pipelineEvidence.webExecution.auditBatches.map((batch) => batch.candidateIds.length), [4, 2]);
+  assert.equal(output.pipelineEvidence.webExecution.executedQueries.length, 1);
+  assert.equal(output.candidates.length, 6);
+});
+
+test("Web审核漏返回候选判断时保留人工状态，不继续搜索", async (t) => {
+  const result = await runAuditedFixture(t, slot("web-missing"), { candidateCount: 2, judgments: () => [] });
+  assert.equal(result.results[0].status, "needs_user_action");
+  assert.equal(result.results[0].candidates.length, 2);
+  assert.equal(result.results[0].pipelineEvidence.webExecution.executedQueries.length, 1);
+  assert.ok(result.results[0].candidates.every((item) => item.rejection === "needs_user_judgment"));
+});
+
+test("Web累计预算不随Query重置，下载失败和超预算候选都保留", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "web-budget-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let calls = 0;
+  const result = await runImageSearchSkill({
+    root, slots: [slot("web-budget")], downloadsPerSlot: 2, sourcePagesPerSlot: 2,
+    adapters: {
+      searchWebBatch: async () => { calls += 1; return [{ pageUrl: "https://example.com/test" }]; },
+      searchCommonsImages: async () => [],
+      extractPageImages: async (page) => Array.from({ length: 5 }, (_, index) => ({ ...page, imageUrl: `https://example.com/${index}.jpg` })),
+      downloadCandidate: async () => { throw new Error("download broken"); },
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.results[0].pipelineEvidence.webExecution.stopReason, "slot_resource_budget");
+  assert.equal(result.results[0].pipelineEvidence.webExecution.downloadsUsed, 2);
+  assert.equal(result.results[0].candidates.length, 5);
+  assert.equal(result.results[0].candidates.filter((item) => item.originalDownloadStatus === "failed").length, 2);
+});
+
+test("Web下一Query必须等待当前候选审核结束，查询实际逐条发送", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "web-serial-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const events = [];
+  let queries = 0;
+  let reviewing = false;
+  const result = await runImageSearchSkill({
+    root, slots: [slot("web-serial")], sourcePagesPerSlot: 4, downloadsPerSlot: 6,
+    visionApiKey: "vision", visionBaseUrl: "https://vision.invalid", visionModel: "model",
+    adapters: {
+      searchWebBatch: async ({ queries: current }) => { assert.equal(reviewing, false); assert.equal(current.length, 1); queries += 1; events.push(`search${queries}`); return [{ pageUrl: `https://example.com/q${queries}` }]; },
+      searchCommonsImages: async () => [],
+      extractPageImages: async (page) => [{ ...page, imageUrl: `${page.pageUrl}/image.jpg` }],
+      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+        const filePath = path.join(directory, `serial-${queries}.jpg`);
+        await sharp({ create: { width: 1400, height: 900, channels: 3, background: { r: queries * 40, g: 100, b: 80 } } }).jpeg().toFile(filePath);
+        return { filePath, publicUrl: `${publicPrefix}/serial-${queries}.jpg`, sha256: `serial-${queries}`, width: 1400, height: 900 };
+      },
+      judgeCandidatesBatch: async ({ candidates }) => {
+        reviewing = true; events.push(`audit${queries}`);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        reviewing = false;
+        return candidates.map((candidate) => completeAudit(candidate, queries === 1 ? { eligible: false, subjectMatch: false, coreSubjectMatch: false, matchLevel: "mismatch", hardRejectCode: "subject_mismatch" } : {}));
+      },
+    },
+  });
+  assert.deepEqual(events, ["search1", "audit1", "search2", "audit2"]);
+  assert.equal(result.results[0].status, "success");
+  assert.equal(result.results[0].candidates.length, 2);
 });

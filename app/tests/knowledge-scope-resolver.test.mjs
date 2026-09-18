@@ -6,11 +6,50 @@ import {
   buildKnowledgeQueryPlan,
   buildKnowledgeScopePlan,
   classifyKnowledgeImagePurpose,
+  confirmHotelDirectory,
+  explicitEntityRoute,
   knowledgeSourcePathMatches,
   resolveKnowledgeChildScope,
   resolveKnowledgeClarification,
   resolveKnowledgeScope,
 } from "../server/knowledge-scope-resolver.mjs";
+
+test('酒店目录确认使用完整层级，前后门禁共用结果', () => {
+  const tree = buildKnowledgeHierarchy([
+    {node_id:'r',formal_name:'根知识库'},
+    {node_id:'c',formal_name:'Testland',parent_node_id:'r'},
+    {node_id:'brand',formal_name:'Azure',parent_node_id:'c'},
+    {node_id:'hotel',formal_name:'Lake Retreat',parent_node_id:'brand'},
+    {node_id:'room',formal_name:'Stay',parent_node_id:'hotel'},
+  ]);
+  const slot = {moduleType:'hotel',hotel:'Azure Lake Retreat Hotel',country:'Testland',
+    queryCore:{identity:'Azure Lake Retreat Hotel'},exactIdentityRequired:true};
+  const proof = confirmHotelDirectory(slot,tree);
+  assert.equal(proof.status,'resolved');
+  assert.deepEqual(proof.resolution.nodeIds,['hotel']);
+  const plan = buildKnowledgeScopePlan(slot,resolveKnowledgeScope(slot,tree),tree);
+  assert.deepEqual(plan.scopes.map(s=>s.resolution.nodeIds),[['hotel']]);
+  assert.equal(plan.explicitEntityFastPath.hotelDirectoryConfirmation.status,'resolved');
+});
+
+test('唯一酒店简称可确认；同名目录不得按体验路线猜选；国家不是酒店', () => {
+  const records = [
+    {node_id:'r',formal_name:'根知识库'},
+    {node_id:'c',formal_name:'Testland',parent_node_id:'r'},
+    {node_id:'a',formal_name:'Azure Retreat',parent_node_id:'c'},
+  ];
+  const slot = {moduleType:'hotel',hotel:'Azure Retreat Riverside',country:'Testland',
+    queryCore:{identity:'Azure Retreat Riverside'},exactIdentityRequired:true};
+  assert.equal(confirmHotelDirectory(slot,buildKnowledgeHierarchy(records)).status,'resolved');
+  const duplicated = buildKnowledgeHierarchy([...records,
+    {node_id:'b',formal_name:'Azure Retreat',parent_node_id:'c'}]);
+  assert.equal(confirmHotelDirectory({...slot,location:'a',activity:'Riverside walk'},duplicated).status,'ambiguous');
+  const plan = buildKnowledgeScopePlan(slot,resolveKnowledgeScope(slot,duplicated),duplicated);
+  assert.equal(plan.scopes.length,0);
+  assert.equal(plan.explicitEntityFastPath.identityKnown,true);
+  assert.equal(plan.explicitEntityFastPath.knowledgeStopReason,'entity_directory_missing');
+  assert.equal(confirmHotelDirectory(slot,buildKnowledgeHierarchy(records.slice(0,2))).status,'unresolved');
+});
 
 const hierarchy = buildKnowledgeHierarchy([
   { node_id: "root", formal_name: "根知识库", parent_node_id: null },
@@ -876,9 +915,9 @@ test("Scope Plan 预先确定逐级范围和不同图片用途的停止边界", 
   assert.equal(transportPlan.stopBoundary, "country");
 
   const entityRoot = resolveKnowledgeScope({ moduleType: "day", location: "安博塞利", subject: "Observation Hill" }, hierarchy);
-  const entityPlan = buildKnowledgeScopePlan({ moduleType: "day", location: "安博塞利", subject: "Observation Hill" }, entityRoot, hierarchy);
+  const entityPlan = buildKnowledgeScopePlan({ moduleType: "day", location: "安博塞利", subject: "Observation Hill",exactIdentityRequired:true,queryCore:{identity:"Observation Hill"} }, entityRoot, hierarchy);
   assert.deepEqual(entityRoot.nodeIds, ["observation-hill"]);
-  assert.deepEqual(entityPlan.scopes.map((item) => item.resolution.nodeIds[0]), ["observation-hill", "amboseli", "kenya"]);
+  assert.deepEqual(entityPlan.scopes.map((item) => item.resolution.nodeIds[0]), ["observation-hill"]);
   assert.equal(entityPlan.scopes[0].evidenceResolution.nodeIds[0], "observation-hill");
   assert.equal(knowledgeSourcePathMatches(entityPlan.scopes[0].evidenceResolution, ["肯尼亚/安博塞利/普通风景.jpg"], { identityAnchors: entityPlan.scopes[0].identityAnchors }).match, false);
   assert.equal(knowledgeSourcePathMatches(entityPlan.scopes[0].evidenceResolution, ["肯尼亚/安博塞利/Observation Hill/view.jpg"], { identityAnchors: entityPlan.scopes[0].identityAnchors }).match, true);
@@ -888,11 +927,12 @@ test("酒店精确目录不存在时停止知识库，不扩大到地区或国�
   const slot = {
     moduleType: "hotel",
     hotel: "Aurora Wilderness Lodge",
+    exactIdentityRequired: true,
     location: "安博塞利",
     country: "肯尼亚",
     locationRole: "scope_only",
     primaryVisualSubject: "酒店无边泳池",
-    queryCore: { subject: "酒店无边泳池", subjectEn: "infinity pool" },
+    queryCore: { subject: "酒店无边泳池", subjectEn: "infinity pool",identity:"Aurora Wilderness Lodge" },
     fidelityQuery: "酒店无边泳池",
     alternateQueries: ["infinity pool"],
   };
@@ -901,20 +941,37 @@ test("酒店精确目录不存在时停止知识库，不扩大到地区或国�
   const scopePlan = buildKnowledgeScopePlan(slot, root, hierarchy);
   assert.deepEqual(scopePlan.scopes, []);
   assert.equal(scopePlan.stopBoundary, "hotel_root");
-  assert.equal(scopePlan.blockedReason, "hotel_directory_unresolved");
+  assert.equal(scopePlan.blockedReason, "entity_directory_missing");
 });
 
-test("景点目录缺失时只在解析到的范围查询并用实体名硬校验，不跨实体采用", () => {
+test("景点目录缺失时停止知识库，不将已解析的地区当成实体目录", () => {
   const withoutObservationHill = buildKnowledgeHierarchy(hierarchy.records
     .filter((node) => node.nodeId !== "observation-hill")
     .map((node) => ({ node_id: node.nodeId, formal_name: node.formalName, parent_node_id: node.parentNodeId })));
-  const slot = { moduleType: "day", location: "安博塞利", subject: "Observation Hill" };
+  const slot = { moduleType: "day", location: "安博塞利", subject: "Observation Hill",exactIdentityRequired:true,queryCore:{identity:"Observation Hill"} };
   const root = resolveKnowledgeScope(slot, withoutObservationHill);
   const plan = buildKnowledgeScopePlan(slot, root, withoutObservationHill);
-  assert.deepEqual(plan.scopes.map((item) => item.resolution.nodeIds[0]), ["amboseli", "kenya"]);
-  assert.equal(plan.scopes[0].sourcePathMode, "entity_identity");
-  assert.ok(plan.scopes[0].identityAnchors.includes("Observation Hill"));
-  assert.equal(knowledgeSourcePathMatches(plan.scopes[0].evidenceResolution, ["肯尼亚/安博塞利/普通风景.jpg"], { mode: plan.scopes[0].sourcePathMode, identityAnchors: plan.scopes[0].identityAnchors }).match, false);
+  assert.deepEqual(plan.scopes, []);
+  assert.equal(plan.blockedReason, "entity_directory_missing");
+  assert.ok(plan.explicitEntityFastPath.identityAnchors.includes("Observation Hill"));
+});
+
+test("陌生命名实体不依赖专用名单，专属酒店体验只锁酒店，通用体验不锁店", () => {
+  for (const target of [
+    { moduleType: "dining", diningLocation: "Cloud Table", location: "北境湖区", subject: "餐厅内景",exactIdentityRequired:true,queryCore:{identity:"Cloud Table"} },
+    { moduleType: "day", locationRole: "visual_identity", location: "云川博物馆", queryCore: { identity: "云川博物馆" }, subject: "博物馆建筑",exactIdentityRequired:true },
+  ]) {
+    const plan = buildKnowledgeScopePlan(target, resolveKnowledgeScope(target, hierarchy), hierarchy);
+    assert.equal(plan.explicitEntityFastPath.matched, true);
+    assert.equal(plan.blockedReason, "entity_directory_missing");
+    assert.deepEqual(plan.scopes, []);
+  }
+  const exclusive = { moduleType: "day", hotel: "Angama Amboseli", location: "安博塞利", subject: "专属星空床", activity: "星空床",exactIdentityRequired:true,queryCore:{identity:"Angama Amboseli"} };
+  assert.deepEqual(buildKnowledgeScopePlan(exclusive, resolveKnowledgeScope(exclusive, hierarchy), hierarchy).scopes.map((scope) => scope.resolution.nodeIds[0]), ["angama"]);
+  const missingHotel = { ...exclusive, hotel: "The Ritz-Carlton, Masai Mara Safari Camp", location: "马赛马拉",queryCore:{identity:"The Ritz-Carlton, Masai Mara Safari Camp"} };
+  const noRitz = buildKnowledgeHierarchy(hierarchy.records.filter((node) => node.nodeId !== "ritz").map((node) => ({ node_id: node.nodeId, formal_name: node.formalName, parent_node_id: node.parentNodeId })));
+  assert.deepEqual(buildKnowledgeScopePlan(missingHotel, resolveKnowledgeScope(missingHotel, noRitz), noRitz).scopes, []);
+  assert.equal(explicitEntityRoute({ moduleType: "day", hotel: "Angama Amboseli", location: "安博塞利", subject: "象群", activity: "普通Safari" }).matched, false);
 });
 
 test("知识库 source_paths 是地点硬证据，冲突路径不能交给视觉模型覆盖", () => {
