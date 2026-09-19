@@ -79,6 +79,18 @@ test("Simple项目直达编辑页复用全局工作台Header", () => {
   assert.doesNotMatch(desktopNarrow, /header-brand span[^}]+display:\s*none/);
 });
 
+test("Step4人工换图允许未自动采用候选且结果提示自动消失", () => {
+  const picker = workspace.slice(workspace.indexOf("function ImagePickerModal"), workspace.indexOf("export function Editor"));
+  const editor = workspace.slice(workspace.indexOf("export function Editor"), workspace.indexOf("export function VersionsStep"));
+  assert.match(picker, /canManuallyChooseImageCandidate\(candidate\)/);
+  assert.match(picker, /manualConfirmed:\s*true/);
+  assert.match(picker, /可人工确认采用/);
+  assert.doesNotMatch(picker, /不适合当前位置/);
+  assert.match(editor, /setTimeout\(\(\) => setImageMessage/);
+  assert.match(editor, /2800/);
+  assert.match(editor, /if \(saved\) setPickerOpen\(false\)/);
+});
+
 test("生成步骤只展示定制师可理解的状态且不暴露技术运行信息", () => {
   const generation = workspace.slice(workspace.indexOf("function AgentGenerationStep"), workspace.indexOf("function CandidatePreview"));
   assert.match(workspace, /SIMPLE_DESIGNER_STAGES/);

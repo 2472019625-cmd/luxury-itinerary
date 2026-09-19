@@ -14,6 +14,14 @@ export const IMAGE_MODULE_POLICY = Object.freeze({
   day: { relevance: 82, luxury: 58, cleanliness: 70, composition: 62 },
 });
 
+export function canManuallyChooseImageCandidate(candidate = {}) {
+  const hasPreview = Boolean(candidate.userProvided || candidate.localPreviewUrl || candidate.previewUrl || candidate.localUrl || candidate.publicUrl);
+  const hardRejected = candidate.status === IMAGE_REVIEW_STATE.HARD_REJECTED
+    || candidate.autoRejected === true
+    || candidate.qualificationStatus === "rejected";
+  return hasPreview && !hardRejected;
+}
+
 const HARD_CODES = new Set(["watermark", "subject_mismatch", "place_mismatch", "broken", "low_resolution", "low_quality", "duplicate", "forbid"]);
 
 export function auditReasonHasIdentityMismatch(reason = "") {

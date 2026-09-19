@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { addDays, isUsableFinalImageSource, mapDaysFromStart, removeExperienceReferences, synchronizeExperienceStatus, validateItineraryFacts } from "./lib/itineraryRules.js";
-import { applyImageToSlot, IMAGE_REVIEW_STATE, pendingImageReviewSlots } from "./lib/imageReviewPolicy.js";
+import { applyImageToSlot, canManuallyChooseImageCandidate, IMAGE_REVIEW_STATE, pendingImageReviewSlots } from "./lib/imageReviewPolicy.js";
 import { buildLayoutImageSlots, getSlotImage, listImagePlacements, moveImageToSlot, setSlotImage } from "./lib/imageSlots.js";
 import { deriveProjectThumbnail } from "./lib/projectThumbnail.js";
 import { safeWriteStorage } from './lib/storageSafety.js';
@@ -755,6 +755,7 @@ function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, on
   const [tab, setTab] = useState('recommended');
   const researching = operation.searching;
   const [pendingChoice, setPendingChoice] = useState(null);
+  const [failedCandidates, setFailedCandidates] = useState(() => new Set());
   useEffect(() => {
     const close = event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); } };
     window.addEventListener('keydown', close, true);
@@ -767,13 +768,13 @@ function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, on
   const uploaded = placements.filter(({ image }) => image.userProvided && !savedCandidates.some(candidate => candidate.localPreviewUrl === image.src)).map(({ slot, image }) => ({ candidateId: 'user-' + slot.slotId, localPreviewUrl: image.src, sourceTitle: '本地上传', slotId: slot.slotId, userProvided: true }));
   const all = [...savedCandidates, ...uploaded].filter((item, index, array) => array.findIndex((other) => other.localPreviewUrl === item.localPreviewUrl && other.pipelineSlotId === item.pipelineSlotId) === index);
   const matchesTarget = (candidate) => candidate.fieldPath ? candidate.fieldPath === targetSlot.fieldPath : candidate.slotId === targetSlot.slotId;
-  const canChoose = (candidate) => candidate.manualSelectable === true || candidate.userProvided || candidate.libraryEligible === true && (!candidate.pipelineSlotId || matchesTarget(candidate));
+  const canChoose = (candidate) => canManuallyChooseImageCandidate(candidate) && !failedCandidates.has(candidate.candidateId);
   const visible = tab === 'recommended' ? all.filter((item) => matchesTarget(item) || !item.pipelineSlotId && item.terminalAudit?.subjectMatch === true).sort((a, b) => Number(matchesTarget(b)) - Number(matchesTarget(a))) : all;
   return <div className="modal-backdrop image-picker-backdrop" role="dialog" aria-modal="true" aria-label="更换图片"><section className="image-picker-modal">
     <header><div><small>更换图片</small><h2>{targetSlot.label}</h2><p>选择已使用图片时会移动到这里，原位置自动留空。</p></div><button onClick={onClose}>关闭</button></header>
     <nav><button className={tab === 'recommended' ? 'active' : ''} onClick={() => setTab('recommended')}>适合当前位置</button><button className={tab === 'all' ? 'active' : ''} onClick={() => setTab('all')}>全部行程图片</button><button className={tab === 'upload' ? 'active' : ''} onClick={() => setTab('upload')}>本地上传</button></nav>
-    {tab === 'upload' ? <div className="image-picker-upload"><UiIcon name="included" size={42} /><strong>上传你确认可使用的图片</strong><p>上传后会保存在当前项目，并锁定这个位置，自动搜索不会覆盖。</p><Button tone="primary" disabled={operation.saving} onClick={() => inputRef.current?.click()}>选择本地图片</Button></div> : <div className="image-picker-grid">{visible.length ? visible.map((candidate) => { const used = usedBySrc.get(candidate.localPreviewUrl); const selectable = canChoose(candidate); return <button key={`${candidate.pipelineSlotId || candidate.slotId}-${candidate.candidateId}`} disabled={!selectable || operation.saving} className={selectable ? '' : 'image-picker-candidate-rejected'} onClick={() => selectable && setPendingChoice({ candidate, used })}><img src={candidate.localPreviewUrl} alt={candidate.actualSubject || '候选图片'} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add('thumbnail-load-failed'); }} /><span><strong>{candidate.sourceTitle || (candidate.userProvided ? '本地上传' : '已检查图片')}</strong><small>{selectable ? used ? '当前在：' + used.label : '可人工采用' : candidate.status === IMAGE_REVIEW_STATE.HARD_REJECTED ? '明确拒绝 · 不可采用' : '不适合当前位置'}</small>{candidate.actualSubject && <small>实际主体：{candidate.actualSubject}</small>}{candidate.reason && <small>判定：{candidate.reason}</small>}</span></button>; }) : <div className="empty-image-state"><strong>还没有适合的图片</strong><span>可以为当前位置继续搜索，或上传自己的图片。</span></div>}</div>}
-    <footer><div role="status" aria-live="polite">{operation.message}</div>{pendingChoice && <div className="empty-image-state"><strong>确认用于「{targetSlot.label}」？</strong><span>{pendingChoice.candidate.reason || '请确认图片内容和使用权。'} 已使用的图片会移动到这里，原位置留空。</span><Button disabled={operation.saving} onClick={() => onChoose({ ...pendingChoice.candidate, manualConfirmed: true }, pendingChoice.used)}>确认替换</Button><Button onClick={() => setPendingChoice(null)}>取消选择</Button></div>}<Button disabled={researching || !onResearch} onClick={onResearch}>{researching ? '正在搜索…' : '为当前位置搜索更多'}</Button></footer>
+    {tab === 'upload' ? <div className="image-picker-upload"><UiIcon name="included" size={42} /><strong>上传你确认可使用的图片</strong><p>上传后会保存在当前项目，并锁定这个位置，自动搜索不会覆盖。</p><Button tone="primary" disabled={operation.saving} onClick={() => inputRef.current?.click()}>选择本地图片</Button></div> : <div className="image-picker-grid">{visible.length ? visible.map((candidate) => { const used = usedBySrc.get(candidate.localPreviewUrl); const previewFailed = failedCandidates.has(candidate.candidateId); const selectable = canChoose(candidate); const needsManualConfirmation = selectable && candidate.manualSelectable !== true && candidate.libraryEligible !== true && !candidate.userProvided; return <button key={`${candidate.pipelineSlotId || candidate.slotId}-${candidate.candidateId}`} disabled={!selectable || operation.saving} className={selectable ? '' : 'image-picker-candidate-rejected'} onClick={() => selectable && setPendingChoice({ candidate, used })}><img src={candidate.localPreviewUrl} alt={candidate.actualSubject || '候选图片'} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add('thumbnail-load-failed'); setFailedCandidates((current) => new Set(current).add(candidate.candidateId)); }} /><span><strong>{candidate.sourceTitle || (candidate.userProvided ? '本地上传' : '已检查图片')}</strong><small>{previewFailed ? '图片加载失败 · 不可采用' : !selectable ? '明确拒绝 · 不可采用' : used ? '当前在：' + used.label : needsManualConfirmation ? '可人工确认采用' : '可人工采用'}</small>{candidate.actualSubject && <small>实际主体：{candidate.actualSubject}</small>}{candidate.reason && candidate.reason !== '暂无审核说明' && <small>判定：{candidate.reason}</small>}</span></button>; }) : <div className="empty-image-state"><strong>还没有适合的图片</strong><span>可以为当前位置继续搜索，或上传自己的图片。</span></div>}</div>}
+    <footer><div role="status" aria-live="polite">{operation.message}</div>{pendingChoice && <div className="empty-image-state"><strong>确认用于「{targetSlot.label}」？</strong><span>{pendingChoice.candidate.reason && pendingChoice.candidate.reason !== '暂无审核说明' ? pendingChoice.candidate.reason : '这张图片未被系统自动采用，请确认内容与使用权。'} 已使用的图片会移动到这里，原位置留空。</span><Button disabled={operation.saving} onClick={() => onChoose({ ...pendingChoice.candidate, manualConfirmed: true }, pendingChoice.used)}>确认替换</Button><Button onClick={() => setPendingChoice(null)}>取消选择</Button></div>}<Button disabled={researching || !onResearch} onClick={onResearch}>{researching ? '正在搜索…' : '为当前位置搜索更多'}</Button></footer>
     <input ref={inputRef} hidden type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload(file); event.target.value = ''; }} />
   </section></div>;
 }
@@ -788,13 +789,35 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   const [imageOperations, setImageOperations] = useState({});
   const [imageMessage, setImageMessage] = useState('');
   const activeImageActions = useRef(new Set());
+  const imageFeedbackTimers = useRef(new Map());
+  useEffect(() => () => {
+    imageFeedbackTimers.current.forEach((timer) => clearTimeout(timer));
+    imageFeedbackTimers.current.clear();
+  }, []);
+  useEffect(() => {
+    if (!imageMessage) return undefined;
+    const timer = setTimeout(() => setImageMessage((current) => current === imageMessage ? '' : current), 2800);
+    return () => clearTimeout(timer);
+  }, [imageMessage]);
   const imageAction = async (slot, kind, perform) => {
     const key = `${slot.slotId}:${kind}`;
     if (activeImageActions.current.has(key)) return false;
     activeImageActions.current.add(key);
     const flag = kind === 'search' ? 'searching' : 'saving';
     const start = kind === 'search' ? `正在为「${slot.label}」搜索更多图片` : kind === 'upload' ? '正在上传并保存图片…' : '正在保存图片…';
-    const show = (message, busy) => { setImageOperations(current => ({ ...current, [slot.slotId]: { ...current[slot.slotId], [flag]: busy, message } })); setImageMessage(message); };
+    const show = (message, busy) => {
+      const previousTimer = imageFeedbackTimers.current.get(slot.slotId);
+      if (previousTimer) clearTimeout(previousTimer);
+      setImageOperations(current => ({ ...current, [slot.slotId]: { ...current[slot.slotId], [flag]: busy, message } }));
+      setImageMessage(message);
+      if (!busy) {
+        const timer = setTimeout(() => {
+          setImageOperations(current => current[slot.slotId]?.message === message ? { ...current, [slot.slotId]: { ...current[slot.slotId], message: '' } } : current);
+          imageFeedbackTimers.current.delete(slot.slotId);
+        }, 2800);
+        imageFeedbackTimers.current.set(slot.slotId, timer);
+      }
+    };
     show(start, true);
     try {
       const result = await perform();
@@ -1117,7 +1140,8 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     if (!currentSlot) return;
     if (candidate.manualSelectable && !candidate.manualConfirmed) return;
     if (onChooseImage) {
-      await imageAction(currentSlot, 'select', () => onChooseImage(candidate, currentSlot, usedSlot));
+      const saved = await imageAction(currentSlot, 'select', () => onChooseImage(candidate, currentSlot, usedSlot));
+      if (saved) setPickerOpen(false);
       return;
     }
     updateData((next) => {

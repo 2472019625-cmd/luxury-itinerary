@@ -9,7 +9,7 @@ import { applySelections, buildImageSlots } from "../server/image-allocator.mjs"
 import { isOfficialSource, parseSearchResults } from "../server/image-search.mjs";
 import { filterDiningExperiences } from "../server/refinement-rules.mjs";
 import { baseScore, candidateRecordId, classifyAuditFailure, ConcurrentTaskQueue, imagePipelineLimits, internationalizeImageQuery, settledMap, shouldContinueAutomaticSearch, uniqueCandidatesByContent } from "../server/image-pipeline.mjs";
-import { applyImageToSlot, classifyImageCandidate, IMAGE_REVIEW_STATE } from "../src/lib/imageReviewPolicy.js";
+import { applyImageToSlot, canManuallyChooseImageCandidate, classifyImageCandidate, IMAGE_REVIEW_STATE } from "../src/lib/imageReviewPolicy.js";
 import { buildLayoutImageSlots, moveImageToSlot } from "../src/lib/imageSlots.js";
 import { buildBlueprintInput, validateImageBlueprint } from "../server/image-blueprint.mjs";
 import { selectCustomerRenderData } from "../server/customer-render-data.mjs";
@@ -186,6 +186,14 @@ test("classifies soft preference misses as manual review across modules", () => 
     assert.equal(result.state, IMAGE_REVIEW_STATE.MANUAL_REVIEW);
     assert.equal(result.adoptable, true);
   }
+});
+
+test("Step4 permits manual confirmation for every visible non-hard-rejected candidate", () => {
+  assert.equal(canManuallyChooseImageCandidate({ localPreviewUrl: "/image-assets/unreviewed.jpg", status: IMAGE_REVIEW_STATE.MANUAL_REVIEW, manualSelectable: false }), true);
+  assert.equal(canManuallyChooseImageCandidate({ localPreviewUrl: "/image-assets/not-selected.jpg", qualificationStatus: "unreviewed", libraryEligible: false }), true);
+  assert.equal(canManuallyChooseImageCandidate({ localPreviewUrl: "/image-assets/rejected.jpg", status: IMAGE_REVIEW_STATE.HARD_REJECTED }), false);
+  assert.equal(canManuallyChooseImageCandidate({ localPreviewUrl: "/image-assets/rejected-qualification.jpg", qualificationStatus: "rejected" }), false);
+  assert.equal(canManuallyChooseImageCandidate({ status: IMAGE_REVIEW_STATE.MANUAL_REVIEW }), false);
 });
 
 test("hard rejects watermark, wrong subject, broken images and duplicates", () => {

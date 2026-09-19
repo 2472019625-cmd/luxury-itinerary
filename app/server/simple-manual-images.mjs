@@ -451,6 +451,46 @@ async function localizeKnowledgeCandidate({
   }
 }
 
+async function localizeRemoteCandidate({ candidate, root, projectId, downloadImage = downloadCandidate } = {}) {
+  if (candidate.localUrl?.startsWith("/image-assets/")) return { candidate, attempts: 0, success: 0, saved: 0, durationMs: 0 };
+  const existingAsset = [candidate.publicUrl, candidate.localPreviewUrl, candidate.previewUrl]
+    .find((value) => String(value || "").startsWith("/image-assets/"));
+  if (existingAsset) return { candidate: { ...candidate, localUrl: existingAsset }, attempts: 0, success: 0, saved: 0, durationMs: 0 };
+  const imageUrl = [candidate.imageUrl, candidate.publicUrl, candidate.previewUrl, candidate.localPreviewUrl]
+    .find((value) => /^https?:\/\//i.test(String(value || "")));
+  if (!imageUrl) throw Object.assign(new Error("该候选没有可下载的原图地址"), { code: "candidate_original_missing" });
+  const startedAt = Date.now();
+  const directory = path.join(root, "output", "image-assets", `simple-manual-${projectId}`);
+  const publicPrefix = `/image-assets/simple-manual-${projectId}`;
+  try {
+    const downloaded = await downloadImage({ ...candidate, imageUrl }, { directory, publicPrefix });
+    return {
+      candidate: {
+        ...candidate,
+        filePath: downloaded.filePath,
+        publicUrl: downloaded.publicUrl,
+        localUrl: downloaded.publicUrl,
+        sha256: downloaded.sha256,
+        width: downloaded.width,
+        height: downloaded.height,
+        bytes: downloaded.bytes,
+        contentType: downloaded.contentType,
+        originalDownloaded: true,
+        originalDownloadStatus: "success",
+      },
+      attempts: 1,
+      success: 1,
+      saved: 1,
+      durationMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    error.code ||= "preview_found_original_download_failed";
+    error.originalDownloadAttempts = 1;
+    error.originalDownloadDurationMs = Date.now() - startedAt;
+    throw error;
+  }
+}
+
 function originalDownloadFailureCode(error) {
   const message = `${error?.code || ""} ${error?.message || ""}`;
   if (/unsupported|不支持的图片格式|invalid format/i.test(message)) return "unsupported_format";
@@ -486,9 +526,11 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
   const overridesAutomaticJudgment = source.slotId !== slotId || !candidateCanBeSelected(context.result, current, candidate);
   if (overridesAutomaticJudgment && !manualConfirmed) throw Object.assign(new Error("未确认图片风险，不能采用"), { code: "manual_confirmation_required" });
   let delayedOriginal = { attempts: 0, success: 0, saved: 0, durationMs: 0 };
-  if (!candidate.localUrl?.startsWith("/image-assets/") && candidate.sourceKind === "knowledge_library") {
+  if (!candidate.localUrl?.startsWith("/image-assets/")) {
     try {
-      delayedOriginal = await localizeKnowledgeCandidate({ candidate, root, projectId, knowledgeImageConfig, downloadImage, refreshMatchedFile });
+      delayedOriginal = candidate.sourceKind === "knowledge_library"
+        ? await localizeKnowledgeCandidate({ candidate, root, projectId, knowledgeImageConfig, downloadImage, refreshMatchedFile })
+        : await localizeRemoteCandidate({ candidate, root, projectId, downloadImage });
       candidate = delayedOriginal.candidate;
     } catch (error) {
       const failureCode = originalDownloadFailureCode(error);

@@ -293,6 +293,40 @@ test("人工选择不能使用损坏文件且不修改项目", async (t) => {
   assert.equal(value.store.getFinalResult(value.projectId, value.executionRunId).imageExecution.results[0].selected, null);
 });
 
+test("只有远程预览的人工候选会在确认时下载原图再替换", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  const candidate = {
+    candidateId: "remote-preview-candidate",
+    imageUrl: "https://images.example.com/room.jpg",
+    localPreviewUrl: "https://images.example.com/room-thumb.jpg",
+    sourceTitle: "远程酒店图片",
+  };
+  result.imageExecution.results[0].candidates.push(candidate);
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const directory = path.join(value.root, "output", "image-assets", `simple-manual-${value.projectId}`);
+  const filePath = path.join(directory, "downloaded.jpg");
+  const buffer = await sharp({ create: { width: 1200, height: 800, channels: 3, background: "#896a42" } }).jpeg().toBuffer();
+  const payload = await chooseSimpleImageCandidate({
+    ...value,
+    slotId: "image:cover:primary",
+    candidateId: candidate.candidateId,
+    manualConfirmed: true,
+    render: async ({ mode }) => ({ status: "success", mode, outputPath: path.join(value.root, `${mode}.png`), rendererCalls: 1, durationMs: 1 }),
+    downloadImage: async (input, options) => {
+      assert.equal(input.imageUrl, candidate.imageUrl);
+      assert.equal(options.publicPrefix, `/image-assets/simple-manual-${value.projectId}`);
+      await mkdir(directory, { recursive: true });
+      await writeFile(filePath, buffer);
+      return { filePath, publicUrl: `/image-assets/simple-manual-${value.projectId}/downloaded.jpg`, width: 1200, height: 800, bytes: buffer.length, contentType: "image/jpeg", sha256: "remote-preview" };
+    },
+  });
+  assert.equal(payload.project.data.heroImage, `/image-assets/simple-manual-${value.projectId}/downloaded.jpg`);
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId).imageExecution.results[0].selected;
+  assert.equal(saved.originalDownloaded, true);
+  assert.equal(saved.originalDownloadStatus, "success");
+});
+
 test("最后一个 required 上传补齐后直接启动 Renderer 并完成", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
   const modes = [];
