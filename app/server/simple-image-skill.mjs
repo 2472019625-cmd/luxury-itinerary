@@ -215,7 +215,7 @@ function expandHotelSourcePages(pages, slot) {
         landing.pathname = `${match[1]}/`;
         landing.search = "";
         landing.hash = "";
-        expanded.push({ ...page, pageUrl: landing.href, title: `${text(slot.hotel) || page.title} official lodge page`, derivedFromPageUrl: page.pageUrl, sourceKind: "derived_official_lodge_page", searchRank: Math.max(0, Number(page.searchRank || 1) - 0.5) });
+        expanded.push({ ...page, pageUrl: landing.href, title: `${text(slot.hotel) || page.title} official lodge page`, derivedFromPageUrl: page.pageUrl, sourceKind: "derived_official_lodge_page", searchRank: Number(page.searchRank || 1) + 0.5 });
       }
     } catch { /* Keep the original search result below. */ }
     expanded.push(page);
@@ -249,6 +249,14 @@ function basicScore(candidate, slot) {
 function candidateRankScore(candidate, slot) {
   const officialHotelPriority = String(slot.moduleType || "").toLowerCase().includes("hotel") && candidate.officialHint ? 1000 : 0;
   return Number(candidate.downloadRelevance?.rankBoost || 0) + officialHotelPriority + basicScore(candidate, slot);
+}
+
+function pageSourcePriority(page = {}) {
+  const value = `${page.pageUrl || ""} ${page.title || ""}`;
+  if (/\/(?:gallery|photos?|media)(?:\/|$)|\b(?:gallery|photos?|media)\b/i.test(value)) return 300;
+  if (page.sourceKind === "derived_official_lodge_page") return 200;
+  if (/\/(?:lodge|hotel|camp|resort|experience|destination)\//i.test(value)) return 150;
+  return 0;
 }
 
 const weakSearchTokens = new Set(["photo", "photos", "photography", "image", "images", "travel", "experience", "landscape", "hotel", "lodge", "camp", "safari"]);
@@ -1948,7 +1956,23 @@ export async function runImageSearchSkill({
       const queryReport = { query: layerQueries[0], returnedPages: searchedPages.length, accessedPages: 0, pageFailures: 0, effectivePages: 0, rawResources: 0, technicalFiltered: 0, resizeDuplicates: 0, relevanceFiltered: 0, downloadPool: 0, downloadAttempts: 0, downloadSuccess: 0, visionAudits: 0, selected: false };
       evidence.webExecution.queryReports.push(queryReport);
       const failureStart = evidence.pageFailures.length;
-      const allPages = expandHotelSourcePages(searchedPages, layerSlot).filter((page) => !webBudget.pageUrls.has(page.pageUrl)).sort((a, b) => basicScore(b, layerSlot) - basicScore(a, layerSlot)).slice(0, evidence.webExecution.currentAllowance.pages);
+      const expandedPages = expandHotelSourcePages(searchedPages, layerSlot)
+        .filter((page) => !webBudget.pageUrls.has(page.pageUrl))
+        .sort((a, b) => pageSourcePriority(b) - pageSourcePriority(a) || basicScore(b, layerSlot) - basicScore(a, layerSlot));
+      const pageAllowance = evidence.webExecution.currentAllowance.pages;
+      const selectedPages = expandedPages.slice(0, pageAllowance);
+      // A derived hotel landing page and its matched gallery are one source
+      // group. Inspect both before moving to another query, without opening
+      // unrelated pages beyond the slot's cumulative network budget.
+      if (isHotel && selectedPages.length && selectedPages.length < expandedPages.length) {
+        const selectedUrls = new Set(selectedPages.map((page) => page.pageUrl));
+        for (const page of expandedPages) {
+          if (selectedPages.length >= sourcePagesPerSlot || webBudget.pages + selectedPages.length >= networkPageLimit) break;
+          const paired = selectedPages.some((selected) => selected.derivedFromPageUrl === page.pageUrl || page.derivedFromPageUrl === selected.pageUrl);
+          if (paired && !selectedUrls.has(page.pageUrl)) { selectedPages.push(page); selectedUrls.add(page.pageUrl); }
+        }
+      }
+      const allPages = selectedPages;
       queryReport.accessedPages = allPages.length;
       for (const page of allPages) webBudget.pageUrls.add(page.pageUrl);
       webBudget.pages += allPages.length;
@@ -1993,7 +2017,11 @@ export async function runImageSearchSkill({
       const perPageCap = Math.max(2, Math.ceil(downloadsPerSlot / Math.max(1, allPages.length)));
       const diverseExtracted = extractedGroups.flatMap((group, index) => [...group].sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot)).slice(0, isHotel && allPages[index]?.officialHint ? Math.max(4, downloadsPerSlot) : perPageCap));
       const returnedCandidates = uniqueImageAssets([...extractedGroups.flat(), ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))));
-      const rawCandidates = uniqueImageAssets([...diverseExtracted, ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot))).slice(0, evidence.webExecution.currentAllowance.downloads);
+      // Current-query candidates have priority over opening another query.
+      // The next query may use whatever cumulative slot budget remains, but
+      // a speculative reservation must not strand already-returned candidates.
+      const remainingDownloadBudget = Math.max(0, downloadsPerSlot - webBudget.downloads);
+      const rawCandidates = uniqueImageAssets([...diverseExtracted, ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot))).slice(0, remainingDownloadBudget);
       for (const candidate of rawCandidates) { webBudget.assets.add(webImageAssetKey(candidate.imageUrl)); candidate.candidateId = stableCandidateId(slot.slotId, candidate); }
       webBudget.downloads += rawCandidates.length;
       queryReport.insufficientInDownloadPool = rawCandidates.filter(candidate=>candidate.downloadRelevance?.state==='insufficient_evidence').length;

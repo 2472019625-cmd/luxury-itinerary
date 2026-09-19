@@ -1483,7 +1483,7 @@ test("官方 Gallery 命中后补取酒店落地页，并优先下载可确认�
       judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate) => completeAudit(candidate, { actualSubject: candidate.alt, score: 95, reason: "官方酒店主体空间" })),
     },
   });
-  assert.deepEqual(extractedPages, ["https://singita.com/lodge/singita-sabora-tented-camp/", "https://singita.com/lodge/singita-sabora-tented-camp/gallery"]);
+  assert.deepEqual(extractedPages, ["https://singita.com/lodge/singita-sabora-tented-camp/gallery", "https://singita.com/lodge/singita-sabora-tented-camp/"]);
   assert.equal(result.results[0].pipelineEvidence.officialSourcePages, 2);
   assert.ok(result.results[0].pipelineEvidence.officialExtractedCandidates >= 4);
   assert.equal(downloadedUrls.length, 2);
