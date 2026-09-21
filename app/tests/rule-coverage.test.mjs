@@ -15,7 +15,7 @@ function officialRules() {
 
 test('all current official rules are registered exactly once with matching execution types', () => {
   const official = officialRules();
-  assert.equal(official.length, 92);
+  assert.equal(official.length, 93);
   assert.equal(new Set(official.map(({ id }) => id)).size, official.length);
   assert.equal(new Set(RULE_COVERAGE.map(({ id }) => id)).size, RULE_COVERAGE.length);
   assert.deepEqual(RULE_COVERAGE.map(({ id }) => id).sort(), official.map(({ id }) => id).sort());

@@ -102,9 +102,15 @@ function Cover({ data }) {
     avatar: "/assets/placeholders/avatar.png",
     role: "资深定制师",
     bio: "专属定制师将与您1V1沟通，从路线节奏、酒店房型到在地体验持续跟进，\n让你的旅行 有品质 也有范儿",
+    phone: "",
+    wechat: "",
   };
   const hasDesigner = Boolean(data.designer?.name || data.designer?.avatar);
   const designer = { ...defaultDesigner, ...(data.designer || {}) };
+  const contacts = [
+    { label: "定制师电话", value: String(designer.phone || "").trim(), icon: "contact" },
+    { label: "工作微信", value: String(designer.wechat || "").trim(), icon: "wechat" },
+  ].filter((item) => item.value);
   const metrics = [["从业时间", designer.experience], ["成交单量", designer.orders], ["客户好评", designer.praise]].filter(([, value]) => value);
   return (
     <section className="cover" data-edit-path="cover">
@@ -113,7 +119,7 @@ function Cover({ data }) {
       <CoverVisual key={data.heroImage || "missing-cover"} src={data.heroImage} focus={data.heroFocus} alt={data.destination || "封面主图"} />
       <div className={`designer-card${hasDesigner ? "" : " designer-card-placeholder"}${metrics.length ? " designer-card-has-metrics" : " designer-card-no-metrics"}`}>
         <img src={designer.avatar} alt={designer.name} />
-        <div className="designer-heading"><strong>{designer.name}</strong><span>{designer.role || "资深定制师"}</span><p>{String(designer.bio || "").split("\n").map((line, index) => <span className="designer-bio-line" key={`${line}-${index}`}>{line}</span>)}</p></div>
+        <div className="designer-heading"><strong>{designer.name}</strong><span>{designer.role || "资深定制师"}</span>{contacts.length > 0 && <dl className={`designer-contact-row designer-contact-count-${contacts.length}`}>{contacts.map((item) => <div className="designer-contact-item" key={item.label}><dt><Icon name={item.icon} size={36} /><span>{item.label}</span></dt><dd>{item.value}</dd></div>)}</dl>}<p>{String(designer.bio || "").split("\n").map((line, index) => <span className="designer-bio-line" key={`${line}-${index}`}>{line}</span>)}</p></div>
         {metrics.length > 0 && <div className="designer-metrics">{metrics.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>}
       </div>
       <div className="cover-meta">
@@ -149,22 +155,61 @@ function Highlights({ items = [], title = "产品亮点" }) {
   })}</div></section>;
 }
 
+const MEAL_LABELS = { breakfast: "早", lunch: "午", dinner: "晚" };
+const MEAL_NEGATIVE_PATTERN = /自理|不含|未含|无餐|不安排|自费/;
+const MEAL_PENDING_PATTERN = /待确认|最终确认|确认安排|以.*为准|视.*安排|按行程所列/;
+
+function summarizeMeals(day) {
+  const plan = day.mealPlan;
+  if (plan && typeof plan === "object" && !Array.isArray(plan)) {
+    const included = [];
+    const excluded = [];
+    const pending = [];
+    Object.entries(MEAL_LABELS).forEach(([key, label]) => {
+      const value = String(plan[key] || "").trim();
+      if (!value) return;
+      if (MEAL_NEGATIVE_PATTERN.test(value)) excluded.push(label);
+      else if (MEAL_PENDING_PATTERN.test(value)) pending.push(label);
+      else included.push(label);
+    });
+    const parts = [];
+    if (included.length) parts.push(`含餐｜${included.join(" · ")}`);
+    if (excluded.length) parts.push(`${excluded.join("、")}餐自理`);
+    if (pending.length) parts.push(`${pending.join("、")}餐待确认`);
+    if (parts.length) return parts.join("；");
+  }
+
+  const text = String(day.meals || plan || "").trim();
+  if (!text) return "餐食｜待确认";
+  if (MEAL_PENDING_PATTERN.test(text)) return "餐食｜待确认";
+  if (/全餐|三餐/.test(text)) return "含餐｜早 · 午 · 晚";
+  const segments = text.split(/[\/、；;]/).map((item) => item.trim()).filter(Boolean);
+  const included = [
+    [/早餐|(^|\s)早(\s|$)/, "早"],
+    [/午餐|中餐|(^|\s)午(\s|$)/, "午"],
+    [/晚餐|(^|\s)晚(\s|$)/, "晚"],
+  ].filter(([pattern]) => segments.some((segment) => pattern.test(segment) && !MEAL_NEGATIVE_PATTERN.test(segment))).map(([, label]) => label);
+  if (!included.length && MEAL_NEGATIVE_PATTERN.test(text)) return "未含餐";
+  return included.length ? `含餐｜${included.join(" · ")}` : "餐食｜待确认";
+}
+
 function Overview({ days, title = "行程总览" }) {
   return <section className="content-section card-panel overview" data-edit-path="overview"><div className="panel-heading"><h2>{title}</h2><span>ITINERARY<br />OVERVIEW</span></div><div className="overview-list">{days.map((day, index) => {
     const routeNodes = day.routeNodes?.length ? day.routeNodes : [day.city];
     const route = routeNodes.join(" → ");
     return <article className="overview-day-card" key={`${day.date}-${day.city}-${index}`} data-edit-path={`overview.${index}`}>
       <div className="overview-day-index"><span>DAY</span><strong>{String(index + 1).padStart(2, "0")}</strong></div>
-      <div className="overview-day-main"><h3>{routeNodes.map((node, nodeIndex) => <span className="overview-route-step" key={`${node}-${nodeIndex}`}>{nodeIndex > 0 && <span className="overview-route-arrow" aria-hidden="true">→</span>}<span className="overview-route-node">{node}</span></span>)}</h3><p>{day.theme || route}</p>{day.overviewNote && <div className="overview-day-meta"><span><Icon name="vehicle" size={28} />{day.overviewNote}</span></div>}</div>
+      <div className="overview-day-main"><h3>{routeNodes.map((node, nodeIndex) => <span className="overview-route-step" key={`${node}-${nodeIndex}`}>{nodeIndex > 0 && <span className="overview-route-arrow" aria-hidden="true">→</span>}<span className="overview-route-node">{node}</span></span>)}</h3><p>{day.theme || route}</p><div className="overview-day-meta"><span className="overview-meal-summary"><Icon name="meal" size={28} />{summarizeMeals(day)}</span>{day.overviewNote && <span><Icon name="vehicle" size={28} />{day.overviewNote}</span>}</div></div>
     </article>;
   })}</div></section>;
 }
 
-function HotelsOverview({ hotels = [], policy, title = "臻选下榻", introTitle = "住进风景深处，也住进旅程的黄金位置", introCopy = "每一处下榻都服务于路线节奏：或更接近游猎现场，或以完整度假体验承接长途移动后的松弛时刻。" }) {
+function HotelsOverview({ hotels = [], policy, title = "臻选酒店", introTitle = "住进风景深处，也住进旅程的黄金位置", introCopy = "每一处下榻都服务于路线节奏：或更接近游猎现场，或以完整度假体验承接长途移动后的松弛时刻。" }) {
   if (!hotels.length) return null;
+  const displayTitle = !title || title === "臻选下榻" ? "臻选酒店" : title;
   const isOdd = hotels.length % 2 === 1;
   const { entries, hasFeatured } = deriveFeaturedCardLayout(hotels, "hotel");
-  return <section className="journey-feature-section hotels-section" data-edit-path="hotels"><SectionTitle en="SIGNATURE STAYS" zh={title} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`hotel-grid${isOdd ? " hotel-grid-odd" : ""}${hasFeatured ? " hotel-grid-featured" : ""}`}>{entries.map(({ item: hotel, originalIndex: hotelIndex, isFeatured }) => <article className={`hotel-card${isFeatured ? " hotel-card-wide" : ""}${hotel.images?.[0] ? "" : " hotel-card-no-image"}`} key={hotel.id || hotel.officialName} data-edit-path={`hotels.${hotelIndex}`}>
+  return <section className="journey-feature-section hotels-section" data-edit-path="hotels"><SectionTitle en="SIGNATURE STAYS" zh={displayTitle} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`hotel-grid${isOdd ? " hotel-grid-odd" : ""}${hasFeatured ? " hotel-grid-featured" : ""}`}>{entries.map(({ item: hotel, originalIndex: hotelIndex, isFeatured }) => <article className={`hotel-card${isFeatured ? " hotel-card-wide" : ""}${hotel.images?.[0] ? "" : " hotel-card-no-image"}`} key={hotel.id || hotel.officialName} data-edit-path={`hotels.${hotelIndex}`}>
     {hotel.images?.[0] ? <div className="hotel-image"><SafeImage src={hotel.images[0].src || hotel.images[0]} alt={hotel.shortName || hotel.officialName} fallbackLabel="酒店图片待补充" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" style={{ objectPosition: hotel.images[0].focus || "50% 50%" }} /></div> : <MissingImageState label="酒店图片待补充" compact className="card-missing-image" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" />}
     <div className="hotel-copy"><div className="hotel-kicker"><span>{hotel.region}</span><em>{hotel.nights}晚</em></div><h3>{hotel.shortName || hotel.officialName}</h3>{hotel.shortName && hotel.officialName && !sameTravelEntityName(hotel.shortName, hotel.officialName) && <p className="hotel-official-name">{hotel.officialName}</p>}
       {hotel.editorialCopy && <p className="hotel-editorial">{hotel.editorialCopy}</p>}
@@ -199,7 +244,11 @@ function ServiceTags({ day }) {
 function RoutePreview({ day }) {
   const route = day.routeNodes?.length ? day.routeNodes : String(day.city || "").split(/[—–-]/).filter(Boolean);
   if (!route.length) return null;
-  return <div className="route-preview"><span className="fact-icon"><Icon name="itinerary" size={64} tone="light" /></span><div><small>今日路线</small><div className="route-nodes">{route.map((node, index) => <span key={`${node}-${index}`}><strong>{node}</strong>{index < route.length - 1 && <i>→</i>}</span>)}</div></div></div>;
+  return <div className="route-preview"><span className="fact-icon"><Icon name="itinerary" size={64} tone="light" /></span><div><small>当日路线</small><div className="route-nodes">{route.map((node, index) => <span key={`${node}-${index}`}><strong>{node}</strong>{index < route.length - 1 && <i>→</i>}</span>)}</div></div></div>;
+}
+
+function DayDescription({ day }) {
+  return <div className="day-fact fact-description"><span className="fact-icon"><Icon name="city" size={64} tone="light" /></span><div><span>当日行程</span><p>{day.description}</p></div></div>;
 }
 
 function DayFacts({ day }) {
@@ -207,26 +256,18 @@ function DayFacts({ day }) {
   const rhythm = [day.vehicle, day.estimatedTravelTime || day.movementPaceDescriptor, day.activityLevel && `活动强度：${day.activityLevel}`, day.restStops].filter(Boolean);
   return <div className="day-facts">
     <RoutePreview day={day} />
-    {rhythm.length > 0 && <div className="day-fact day-rhythm"><span className="fact-icon"><Icon name="vehicle" size={64} tone="light" /></span><div><span>今日节奏</span><div className="rhythm-chips">{rhythm.map((item) => <b key={item}>{item}</b>)}</div></div></div>}
-    {(meal || day.meals) && <div className="day-fact"><span className="fact-icon"><Icon name="meal" size={64} tone="light" /></span><div><span>今日用餐</span>{meal ? <div className="meal-grid">{[["早餐", meal.breakfast], ["午餐", meal.lunch], ["晚餐", meal.dinner]].filter(([, value]) => value).map(([label, value]) => <p key={label}><small>{label}</small><strong>{value}</strong></p>)}</div> : <strong>{day.meals}</strong>}{meal?.special && <div className="special-meal"><em>特色餐饮</em><b>{meal.special}</b></div>}</div></div>}
     <OvernightFact day={day} />
-    <div className="day-fact fact-description"><span className="fact-icon"><Icon name="city" size={64} tone="light" /></span><div><span>今日行程</span><p>{day.description}</p></div></div>
-    <DayNotices notices={day.dayNotices || day.dayNotes} />
+    {(meal || day.meals) && <div className="day-fact"><span className="fact-icon"><Icon name="meal" size={64} tone="light" /></span><div><span>当日用餐</span>{meal ? <div className="meal-grid">{[["早餐", meal.breakfast], ["午餐", meal.lunch], ["晚餐", meal.dinner]].filter(([, value]) => value).map(([label, value]) => <p key={label}><small>{label}</small><strong>{value}</strong></p>)}</div> : <strong>{day.meals}</strong>}{meal?.special && <div className="special-meal"><em>特色餐饮</em><b>{meal.special}</b></div>}</div></div>}
+    {rhythm.length > 0 && <div className="day-fact day-rhythm"><span className="fact-icon"><Icon name="vehicle" size={64} tone="light" /></span><div><span>当日节奏</span><div className="rhythm-chips">{rhythm.map((item) => <b key={item}>{item}</b>)}</div></div></div>}
   </div>;
 }
 
 function OvernightFact({ day }) {
   const type = inferOvernightType(day);
-  if (type === "none") return <div className="day-fact day-overnight-none"><span className="fact-icon"><Icon name="return" size={64} tone="light" /></span><div><span>今晚安排</span><strong>无住宿 · 行程结束</strong></div></div>;
-  if (type === "inflight") return <div className="day-fact day-overnight-inflight"><span className="fact-icon"><Icon name="departure" size={64} tone="light" /></span><div><span>今晚安排</span><strong>{day.overnightLabel || "返程航班"}</strong></div></div>;
+  if (type === "none") return <div className="day-fact day-overnight-none"><span className="fact-icon"><Icon name="return" size={64} tone="light" /></span><div><span>当晚安排</span><strong>无住宿 · 行程结束</strong></div></div>;
+  if (type === "inflight") return <div className="day-fact day-overnight-inflight"><span className="fact-icon"><Icon name="departure" size={64} tone="light" /></span><div><span>当晚安排</span><strong>{day.overnightLabel || "返程航班"}</strong></div></div>;
   if (!day.hotel) return null;
-  return <div className="day-fact"><span className="fact-icon"><Icon name="hotel" size={64} tone="light" /></span><div><span>今晚入住</span><strong>{day.hotelShortName || day.hotel}</strong></div></div>;
-}
-
-function DayNotices({ notices }) {
-  if (!notices?.length) return null;
-  const notice = typeof notices[0] === "string" ? { text: notices[0] } : notices[0];
-  return <div className="day-notices"><div className="day-notice day-notice-tip"><Icon name="warning" size={34} tone="gold" /><div><strong>今日贴士</strong><p>{notice.text}</p></div></div></div>;
+  return <div className="day-fact"><span className="fact-icon"><Icon name="hotel" size={64} tone="light" /></span><div><span>当晚入住</span><strong>{day.hotelShortName || day.hotel}</strong></div></div>;
 }
 
 function SpotCard({ spot, dayIndex, spotIndex, spotId, slotId, imageIndexBase = 0 }) {
@@ -246,7 +287,7 @@ function SpotGallery({ spots = [], dayIndex }) {
 }
 
 function DaySection({ day, index }) {
-  return <section className="day-section" data-edit-path={`days.${index}`}><header className="day-header"><div className="day-date"><strong>DAY {index + 1}</strong><span>/</span><time>{formatDate(day.date)}</time></div>{day.theme && <h2>{day.theme}</h2>}<ServiceTags day={day} /></header><div className="day-body"><DayFacts day={day} /><SpotGallery spots={day.spots} dayIndex={index} /></div></section>;
+  return <section className="day-section" data-edit-path={`days.${index}`}><header className="day-header"><div className="day-date"><strong>DAY {index + 1}</strong><span>/</span><time>{formatDate(day.date)}</time></div>{day.theme && <h2>{day.theme}</h2>}<ServiceTags day={day} /></header><div className="day-body"><DayDescription day={day} /><SpotGallery spots={day.spots} dayIndex={index} /><DayFacts day={day} /></div></section>;
 }
 
 function ListCard({ icon, title, items, tone = "gold" }) {
@@ -265,8 +306,15 @@ function Expenses({ data }) {
 }
 
 function BookingFlow() {
-  const steps = [["提出您的需求", "提供出行时间、人数、需求和预算等信息", "contact"], ["定制师跟进", "专属定制师与您一对一沟通", "guide"], ["收到定制方案", "根据您的需求量身定制行程", "itinerary"], ["确认定制方案", "调整和优化行程，最终确定适合自己的方案", "included"], ["下单确认", "支付下单，并签署旅游合同", "payment"], ["等待出行", "专属的服务群全程贴心服务", "calendar"]];
-  return <section className="booking-section" data-edit-path="booking"><SectionTitle en="BOOKING" zh="预订流程" /><div className="booking-flow">{steps.map(([title, copy, icon], index) => <div className={`booking-step booking-step-${index % 2 ? "right" : "left"}`} key={title}><div className="booking-copy"><h3>{title}<Icon name={icon} size={46} tone="warning" /></h3><p>{copy}</p></div><strong>{String(index + 1).padStart(2, "0")}</strong></div>)}</div></section>;
+  const steps = [
+    ["说出您的向往", ["告知出行时间、目的地与人数，", "任何天马行空的想法，我们都认真聆听。"], "contact"],
+    ["专属定制师就位", ["专属旅行顾问24小时内致电或添加微信，", "第一时间响应您的期待。"], "guide"],
+    ["查收定制方案", ["您将收到一份涵盖行程动线、", "甄选酒店与特色体验的完整方案。"], "itinerary"],
+    ["随心调整至臻", ["路线、房型、餐食均可按您的偏好调整，", "直至每一处细节都契合心意。"], "included"],
+    ["锁定稀缺资源", ["确认方案并完成支付签约，", "即刻为您抢订限量席位及特殊体验资源。"], "payment"],
+    ["静候非凡之旅", ["专属服务群全程护航，", "出行琐事尽托付于我们，您只需随心而动。"], "calendar"],
+  ];
+  return <section className="booking-section" data-edit-path="booking"><SectionTitle en="BOOKING" zh="预订流程" /><div className="booking-flow">{steps.map(([title, copyLines, icon], index) => <div className={`booking-step booking-step-${index % 2 ? "right" : "left"}`} key={title}><div className="booking-copy"><h3>{title}<Icon name={icon} size={46} tone="warning" /></h3><p>{copyLines.map((line) => <span key={line}>{line}</span>)}</p></div><strong>{String(index + 1).padStart(2, "0")}</strong></div>)}</div></section>;
 }
 
 function SecurityAndPayment({ payment, showSecuritySection = true, showPaymentSection = true }) {
@@ -315,8 +363,19 @@ function Notes({ notes, title = "注意事项", intro = "下面这些小提醒�
   </div></section>;
 }
 
-function Footer({ contact }) {
-  return <footer className="brand-footer-fixed" data-edit-path="footer"><img src="/assets/brand/fixed-footer-template-v1.jpg" alt="奢游国际固定品牌页尾：品牌优势、荣誉头衔、联系方式与社交媒体" /></footer>;
+function BrandSourceCrop({ variant, alt }) {
+  return <div className={`brand-source-crop brand-source-crop-${variant}`}><img src="/assets/brand/about-contact-source-v2.jpg" alt={alt} /></div>;
+}
+
+function BrandContactArtwork() {
+  return <div className="brand-source-crop brand-source-crop-contact-wave"><img src="/assets/brand/about-contact-source-v2.jpg" alt="奢游国际社交媒体、联系账号与品牌波浪背景" /><span className="brand-contact-cta-mask" aria-hidden="true" /></div>;
+}
+
+function Footer() {
+  return <footer className="brand-footer-fixed" data-edit-path="footer">
+    <section className="brand-footer-section brand-about-section"><SectionTitle en="ABOUT US" zh="关于我们" /><BrandSourceCrop variant="about" alt="奢游国际品牌介绍、合作资质与品牌荣誉" /></section>
+    <section className="brand-footer-section brand-contact-section"><SectionTitle en="FOLLOW US" zh="联系我们" /><BrandContactArtwork /></section>
+  </footer>;
 }
 
 function buildScenario(data, scenario) {
@@ -329,6 +388,10 @@ function buildScenario(data, scenario) {
   if (scenario === "no-payment") return { ...data, showPaymentSection: false };
   if (scenario === "no-security") return { ...data, showSecuritySection: false };
   if (scenario === "payment-no-qr") return { ...data, payment: { accountTitle: data.payment?.accountTitle, companyName: data.payment?.companyName, notice: data.payment?.notice } };
+  if (scenario === "designer-contact") return { ...data, designer: { ...(data.designer || {}), name: "Sunny", role: "资深定制师", phone: "138 0000 0000", wechat: "LuxuryTravel_Sunny" } };
+  if (scenario === "designer-phone-only") return { ...data, designer: { ...(data.designer || {}), name: "Sunny", role: "资深定制师", phone: "138 0000 0000", wechat: "" } };
+  if (scenario === "designer-wechat-only") return { ...data, designer: { ...(data.designer || {}), name: "Sunny", role: "资深定制师", phone: "", wechat: "LuxuryTravel_Sunny" } };
+  if (scenario === "designer-wechat-long") return { ...data, designer: { ...(data.designer || {}), name: "Sunny", role: "资深定制师", phone: "", wechat: "LuxuryTravel_Enterprise_Service_Sunny_2026" } };
   if (scenario === "composite-images") {
     const diningSources = data.diningExperiences?.slice(0, 2).map((item, index) => ({ ...(item.image || item.images?.[0]), label: `餐饮子体验${index + 1}` })).filter((item) => item?.src);
     const spotSources = data.days.flatMap((day) => day.spots || []).slice(0, 2).map((spot, index) => ({ src: spot.image || spot.images?.[0]?.src, label: `行程子体验${index + 1}`, focus: spot.focus, fit: spot.fit })).filter((item) => item.src);
@@ -351,7 +414,7 @@ export function Itinerary({ data, scale = 1 }) {
 }
 
 function ItineraryContent({ data, scale = 1 }) {
-  return <div className="export-frame" style={{ width: `${2000 * scale}px` }}><main id="itinerary" className="itinerary-canvas" style={{ transform: scale === 1 ? undefined : `scale(${scale})` }}><Cover data={data} /><div className="page-content intro-content"><Highlights items={data.highlights} title={data.highlightsSectionTitle} />{data.showOverviewSection !== false && <Overview days={data.days} title={data.overviewSectionTitle} />}<HotelsOverview hotels={data.hotels} policy={data.hotelReplacementPolicy} title={data.hotelSectionTitle} introTitle={data.hotelIntroTitle} introCopy={data.hotelIntroCopy} /><DiningOverview items={data.diningExperiences} policy={data.diningPolicy} title={data.diningSectionTitle} introTitle={data.diningIntroTitle} introCopy={data.diningIntroCopy} /><TransportOverview items={data.transportSummary} disclaimer={data.transportDisclaimer} title={data.transportSectionTitle} introTitle={data.transportIntroTitle} introCopy={data.transportIntroCopy} /><SectionTitle en="HOLIDAY MEET" zh="行程细节" /></div><div className="days-wrap">{data.days.map((day, index) => <DaySection day={day} index={index} key={`${day.date}-${index}`} />)}</div><div className="page-content closing-content"><Expenses data={data} />{data.showBookingSection !== false && <BookingFlow />}<SecurityAndPayment payment={data.payment} showSecuritySection={data.showSecuritySection !== false} showPaymentSection={data.showPaymentSection !== false} /><Notes notes={data.notes} title={data.notesSectionTitle} intro={data.notesIntro} /></div><Footer contact={data.contact} /></main></div>;
+  return <div className="export-frame" style={{ width: `${2000 * scale}px` }}><main id="itinerary" className="itinerary-canvas" style={{ transform: scale === 1 ? undefined : `scale(${scale})` }}><Cover data={data} /><div className="page-content intro-content"><Highlights items={data.highlights} title={data.highlightsSectionTitle} />{data.showOverviewSection !== false && <Overview days={data.days} title={data.overviewSectionTitle} />}<HotelsOverview hotels={data.hotels} policy={data.hotelReplacementPolicy} title={data.hotelSectionTitle} introTitle={data.hotelIntroTitle} introCopy={data.hotelIntroCopy} /><DiningOverview items={data.diningExperiences} policy={data.diningPolicy} title={data.diningSectionTitle} introTitle={data.diningIntroTitle} introCopy={data.diningIntroCopy} /><TransportOverview items={data.transportSummary} disclaimer={data.transportDisclaimer} title={data.transportSectionTitle} introTitle={data.transportIntroTitle} introCopy={data.transportIntroCopy} /><SectionTitle en="HOLIDAY MEET" zh="行程细节" /></div><div className="days-wrap">{data.days.map((day, index) => <DaySection day={day} index={index} key={`${day.date}-${index}`} />)}</div><div className="page-content closing-content"><Expenses data={data} />{data.showBookingSection !== false && <BookingFlow />}<SecurityAndPayment payment={data.payment} showSecuritySection={data.showSecuritySection !== false} showPaymentSection={data.showPaymentSection !== false} /><Notes notes={data.notes} title={data.notesSectionTitle} intro={data.notesIntro} /></div><Footer /></main></div>;
 }
 
 function CoverGradientProof({ data }) {
@@ -374,6 +437,10 @@ export function App() {
   if (window.location.pathname.startsWith("/agent-planner")) return <AgentPlanner />;
   const params = new URLSearchParams(window.location.search);
   const exportMode = params.get("export") === "1";
+  if (window.location.pathname === "/" && !exportMode && params.get("templatePreview") !== "1") {
+    window.location.replace("/agent");
+    return null;
+  }
   const outputWidth = Number(params.get("width") || 2000);
   const scale = exportMode ? outputWidth / 2000 : 1;
   const datasetName = params.get("dataset");

@@ -738,7 +738,7 @@ body:has(.editor-page) { overflow: hidden; }
 .profile-avatar-editor small { color: var(--ws-muted); text-align: center; font-size: 12px; line-height: 1.7; }
 .profile-avatar-button { min-height: 38px; padding: 0 18px; background: white; }
 .profile-fields { min-width: 0; display: grid; align-content: start; gap: 18px; }
-.profile-name-row { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(150px, .92fr); gap: 16px; }
+.profile-name-row, .profile-contact-row { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(150px, .92fr); gap: 16px; }
 .profile-field label { display: grid; gap: 8px; margin: 0; color: #62584d; font-size: 13px; font-weight: 600; }
 .profile-field input, .profile-field textarea { width: 100%; border: 1px solid #ddcfbc; border-radius: 8px; background: white; color: var(--ws-ink); outline: none; font-size: 14px; transition: border .18s ease, box-shadow .18s ease, background .18s ease; }
 .profile-field input { height: 44px; padding: 0 13px; }
@@ -759,7 +759,7 @@ body:has(.editor-page) { overflow: hidden; }
   .profile-panel h2 { font-size: 26px; }
   .profile-layout { grid-template-columns: 1fr; gap: 20px; padding: 22px; overflow: visible; }
   .profile-avatar-editor { width: 100%; padding: 20px; }
-  .profile-name-row { grid-template-columns: 1fr; gap: 18px; }
+  .profile-name-row, .profile-contact-row { grid-template-columns: 1fr; gap: 18px; }
   .profile-field textarea { min-height: 116px; }
   .profile-panel > footer { padding: 18px 22px 22px; }
 }
