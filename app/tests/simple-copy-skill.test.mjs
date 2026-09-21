@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeCopyValueForSchema, runCopyWriterSkill, validateCopyCommitments, validateCopyValue } from "../server/simple-copy-skill.mjs";
+import { buildHotelFactRows, normalizeCopyValueForSchema, runCopyWriterSkill, validateCopyCommitments, validateCopyValue } from "../server/simple-copy-skill.mjs";
 
 const task = (targetId, targetPath, moduleType = "day") => ({
   targetId,
@@ -96,7 +96,7 @@ test("无 researchRequest 不触发联网，合理体验化表达不要求 Excel
   assert.equal(result.results[0].status, "success");
 });
 
-test("研究结果只注入当前 target，研究失败不拖垮无请求任务", async () => {
+test("研究结果只注入当前 target，研究技术失败时酒店使用供应商事实安全降级", async () => {
   const researched = { ...task("hotel", "hotels.0.editorialCopy", "hotel"), researchRequest: { researchType: "official_entity_facts", entityName: "Example Lodge", categories: ["空间"] } };
   const direct = task("transport", "transportSummary.0.editorialCopy", "transport");
   const result = await runCopyWriterSkill({
@@ -104,42 +104,88 @@ test("研究结果只注入当前 target，研究失败不拖垮无请求任务"
     researchFacts: async () => { throw Object.assign(new Error("官方来源暂不可用"), { code: "copy_facts_research_failed" }); },
     requestJson: async ({ messages }) => {
       const payload = JSON.parse(messages.at(-1).content);
-      assert.deepEqual(payload.tasks.map((item) => item.targetId), ["transport"]);
-      return { json: { results: [{ targetId: "transport", targetPath: direct.targetPath, value: "以已确认交通类别组织整程移动体验。" }] }, attemptUsages: [{}] };
+      assert.deepEqual(payload.tasks.map((item) => item.targetId), ["hotel", "transport"]);
+      const hotelTask = payload.tasks.find((item) => item.targetId === "hotel");
+      assert.equal(hotelTask.facts.factsResearchOutcome.status, "failed");
+      assert.deepEqual(hotelTask.facts.verifiedFacts, []);
+      assert.match(hotelTask.facts.factsResearchOutcome.zeroFactBoundary, /禁止依赖模型常识/);
+      return { json: { results: [
+        { targetId: "hotel", targetPath: researched.targetPath, value: "依据供应商已确认资料，保留克制的酒店介绍。" },
+        { targetId: "transport", targetPath: direct.targetPath, value: "以已确认交通类别组织整程移动体验。" },
+      ] }, attemptUsages: [{}] };
     },
   });
-  assert.equal(result.results.find((item) => item.targetId === "hotel").status, "failed");
+  assert.equal(result.results.find((item) => item.targetId === "hotel").status, "success");
+  assert.ok(result.results.find((item) => item.targetId === "hotel").warnings.some((item) => /事实研究发生技术故障/.test(item)));
   assert.equal(result.results.find((item) => item.targetId === "transport").status, "success");
+  assert.equal(result.researchResults.find((item) => item.targetId === "hotel").status, "failed");
   assert.equal(result.metrics.researchCalls, 1);
   assert.equal(result.metrics.modelCalls, 1);
 });
 
-test("hotel editorialCopy 和 proofPoints 共用研究结果并读取 verifiedFacts", async () => {
-  const request = { researchType: "official_entity_facts", entityName: "Faru Faru Lodge", categories: ["空间与设计", "景观与环境"] };
+test("hotel editorialCopy、proofPoints 和 factRows 共用一次研究，factRows 不增加 Writer 输出", async () => {
+  const request = { researchType: "official_entity_facts", entityName: "Faru Faru Lodge", categories: ["位置", "客房", "设计", "设施"] };
   const editorial = { ...task("hotel-copy", "hotels.0.editorialCopy", "hotel"), researchRequest: request };
   const proofPoints = { ...task("hotel-proof", "hotels.0.proofPoints", "hotel"), researchRequest: request, outputSchema: { type: "array", minItems: 2, maxItems: 3, items: { type: "string", minLength: 2 } } };
+  const factRows = { ...task("hotel-fact-rows", "hotels.0.factRows", "hotel_fact_rows"), researchRequest: request, required: false, outputSchema: { type: "array", minItems: 4, maxItems: 4, items: { type: "object", required: ["key", "label", "text", "status"], properties: { key: { type: "string" }, label: { type: "string" }, text: { type: "string" }, status: { type: "string" }, sourceUrl: { type: "string" }, sourceClass: { type: "string" }, checkedAt: { type: "string" } }, additionalProperties: false } } };
   let researchCalls = 0;
   const result = await runCopyWriterSkill({
-    tasks: [editorial, proofPoints],
+    tasks: [editorial, proofPoints, factRows],
     researchFacts: async () => {
       researchCalls += 1;
       return {
         researchType: request.researchType,
         entityName: request.entityName,
         status: "success",
-        verifiedFacts: [{ category: "景观与环境", fact: "临近 Grumeti River。", sourceUrl: "https://singita.com/lodge/singita-faru-faru-lodge/", sourceExcerpt: "located on the Grumeti River", checkedAt: "2026-09-04T00:00:00.000Z" }],
+        verifiedFacts: [{ category: "位置", fact: "临近 Grumeti River。", sourceUrl: "https://singita.com/lodge/singita-faru-faru-lodge/", sourceExcerpt: "located on the Grumeti River", sourceClass: "official_entity", checkedAt: "2026-09-04T00:00:00.000Z" }],
+        categoryOutcomes: [{ category: "位置", status: "success" }, { category: "客房", status: "not_found" }, { category: "设计", status: "not_found" }, { category: "设施", status: "not_found" }],
         attemptUsages: [{}],
       };
     },
     requestJson: async ({ messages }) => {
       const payload = JSON.parse(messages.at(-1).content);
+      assert.deepEqual(payload.tasks.map((item) => item.targetId), ["hotel-copy", "hotel-proof"]);
       for (const item of payload.tasks) assert.equal(item.verifiedFacts.verifiedFacts[0].fact, "临近 Grumeti River。");
       return { json: { results: payload.tasks.map((item) => ({ targetId: item.targetId, targetPath: item.targetPath, value: item.targetId === "hotel-proof" ? ["临近 Grumeti River", "以河岸景观构成住宿环境"] : "Faru Faru Lodge 临近 Grumeti River，河岸环境让住宿本身成为草原体验的一部分。" })) }, attemptUsages: [{}] };
     },
   });
   assert.equal(researchCalls, 1);
   assert.equal(result.metrics.researchCalls, 1);
-  assert.deepEqual(result.results.map((item) => item.status), ["success", "success"]);
+  assert.equal(result.metrics.modelCalls, 1);
+  assert.deepEqual(result.results.map((item) => item.status), ["success", "success", "success"]);
+  assert.deepEqual(result.results[2].value.map(({ key, label, text, status }) => ({ key, label, text, status })), [
+    { key: "location", label: "位置", text: "临近 Grumeti River。", status: "success" },
+    { key: "rooms", label: "客房", text: "", status: "not_found" },
+    { key: "design", label: "设计", text: "", status: "not_found" },
+    { key: "facilities", label: "设施", text: "", status: "not_found" },
+  ]);
+});
+
+test("hotel factRows 研究技术失败时保留四行状态且不调用 Copy Writer", async () => {
+  const request = { researchType: "official_entity_facts", entityName: "Unavailable Lodge", categories: ["位置", "客房", "设计", "设施"] };
+  const factRows = { ...task("failed-fact-rows", "hotels.0.factRows", "hotel_fact_rows"), researchRequest: request, required: false, outputSchema: { type: "array", minItems: 4, maxItems: 4, items: { type: "object" } } };
+  let writerCalls = 0;
+  const result = await runCopyWriterSkill({
+    tasks: [factRows],
+    researchFacts: async () => { throw Object.assign(new Error("暂不可用"), { code: "copy_facts_research_failed" }); },
+    requestJson: async () => { writerCalls += 1; throw new Error("不应调用"); },
+  });
+  assert.equal(writerCalls, 0);
+  assert.equal(result.metrics.modelCalls, 0);
+  assert.equal(result.results[0].status, "success");
+  assert.deepEqual(result.results[0].value.map((row) => row.status), ["source_unavailable", "source_unavailable", "source_unavailable", "source_unavailable"]);
+});
+
+test("buildHotelFactRows 固定顺序保存核验事实与缺失状态", () => {
+  const rows = buildHotelFactRows({
+    status: "success",
+    verifiedFacts: [{ category: "设施", fact: "设有室内泳池。", sourceUrl: "https://example.com", sourceClass: "official_entity", checkedAt: "2026-09-21T00:00:00.000Z" }],
+    categoryOutcomes: [{ category: "位置", status: "not_found" }, { category: "客房", status: "source_unavailable" }, { category: "设计", status: "not_found" }, { category: "设施", status: "success" }],
+  });
+  assert.deepEqual(rows.map((row) => row.key), ["location", "rooms", "design", "facilities"]);
+  assert.equal(rows[1].status, "source_unavailable");
+  assert.equal(rows[3].text, "设有室内泳池。");
+  assert.equal(rows[3].sourceUrl, "https://example.com");
 });
 
 test("酒店 verifiedFacts 为零时显式注入事实边界且 proofPoints 可按真实数量留空", async () => {
@@ -161,7 +207,40 @@ test("酒店 verifiedFacts 为零时显式注入事实边界且 proofPoints 可�
   });
   assert.deepEqual(result.results.map((item) => item.status), ["success", "success"]);
   assert.deepEqual(result.results[1].value, []);
-  assert.ok(result.results.every((item) => item.warnings.some((warning) => /酒店官方事实研究未成功/.test(warning))));
+  assert.ok(result.results.every((item) => item.warnings.some((warning) => /酒店事实研究未获得可核验结果/.test(warning))));
+});
+
+test("酒店研究按字段部分缺失时继续生成并保留字段状态", async () => {
+  const request = { researchType: "official_entity_facts", entityName: "Example Lodge", categories: ["位置", "客房", "设计", "设施"] };
+  const hotelTask = { ...task("hotel-partial", "hotels.0.editorialCopy", "hotel"), researchRequest: request };
+  const result = await runCopyWriterSkill({
+    tasks: [hotelTask],
+    researchFacts: async () => ({
+      researchType: request.researchType,
+      entityName: request.entityName,
+      status: "success",
+      verifiedFacts: [{ category: "位置", fact: "位于河岸。", sourceUrl: "https://examplelodge.com/location", sourceExcerpt: "river", sourceClass: "official_entity", checkedAt: "2026-09-21T00:00:00.000Z" }],
+      categoryOutcomes: [
+        { category: "位置", status: "success" },
+        { category: "客房", status: "not_found" },
+        { category: "设计", status: "source_unavailable" },
+        { category: "设施", status: "not_found" },
+      ],
+      attemptUsages: [{}],
+    }),
+    requestJson: async ({ messages }) => {
+      const payload = JSON.parse(messages.at(-1).content);
+      assert.deepEqual(payload.tasks[0].facts.factsResearchOutcome.categoryOutcomes, [
+        { category: "位置", status: "success" },
+        { category: "客房", status: "not_found" },
+        { category: "设计", status: "source_unavailable" },
+        { category: "设施", status: "not_found" },
+      ]);
+      return { json: { results: [{ targetId: hotelTask.targetId, targetPath: hotelTask.targetPath, value: "酒店位于河岸，以已核验的位置事实说明住宿环境。" }] }, attemptUsages: [{}] };
+    },
+  });
+  assert.equal(result.results[0].status, "success");
+  assert.ok(result.results[0].warnings.some((warning) => /部分字段未获得可核验结果/.test(warning)));
 });
 
 test("门禁允许合理体验展开，只拒绝无依据的新具体承诺和订单边界", async () => {

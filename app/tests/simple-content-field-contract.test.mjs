@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { materializeSimpleSkillPlan } from "../server/simple-plan-adapter.mjs";
 import { applySimpleSkillResults } from "../server/simple-pipeline-writeback.mjs";
+import { selectCustomerRenderData } from "../server/customer-render-data.mjs";
 
 function fixture() {
   const days = [0, 1].map((index) => ({
@@ -51,6 +52,7 @@ test("Program 为 subtitle、DAY theme、spot description 与酒店 proofPoints 
   assert.ok(byPath.has("days.0.spots.0.description"));
   assert.ok(byPath.has("days.1.spots.0.description"));
   assert.ok(byPath.has("hotels.0.proofPoints"));
+  assert.ok(byPath.has("hotels.0.factRows"));
   assert.ok(byPath.has("transportSummary.0.usageLabel"));
   assert.ok(byPath.has("transportSummary.0.features"));
   assert.ok(byPath.has("notes"));
@@ -58,7 +60,13 @@ test("Program 为 subtitle、DAY theme、spot description 与酒店 proofPoints 
   assert.equal(byPath.get("hotels.0.proofPoints").outputSchema.minItems, 0);
   assert.equal(byPath.get("hotels.0.proofPoints").outputSchema.maxItems, 3);
   assert.equal(byPath.get("hotels.0.editorialCopy").researchRequest.researchType, "official_entity_facts");
+  assert.deepEqual(byPath.get("hotels.0.editorialCopy").researchRequest.categories, ["位置", "客房", "设计", "设施"]);
   assert.deepEqual(byPath.get("hotels.0.editorialCopy").researchRequest, byPath.get("hotels.0.proofPoints").researchRequest);
+  assert.deepEqual(byPath.get("hotels.0.editorialCopy").researchRequest, byPath.get("hotels.0.factRows").researchRequest);
+  assert.equal(byPath.get("hotels.0.factRows").moduleType, "hotel_fact_rows");
+  assert.equal(byPath.get("hotels.0.factRows").required, false);
+  assert.equal(byPath.get("hotels.0.factRows").outputSchema.minItems, 4);
+  assert.equal(byPath.get("hotels.0.factRows").outputSchema.maxItems, 4);
   assert.ok(byPath.get("hotels.0.editorialCopy").facts.lodgingIdentityEvidence.every((item) => /^DAY \d+ 住宿：/.test(item)));
   assert.ok(byPath.get("hotels.0.editorialCopy").facts.supplierHotelContext.every((item) => !/^DAY \d+ 住宿：/.test(item)));
   assert.match(byPath.get("days.0.spots.0.description").facts.description, /敞篷越野游猎/);
@@ -131,6 +139,30 @@ test("Program Writeback 只写授权表达字段并保护订单与 spot 状态�
   assert.equal(result.data.days[0].spots[0].status, "included");
   assert.equal(result.data.days[1].spots[0].optional, true);
   assert.deepEqual(result.data.days[0].spots[0].sourceEvidence, ["DAY 1 原始资料"]);
+});
+
+test("Program 写回结构化酒店事实，客户投影隐藏缺失行和内部来源字段", () => {
+  const { data, agentPlan } = fixture();
+  const plan = materializeSimpleSkillPlan({ data, agentPlan });
+  const task = plan.copyTasks.find((item) => item.targetPath === "hotels.0.factRows");
+  const rows = [
+    { key: "location", label: "位置", text: "位于塞伦盖蒂西部。", status: "success", sourceUrl: "https://example.com/location", sourceClass: "official_entity", checkedAt: "2026-09-21T00:00:00.000Z" },
+    { key: "rooms", label: "客房", text: "", status: "not_found" },
+    { key: "design", label: "设计", text: "以自然材质连接室内与河岸景观。", status: "success", sourceUrl: "https://example.com/design", sourceClass: "architect_or_design_studio", checkedAt: "2026-09-21T00:00:00.000Z" },
+    { key: "facilities", label: "设施", text: "", status: "source_unavailable" },
+  ];
+  const result = applySimpleSkillResults({
+    preparedData: plan.preparedData,
+    copyTasks: [task],
+    copyExecution: { results: [{ targetId: task.targetId, targetPath: task.targetPath, status: "success", value: rows }] },
+  });
+  assert.equal(result.requiredUnresolved.length, 0);
+  assert.deepEqual(result.data.hotels[0].factRows, rows);
+  const customerRows = selectCustomerRenderData(result.data).hotels[0].factRows;
+  assert.deepEqual(customerRows, [
+    { key: "location", label: "位置", text: "位于塞伦盖蒂西部。" },
+    { key: "design", label: "设计", text: "以自然材质连接室内与河岸景观。" },
+  ]);
 });
 
 test("Program Writeback 拒绝扩写到房型等非授权字段", () => {

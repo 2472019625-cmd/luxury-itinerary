@@ -5,6 +5,25 @@ import { TRAVEL_ENTITY_REGISTRY } from "../src/data/travelEntityRegistry.js";
 const stringSchema = Object.freeze({ type: "string", minLength: 1 });
 const subtitleSchema = Object.freeze({ type: "string", minLength: 1, maxLength: 76 });
 const hotelProofPointsSchema = Object.freeze({ type: "array", minItems: 0, maxItems: 3, items: { type: "string", minLength: 1 } });
+const hotelFactRowsSchema = Object.freeze({
+  type: "array",
+  minItems: 4,
+  maxItems: 4,
+  items: {
+    type: "object",
+    required: ["key", "label", "text", "status"],
+    properties: {
+      key: { enum: ["location", "rooms", "design", "facilities"] },
+      label: { enum: ["位置", "客房", "设计", "设施"] },
+      text: { type: "string" },
+      status: { enum: ["success", "not_found", "source_unavailable"] },
+      sourceUrl: { type: "string" },
+      sourceClass: { type: "string" },
+      checkedAt: { type: "string" },
+    },
+    additionalProperties: false,
+  },
+});
 const transportUsageLabelSchema = Object.freeze({ type: "string", minLength: 1, maxLength: 80 });
 const transportFeaturesSchema = Object.freeze({ type: "array", minItems: 0, maxItems: 3, items: { type: "string", minLength: 1 } });
 const diningCopySchema = Object.freeze({ type: "string", minLength: 12, maxLength: 96 });
@@ -155,7 +174,7 @@ function dayRole(agentPlan, index) {
 }
 
 function hotelCopyFacts(hotel = {}) {
-  const { editorialCopy: _editorialCopy, proofPoints: _proofPoints, images: _images, ...facts } = hotel;
+  const { editorialCopy: _editorialCopy, proofPoints: _proofPoints, factRows: _factRows, images: _images, ...facts } = hotel;
   return {
     ...facts,
     sourceEvidence: unique(facts.sourceEvidence || []),
@@ -195,7 +214,7 @@ function hotelResearchRequest(hotel = {}) {
   return {
     researchType: "official_entity_facts",
     entityName,
-    categories: ["空间与设计", "景观与环境", "公共空间与居停方式"],
+    categories: ["位置", "客房", "设计", "设施"],
     ...(officialDomains.length ? { officialDomains } : {}),
   };
 }
@@ -660,10 +679,11 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
   data.hotels.forEach((hotel, index) => {
     const researchRequest = hotelResearchRequest(hotel);
     const facts = hotelCopyFacts(hotel);
+    if (!Array.isArray(hotel.factRows)) hotel.factRows = [];
     copyTasks.push(copyTask({
       targetId: `copy:hotel:${hotel.id || index + 1}`, targetPath: `hotels.${index}.editorialCopy`, moduleType: "hotel",
       facts,
-      plannerGoal: "写 2—4 句直接、易读的酒店产品介绍，全文最多采用 2 个有辨识度的住宿事实。第一句说明这是什么酒店、位于哪里；随后分别说明所选特点带来的客户住宿价值；最多一句轻量说明它在整程中的产品角色。每句话只承担一个主要功能，少用长并列句，不用比喻、拟人、抽象奢华形容或情绪化收尾。准确保留来源语义，例如“设计灵感来自”不能改成“由其改建”。verifiedFacts 只是候选素材，不要求全部进入正文，不做官网摘要或设施清单。若 verifiedFacts 为 0，只能使用 supplierHotelContext 中明确属于当前酒店的事实；资料不足时保持克制，不得以泛化酒店介绍或产品角色替代真实事实。",
+      plannerGoal: "写 2—4 句直接、易读的酒店产品介绍，全文最多采用 2 个有辨识度的住宿事实。第一句说明这是什么酒店、位于哪里；随后分别说明所选特点带来的客户住宿价值；最多一句轻量说明它在整程中的产品角色。每句话只承担一个主要功能，少用长并列句，不用比喻、拟人、抽象奢华形容或情绪化收尾。准确保留来源语义，例如“设计灵感来自”不能改成“由其改建”。verifiedFacts 只从位置、客房、设计、设施中提供候选素材，不要求全部进入正文，不做网页摘要或设施清单。公开客房事实只能说明酒店通常提供的房型或景观选择，绝不能写成本次订单已订、已升级或保证入住的房型。若 verifiedFacts 为 0，只能使用 supplierHotelContext 中明确属于当前酒店的事实；资料不足时保持克制，不得以泛化酒店介绍或产品角色替代真实事实。",
       relevantContext: itineraryContext, layoutHints: { placement: "hotel_card", itemIndex: index }, researchRequest, required: true,
     }));
     copyTasks.push(copyTask({
@@ -671,6 +691,12 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
       facts,
       plannerGoal: "输出 2—3 个真实、具体、可快速理解的短标签，不写完整说明句。优先选择来源中的准确地点或保护区名称、明确景观、空间类型、真实数量及直接住宿价值；不得自行添加评价性修饰，不使用抽象修辞包装事实，不重复 editorialCopy 的完整句子，不以“位于、拥有、提供、配备”开头。verifiedFacts 为 0 但 supplierHotelContext 明确提供了酒店自身的欢迎仪式、空间或餐饮体验时，仍可从这些来源事实选择标签。每项优先 4—10 个中文字，约 14 字以上通常说明过长。若事实只支持 0—1 个标签，按真实数量返回并在 warnings 明确酒店事实不足，不得凑满。",
       relevantContext: itineraryContext, layoutHints: { placement: "hotel_card_proof_points", itemIndex: index }, outputSchema: hotelProofPointsSchema, researchRequest, required: true,
+    }));
+    copyTasks.push(copyTask({
+      targetId: `copy:hotel:${hotel.id || index + 1}:fact-rows`, targetPath: `hotels.${index}.factRows`, moduleType: "hotel_fact_rows",
+      facts,
+      plannerGoal: "将同一次酒店事实研究中已经逐页核验的位置、客房、设计、设施结果按固定四行保存；程序直接映射，不再次生成或改写事实。缺失字段保留状态并留空，不使用模型常识补齐。",
+      relevantContext: itineraryContext, layoutHints: { placement: "hotel_fact_rows", itemIndex: index }, outputSchema: hotelFactRowsSchema, researchRequest, required: false,
     }));
   });
   data.diningExperiences.forEach((item, index) => copyTasks.push(copyTask({

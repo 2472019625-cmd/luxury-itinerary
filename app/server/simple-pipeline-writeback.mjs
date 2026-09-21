@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { getSlotImage, setSlotImage } from "../src/lib/imageSlots.js";
 import { validateCopyValue } from "./simple-copy-skill.mjs";
 
-const COPY_PATH = /^(?:title|subtitle|notes|highlights\.\d+|hotels\.\d+\.(?:editorialCopy|proofPoints)|diningExperiences\.\d+\.editorialCopy|transportSummary\.\d+\.(?:usageLabel|editorialCopy|features)|days\.\d+\.(?:theme|description)|days\.\d+\.dayNotices\.0\.text|days\.\d+\.spots\.\d+\.description)$/;
+const COPY_PATH = /^(?:title|subtitle|notes|highlights\.\d+|hotels\.\d+\.(?:editorialCopy|proofPoints|factRows)|diningExperiences\.\d+\.editorialCopy|transportSummary\.\d+\.(?:usageLabel|editorialCopy|features)|days\.\d+\.(?:theme|description)|days\.\d+\.dayNotices\.0\.text|days\.\d+\.spots\.\d+\.description)$/;
 
 function protectedFacts(data = {}) {
   return {
