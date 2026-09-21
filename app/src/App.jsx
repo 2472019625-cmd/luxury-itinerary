@@ -388,7 +388,8 @@ function buildScenario(data, scenario) {
   if (scenario === "short") return { ...data, dayCount: 3, days: data.days.slice(0, 3), endDate: data.days[2].date };
   if (scenario === "no-images") return { ...data, days: data.days.map((day) => ({ ...day, spots: [] })) };
   if (scenario === "long-copy") return { ...data, days: data.days.map((day) => ({ ...day, description: `${day.description}${day.description}${day.description}` })) };
-  if (scenario === "four-images") { const source = data.days.find((day) => day.spots?.length === 4)?.spots || []; return { ...data, days: data.days.map((day) => ({ ...day, spots: source })) }; }
+  if (scenario === "three-images") { const source = data.days.flatMap((day) => day.spots || []).slice(0, 3); return { ...data, days: data.days.map((day, index) => index === 0 ? { ...day, spots: source } : day) }; }
+  if (scenario === "four-images") { const source = data.days.find((day) => day.spots?.length === 4)?.spots || data.days.flatMap((day) => day.spots || []).slice(0, 4); return { ...data, days: data.days.map((day) => ({ ...day, spots: source })) }; }
   if (scenario === "missing-services") return { ...data, days: data.days.map((day, index) => index % 2 ? { ...day, hotel: null, driver: null, guide: null } : day) };
   if (scenario === "no-payment") return { ...data, showPaymentSection: false };
   if (scenario === "no-security") return { ...data, showSecuritySection: false };

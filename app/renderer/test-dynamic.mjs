@@ -14,7 +14,7 @@ const candidates = [
 const executablePaths = [...new Set(candidates.filter((candidate) => fs.existsSync(candidate)))];
 if (!executablePaths.length) throw new Error("未找到 Edge/Chrome");
 
-const scenarios = ["short", "standard", "long", "no-images", "four-images", "composite-images", "long-copy", "missing-services", "no-payment", "no-security", "payment-no-qr", "designer-contact", "designer-phone-only", "designer-wechat-only", "designer-wechat-long"];
+const scenarios = ["short", "standard", "long", "no-images", "three-images", "four-images", "composite-images", "long-copy", "missing-services", "no-payment", "no-security", "payment-no-qr", "designer-contact", "designer-phone-only", "designer-wechat-only", "designer-wechat-long"];
 const baseUrl = process.env.LUXURY_TRAVEL_BASE_URL || "http://127.0.0.1:4173";
 const expectedDayFactLabels = ["当日行程", "当日路线", "当晚入住", "当日用餐", "当日节奏"];
 const expectedDayContentOrder = ["当日行程", "体验图片", "当日路线", "当晚入住", "当日用餐", "当日节奏"];
@@ -91,6 +91,12 @@ try {
         };
       };
       const twoColumnSpotGallery = canvas.querySelector(".spot-count-2, .spot-count-4");
+      const threeSpotGallery = canvas.querySelector(".spot-count-3");
+      const threeSpotCards = [...(threeSpotGallery?.querySelectorAll(":scope > .spot-card") || [])];
+      const threeSpotGalleryRect = threeSpotGallery?.getBoundingClientRect();
+      const threeSpotCardRects = threeSpotCards.map((card) => card.getBoundingClientRect());
+      const threeSpotLastImageRect = threeSpotCards[2]?.querySelector(".spot-image")?.getBoundingClientRect();
+      const threeSpotLastCopyRect = threeSpotCards[2]?.querySelector(".spot-copy")?.getBoundingClientRect();
       const bookingNodeMetrics = [...canvas.querySelectorAll(".booking-step")].map((step) => {
         const stepRect = step.getBoundingClientRect();
         const nodeRect = step.querySelector(":scope > strong")?.getBoundingClientRect();
@@ -162,6 +168,15 @@ try {
         mealValueStyle: readTextStyle(".meal-grid strong"),
         rhythmStyle: readTextStyle(".rhythm-chips b"),
         twoColumnSpotTrackCount: twoColumnSpotGallery ? getComputedStyle(twoColumnSpotGallery).gridTemplateColumns.split(" ").length : 0,
+        threeSpotLayout: !threeSpotGalleryRect || threeSpotCardRects.length !== 3 ? null : {
+          trackCount: getComputedStyle(threeSpotGallery).gridTemplateColumns.split(" ").length,
+          topWidthDelta: Math.abs(threeSpotCardRects[0].width - threeSpotCardRects[1].width),
+          thirdWidthDelta: Math.abs(threeSpotCardRects[2].width - threeSpotGalleryRect.width),
+          thirdBelowTopRow: threeSpotCardRects[2].top > Math.max(threeSpotCardRects[0].bottom, threeSpotCardRects[1].bottom),
+          thirdImageBeforeCopy: Boolean(threeSpotLastImageRect && threeSpotLastCopyRect && threeSpotLastImageRect.right <= threeSpotLastCopyRect.left + 1),
+          thirdImageRatio: threeSpotLastImageRect ? threeSpotLastImageRect.width / threeSpotCardRects[2].width : 0,
+          thirdCopyCentered: threeSpotLastCopyRect ? getComputedStyle(threeSpotCards[2].querySelector(".spot-copy")).justifyContent === "center" : false,
+        },
       };
     });
     results.push({ scenario, ...metrics, consoleErrors: errors });
@@ -240,7 +255,21 @@ const failures = results.filter((item) => {
     || item.designerContactItemCenterDelta > 1
     || !item.designerContactOrderValid
   );
-  return item.width !== 2000 || item.missingImages.length || item.overflowing.length || item.consoleErrors.length || item.slogan !== "高品质度假管家，懂度假，更懂你" || item.fontStatus !== "loaded" || wrongVisibility || wrongQrFallback || wrongFrontendContent || wrongDesignerContact || wrongSingleDesignerContact;
+  const wrongThreeSpotLayout = item.scenario === "three-images" && (
+    !item.threeSpotLayout
+    || item.threeSpotLayout.trackCount !== 2
+    || item.threeSpotLayout.topWidthDelta > 1
+    || item.threeSpotLayout.thirdWidthDelta > 1
+    || !item.threeSpotLayout.thirdBelowTopRow
+    || !item.threeSpotLayout.thirdImageBeforeCopy
+    || Math.abs(item.threeSpotLayout.thirdImageRatio - 0.56) > 0.02
+    || !item.threeSpotLayout.thirdCopyCentered
+  );
+  const wrongFourSpotLayout = item.scenario === "four-images" && (
+    item.spotCardCount !== item.dayCount * 4
+    || item.twoColumnSpotTrackCount !== 2
+  );
+  return item.width !== 2000 || item.missingImages.length || item.overflowing.length || item.consoleErrors.length || item.slogan !== "高品质度假管家，懂度假，更懂你" || item.fontStatus !== "loaded" || wrongVisibility || wrongQrFallback || wrongFrontendContent || wrongDesignerContact || wrongSingleDesignerContact || wrongThreeSpotLayout || wrongFourSpotLayout;
 });
 const output = path.join(root, "output", "dynamic-test-results.json");
 fs.writeFileSync(output, `${JSON.stringify({ passed: failures.length === 0, results }, null, 2)}\n`);
