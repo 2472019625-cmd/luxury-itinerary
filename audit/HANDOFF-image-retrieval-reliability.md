@@ -124,3 +124,5 @@
 新版弹窗实测进一步暴露资格优先级错误：某书籍封面图片的内层终审为 `wrong_subject`，外层为 `needs_user_judgment`，旧 `candidateQualification` 用逻辑或只检查了外层，误归为人工候选。`app/server/image-candidate-eligibility.mjs` 已改为分别检查外层和终审硬拒绝，任一明确硬错均不可选。对同一隔离项目只读重算，128 条本地预览中的硬拒绝由 54 增至 62（新增识别 6 个主体错、1 个活动错、1 个酒店身份错）；原始运行结果文件未改。`image-audit-evidence.test.mjs` 新增冲突优先级回归，相关资格/编辑器测试 36/36 通过。全新浏览器重新打开换图弹窗后，“全部行程图片”显示 66 张，硬拒绝标签 0、页面脚本错误 0，首屏原误显的书籍封面已消失；证据为 `private/picker-all-v2.png` 和 `picker-browser-v2.json`。列表仍含人工待判断图，用户需自行核对，不能据此认定每张内容准确。
 
 最后改动后的 `npm run test:images` 36/36、`npm run build` 与构建后 `npm run test:sites` 4/4 均通过。编辑器服务与两次短时浏览器检查均已退出；仓库外临时脚本、浏览器数据和证据按本轮 `resources.json` 登记保留供复核。
+
+临时浏览器配置目录的精确清理命令被自动审批在执行前拦截，返回 `blocked by policy` 且未说明更具体原因；未改用其他方法绕过。两份由本轮创建的配置目录保留在受限运行目录，`resources.json` 标记为待登记清理流程处理，截图与结论不依赖配置目录继续存在。
