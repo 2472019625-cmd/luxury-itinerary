@@ -126,6 +126,36 @@ test("Step4 保留全部已规划 DAY 图片位并区分可选缺图状态", asy
   assert.match(buildLayoutImageSlots(payload.project.data).find((slot) => slot.slotId === optional.slotId).label, /花豹追踪.*未找到图片.*可选/s);
 });
 
+test("候选预览只发布本地素材路径，未下载与过滤候选保留原始证据但不展示远程图片", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const remoteCandidates = [
+    { candidateId: "web-not-downloaded", imageUrl: "https://images.example.com/unreviewed.jpg", originalDownloadStatus: "not_requested", qualificationStatus: "unreviewed" },
+    { candidateId: "web-filtered-before-download", imageUrl: "https://images.example.com/logo.png", candidateStatus: "filtered_before_download", rejection: "ui_resource", originalDownloadStatus: "not_requested", qualificationStatus: "unreviewed" },
+    { candidateId: "knowledge-remote-preview", sourceKind: "knowledge_library", imageUrl: "https://images.example.com/knowledge.jpg", previewUrl: "https://images.example.com/knowledge-preview.jpg", knowledgePreview: { url: "https://images.example.com/knowledge-preview.jpg" } },
+    { candidateId: "legacy-remote-preview", imageUrl: "https://images.example.com/original.jpg", localPreviewUrl: "https://images.example.com/thumb.jpg", localUrl: "https://images.example.com/local-name-only.jpg", publicUrl: "https://images.example.com/public-name-only.jpg" },
+  ];
+  const localCandidates = ["localPreviewUrl", "previewUrl", "localUrl", "publicUrl", "imageUrl"].map((field) => ({
+    candidateId: `local-${field}`, imageUrl: "https://images.example.com/original.jpg", [field]: "/image-assets/test/selectable.jpg",
+  }));
+  // A stale remote preview must not hide a valid downloaded local asset.
+  localCandidates.push({ candidateId: "local-fallback", localPreviewUrl: "https://images.example.com/stale.jpg", publicUrl: "/image-assets/test/selectable.jpg" });
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.imageExecution.results[0].candidates.push(...remoteCandidates, ...localCandidates);
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const payload = buildSimpleManualImagePayload(value.store, value.projectId);
+  for (const collection of [payload.project.data.imageCandidates, payload.imageReview.slots[0].candidates]) {
+    for (const original of remoteCandidates) {
+      const candidate = collection.find(item => item.candidateId === original.candidateId);
+      assert.equal(candidate.localPreviewUrl, "");
+      assert.equal(candidate.imageUrl, original.imageUrl);
+      assert.equal(candidate.originalDownloadStatus, original.originalDownloadStatus);
+    }
+    for (const original of localCandidates) assert.equal(collection.find(item => item.candidateId === original.candidateId).localPreviewUrl, "/image-assets/test/selectable.jpg");
+  }
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId).imageExecution.results[0].candidates;
+  for (const original of [...remoteCandidates, ...localCandidates]) assert.deepEqual(saved.find(item => item.candidateId === original.candidateId), original);
+});
+
 test("Step4 区分候选待选、硬拒绝、审核超时和审核中", async (t) => {
   const value = await fixture({ includeOptionalDay: true }); t.after(() => rm(value.root, { recursive: true, force: true }));
   let result = value.store.getFinalResult(value.projectId, value.executionRunId);

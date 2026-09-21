@@ -22,6 +22,14 @@ export function canManuallyChooseImageCandidate(candidate = {}) {
   return hasPreview && !hardRejected;
 }
 
+export function canRecommendImageCandidateForSlot(candidate = {}, targetSlot = {}) {
+  if (!canManuallyChooseImageCandidate(candidate)) return false;
+  if (candidate.fieldPath) return candidate.fieldPath === targetSlot.fieldPath;
+  const candidateSlotId = candidate.pipelineSlotId || candidate.slotId;
+  const targetSlotId = targetSlot.pipelineSlotId || targetSlot.slotId;
+  return Boolean(candidateSlotId && targetSlotId && candidateSlotId === targetSlotId);
+}
+
 const HARD_CODES = new Set(["watermark", "subject_mismatch", "place_mismatch", "broken", "low_resolution", "low_quality", "duplicate", "forbid"]);
 
 export function auditReasonHasIdentityMismatch(reason = "") {

@@ -148,6 +148,13 @@ function selectableIds(result, imageResult) {
   ].filter(Boolean));
 }
 
+function localCandidatePreviewUrl(candidate) {
+  // The editor preview route serves downloaded assets. Search results and
+  // remote knowledge previews remain evidence until they are localized.
+  return [candidate.localPreviewUrl, candidate.previewUrl, candidate.localUrl, candidate.publicUrl, candidate.imageUrl]
+    .find((value) => typeof value === "string" && value.startsWith("/image-assets/")) || "";
+}
+
 function frontendCandidate(candidate, slotId, binding, canSelect) {
   const hard = candidate.hardJudgment || {};
   const qualificationStatus = candidateQualification(candidate);
@@ -158,7 +165,7 @@ function frontendCandidate(candidate, slotId, binding, canSelect) {
     slotId,
     pipelineSlotId: slotId,
     fieldPath: binding?.fieldPath || "",
-    localPreviewUrl: candidate.localPreviewUrl || candidate.previewUrl || candidate.localUrl || candidate.publicUrl || candidate.imageUrl || "",
+    localPreviewUrl: localCandidatePreviewUrl(candidate),
     status: hardRejected ? "hard_rejected" : qualificationStatus === "eligible" ? "eligible_not_selected" : "manual_review",
     autoReviewStatus: hardRejected ? "auto_rejected" : reviewTimeout ? "review_timeout" : candidate.autoReviewStatus || (canSelect ? "not_auto_selected" : "manual_only"),
     autoRejected: hardRejected,

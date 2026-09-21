@@ -17,6 +17,7 @@ export default defineConfig({
     proxy: {
       "/api": "http://127.0.0.1:4180",
       "/generated": "http://127.0.0.1:4180",
+      "/image-assets": "http://127.0.0.1:4180",
     },
     warmup: {
       clientFiles: ["./src/main.jsx"],

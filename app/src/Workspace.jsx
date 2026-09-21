@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { addDays, isUsableFinalImageSource, mapDaysFromStart, removeExperienceReferences, synchronizeExperienceStatus, validateItineraryFacts } from "./lib/itineraryRules.js";
-import { applyImageToSlot, canManuallyChooseImageCandidate, IMAGE_REVIEW_STATE, pendingImageReviewSlots } from "./lib/imageReviewPolicy.js";
+import { applyImageToSlot, canManuallyChooseImageCandidate, canRecommendImageCandidateForSlot, IMAGE_REVIEW_STATE, pendingImageReviewSlots } from "./lib/imageReviewPolicy.js";
 import { buildLayoutImageSlots, getSlotImage, listImagePlacements, moveImageToSlot, setSlotImage } from "./lib/imageSlots.js";
 import { deriveProjectThumbnail } from "./lib/projectThumbnail.js";
 import { safeWriteStorage } from './lib/storageSafety.js';
@@ -767,9 +767,8 @@ function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, on
   const savedCandidates = (data.imageCandidates || []).filter((item) => item.localPreviewUrl);
   const uploaded = placements.filter(({ image }) => image.userProvided && !savedCandidates.some(candidate => candidate.localPreviewUrl === image.src)).map(({ slot, image }) => ({ candidateId: 'user-' + slot.slotId, localPreviewUrl: image.src, sourceTitle: '本地上传', slotId: slot.slotId, userProvided: true }));
   const all = [...savedCandidates, ...uploaded].filter((item, index, array) => array.findIndex((other) => other.localPreviewUrl === item.localPreviewUrl && other.pipelineSlotId === item.pipelineSlotId) === index);
-  const matchesTarget = (candidate) => candidate.fieldPath ? candidate.fieldPath === targetSlot.fieldPath : candidate.slotId === targetSlot.slotId;
   const canChoose = (candidate) => canManuallyChooseImageCandidate(candidate) && !failedCandidates.has(candidate.candidateId);
-  const visible = tab === 'recommended' ? all.filter((item) => matchesTarget(item) || !item.pipelineSlotId && item.terminalAudit?.subjectMatch === true).sort((a, b) => Number(matchesTarget(b)) - Number(matchesTarget(a))) : all;
+  const visible = tab === 'recommended' ? all.filter((item) => canRecommendImageCandidateForSlot(item, targetSlot)) : all;
   return <div className="modal-backdrop image-picker-backdrop" role="dialog" aria-modal="true" aria-label="更换图片"><section className="image-picker-modal">
     <header><div><small>更换图片</small><h2>{targetSlot.label}</h2><p>选择已使用图片时会移动到这里，原位置自动留空。</p></div><button onClick={onClose}>关闭</button></header>
     <nav><button className={tab === 'recommended' ? 'active' : ''} onClick={() => setTab('recommended')}>适合当前位置</button><button className={tab === 'all' ? 'active' : ''} onClick={() => setTab('all')}>全部行程图片</button><button className={tab === 'upload' ? 'active' : ''} onClick={() => setTab('upload')}>本地上传</button></nav>
