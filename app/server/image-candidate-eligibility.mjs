@@ -50,7 +50,9 @@ export function isIdentityEvidenceUnresolved(audit = {}) {
 export function candidateQualification(candidate = {}) {
   if (candidate.qualificationStatus === "rejected") return "rejected";
   if (candidate.autoRejected === true) return "rejected";
-  if (isHardRejectionCode(candidate.rejection || candidate.hardJudgment?.hardRejectCode)) return "rejected";
+  // An outer manual-review reason must never mask a specific terminal hard
+  // rejection such as wrong_subject or wrong_hotel.
+  if (isHardRejectionCode(candidate.rejection) || isHardRejectionCode(candidate.hardJudgment?.hardRejectCode)) return "rejected";
   if (isIdentityEvidenceUnresolved(candidate.hardJudgment || candidate)) return "unreviewed";
   if (candidate.qualificationStatus === "eligible") return "eligible";
   if (candidate.hardJudgment?.eligible === true || candidate.eligible === true) return "eligible";

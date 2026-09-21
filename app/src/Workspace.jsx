@@ -760,7 +760,7 @@ function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, on
   const inputRef = useRef(null);
   const placements = listImagePlacements(data);
   const usedBySrc = new Map(placements.map(({ slot, image }) => [image.src, slot]));
-  const savedCandidates = (data.imageCandidates || []).filter((item) => item.localPreviewUrl);
+  const savedCandidates = (data.imageCandidates || []).filter((item) => item.localPreviewUrl && canManuallyChooseImageCandidate(item));
   const uploaded = placements.filter(({ image }) => image.userProvided && !savedCandidates.some(candidate => candidate.localPreviewUrl === image.src)).map(({ slot, image }) => ({ candidateId: 'user-' + slot.slotId, localPreviewUrl: image.src, sourceTitle: '本地上传', slotId: slot.slotId, userProvided: true }));
   const all = [...savedCandidates, ...uploaded].filter((item, index, array) => array.findIndex((other) => other.localPreviewUrl === item.localPreviewUrl && other.pipelineSlotId === item.pipelineSlotId) === index);
   const canChoose = (candidate) => canManuallyChooseImageCandidate(candidate) && !failedCandidates.has(candidate.candidateId);

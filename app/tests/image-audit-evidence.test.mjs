@@ -113,6 +113,21 @@ test("homepage titles and generic local captions cannot prove a necessary hotel 
   assert.ok(isIdentityEvidenceUnresolved(unprovedConflict));
 });
 
+test("人工身份待判不能遮住同一候选的主体或酒店硬拒绝", () => {
+  for (const hardRejectCode of ["wrong_subject", "wrong_activity", "wrong_hotel"]) {
+    const candidate = {
+      rejection: "needs_user_judgment",
+      qualificationStatus: "unreviewed",
+      hardJudgment: {
+        auditEvidenceVersion: IMAGE_AUDIT_EVIDENCE_VERSION,
+        hardRejectCode,
+        identityEvidence: { status: "insufficient", basis: "none", evidenceIds: [] },
+      },
+    };
+    assert.equal(candidateQualification(candidate), "rejected", hardRejectCode);
+  }
+});
+
 test("explicit per-photo identity citations and entity page bindings can support identity", async (t) => {
   const { candidate } = await fixtures(t);
   for (const [attributes, basis, evidenceIds, quote] of [
