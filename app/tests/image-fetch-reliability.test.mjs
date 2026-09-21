@@ -119,6 +119,21 @@ test('per-domain acquisition serializes transfers, while different hosts can pro
   assert.equal(sameHostEntered, false); other(); first(); (await same)(); await session.close();
 });
 
+test('one retrieval session remembers only rejected or missing source pages', async () => {
+  const session = createImageRetrievalSession({ domainIntervalMs: 0 });
+  const blocked = `${origin}/blocked`;
+  const missing = `${origin}/missing`;
+  const transient = `${origin}/busy`;
+  assert.equal(session.rememberUnavailablePage(blocked, { code: 'page_access_blocked' }), true);
+  assert.equal(session.rememberUnavailablePage(missing, { code: 'page_http_error', message: '来源资源请求失败（404）' }), true);
+  assert.equal(session.rememberUnavailablePage(transient, { code: 'page_rate_limited', message: '429' }), false);
+  assert.equal(session.unavailablePageReason(blocked), 'page_access_blocked');
+  assert.equal(session.unavailablePageReason(missing), 'page_http_error');
+  assert.equal(session.unavailablePageReason(transient), null);
+  await session.close();
+  assert.equal(session.unavailablePageReason(blocked), null);
+});
+
 test('cancelled domain waiters exit without waiting for the previous transfer', async () => {
   const session = createImageRetrievalSession({ domainIntervalMs: 0 });
   const release = await session.acquire(`${origin}/a`); const controller = new AbortController();

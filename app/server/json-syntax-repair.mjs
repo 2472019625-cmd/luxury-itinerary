@@ -7,6 +7,34 @@ function stripJsonWrapper(content) {
     .trim();
 }
 
+function completeObjectWithin(source) {
+  const start = source.indexOf("{");
+  if (start < 0) return null;
+  const stack = [];
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{" || char === "[") stack.push(char);
+    else if (char === "}" || char === "]") {
+      if (stack.pop() !== (char === "}" ? "{" : "[")) return null;
+      if (!stack.length) {
+        // Two independent objects are ambiguous output, not a wrapper.
+        if (/[{}]/.test(source.slice(index + 1))) return null;
+        return source.slice(start, index + 1);
+      }
+    }
+  }
+  return null;
+}
+
 function syntaxPosition(error) {
   const match = String(error?.message || "").match(/(?:position|at position)\s+(\d+)/i);
   return match ? Number(match[1]) : null;
@@ -167,8 +195,12 @@ export function parseJsonWithSyntaxRepair(content, { allowRepair = false } = {})
       parseError.parseResult = { status: "invalid_json", repaired: false, operations: [], parseError: parseError.message, repairError: null };
       throw parseError;
     }
-    const candidate = repairCandidate(source);
-    if (!candidate.operations.length || candidate.repaired === source) {
+    const complete = completeObjectWithin(source);
+    const boundedSource = complete && complete !== source ? complete : source;
+    const envelopeOperations = boundedSource !== source ? [{ type: "extracted_complete_json_object" }] : [];
+    const candidate = repairCandidate(boundedSource);
+    const operations = [...envelopeOperations, ...candidate.operations];
+    if (!operations.length || candidate.repaired === source) {
       parseError.parseResult = { status: "invalid_json", repaired: false, operations: [], parseError: parseError.message, repairError: "没有可确定执行的纯语法修复" };
       throw parseError;
     }
@@ -177,10 +209,10 @@ export function parseJsonWithSyntaxRepair(content, { allowRepair = false } = {})
         json: JSON.parse(candidate.repaired),
         source,
         repairedSource: candidate.repaired,
-        result: { status: "repaired_json", repaired: true, operations: candidate.operations, parseError: parseError.message, repairError: null },
+        result: { status: "repaired_json", repaired: true, operations, parseError: parseError.message, repairError: null },
       };
     } catch (repairError) {
-      parseError.parseResult = { status: "invalid_json", repaired: false, operations: candidate.operations, parseError: parseError.message, repairError: repairError.message };
+      parseError.parseResult = { status: "invalid_json", repaired: false, operations, parseError: parseError.message, repairError: repairError.message };
       throw parseError;
     }
   }

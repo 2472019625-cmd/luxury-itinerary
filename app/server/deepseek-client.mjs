@@ -78,6 +78,7 @@ export async function requestDeepSeekJson({
   baseUrl = "https://api.deepseek.com",
   model = "deepseek-v4-flash",
   messages,
+  retryMessages,
   reasoningEffort = "high",
   thinkingType = "enabled",
   maxTokens = 24000,
@@ -94,6 +95,7 @@ export async function requestDeepSeekJson({
   const attempts = Math.max(1, Number(emptyContentRetries) + 1);
   let emptyDiagnostic = null;
   const attemptUsages = [];
+  const attemptContents = [];
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -106,7 +108,7 @@ export async function requestDeepSeekJson({
       const response = await fetchImpl(`${String(baseUrl).replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify(buildDeepSeekRequest({ model, messages, reasoningEffort, maxTokens, thinkingType: attempt === 1 ? thinkingType : "disabled" })),
+        body: JSON.stringify(buildDeepSeekRequest({ model, messages: attempt > 1 && Array.isArray(retryMessages) ? retryMessages : messages, reasoningEffort, maxTokens, thinkingType: attempt === 1 ? thinkingType : "disabled" })),
         signal: combinedSignal,
       });
       if (!response.ok) {
@@ -148,20 +150,31 @@ export async function requestDeepSeekJson({
         }
       });
       content = content.trim();
+      if (content) attemptContents.push(content);
       const attemptRecord = { attempt, usage: usage || null, finishReason, receivedContentChars: content.length, reasoningChars, outcome: "received", reasoningEffort, thinkingType: attempt === 1 ? thinkingType : "disabled" };
       attemptUsages.push(attemptRecord);
       if (!content) {
-        attemptRecord.outcome = "empty_content";
-        parseResult = { status: "empty_content", repaired: false, operations: [], parseError: "模型未返回正文", repairError: null };
+        const stoppedByLength = finishReason === "length";
+        attemptRecord.outcome = stoppedByLength ? "truncated_json" : "empty_content";
+        parseResult = { status: stoppedByLength ? "truncated_json" : "empty_content", repaired: false, operations: [], parseError: stoppedByLength ? "模型输出达到长度上限且未返回JSON正文" : "模型未返回正文", repairError: null };
         emptyDiagnostic = { finishReason, reasoningChars };
         if (attempt < attempts) {
-          emitStatus(onStatus, { providerResponded: true, streamPhase: "retrying", attempt, nextAttempt: attempt + 1, receivedContentChars: 0, reasoningChars, reason: "empty_content" });
+          emitStatus(onStatus, { providerResponded: true, streamPhase: "retrying", attempt, nextAttempt: attempt + 1, receivedContentChars: 0, reasoningChars, reason: attemptRecord.outcome });
           await sleepImpl(Math.min(750 * attempt, 2000));
           continue;
         }
-        throw new Error(`DeepSeek 接口连续 ${attempts} 次没有返回可用内容（finish_reason=${emptyDiagnostic.finishReason || "unknown"}，reasoning_chars=${emptyDiagnostic.reasoningChars}）`);
+        const noContentError = new Error(`DeepSeek 接口连续 ${attempts} 次没有返回可用内容（finish_reason=${emptyDiagnostic.finishReason || "unknown"}，reasoning_chars=${emptyDiagnostic.reasoningChars}）`);
+        if (stoppedByLength) noContentError.code = "planner_json_invalid";
+        throw noContentError;
       }
       try {
+        // A provider length stop is not a completed plan, even if the prefix
+        // happens to parse after a purely syntactic delimiter repair.
+        if (finishReason === "length") {
+          const truncated = new SyntaxError("模型输出达到长度上限，不能确认规划已完整返回");
+          truncated.parseResult = { status: "truncated_json", repaired: false, operations: [], parseError: truncated.message, repairError: null };
+          throw truncated;
+        }
         const parsedResult = parseJsonWithSyntaxRepair(content, { allowRepair: allowSyntaxRepair });
         const parsed = parsedResult.json;
         parseResult = parsedResult.result;
@@ -195,6 +208,9 @@ export async function requestDeepSeekJson({
       }
     } catch (error) {
       attemptError = error;
+      // Keep response text available only to the in-process caller for
+      // deterministic slot recovery; it is already saved by onModelAttempt.
+      Object.defineProperty(error, "attemptContents", { value: [...attemptContents], configurable: true });
       if (!attemptUsages.some((item) => item.attempt === attempt)) attemptUsages.push({ attempt, usage: null, finishReason: null, receivedContentChars: 0, reasoningChars: 0, outcome: error?.status ? `http_${error.status}` : error?.name === "AbortError" ? "timeout" : "stream_interrupted", reasoningEffort, thinkingType: attempt === 1 ? thinkingType : "disabled" });
       error.attemptUsages = [...attemptUsages];
       if (signal?.aborted) throw error;

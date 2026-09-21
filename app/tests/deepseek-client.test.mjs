@@ -136,7 +136,7 @@ test("retries a truncated JSON response without accepting partial output", async
   assert.equal(result.recovery.reason, "empty_or_invalid_json");
   assert.equal(attempts.length, 2);
   assert.equal(attempts[0].rawContent, '{"broken":"');
-  assert.equal(attempts[0].parseResult.status, "invalid_json");
+  assert.equal(attempts[0].parseResult.status, "truncated_json");
   assert.equal(attempts[1].rawContent, '{"ok":true}');
   assert.equal(attempts[1].parseResult.status, "valid_json");
 });
@@ -163,9 +163,59 @@ test("repairs only deterministic JSON punctuation before accepting the response"
   assert.equal(attempts[0].parseResult.status, "repaired_json");
 });
 
+test("rejects a length-stopped object and uses compact retry messages", async () => {
+  const requestMessages = [];
+  const result = await requestDeepSeekJson({
+    apiKey: "test-key",
+    emptyContentRetries: 1,
+    allowSyntaxRepair: true,
+    messages: [{ role: "user", content: "full plan" }],
+    retryMessages: [{ role: "user", content: "compact full plan" }],
+    fetchImpl: async (_url, options) => {
+      requestMessages.push(JSON.parse(options.body).messages);
+      return sseResponse([completion('{"summary":{},"imagePlan":{"slots":[]}}', { finishReason: requestMessages.length === 1 ? "length" : "stop" }), "[DONE]"]);
+    },
+    sleepImpl: async () => {},
+  });
+  assert.deepEqual(requestMessages.map((items) => items[0].content), ["full plan", "compact full plan"]);
+  assert.deepEqual(result.attemptUsages.map((item) => item.outcome), ["truncated_json", "accepted"]);
+});
+
+test("records reasoning-only length stop as truncation before a complete retry", async () => {
+  let calls = 0;
+  const attempts = [];
+  const result = await requestDeepSeekJson({
+    apiKey: "test-key",
+    emptyContentRetries: 1,
+    thinkingType: "disabled",
+    messages: [{ role: "user", content: "full plan" }],
+    fetchImpl: async () => {
+      calls += 1;
+      return sseResponse([completion(calls === 1 ? "" : '{"ok":true}', { reasoning: calls === 1 ? "reasoning exceeded budget" : "", finishReason: calls === 1 ? "length" : "stop" }), "[DONE]"]);
+    },
+    sleepImpl: async () => {},
+    onModelAttempt: (attempt) => attempts.push(attempt),
+  });
+  assert.deepEqual(result.json, { ok: true });
+  assert.equal(attempts[0].parseResult.status, "truncated_json");
+  assert.deepEqual(result.attemptUsages.map((item) => item.outcome), ["truncated_json", "accepted"]);
+});
+
+test("extracts one complete JSON object from harmless response prose", async () => {
+  const result = await requestDeepSeekJson({
+    apiKey: "test-key",
+    allowSyntaxRepair: true,
+    messages: [{ role: "user", content: "return json" }],
+    fetchImpl: async () => sseResponse([completion('结果如下：\n```json\n{"ok":true}\n```\n已完成。', { finishReason: "stop" }), "[DONE]"]),
+  });
+  assert.deepEqual(result.json, { ok: true });
+  assert.deepEqual(result.parseResult.operations.map((item) => item.type), ["extracted_complete_json_object"]);
+});
+
 test("does not invent content when malformed JSON cannot be deterministically repaired", async () => {
   let calls = 0;
   const attempts = [];
+  let terminalError;
   await assert.rejects(() => requestDeepSeekJson({
     apiKey: "test-key",
     emptyContentRetries: 1,
@@ -177,11 +227,13 @@ test("does not invent content when malformed JSON cannot be deterministically re
     },
     sleepImpl: async () => {},
     onModelAttempt: (attempt) => attempts.push(attempt),
-  }), /连续 2 次未返回完整合法JSON/);
+  }), (error) => { terminalError = error; return /连续 2 次未返回完整合法JSON/.test(error.message); });
   assert.equal(calls, 2);
   assert.equal(attempts.length, 2);
-  assert.ok(attempts.every((attempt) => attempt.parseResult.status === "invalid_json"));
+  assert.ok(attempts.every((attempt) => attempt.parseResult.status === "truncated_json"));
   assert.ok(attempts.every((attempt) => attempt.rawContent === '{"businessField":"unterminated'));
+  assert.deepEqual(terminalError.attemptContents, ['{"businessField":"unterminated', '{"businessField":"unterminated']);
+  assert.equal(Object.keys(terminalError).includes("attemptContents"), false);
 });
 
 test("reports a clear error after all empty-content retries are exhausted", async () => {

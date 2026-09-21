@@ -12,7 +12,7 @@ import { validateReviewDecisionBatch } from "./agent-review-decision.mjs";
 import { buildKnowledgeQueryPlan, cleanupPlannerQueryScope, validatePlannerSearchIntent } from "./knowledge-scope-resolver.mjs";
 import { visualSubjectPolicyIssue } from "./visual-subject-policy.mjs";
 
-export const AGENT_PROMPT_VERSION = "agent-trip-planner-v4-image-identity-complete";
+export const AGENT_PROMPT_VERSION = "agent-trip-planner-v6-compact-first-image-plan";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const prompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-trip-planner-v1.md"), "utf8");
 const reviewDecisionPrompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-review-decision-v1.md"), "utf8");
@@ -320,6 +320,61 @@ function fallbackPlannerRaw(factBasis = {}, reason = "planner_system_failure") {
   };
 }
 
+function completePlannerObjectEnd(source, start) {
+  const stack = [];
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{" || char === "[") stack.push(char);
+    else if (char === "}" || char === "]") {
+      if (stack.pop() !== (char === "}" ? "{" : "[")) return -1;
+      if (!stack.length) return index + 1;
+    }
+  }
+  return -1;
+}
+
+export function recoverCompletePlannerImageSlots(attemptContents = []) {
+  let best = [];
+  for (const content of attemptContents) {
+    const source = String(content || "").slice(0, 250_000);
+    const planMatch = /"imagePlan"\s*:\s*\{/.exec(source);
+    if (!planMatch) continue;
+    const planBodyStart = planMatch.index + planMatch[0].length;
+    const slotsMatch = /"slots"\s*:\s*\[/.exec(source.slice(planBodyStart));
+    if (!slotsMatch) continue;
+    const arrayAt = planBodyStart + slotsMatch.index + slotsMatch[0].length - 1;
+    const slots = [];
+    const seen = new Set();
+    let cursor = arrayAt + 1;
+    while (cursor < source.length && slots.length < 80) {
+      while (/[\s,]/.test(source[cursor] || "")) cursor += 1;
+      if (source[cursor] !== "{") break;
+      const end = completePlannerObjectEnd(source, cursor);
+      if (end < 0) break;
+      try {
+        const slot = JSON.parse(source.slice(cursor, end));
+        const role = cleanText(slot?.role);
+        if (/^(?:cover|(?:hotel|dining|transport):\d+|day:\d+(?::supporting:\d+)?)$/.test(role) && !seen.has(role)) {
+          slots.push(slot);
+          seen.add(role);
+        }
+      } catch { /* Malformed slot is never reconstructed from guesses. */ }
+      cursor = end;
+    }
+    if (slots.length > best.length) best = slots;
+  }
+  return best;
+}
+
 function applyPlannerFailOpen(plan, validationErrors = []) {
   const next = structuredClone(plan);
   const repairs = [];
@@ -415,21 +470,24 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   const identityPrompt = "每个imagePlan.slots图片位保留boolean字段exactIdentityRequired。唯一含义：true只在如果不是queryCore.identity指向的这个具体实体，即使画面主体和动作都对，也会造成事实错误时成立；图片必须证明该具体身份。反事实检查：去掉这个具体身份以后，主体和必要动作仍然正确的图片能否完成当前图片位的主要展示任务？能则必须false；只有换成别的实体会把明确承诺的唯一地点、建筑、机构本体或实体专属体验错误展示为目标实体时才true。原始行程地点必须准确，不等于照片必须证明唯一地点身份；地点只是体验发生背景、Scope或搜索context，主要展示的是主体+动作时必须false。主体正确、动作正确、交通类别正确均不等于具体实体身份必需；identity非空、地点明确、locationRole=visual_identity也都不是true的依据。不得靠固定关键词、实体类型或地点名称判断。true时queryCore.identity必须明确目标身份，已有identityEn尽量保留正式英文名称。此字段只判断图片身份是否不可替代，不改变原始地点、画面、Query或来源；不要新增解释字段、第二次调用或其他输出结构。";
   const identityDecisionPrompt = "填写exactIdentityRequired前，先在本次规划内区分两个独立问题（不输出推理或新增字段）：①主体与必要动作必须正确，这要求同一种画面/体验，不要求唯一地点身份；②具体实体是否不可替代，这才决定该boolean。事件、自然现象、活动场面及其营销名称不是唯一实体身份；不得把行程主卖点的重要程度当成身份必需性。若主体动作仍正确，只是照片无法证明发生在那个命名地点，不能据此填true。独立酒店模块展示的就是预订的具体酒店，换成另一家会造成事实错误，因此必须true并填写该酒店正式identity。实体专属体验按是否必须属于该实体判断，不能仅因发生于酒店就设true。完成后逐图片位复核这两个问题，保持主体/动作、地点和身份分开；不按国家、动物、活动或品牌词表判断。";
   const identityOutputChecklist = '最终输出 JSON 前逐个遍历 imagePlan.slots，包含 cover、每个 hotel/dining/transport、每个 day:N 主图和每个 supporting：每一个 slot 对象都必须显式写出 "exactIdentityRequired": true 或 "exactIdentityRequired": false。不得省略、使用 null/字符串，也不得只在前几个 slot 输出该字段。先按上面的反事实判断决定每个值，不按 role、locationRole 或 identity 是否非空机械填充；输出完成后再次检查 imagePlan.slots.length 与此布尔字段出现次数完全相同。';
-  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist] : [])].join('\n\n') }];
+  const compactOutputPrompt = '只输出一个完整、紧凑的 JSON 对象，顶层先写 imagePlan，再写其他字段；不加 Markdown、解释、重复事实、冗长 rationale 或未定义字段。保留契约要求的所有字段和全部图片位；每个说明字段只写必要短句，sourceRefs只写可追溯路径。不要靠省略 slot、queryCore、Query 或 exactIdentityRequired 缩短输出。输出结束前确认整个对象闭合。';
+  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist] : []), compactOutputPrompt].join('\n\n') }];
   const messages = [...systemMessages, { role: "user", content: JSON.stringify(sharedInput) }];
+  const retryMessages = [...systemMessages, { role: "user", content: `${JSON.stringify(sharedInput)}\n\n技术补救：上次响应没有形成完整合法JSON。本次直接输出完整紧凑JSON对象，不写推理、前言或代码块；优先保证全部必需图片位及其完整字段，非图片说明简短。` }];
   const attemptStartedAt = new Date().toISOString();
   let raw;
   let response = null;
   let plannerSystemError = null;
   let plannerAttemptUsages = [];
   try {
-    response = await requestJson({ apiKey, baseUrl, model, messages, reasoningEffort: "high", maxTokens: 30000, timeoutMs: 180_000, emptyContentRetries: 1, allowSyntaxRepair: true, onModelAttempt, signal, onStatus: (event) => onStatus?.({ status: "planning", message: event.streamPhase === "retrying" ? "首次未取得完整规划，正在关闭深度思考后补取最终答案" : "规划模型正在返回单次业务计划", provider: { streamPhase: event.streamPhase, receivedContentChars: event.receivedContentChars } }) });
+    response = await requestJson({ apiKey, baseUrl, model, messages, retryMessages, reasoningEffort: "high", thinkingType: "disabled", maxTokens: 30000, timeoutMs: 180_000, emptyContentRetries: 1, allowSyntaxRepair: true, onModelAttempt, signal, onStatus: (event) => onStatus?.({ status: "planning", message: event.streamPhase === "retrying" ? "首次未取得完整规划，正在补取紧凑JSON" : "规划模型正在返回单次业务计划", provider: { streamPhase: event.streamPhase, receivedContentChars: event.receivedContentChars } }) });
     plannerAttemptUsages = Array.isArray(response.attemptUsages) ? response.attemptUsages : [];
     raw = response.json;
   } catch (error) {
     plannerAttemptUsages = Array.isArray(error?.attemptUsages) ? error.attemptUsages : [];
     plannerSystemError = { code: error?.code || "planner_system_failure", message: error?.message || String(error) };
     raw = fallbackPlannerRaw(factBasis, plannerSystemError.code);
+    if (plannerSystemError.code === "planner_json_invalid") raw.imagePlan.slots = recoverCompletePlannerImageSlots(error?.attemptContents);
   }
   const plannerModelCalls = Math.max(1, plannerAttemptUsages.length || 1);
   callStats.trip_planner = plannerModelCalls;

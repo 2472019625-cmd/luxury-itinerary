@@ -14,7 +14,7 @@ const executables = [
 
 // One invocation owns this object. No cookie/header is enumerable on it or on candidates.
 export function createImageRetrievalSession({ signal, runtimeDirectory, maxBrowserPages = 4, browserTimeoutMs = 20_000, domainIntervalMs = 150, launchBrowser = (options) => puppeteer.launch(options), fetchImpl } = {}) {
-  const cookies = new Map(); const domains = new Map(); const pages = new Map();
+  const cookies = new Map(); const domains = new Map(); const pages = new Map(); const unavailablePages = new Map();
   const diagnostics = { browserPages: 0, browserFailures: 0, browserRequests: 0, browserBytes: 0, technicalRetries: 0, failures: {}, blockedBrowserRequests: 0 };
   let browserPromise; let browserHandle; let ownedDirectory; let launchAttempted = false; let closed = false; let browserTail = Promise.resolve();
   const controller = new AbortController();
@@ -47,6 +47,13 @@ export function createImageRetrievalSession({ signal, runtimeDirectory, maxBrows
     cooldown(url, ms) { const state = stateFor(url); state.cooldownAt = Math.max(state.cooldownAt, Date.now() + ms); },
     recordFailure(code) { diagnostics.failures[code] = (diagnostics.failures[code] || 0) + 1; },
     recordRetry() { diagnostics.technicalRetries += 1; },
+    rememberUnavailablePage(pageUrl, error) {
+      const code = error?.code;
+      if (code !== 'page_access_blocked' && !(code === 'page_http_error' && /(?:\b404\b|（404）)/.test(String(error?.message || '')))) return false;
+      unavailablePages.set(pageUrl, code);
+      return true;
+    },
+    unavailablePageReason(pageUrl) { return unavailablePages.get(pageUrl) || null; },
     headersFor(value, sourcePageUrl) {
       const url = new URL(value); const headers = {};
       const matched = [...cookies.values()].filter((cookie) => cookie.host === url.hostname && (!cookie.secure || url.protocol === 'https:')
@@ -96,7 +103,7 @@ export function createImageRetrievalSession({ signal, runtimeDirectory, maxBrows
         try { await browser.close(); safelyStopped = true; }
         catch { api.recordFailure('browser_close_failed'); }
       }
-      cookies.clear(); domains.clear(); pages.clear(); signal?.removeEventListener('abort', abort);
+      cookies.clear(); domains.clear(); pages.clear(); unavailablePages.clear(); signal?.removeEventListener('abort', abort);
       if (ownedDirectory && safelyStopped) {
         const resolved = path.resolve(ownedDirectory);
         const parent = path.resolve(runtimeDirectory || path.join(process.env.LOCAL_CODEX_RUNTIME_ROOT || path.join(os.tmpdir(), 'codex-runtime'), 'luxury-itinerary', 'image-retrieval'));

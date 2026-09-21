@@ -566,6 +566,11 @@ export function failedHardRequirement(slot, audit) {
   if (core.visualLocation && audit.locationMatch !== true) return "wrong_location";
   if (identityBound && text(slot.hotel) && audit.hotelIdentityMatch !== true) return "wrong_hotel";
   if (constraints.transportType && audit.transportTypeMatch !== true) return "wrong_transport_type";
+  // A broad safari_vehicle verdict cannot override an explicit vehicle shape
+  // conflict visible in the model's own factual description.
+  if (constraints.transportType === "safari_vehicle"
+    && /(?:四驱|四轮|4\s*[x×]\s*4|four[- ]?wheel)/i.test(core.subject)
+    && /(?:六轮|6轮|6\s*[x×]\s*6|six[- ]?wheel)/i.test(text(audit.actualSubject))) return "wrong_transport_type";
   if (core.identityRequirement && audit.identityMatch === false) return identityBound && text(slot.hotel) ? "wrong_hotel" : constraints.transportType ? "wrong_transport_type" : "wrong_subject";
   if (core.action && (audit.coreActionMatch ?? audit.activityMatch) !== true) return "wrong_activity";
   if (core.subject && (audit.coreSubjectMatch ?? audit.subjectMatch) !== true) return "wrong_subject";
@@ -630,7 +635,7 @@ function retryableTechnicalError(error) {
   if (error?.technicalRetryHandled) return false;
   const value = `${error?.code || ""} ${error?.name || ""} ${error?.message || error || ""}`;
   if (/page_access_blocked|page_redirect_mismatch|分辨率不足|文件过大|资源上限|不支持的图片格式|下载失败（4\d\d）/i.test(value)) return false;
-  return /invalid_json|JSON|parse|解析|decode|解码|corrupt|sharp|unsupported image|network|fetch|socket|ECONN|ETIMEDOUT|timeout|timed out|aborted|abort|unavailable|请求失败|下载失败/i.test(value);
+  return /invalid_json|JSON|parse|解析|decode|解码|corrupt|sharp|unsupported image|network|网络错误|fetch|socket|ECONN|ETIMEDOUT|timeout|timed out|超时|aborted|abort|unavailable|请求失败|下载失败/i.test(value);
 }
 
 async function withOneTechnicalRetry(worker, onRetry) {
@@ -690,6 +695,7 @@ export async function runImageSearchSkill({
   const resolvedSourceMode = normalizeImageSourceMode(sourceMode);
   const timingsMs = { knowledgeSearch: 0, searchProvider: 0, commons: 0, pageExtraction: 0, download: 0, previewAudit: 0, originalDownload: 0, batchVision: 0, topConfirmation: 0 };
   const metrics = { businessBatches: 1, automaticFollowupRounds: 0, sourceMode: resolvedSourceMode, slotCount: Array.isArray(slots) ? slots.length : 0, knowledgeCalls: 0, knowledgeLogicalQueries: 0, knowledgeActualRequests: 0, knowledgeQueryReused: 0, knowledgeQueryInFlightReused: 0, knowledgeCompleted: 0, knowledgeNotFound: 0, knowledgeNeedsClarification: 0, knowledgeClarificationRetries: 0, knowledgeClarificationResolved: 0, knowledgeScopeResolved: 0, knowledgeScopeUnresolved: 0, knowledgeFailed: 0, knowledgeTimeouts: 0, knowledgeCandidates: 0, knowledgeUniqueCandidates: 0, knowledgeMergedDuplicates: 0, knowledgeSourcePathRejected: 0, knowledgeFirstWebFallbacks: 0, previewReturned: 0, previewUnique: 0, previewAudited: 0, previewFetchAttempts: 0, matchedFileDownloadAttempts: 0, matchedFileDownloadSuccess: 0, originalDownloadSavedCount: 0, previewAuditTimeMs: 0, originalDownloadTimeMs: 0, searchCalls: 0, commonsCalls: 0, pageExtractionCalls: 0, downloadAttempts: 0, batchVisionCalls: 0, topConfirmationCalls: 0, technicalRetries: { search: 0, pageExtraction: 0, download: 0 }, timingsMs, timingsSemantics: "各阶段所有并发操作耗时累计；阶段间存在重叠，不应相加作为总耗时" };
+  metrics.technicalRetries.vision = 0;
   // These maps belong only to this invocation. Never cache slot semantics or judgments.
   const pageCache = new Map();
   const downloadCache = new Map();
@@ -1002,11 +1008,11 @@ export async function runImageSearchSkill({
             context: contextText(layerSlot.visualContext),
             module: layerSlot.moduleType,
           };
-          judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:scope-${scopeIndex + 1}:query-${queryIndex + 1}:batch-${auditBatches}`, async (recordAttempt) => {
+          judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:scope-${scopeIndex + 1}:query-${queryIndex + 1}:batch-${auditBatches}`, async (recordAttempt) => withOneTechnicalRetry(async () => {
             recordAttempt();
             metrics.batchVisionCalls += 1;
             return measure("batchVision", () => judgeFn({ slot: auditSlot, candidates: downloaded, apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal }));
-          }));
+          }, (error) => { metrics.technicalRetries.vision += 1; warnings.push(`${layerName} 视觉判断技术重试：${error?.message || error}`); })));
         } catch (error) {
           const reviewStatus = error?.code === "audit_timeout" ? "review_timeout" : "not_auto_selected";
           for (const candidate of downloaded) {
@@ -1558,11 +1564,11 @@ export async function runImageSearchSkill({
                 context: contextText(layerSlot.visualContext),
                 module: layerSlot.moduleType,
               };
-              judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:preview-batch-${auditBatches}`, async (recordAttempt) => {
+              judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:preview-batch-${auditBatches}`, async (recordAttempt) => withOneTechnicalRetry(async () => {
                 recordAttempt();
                 metrics.batchVisionCalls += 1;
                 return measure("previewAudit", () => measure("batchVision", () => judgeFn({ slot: auditSlot, candidates: batch, apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal })));
-              }));
+              }, (error) => { metrics.technicalRetries.vision += 1; warnings.push(`${layerName} 视觉判断技术重试：${error?.message || error}`); })));
             } catch (error) {
               const rejection = error?.code === "audit_timeout" ? "review_timeout" : "needs_user_judgment";
               for (const candidate of batch) {
@@ -2017,8 +2023,10 @@ export async function runImageSearchSkill({
       const expandedPages = expandHotelSourcePages(searchedPages, layerSlot)
         .filter((page) => !webBudget.pageUrls.has(page.pageUrl))
         .sort((a, b) => pageSourcePriority(b) - pageSourcePriority(a) || basicScore(b, layerSlot) - basicScore(a, layerSlot));
+      const availablePages = expandedPages.filter((page) => !retrievalSession?.unavailablePageReason?.(page.pageUrl));
+      queryReport.cachedUnavailablePages = expandedPages.length - availablePages.length;
       const pageAllowance = evidence.webExecution.currentAllowance.pages;
-      const selectedPages = expandedPages.slice(0, pageAllowance);
+      const selectedPages = availablePages.slice(0, pageAllowance);
       const allPages = selectedPages;
       queryReport.accessedPages = allPages.length;
       for (const page of allPages) webBudget.pageUrls.add(page.pageUrl);
@@ -2036,7 +2044,7 @@ export async function runImageSearchSkill({
           try { return await extractFn(page, { signal, retrievalSession, maxImages: 24, semanticTerms, loadPage }); }
           finally { evidence.webExecution.operationMs ||= {}; evidence.webExecution.operationMs.pageExtraction = (evidence.webExecution.operationMs.pageExtraction || 0) + Date.now() - started; }
         }
-        catch (error) { const classified = failureLayer(error); const failure = classified === "download" ? "page_fetch" : classified; evidence.pageFailures.push({ pageUrl: page.pageUrl, layer: failure, reason: error?.message || String(error) }); warnings.push(`${layerName} 网页图片提取失败：${page.pageUrl}：${error?.message || error}`); return []; }
+        catch (error) { retrievalSession?.rememberUnavailablePage?.(page.pageUrl, error); const classified = failureLayer(error); const failure = classified === "download" ? "page_fetch" : classified; evidence.pageFailures.push({ pageUrl: page.pageUrl, layer: failure, reason: error?.message || String(error) }); warnings.push(`${layerName} 网页图片提取失败：${page.pageUrl}：${error?.message || error}`); return []; }
       }));
       evidence.semanticExtractionCompleted = true;
       const webPreparation = prepareWebCandidates([...extractedGroups.flat(), ...directCandidates]);
@@ -2170,12 +2178,12 @@ export async function runImageSearchSkill({
         let judgments;
         const started = Date.now();
         try {
-          judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:wave${offset / batchSize + 1}`, async (recordAttempt) => {
+          judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:wave${offset / batchSize + 1}`, async (recordAttempt) => withOneTechnicalRetry(async () => {
             recordAttempt(); metrics.batchVisionCalls += 1;
             queryReport.visionAudits += wave.length;
             queryReport.visionBatchSizes.push(wave.length);
             return webMeasure("batchVision", () => judgeFn({ slot: { ...layerSlot, ...layerConstraints, label: text(layerSlot.subject) || slot.slotId, context: contextText(layerSlot.visualContext), module: layerSlot.moduleType }, candidates: wave, apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal }));
-          }));
+          }, (error) => { metrics.technicalRetries.vision += 1; warnings.push(`${layerName} 视觉判断技术重试：${error?.message || error}`); })));
         } catch (error) {
           warnings.push(`${layerName} 批量视觉判断未完成：${error?.message || error}`);
           const reviewStatus = error?.code === "audit_timeout" ? "review_timeout" : "not_auto_selected";

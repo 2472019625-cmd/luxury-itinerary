@@ -182,6 +182,69 @@ test('相同内容的已下载候选保留真实状态，借用的抓取会话�
   assert.equal(closed, false);
 });
 
+test('后续图片位跳过本批已拒绝的来源页，把页面额度留给其他结果', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'web-dead-source-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const unavailable = new Map();
+  const extracted = [];
+  const retrievalSession = {
+    rememberUnavailablePage: (url, error) => { if (error.code === 'page_access_blocked') unavailable.set(url, error.code); },
+    unavailablePageReason: url => unavailable.get(url) || null,
+    getDiagnostics: () => ({}),
+  };
+  const result = await runImageSearchSkill({
+    root, slots: [{ ...slot, slotId: 'first-dead-page' }, { ...slot, slotId: 'second-alternative' }],
+    sourcePagesPerSlot: 1, downloadsPerSlot: 2, concurrency: { slots: 1 },
+    visionApiKey: 'fixture', visionBaseUrl: 'https://vision.invalid', visionModel: 'fixture',
+    adapters: {
+      retrievalSession,
+      searchWebBatch: async () => [{ pageUrl: 'https://example.com/gallery/blocked' }, { pageUrl: 'https://example.com/fallback' }],
+      searchCommonsImages: async () => [],
+      extractPageImages: async page => { extracted.push(page.pageUrl); if (page.pageUrl.endsWith('/blocked')) throw Object.assign(new Error('access denied'), { code: 'page_access_blocked' }); return [{ ...page, imageUrl: `${page.pageUrl}/photo.jpg`, alt: 'wildebeest herd river crossing' }]; },
+      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+        const filePath = path.join(directory, 'photo.jpg');
+        await sharp({ create: { width: 1200, height: 800, channels: 3, background: '#358859' } }).jpeg().toFile(filePath);
+        return { filePath, publicUrl: `${publicPrefix}/photo.jpg`, sha256: candidate.imageUrl, width: 1200, height: 800 };
+      },
+      judgeCandidatesBatch: async ({ candidates }) => candidates.map(candidate => judgment(candidate, true)),
+    },
+  });
+  assert.equal(extracted.filter(url => url.endsWith('/blocked')).length, 1);
+  assert.ok(extracted.some(url => url.endsWith('/fallback')));
+  assert.ok(result.results[1].pipelineEvidence.webExecution.queryReports.some(report => report.cachedUnavailablePages > 0));
+});
+
+test('视觉服务短暂网络错误只重试当前批次，不重搜整个图片位', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'web-vision-retry-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let searches = 0;
+  let audits = 0;
+  const result = await runImageSearchSkill({
+    root, slots: [{ ...slot, alternateQueries: [] }], sourcePagesPerSlot: 1, downloadsPerSlot: 1,
+    visionApiKey: 'fixture', visionBaseUrl: 'https://vision.invalid', visionModel: 'fixture',
+    adapters: {
+      searchWebBatch: async () => { searches += 1; return [{ pageUrl: 'https://example.com/gallery' }]; },
+      searchCommonsImages: async () => [],
+      extractPageImages: async page => [{ ...page, imageUrl: `${page.pageUrl}/photo.jpg`, alt: 'wildebeest herd river crossing' }],
+      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+        const filePath = path.join(directory, 'photo.jpg');
+        await sharp({ create: { width: 1200, height: 800, channels: 3, background: '#358859' } }).jpeg().toFile(filePath);
+        return { filePath, publicUrl: `${publicPrefix}/photo.jpg`, sha256: candidate.imageUrl, width: 1200, height: 800 };
+      },
+      judgeCandidatesBatch: async ({ candidates }) => {
+        audits += 1;
+        if (audits === 1) throw Object.assign(new Error('网络错误'), { code: 'vision_network_error' });
+        return candidates.map(candidate => judgment(candidate, true));
+      },
+    },
+  });
+  assert.equal(result.results[0].status, 'success');
+  assert.equal(audits, 2);
+  assert.equal(result.metrics.technicalRetries.vision, 1);
+  assert.equal(searches, 1);
+  assert.equal(result.metrics.automaticFollowupRounds, 0);
+});
+
 test('自有抓取会话关闭产生的保留目录诊断进入返回指标', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'web-session-diagnostics-'));
   t.after(() => rm(root, { recursive: true, force: true }));

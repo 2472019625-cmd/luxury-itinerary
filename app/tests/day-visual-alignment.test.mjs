@@ -254,3 +254,14 @@ test('关键动作未出现在实际画面时不自动采用，但不是身份�
   assert.equal(failedHardRequirement(slot('向导带队步行Safari', '步行'), { ...pass, actualSubject: '向导带领客人在草原徒步行走', reason: '步行活动清晰' }), null);
   assert.equal(failedHardRequirement(slot('长颈鹿零距离互动', '游客近距离互动'), { ...pass, actualSubject: '长颈鹿舔游客手掌，游客在旁近距离互动', reason: '人与长颈鹿互动清晰' }), null);
 });
+
+test('模型将六轮游猎车归为游猎车时仍不能自动充当四驱开顶越野车', () => {
+  const slot = { moduleType: 'transport', queryCore: { subject: '开顶四驱越野车', action: '在草原上行驶' } };
+  const passed = { technicalUsable: true, watermarkFree: true, nonAI: true, photographic: true,
+    locationMatch: true, hotelIdentityMatch: true, activityMatch: true, coreActionMatch: true,
+    subjectMatch: true, coreSubjectMatch: true, identityMatch: true, subjectClear: true,
+    transportTypeMatch: true, eligible: true, hardRejectCode: 'none' };
+  assert.equal(failedHardRequirement(slot, { ...passed, actualSubject: '红色六轮游猎敞篷越野车在草原上行驶' }), 'wrong_transport_type');
+  assert.equal(failedHardRequirement(slot, { ...passed, actualSubject: '四驱开顶越野车在草原上行驶' }), null);
+  assert.equal(failedHardRequirement({ moduleType: 'transport', queryCore: { subject: '开顶游猎车', action: '在草原上行驶' } }, { ...passed, actualSubject: '红色六轮游猎车在草原上行驶' }), null);
+});
