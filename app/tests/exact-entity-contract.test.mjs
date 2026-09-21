@@ -72,8 +72,14 @@ test('Adapter原值透传布尔值，不把酒店false或字符串true修成true
 });
 test('原有Planner请求收窄布尔字段含义，不新增模型调用；缺字段不猜值',async()=>{
  let calls=0;const factBasis=buildAgentFactBasis({destination:'Kenya',days:[{description:'草原飞机抵达'}]});
- await generateAgentPlan({project:{projectId:'identity-contract',inputFingerprint:'test',factBasis},simpleSkillContract:true,requestJson:async options=>{calls++;const p=options.messages[0].content;assert.match(p,/去掉这个具体身份以后/);assert.match(p,/不得靠固定关键词、实体类型或地点名称判断/);assert.match(p,/即使画面主体和动作都对，也会造成事实错误/);assert.match(p,/原始行程地点必须准确，不等于照片必须证明唯一地点身份/);assert.match(p,/主要展示的是主体\+动作时必须false/);assert.match(p,/identity非空、地点明确、locationRole=visual_identity也都不是true的依据/);return plannerRequestJson({delayMs:0})(options);}});
+ await generateAgentPlan({project:{projectId:'identity-contract',inputFingerprint:'test',factBasis},simpleSkillContract:true,requestJson:async options=>{calls++;const p=options.messages[0].content;assert.match(p,/去掉这个具体身份以后/);assert.match(p,/不得靠固定关键词、实体类型或地点名称判断/);assert.match(p,/即使画面主体和动作都对，也会造成事实错误/);assert.match(p,/原始行程地点必须准确，不等于照片必须证明唯一地点身份/);assert.match(p,/主要展示的是主体\+动作时必须false/);assert.match(p,/identity非空、地点明确、locationRole=visual_identity也都不是true的依据/);assert.match(p,/imagePlan\.slots\.length 与此布尔字段出现次数完全相同/);return plannerRequestJson({delayMs:0})(options);}});
  assert.equal(calls,1);
  const issues=validateSimpleDayVisuals({imagePlan:{slots:[{role:'day:1',primaryVisualSubject:'车辆',location:'Nairobi',locationRole:'scope_only',queryCore:{subject:'车辆'},fidelityQuery:'车辆接送',alternateQueries:['vehicle transfer']}]}},factBasis);
  assert.ok(issues.some(x=>x.code==='image_exact_identity_invalid'));
+});
+test('金额单位中的斜杠不误判成两种画面，真正的画面二选一仍拦截',()=>{
+ const base={role:'day:1',primaryVisualSubject:'草原上空飞行的热气球（自费可选，约500美金/人）',location:'马赛马拉',locationRole:'scope_only',exactIdentityRequired:false,queryCore:{subject:'热气球',action:'草原上空飞行',identity:''},fidelityQuery:'草原热气球飞行',alternateQueries:['hot air balloon safari'],sourceRefs:['days[0]']};
+ const check=s=>validateSimpleDayVisuals({imagePlan:{slots:[s]}},{days:[{spots:[]}]}).map(issue=>issue.code);
+ assert.ok(!check(base).includes('ambiguous_visual_subject'));
+ assert.ok(check({...base,primaryVisualSubject:'狮子/豹子在草原上奔跑'}).includes('ambiguous_visual_subject'));
 });

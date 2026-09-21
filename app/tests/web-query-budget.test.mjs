@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
-import { applyKnowledgeSourcePathEvidence, failedHardRequirement, runImageSearchSkill } from '../server/simple-image-skill.mjs';
+import { applyKnowledgeSourcePathEvidence, failedHardRequirement, runImageSearchSkill, selectDiverseWebDownloads } from '../server/simple-image-skill.mjs';
 
 const slot = {
   slotId: 'query-budget', moduleType: 'day', required: true, userLocked: false,
@@ -23,6 +23,19 @@ const judgment = (candidate, good) => ({
   watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true,
   eligible: good, hardRejectCode: good ? 'none' : 'wrong_subject',
   relevance: good ? 95 : 20, luxury: 90, cleanliness: 90, composition: 90, score: good ? 95 : 20,
+});
+
+test('单页官方图库只有非目标空间时，同一下载预算保留其他来源页的候选', () => {
+  const ranked = [
+    ...Array.from({ length: 6 }, (_, i) => ({ imageUrl: `https://official.example/room-${i}.jpg`, pageUrl: 'https://official.example/gallery' })),
+    ...Array.from({ length: 3 }, (_, i) => ({ imageUrl: `https://media.example/exterior-${i}.jpg`, pageUrl: 'https://media.example/photos' })),
+  ];
+  const chosen = selectDiverseWebDownloads(ranked, 5);
+  assert.equal(chosen.length, 5);
+  assert.deepEqual(chosen.map(item => new URL(item.pageUrl).hostname), [
+    'official.example', 'official.example', 'official.example', 'media.example', 'media.example',
+  ]);
+  assert.deepEqual(selectDiverseWebDownloads(ranked.slice(0, 6), 5), ranked.slice(0, 5), '只有一个有效来源时不得浪费预算');
 });
 
 test('新版必要身份证据不足保持人工状态；已核验实体路径可提供确定性身份依据', () => {

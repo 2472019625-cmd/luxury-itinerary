@@ -106,3 +106,13 @@
 - Pipeline 为 `partial`；2000px 草稿渲染成功，编辑器可进入且页面脚本错误 0，正式交付条件未满足。最终还有 28 个图片问题及 8 个文案问题。渲染 QA 报告本地指定支付宝二维码资产缺失，导致一张破图和固定模块不完整；仓库对应文件确实不存在，本轮未替代批准素材。
 
 执行证据位于受限访问目录 `D:\CodexRuntime\agent-runtime\luxury-itinerary\20260921-new-project-regression-31657a6`，包括 `private/pipeline/summary.json`、`result.json`、`editor.png` 和渲染草稿。隔离服务、检索浏览器和本轮 Chrome 实例已退出，证据留待用户与独立复核；不宣布验收通过。后续优先核查 Planner 必需位字段契约，再分别处理候选召回/排序、来源访问与低分辨率问题；二维码需恢复经批准的原资产。
+
+## 2026-09-21 图片准确性续改
+
+问题编号 `IMG-REL-12`（Planner 身份字段遗漏）、`IMG-REL-13`（公网同页候选占满下载额度）、`IMG-REL-14`（金额单位斜杠误判画面二选一）。仍在 `codex/image-retrieval-reliability` 分支。`app/server/agent-trip-planner.mjs` 强化每个图片位必须显式输出 `exactIdentityRequired` 的逐位检查，不用名称或地点推断缺失值；只在画面二选一校验中忽略“500 美金/人”等金额单位斜杠，原始费用事实保持不变。`app/server/web-image-candidates.mjs` 不再把酒店身份文字单独算作具体外观/客房主体的强匹配。`app/server/simple-image-skill.mjs` 在既有单 Query 下载额度内按来源页分配有限名额，同一页最多先占约六成，其余候选仍按原排序补满；没有增加调用预算、业务重搜或放宽视觉/身份硬门禁。对应测试在 `app/tests/exact-entity-contract.test.mjs`、`web-download-relevance.test.mjs`、`web-query-budget.test.mjs`。
+
+检查：定向契约及搜图 24/24、Image/Planner/Pipeline 集成 101/101、`npm run test:images` 36/36；金额斜杠补丁后 Planner 契约 6/6，`npm run build` 和构建后 `npm run test:sites` 4/4。全部通过。完整新项目使用同一真实 Excel 与全新 Planner 输出，原始 27 个图片位均有布尔身份字段；相较上一轮原始 32 位中缺 21 位，说明这一输入上的字段完整性改善，但两次 Planner 输出内容不同，不是同一候选池的命中率对照。此轮 Planner 仅有 DAY 6 主图因金额单位斜杠被旧校验误拦；补丁后用该次真实 Planner 原始结果重新校验为 0 错误。完整 Pipeline 在该补丁落地前已启动，因此它的 DAY 6 仍按旧快照跳过搜图，不能把这轮当作 DAY 6 最终代码的端到端证明。
+
+隔离新项目 `dfcfc5a8-f99c-4716-bd5f-f874e9bc8852`：自动采用 17/27，13 个必需位中 7 个有图、6 个待处理；Image 结果 17 success、7 needs_user_action、3 not_found。换图数据共 409 条候选，128 条本地预览、0 条远程伪本地预览；本轮保存的 141 个素材文件全部可解码。2000px 草稿渲染与全新浏览器编辑器通过，页面脚本错误 0；Pipeline 仍为 `partial`、`canEnterFinal=false`，共 9 个文案、6 个图片未解决，批准的支付宝二维码资产缺失仍导致破图及固定模块不完整警告。抽查封面、DAY 3/4/5/8 与酒店 1 实图基本对应规划画面，但自动采用的交通图中仍有“六轮游猎车被视作四驱开顶车代表图”的模型判断风险，需要独立人工核对，不能据 17/27 宣布准确率达标。酒店 2/3/4 与 DAY 1/2/6 仍缺必需图片；网站阻拦、无合格图和视觉判断不确定未由本次代码改动根治。
+
+受限证据目录：`D:\CodexRuntime\agent-runtime\luxury-itinerary\20260921-image-quality-followup`，包括测试/构建日志、`private/plan` 原始规划、`private/pipeline/summary.json`、`result.json`、`editor.png` 和2000px草稿。隔离服务与浏览器退出后保留证据供复核，不宣布独立验收通过，也不把隔离项目当作用户常驻服务中的项目。

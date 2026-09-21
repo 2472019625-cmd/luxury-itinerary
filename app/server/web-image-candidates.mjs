@@ -44,10 +44,12 @@ export function imageRelevanceDecision(candidate, slot) {
   try { resourcePath = decodeURIComponent(new URL(resourceUrl(candidate.imageUrl)).pathname); } catch {}
   const own = [resourcePath, candidate.alt, candidate.imageTitle, candidate.caption, candidate.structuredImageText].filter(Boolean).join(' | ');
   const local = [own, candidate.localContext].filter(Boolean).join(' | ');
+  const hotel = slot.moduleType === 'hotel';
   const subject = matchTerms([proof.subject, core.subject, core.subjectEn], local);
+  const genericHotelSubjectTerms = new Set(['hotel', 'hotels', 'lodge', 'lodges', 'camp', 'camps', 'resort', 'resorts', 'accommodation', 'property']);
+  const subjectSupported = hotel ? subject.matches.some(t => !genericHotelSubjectTerms.has(t)) : subject.matched;
   const actionValues = [proof.action, core.action, core.actionEn].filter(Boolean);
   const action = matchTerms(actionValues, local);
-  const hotel = slot.moduleType === 'hotel';
   const identities = [hotel && slot.hotel, slot.entityName, ...(slot.identityAnchors || []), core.identity, core.identityEn].filter(Boolean);
   const identityAlternatives = identities.map(v => terms(v)).filter(v => v.length);
   const identity = identityAlternatives.some(words => {
@@ -63,12 +65,14 @@ export function imageRelevanceDecision(candidate, slot) {
     && normalize(candidate.depictedIdentity) !== normalize(targetIdentity);
   const explicitText = [candidate.alt, candidate.caption, candidate.structuredImageText].filter(Boolean).join(' ').toLowerCase();
   const negatedCore = [...terms(core.subjectEn), ...terms(core.actionEn)].some(t => new RegExp(`\\b(?:no|not|without)\\s+${t}\\b`, 'i').test(explicitText));
+  // A hotel name on the page or image proves at most its identity. It cannot
+  // make a room photograph a strong match for a requested exterior.
   const state = declaredIdentityConflict || negatedCore ? 'explicit_mismatch'
-    : (!identityCore || identity) && (subject.matched || (hotel && identity)) && (!actionValues.length || action.matched) ? 'strong_match' : 'insufficient_evidence';
+    : (!identityCore || identity) && subjectSupported && (!actionValues.length || action.matched) ? 'strong_match' : 'insufficient_evidence';
   const pass = state !== 'explicit_mismatch';
   return { pass, state, status: pass ? 'pending_visual_confirmation' : 'filtered_before_download',
     reason: declaredIdentityConflict ? 'declared_image_identity_conflict' : negatedCore ? 'explicit_core_negation' : state === 'strong_match' ? 'local_core_evidence' : 'local_evidence_insufficient_not_mismatch',
-    rankBoost: (state === 'strong_match' ? 100 : 0) + subject.matches.length * 12 + action.matches.length * 10 + (identity ? 25 : 0),
+    rankBoost: (state === 'strong_match' ? 100 : 0) + subject.matches.filter(t => !hotel || !genericHotelSubjectTerms.has(t)).length * 12 + action.matches.length * 10 + (identity ? 25 : 0),
     resourcePath,
     subjectMatches: subject.matches, actionMatches: action.matches, identitySupported: identity,
     evidence: local.slice(0, 1400), evidenceSemantics: 'local_text_only_not_visual_judgment' };

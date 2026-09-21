@@ -21,6 +21,14 @@ test('arbitrary exact identity needs local support, context identity does not',(
   assert.equal(imageRelevanceDecision({...c,caption:'Glass sculpture in Arbitrary Azure Pavilion'},s).pass,true);
   assert.equal(imageRelevanceDecision(c,{...s,exactIdentityRequired:false}).pass,true);
 });
+test('hotel identity alone does not make a different room type a strong local match',()=>{
+  const hotel={moduleType:'hotel',hotel:'Fixture Hotel',exactIdentityRequired:true,queryCore:{subject:'酒店外观',subjectEn:'hotel exterior',identity:'Fixture Hotel'}};
+  const room={imageUrl:'https://example.com/fixture-hotel-suite.jpg',alt:'Fixture Hotel suite interior'};
+  const exterior={imageUrl:'https://example.com/fixture-hotel-exterior.jpg',alt:'Fixture Hotel exterior'};
+  assert.equal(imageRelevanceDecision(room,hotel).state,'insufficient_evidence');
+  assert.equal(imageRelevanceDecision(room,hotel).pass,true,'文字证据不足仍留给视觉审核');
+  assert.equal(imageRelevanceDecision(exterior,hotel).state,'strong_match');
+});
 test('figure caption and image-specific structured metadata rescue opaque filenames',()=>{
   const page={pageUrl:'https://example.com/page'};
   const c=extractImageCandidatesFromHtml('<figure><img src="123.jpg"><figcaption>wildebeest herd river crossing</figcaption></figure><script type="application/ld+json">{"image":{"contentUrl":"https://example.com/456.jpg","caption":"wildebeest herd river crossing"}}</script>',page);

@@ -251,6 +251,32 @@ function candidateRankScore(candidate, slot) {
   return Number(candidate.downloadRelevance?.rankBoost || 0) + officialHotelPriority + basicScore(candidate, slot);
 }
 
+export function selectDiverseWebDownloads(rankedCandidates, allowance) {
+  const budget = Math.max(0, Math.floor(Number(allowance) || 0));
+  if (!budget) return [];
+  const perPageLimit = Math.max(1, Math.ceil(budget * 0.6));
+  const perPage = new Map();
+  const selected = [];
+  const selectedKeys = new Set();
+  for (const candidate of rankedCandidates) {
+    if (selected.length >= budget) break;
+    const key = candidate.pageUrl || candidate.sourcePage || candidate.imageUrl;
+    const count = perPage.get(key) || 0;
+    if (count >= perPageLimit) continue;
+    selected.push(candidate);
+    selectedKeys.add(webImageAssetKey(candidate.imageUrl));
+    perPage.set(key, count + 1);
+  }
+  // A single productive page may fill the remaining allowance. Diversity is
+  // a bounded ordering policy, not an extra rejection or search round.
+  for (const candidate of rankedCandidates) {
+    if (selected.length >= budget) break;
+    const key = webImageAssetKey(candidate.imageUrl);
+    if (!selectedKeys.has(key)) { selected.push(candidate); selectedKeys.add(key); }
+  }
+  return selected;
+}
+
 function pageSourcePriority(page = {}) {
   const value = `${page.pageUrl || ""} ${page.title || ""}`;
   if (/\/(?:gallery|photos?|media)(?:\/|$)|\b(?:gallery|photos?|media)\b/i.test(value)) return 300;
@@ -2043,7 +2069,7 @@ export async function runImageSearchSkill({
       const returnedCandidates = uniqueImageAssets([...extractedGroups.flat(), ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))));
       const remainingDownloadBudget = Math.min(Math.max(0, downloadsPerSlot - webBudget.downloads), evidence.webExecution.currentAllowance.downloads);
       const rankedCandidates = uniqueImageAssets([...diverseExtracted, ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot)));
-      const rawCandidates = rankedCandidates.slice(0, remainingDownloadBudget);
+      const rawCandidates = selectDiverseWebDownloads(rankedCandidates, remainingDownloadBudget);
       const admittedKeys = new Set(rawCandidates.map(candidate => webImageAssetKey(candidate.imageUrl)));
       const rankedKeys = new Set(rankedCandidates.map(candidate => webImageAssetKey(candidate.imageUrl)));
       for (const candidate of returnedCandidates) {

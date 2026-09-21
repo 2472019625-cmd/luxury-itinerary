@@ -12,7 +12,7 @@ import { validateReviewDecisionBatch } from "./agent-review-decision.mjs";
 import { buildKnowledgeQueryPlan, cleanupPlannerQueryScope, validatePlannerSearchIntent } from "./knowledge-scope-resolver.mjs";
 import { visualSubjectPolicyIssue } from "./visual-subject-policy.mjs";
 
-export const AGENT_PROMPT_VERSION = "agent-trip-planner-v3-single-pass-fail-open";
+export const AGENT_PROMPT_VERSION = "agent-trip-planner-v4-image-identity-complete";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const prompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-trip-planner-v1.md"), "utf8");
 const reviewDecisionPrompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-review-decision-v1.md"), "utf8");
@@ -164,7 +164,11 @@ export function validateSimpleDayVisuals(plan, factBasis = {}) {
       }
     }
     if (isAbstractVisual(slot)) errors.push(slotError(roleLabel, "abstract_visual_subject", `${roleLabel}只描述了抵达、离境、接送、入住或用餐等抽象事件；必须改成一张能够直接拍出来的具体主体与动作`));
-    if (/或|或者|二选一|\bor\b|\//i.test(primaryVisualSubject)) errors.push(slotError(roleLabel, "ambiguous_visual_subject", `${roleLabel}.primaryVisualSubject 当前值“${primaryVisualSubject}”仍然是A或B；必须选定一个具体画面`));
+    // A per-person/night price is a commercial status note, not an A/B visual
+    // choice. Keep the original text and facts; only exclude that unit slash
+    // from the visual-alternative check.
+    const visualChoiceText = primaryVisualSubject.replace(/\d[\d,.]*\s*(?:美金|美元|人民币|元|USD|CNY)?\s*\/\s*(?:人|位|晚|天|间|车)/gi, "");
+    if (/或|或者|二选一|\bor\b|\//i.test(visualChoiceText)) errors.push(slotError(roleLabel, "ambiguous_visual_subject", `${roleLabel}.primaryVisualSubject 当前值“${primaryVisualSubject}”仍然是A或B；必须选定一个具体画面`));
     const subjectIssue = visualSubjectPolicyIssue(primaryVisualSubject, slot.queryCore);
     if (subjectIssue) errors.push(slotError(roleLabel, "composite_visual_subject", `${roleLabel}.primaryVisualSubject 当前值“${primaryVisualSubject}”合并了多个可独立找图的画面；必须保留一个或拆成独立图片位`));
     const coreFingerprint = [slot.queryCore?.identity, slot.queryCore?.subject, slot.queryCore?.action].map(normalizedVisual).filter(Boolean).join("|");
@@ -410,7 +414,8 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   const dayNumbering = (project.factBasis?.days || []).map((day, i) => `DAY${i + 1}: dayRoles.index=${i}; imagePlan主图role=day:${i + 1}; 辅助role=day:${i + 1}:supporting:1等；只消费factBasis.days[${i}]。`).join('\n');
   const identityPrompt = "每个imagePlan.slots图片位保留boolean字段exactIdentityRequired。唯一含义：true只在如果不是queryCore.identity指向的这个具体实体，即使画面主体和动作都对，也会造成事实错误时成立；图片必须证明该具体身份。反事实检查：去掉这个具体身份以后，主体和必要动作仍然正确的图片能否完成当前图片位的主要展示任务？能则必须false；只有换成别的实体会把明确承诺的唯一地点、建筑、机构本体或实体专属体验错误展示为目标实体时才true。原始行程地点必须准确，不等于照片必须证明唯一地点身份；地点只是体验发生背景、Scope或搜索context，主要展示的是主体+动作时必须false。主体正确、动作正确、交通类别正确均不等于具体实体身份必需；identity非空、地点明确、locationRole=visual_identity也都不是true的依据。不得靠固定关键词、实体类型或地点名称判断。true时queryCore.identity必须明确目标身份，已有identityEn尽量保留正式英文名称。此字段只判断图片身份是否不可替代，不改变原始地点、画面、Query或来源；不要新增解释字段、第二次调用或其他输出结构。";
   const identityDecisionPrompt = "填写exactIdentityRequired前，先在本次规划内区分两个独立问题（不输出推理或新增字段）：①主体与必要动作必须正确，这要求同一种画面/体验，不要求唯一地点身份；②具体实体是否不可替代，这才决定该boolean。事件、自然现象、活动场面及其营销名称不是唯一实体身份；不得把行程主卖点的重要程度当成身份必需性。若主体动作仍正确，只是照片无法证明发生在那个命名地点，不能据此填true。独立酒店模块展示的就是预订的具体酒店，换成另一家会造成事实错误，因此必须true并填写该酒店正式identity。实体专属体验按是否必须属于该实体判断，不能仅因发生于酒店就设true。完成后逐图片位复核这两个问题，保持主体/动作、地点和身份分开；不按国家、动物、活动或品牌词表判断。";
-  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering] : [])].join('\n\n') }];
+  const identityOutputChecklist = '最终输出 JSON 前逐个遍历 imagePlan.slots，包含 cover、每个 hotel/dining/transport、每个 day:N 主图和每个 supporting：每一个 slot 对象都必须显式写出 "exactIdentityRequired": true 或 "exactIdentityRequired": false。不得省略、使用 null/字符串，也不得只在前几个 slot 输出该字段。先按上面的反事实判断决定每个值，不按 role、locationRole 或 identity 是否非空机械填充；输出完成后再次检查 imagePlan.slots.length 与此布尔字段出现次数完全相同。';
+  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist] : [])].join('\n\n') }];
   const messages = [...systemMessages, { role: "user", content: JSON.stringify(sharedInput) }];
   const attemptStartedAt = new Date().toISOString();
   let raw;
