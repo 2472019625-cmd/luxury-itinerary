@@ -14,6 +14,7 @@ import { buildCustomerTravelEntityData } from './lib/travelEntityDisplay.js';
 import { normalizeHighlightForDisplay } from './lib/highlightDisplay.js';
 import { buildConfirmationActionItems, currentPriceSelection, isChildCountConfirmed, listPriceOffers, matchingPriceOffers, priceOfferKey } from './lib/confirmationActionItems.js';
 import { createManualDayCard, daySpotIdentity, deleteDaySpotPreservingSlots, reorderDaySpots, resolveDayPreviewSpotIndex, resolveDaySpotIndex } from './lib/dayEditorState.js';
+import { sha256File } from './lib/fileHash.js';
 
 const STORAGE_USERS = "sheyou-workspace-users-v1";
 const STORAGE_SESSION = "sheyou-workspace-session-v1";
@@ -69,11 +70,6 @@ function writeStorage(key, value) {
 
 function uid(prefix = "id") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-async function fileSha256(file) {
-  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 function formatTime(value) {
@@ -324,7 +320,7 @@ function UploadStep({ project, onFiles, onContinue }) {
     setParsing(true);
     try {
       const { importItineraryWorkbook } = await import("./lib/itineraryImport.js");
-      const [recognition, sourceSha256] = await Promise.all([importItineraryWorkbook(workbook, project.data), fileSha256(workbook)]);
+      const [recognition, sourceSha256] = await Promise.all([importItineraryWorkbook(workbook, project.data), sha256File(workbook)]);
       await onFiles([workbook], recognition, sourceSha256);
       onContinue();
     } catch (error) {

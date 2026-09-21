@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { importItineraryWorkbook } from "./lib/itineraryImport.js";
 import { createProductionDefaultData } from "./lib/itineraryRules.js";
+import { sha256File } from "./lib/fileHash.js";
 
 const statusLabel = {
   reading: "正在读取资料",
@@ -10,12 +11,6 @@ const statusLabel = {
   failed: "规划失败",
   cancelled: "已取消",
 };
-
-async function sha256(file) {
-  const bytes = await file.arrayBuffer();
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
-}
 
 function Section({ number, title, children, muted }) {
   return <section className={`agent-section${muted ? " agent-section-muted" : ""}`}><header><span>{number}</span><h2>{title}</h2></header><div className="agent-section-body">{children}</div></section>;
@@ -106,7 +101,7 @@ export function AgentPlanner() {
     if (!file) return;
     setStatus("reading"); setMessage("正在读取资料"); setError("");
     try {
-      const [{ data, report }, digest] = await Promise.all([importItineraryWorkbook(file, createProductionDefaultData()), sha256(file)]);
+      const [{ data, report }, digest] = await Promise.all([importItineraryWorkbook(file, createProductionDefaultData()), sha256File(file)]);
       setSource({ name: file.name, digest, report });
       await submit({ facts: data, report, sourceName: file.name, sourceSha256: digest });
     } catch (failure) { setStatus("failed"); setError(failure.message || "资料读取失败"); }

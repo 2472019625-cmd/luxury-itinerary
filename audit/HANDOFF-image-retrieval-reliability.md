@@ -85,3 +85,13 @@
 本轮修复候选展示与图片传输的确定性缺陷，不声明来源召回、下载成功率或视觉判断准确率已经达标。未放宽准入、增加搜索预算或改变路由默认入口。状态仍为执行验证、待独立复核。
 
 外部验证记录：`D:\CodexRuntime\agent-runtime\luxury-itinerary\20260921-local-dev-repair\image-feedback`。仅保留本轮测试/构建日志与无客户原文的统计；用户复核后由登记责任方回收。原开发服务与用户项目数据不属于该验证目录的清理范围。
+
+## 2026-09-21 上传指纹 `digest` 报错
+
+问题编号 `UPLOAD-HTTP-01`。前端两处 Excel 上传入口直接调用 `crypto.subtle.digest`；当浏览器未提供 Web Crypto（例如通过普通 HTTP 局域网地址访问）时，`subtle` 为 `undefined`，上传在生成文件指纹阶段报 `Cannot read properties of undefined (reading 'digest')`。输入文件未因此被当作成功导入。
+
+`app/src/lib/fileHash.js` 统一两个入口：有 Web Crypto 时继续使用原生 SHA-256；没有时在浏览器内计算同一 SHA-256，不向第三方传文件。`app/src/Workspace.jsx` 和 `AgentPlanner.jsx` 改为调用共享函数。`app/tests/file-hash.test.mjs` 对 0、1、55、56、63、64、65、1024 及超过 1 MiB 的二进制输入，与 Node SHA-256 对照两条路径，另核对文件只读取一次。
+
+`node --test tests/file-hash.test.mjs tests/agent-planner-frontend.test.mjs tests/itinerary-import.test.mjs` 为 23/23 通过；`npm run build` 与构建后的 `npm run test:sites`（4/4）通过。未重跑真实 Excel 生成和新项目浏览器验收；本次只确认上传指纹计算及关联前端构建。用户需刷新页面后重试上传，结果仍待实际浏览器验证。未改配置文件和后端服务。
+
+补记前节服务状态：用户随后自行重启 4180；`/manual-images` 经 4180 与 Vite 5173 均返回 577 条记录、50 条本地预览、0 条远程预览，45 个唯一图片地址在 Vite 下全部返回图片。此前“尚待重启”是当时状态，现已完成接口级验证，完整新项目验收仍待复核。
