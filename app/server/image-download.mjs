@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { assertPublicUrl, fetchPublicUrl } from "./page-images.mjs";
+import { fetchPublicImageResource, readImageResponse, IMAGE_ACCEPT, IMAGE_USER_AGENT } from './public-image-http.mjs';
 
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const extensions = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" };
@@ -39,33 +39,43 @@ export async function fetchTrustedKnowledgeUrl(value, { allowedOrigins = [], sig
   } finally { clearTimeout(timer); }
 }
 
-export async function downloadCandidate(candidate, { directory, publicPrefix, signal, minWidth = 900, minHeight = 500, maxBytes = 14 * 1024 * 1024, onRequest, trustedKnowledgeOrigins = [], fetchImpl = fetch }) {
-  const isKnowledgeLibrary = candidate.sourceKind === "knowledge_library";
-  if (!isKnowledgeLibrary) await assertPublicUrl(candidate.imageUrl);
-  const response = await (isKnowledgeLibrary ? fetchTrustedKnowledgeUrl(candidate.imageUrl, {
-    allowedOrigins: trustedKnowledgeOrigins,
-    headers: { "user-agent": "Mozilla/5.0 LuxuryTravelImageResearch/1.0", accept: "image/avif,image/webp,image/png,image/jpeg" },
-    signal,
-    timeoutMs: 25_000,
-    fetchImpl,
-    onRequest,
-  }) : fetchPublicUrl(candidate.imageUrl, {
-    headers: { "user-agent": "Mozilla/5.0 LuxuryTravelImageResearch/1.0", accept: "image/avif,image/webp,image/png,image/jpeg" },
-    signal,
-    timeoutMs: 25_000,
-    fetchImpl,
-    onRequest,
-  }));
-  if (!response.ok) throw new Error(`图片下载失败（${response.status}）`);
-  const declaredLength = Number(response.headers.get("content-length") || 0);
-  if (declaredLength > maxBytes) throw new Error("图片文件过大");
-  const chunks = []; let received = 0;
-  for await (const chunk of response.body || []) {
-    received += chunk.length;
-    if (received > maxBytes) { await response.body?.cancel?.().catch(() => {}); throw new Error('图片文件超过资源上限'); }
-    chunks.push(Buffer.from(chunk));
+export async function downloadCandidate(candidate, options) {
+  const variants = candidate.sourceKind === 'knowledge_library' ? [candidate.imageUrl]
+    : [...new Set([candidate.imageUrl, ...(Array.isArray(candidate.imageVariants) ? candidate.imageVariants : [])])].slice(0, 3);
+  let lastError;
+  for (const [index, imageUrl] of variants.entries()) {
+    try {
+      const downloaded = await downloadVariant({ ...candidate, imageUrl }, options);
+      return { ...downloaded, imageUrl: candidate.imageUrl, downloadedImageUrl: imageUrl, downloadVariantAttempts: index + 1 };
+    } catch (error) {
+      lastError = error;
+      if (options.signal?.aborted || error.challengeDetected || ['public_url_blocked', 'page_rate_limited', 'page_service_unavailable'].includes(error.code)) break;
+    }
   }
-  const buffer = Buffer.concat(chunks);
+  throw lastError;
+}
+
+async function downloadVariant(candidate, { directory, publicPrefix, signal, minWidth = 900, minHeight = 500, maxBytes = 14 * 1024 * 1024, onRequest, trustedKnowledgeOrigins = [], fetchImpl = fetch, retrievalSession, timeoutMs = 25_000 }) {
+  const isKnowledgeLibrary = candidate.sourceKind === "knowledge_library";
+  let buffer;
+  if (isKnowledgeLibrary) {
+    const response = await fetchTrustedKnowledgeUrl(candidate.imageUrl, {
+    allowedOrigins: trustedKnowledgeOrigins,
+    headers: { 'user-agent': IMAGE_USER_AGENT, accept: IMAGE_ACCEPT },
+    signal,
+    timeoutMs,
+    fetchImpl,
+    onRequest,
+    });
+    if (!response.ok) { await response.body?.cancel?.().catch(() => {}); throw new Error(`图片下载失败（${response.status}）`); }
+    buffer = await readImageResponse(response, { signal, timeoutMs, maxBytes });
+  } else {
+    const resource = await fetchPublicImageResource(candidate.imageUrl, {
+      headers: { 'user-agent': IMAGE_USER_AGENT, accept: IMAGE_ACCEPT },
+      signal, timeoutMs, maxBytes, fetchImpl, onRequest, retrievalSession, sourcePageUrl: candidate.pageUrl,
+    });
+    buffer = resource.buffer;
+  }
   if (!buffer.length || buffer.length > maxBytes) throw new Error("图片文件大小不合格");
   const metadata = await sharp(buffer, { failOn: "warning" }).metadata();
   const contentType = metadata.format === 'jpeg' ? 'image/jpeg' : metadata.format === 'png' ? 'image/png' : metadata.format === 'webp' ? 'image/webp' : '';

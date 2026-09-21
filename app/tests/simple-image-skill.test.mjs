@@ -1225,7 +1225,8 @@ async function runAuditedFixture(t, slotInput, { candidateCount = 1, judgments }
     visionBaseUrl: "https://vision.example/v1",
     visionModel: "vision-model",
     sourcePagesPerSlot: 1,
-    downloadsPerSlot: candidateCount,
+    // Keep the whole fixture pool plus the required next-query opportunity.
+    downloadsPerSlot: candidateCount + 1,
     visionCandidatesPerSlot: candidateCount,
     adapters: {
       searchWebBatch: async () => [{ title: "受控候选页", pageUrl: "https://example.com/page", officialHint: true }],
@@ -1460,7 +1461,8 @@ test("官方 Gallery 命中后补取酒店落地页，并优先下载可确认�
     root,
     slots: [slot("image:hotel:sabora:primary", { moduleType:"hotel", location:"Grumeti Reserve Tanzania", hotel:"Singita Sabora Tented Camp", activity:"", subject:"可确认 Singita Sabora Tented Camp 身份的帐篷营地、客房或公共空间" })],
     searchApiKey:"search-key", searchModel:"search-model", visionApiKey:"vision-key", visionBaseUrl:"https://vision.example/v1", visionModel:"vision-model",
-    sourcePagesPerSlot:2, downloadsPerSlot:2, visionCandidatesPerSlot:2,
+    // Two paired source pages/two hotel candidates, plus the next-query reserve.
+    sourcePagesPerSlot:3, downloadsPerSlot:3, visionCandidatesPerSlot:2,
     adapters: {
       searchWebBatch: async () => [{ title:"Singita Sabora Gallery", pageUrl:"https://singita.com/lodge/singita-sabora-tented-camp/gallery", officialHint:true, searchRank:1 }],
       searchCommonsImages: async () => [],
@@ -1544,7 +1546,8 @@ test("真实批量视觉请求和返回都以candidateId为硬契约", async (t)
   t.after(() => { globalThis.fetch = originalFetch; });
   const judgments = await judgeCandidatesBatch({ slot: { label: "DAY2", module: "day", context: "塞伦盖蒂", subject: "游猎", visualGoal: "游猎职责", mustHave: ["地点：塞伦盖蒂", "活动：游猎", "主体：游猎"], prefer: [], forbid: [] }, candidates: files, apiKey: "key", baseUrl: "https://vision.invalid", model: "model" });
   const promptText = requestBody.messages[0].content.find((item) => item.type === "text").text;
-  assert.match(promptText, /candidateId=candidate-fixed-1/);
+  assert.match(promptText, /"candidateId":"candidate-fixed-1"/);
+  assert.match(promptText, /"candidateId":"candidate-fixed-2"/);
   assert.match(promptText, /locationMatch/);
   assert.match(promptText, /eligible/);
   assert.match(promptText, /photographic/);
@@ -2286,6 +2289,23 @@ test("Web审核漏返回候选判断时保留人工状态，不继续搜索", as
   assert.ok(result.results[0].candidates.every((item) => item.rejection === "needs_user_judgment"));
 });
 
+test("Web必要身份证据不足不硬拒绝、不采用且不触发后续Query", async (t) => {
+  const target = slot("web-identity-uncertain", { moduleType: "hotel", hotel: "Fixture Hotel", exactIdentityRequired: true, queryCore: { subject: "客房", identity: "Fixture Hotel" } });
+  const result = await runAuditedFixture(t, target, { judgments: candidates => candidates.map(candidate => ({
+    candidateId: candidate.candidateId, auditEvidenceVersion: 2, identityMatch: false, hotelIdentityMatch: false, eligible: false,
+    identityEvidence: { status: "insufficient", basis: "none", evidenceIds: [], explanation: "普通客房无法证明目标酒店" },
+  })) });
+  const output = result.results[0];
+  assert.equal(output.status, "needs_user_action");
+  assert.equal(output.selected, null);
+  assert.equal(output.pipelineEvidence.webExecution.executedQueries.length, 1);
+  assert.equal(output.candidates[0].qualificationStatus, "unreviewed");
+  assert.equal(output.candidates[0].autoRejected, false);
+  assert.equal(output.candidates[0].rejection, "needs_user_judgment");
+  assert.equal(output.candidates[0].hardJudgment.auditEvidenceVersion, 2);
+  assert.equal(output.candidates[0].hardJudgment.identityEvidence.status, "insufficient");
+});
+
 test("Web累计预算不随Query重置，下载失败和超预算候选都保留", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "web-budget-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -2293,17 +2313,18 @@ test("Web累计预算不随Query重置，下载失败和超预算候选都保留
   const result = await runImageSearchSkill({
     root, slots: [slot("web-budget")], downloadsPerSlot: 2, sourcePagesPerSlot: 2,
     adapters: {
-      searchWebBatch: async () => { calls += 1; return [{ pageUrl: "https://example.com/test" }]; },
+      searchWebBatch: async () => { calls += 1; return [{ pageUrl: `https://example.com/test-${calls}` }]; },
       searchCommonsImages: async () => [],
-      extractPageImages: async (page) => Array.from({ length: 5 }, (_, index) => ({ ...page, imageUrl: `https://example.com/${index}.jpg` })),
+      extractPageImages: async (page) => Array.from({ length: 5 }, (_, index) => ({ ...page, imageUrl: `${page.pageUrl}/${index}.jpg` })),
       downloadCandidate: async () => { throw new Error("download broken"); },
     },
   });
-  assert.equal(calls, 1);
-  assert.equal(result.results[0].pipelineEvidence.webExecution.stopReason, "slot_resource_budget");
+  assert.equal(calls, 2);
+  assert.equal(result.results[0].pipelineEvidence.webExecution.stopReason, "queries_exhausted");
   assert.equal(result.results[0].pipelineEvidence.webExecution.downloadsUsed, 2);
-  assert.equal(result.results[0].candidates.length, 5);
+  assert.equal(result.results[0].candidates.length, 10);
   assert.equal(result.results[0].candidates.filter((item) => item.originalDownloadStatus === "failed").length, 2);
+  assert.deepEqual(result.results[0].pipelineEvidence.webExecution.queryReports.map(report => report.admittedCandidates), [1, 1]);
 });
 
 test("Web下一Query必须等待当前候选审核结束，查询实际逐条发送", async (t) => {

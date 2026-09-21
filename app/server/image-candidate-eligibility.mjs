@@ -1,3 +1,5 @@
+export const IMAGE_AUDIT_EVIDENCE_VERSION = 2;
+
 export const HARD_REJECTION_CODES = new Set([
   "wrong_hotel",
   "wrong_location",
@@ -34,11 +36,23 @@ export function isHardRejectionCode(code) {
   return HARD_REJECTION_CODES.has(normalizeHardRejectCode(code));
 }
 
+// Only fresh evidence-aware judgments use this state. Legacy saved candidates
+// keep their existing qualification; missing new fields never invalidate them.
+export function isIdentityEvidenceUnresolved(audit = {}) {
+  return audit?.auditEvidenceVersion === IMAGE_AUDIT_EVIDENCE_VERSION
+    && audit.identityEvidence?.status === "insufficient"
+    && !isHardRejectionCode(audit.hardRejectCode)
+    && audit.visibleIdentityConflict !== true
+    && audit.visibleLocationConflict !== true
+    && !["coreSubjectMatch", "coreActionMatch", "subjectClear", "transportTypeMatch", "watermarkFree", "nonAI", "photographic", "technicalUsable"].some((field) => audit[field] === false);
+}
+
 export function candidateQualification(candidate = {}) {
   if (candidate.qualificationStatus === "rejected") return "rejected";
-  if (candidate.qualificationStatus === "eligible") return "eligible";
   if (candidate.autoRejected === true) return "rejected";
   if (isHardRejectionCode(candidate.rejection || candidate.hardJudgment?.hardRejectCode)) return "rejected";
+  if (isIdentityEvidenceUnresolved(candidate.hardJudgment || candidate)) return "unreviewed";
+  if (candidate.qualificationStatus === "eligible") return "eligible";
   if (candidate.hardJudgment?.eligible === true || candidate.eligible === true) return "eligible";
   return "unreviewed";
 }

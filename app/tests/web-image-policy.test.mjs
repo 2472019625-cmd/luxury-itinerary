@@ -24,6 +24,28 @@ test('英文首先使用核心主体动作，车辆不被机场替代',()=>{
   assert.equal(q[0],'Nairobi drop-off vehicle parked at the terminal');
   assert.equal(q[1],'Nairobi 送机车辆 停靠航站楼');
 });
+
+test('英文Core缺主体或动作时保留完整Planner英文词，不以半套英文覆盖', () => {
+  for (const missing of ['subjectEn', 'actionEn']) {
+    const s = ordinary('角马群', 'wildebeest herd', '横渡河流', 'crossing the river', '马拉河');
+    s.queryCore[missing] = '';
+    const queries = buildWebExecutionQueries(s, ['角马横渡河流', 'wildebeest herd crossing the river']);
+    assert.equal(queries[0], 'Kenya wildebeest herd crossing the river');
+    assert.equal(queries[1], 'Kenya 角马群 横渡河流');
+  }
+});
+
+test('没有完整英文表达时使用完整中文Core；静态画面允许动作为空', () => {
+  for (const missing of ['subjectEn', 'actionEn']) {
+    const s = ordinary('角马群', 'wildebeest herd', '横渡河流', 'crossing the river', '未知地点');
+    s.queryCore[missing] = '';
+    const partial = missing === 'subjectEn' ? 'crossing the river' : 'wildebeest herd';
+    const queries = buildWebExecutionQueries(s, ['角马横渡河流', partial]);
+    assert.ok(queries.every(query => query.includes('角马') && query.includes('河流')));
+    assert.ok(queries.every(query => !query.endsWith(partial)));
+  }
+  assert.equal(buildWebExecutionQueries(ordinary('雕塑', 'sculpture', '', '', '未知地点'), ['雕塑', 'sculpture'])[0], 'Kenya sculpture');
+});
 test('任意名字由Core语义决定，地点角色和实体类型标签不决定路由',()=>{
   for(const entityName of ['Arbitrary Target','餐厅','博物馆','机场','村庄']) {
     const s={moduleType:'day',entityName,location:entityName,locationRole:'visual_identity',queryCore:{identity:entityName}};

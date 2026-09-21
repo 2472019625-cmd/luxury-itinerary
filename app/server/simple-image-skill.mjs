@@ -8,8 +8,8 @@ import { downloadCandidate } from "./image-download.mjs";
 import { searchWebBatch } from "./image-search.mjs";
 import { normalizeImageSourceMode, searchKnowledgeImages } from "./knowledge-image-search.mjs";
 import { applyKnowledgeScopeToQueryPlan, buildKnowledgeQueryPlan, buildKnowledgeScopePlan, buildKnowledgeVisualTarget, classifyKnowledgeImagePurpose, explicitEntityRoute, createKnowledgeScopeResolver, knowledgeSourcePathMatches } from "./knowledge-scope-resolver.mjs";
-import { isHardRejectionCode, normalizeHardRejectCode } from "./image-candidate-eligibility.mjs";
-import { canonicalImageAssetKey, extractPageImages, fetchImagePageContent } from "./page-images.mjs";
+import { IMAGE_AUDIT_EVIDENCE_VERSION, isHardRejectionCode, isIdentityEvidenceUnresolved, normalizeHardRejectCode } from "./image-candidate-eligibility.mjs";
+import { canonicalImageAssetKey, createImageRetrievalSession, extractPageImages, fetchImagePageContent } from "./page-images.mjs";
 import { searchCommonsImages } from "./commons-search.mjs";
 import { buildWebExecutionQueries, classifyWebFallback } from "./image-web-execution.mjs";
 import { prepareWebCandidates, gateWebCandidates, webImageAssetKey } from "./web-image-candidates.mjs";
@@ -387,6 +387,7 @@ function stableCandidateId(slotId, candidate = {}) {
 function hardJudgment(audit = null) {
   if (!audit) return null;
   return {
+    ...(audit.auditEvidenceVersion ? { auditEvidenceVersion: audit.auditEvidenceVersion, identityEvidence: audit.identityEvidence } : {}),
     locationMatch: audit.locationMatch,
     visibleLocationConflict: audit.visibleLocationConflict,
     hotelIdentityMatch: audit.hotelIdentityMatch,
@@ -444,6 +445,9 @@ function publicCandidate(candidate, audit = null, rejection = null) {
     sourcePage: candidate.pageUrl,
     sourceTitle: candidate.title || "",
     sourceKind: candidate.sourceKind || null,
+    acquisitionMethod: candidate.acquisitionMethod || null,
+    downloadedImageUrl: fromKnowledgeLibrary ? null : candidate.downloadedImageUrl || null,
+    downloadVariantAttempts: Number(candidate.downloadVariantAttempts || 0),
     knowledgeAssetKey: candidate.knowledgeAssetKey || null,
     knowledgeAssetId: candidate.knowledgeAssetId || null,
     knowledgePreview: candidate.knowledgePreview ? { ...candidate.knowledgePreview, url: candidate.previewPublicUrl ? null : candidate.knowledgePreview.url } : null,
@@ -462,6 +466,11 @@ function publicCandidate(candidate, audit = null, rejection = null) {
     originalDownloadStatus: candidate.originalDownloadStatus || (originalDownloaded ? "success" : "not_requested"),
     originalDownloadFailureCode: originalFailureCode,
     originalDownloadFailureReason: candidate.originalDownloadFailureReason || null,
+    ...(candidate.webDownloadAdmission ? {
+      webDownloadAdmission: candidate.webDownloadAdmission,
+      webDownloadDeferredReason: candidate.webDownloadDeferredReason || null,
+      webQueries: candidate.webQueries || [],
+    } : {}),
     originalWidth: Number(candidate.originalWidth || 0) || null,
     originalHeight: Number(candidate.originalHeight || 0) || null,
     minimumWidth: Number(candidate.minimumWidth || 0) || null,
@@ -514,6 +523,7 @@ export function completeVisualJudgment(audit) {
 }
 
 export function failedHardRequirement(slot, audit) {
+  if (isIdentityEvidenceUnresolved(audit)) return "needs_user_judgment";
   const constraints = buildImageConstraints(slot);
   const core = constraints.core;
   const identityBound = ["hotel_space", "hotel_experience", "explicit_entity"].includes(slot.knowledgeImagePurpose || classifyKnowledgeImagePurpose(slot));
@@ -561,8 +571,12 @@ export function applyKnowledgeSourcePathEvidence(slot, audit, pathDecision = {})
     return { ...audit, locationMatch: identityBound ? audit.locationMatch : false, hotelIdentityMatch: identityBound && text(slot.hotel) ? false : audit.hotelIdentityMatch, eligible: false, hardRejectCode: identityBound && text(slot.hotel) ? "wrong_hotel" : "wrong_location", reason: [audit.reason, `知识库来源路径与目标 scope 不一致：${pathDecision.scopePath || "unknown"}`].filter(Boolean).join("；") };
   }
   if (pathDecision.match !== true) return audit;
-  const countryContext = pathDecision.mode === "country_context";
   const explicitHardCode = normalizeHardRejectCode(audit.hardRejectCode);
+  // A matching folder can resolve missing identity evidence, but cannot
+  // overrule a fresh photo/caption conflict or an explicit identity rejection.
+  if (audit.auditEvidenceVersion === IMAGE_AUDIT_EVIDENCE_VERSION
+    && (audit.identityEvidence?.status === "conflict" || ["wrong_hotel", "wrong_location", "knowledge_source_path_mismatch"].includes(explicitHardCode))) return audit;
+  const countryContext = pathDecision.mode === "country_context";
   const next = {
     ...audit,
     locationMatch: pathDecision.mode === "entity_identity" && text(slot.location) && explicitHardCode !== "wrong_location" ? true : audit.locationMatch,
@@ -578,11 +592,16 @@ export function applyKnowledgeSourcePathEvidence(slot, audit, pathDecision = {})
       next.hotelIdentityMatch = true;
       next.hardRejectCode = "none";
     }
+    if (audit.auditEvidenceVersion === IMAGE_AUDIT_EVIDENCE_VERSION && !audit.visibleIdentityConflict && !audit.visibleLocationConflict) {
+      next.identityMatch = true;
+      next.identityEvidence = { status: "supported", basis: "knowledge_path", evidenceIds: [], explanation: "已通过程序核验的知识库来源路径与目标实体一致", quote: pathDecision.scopePath || "", visibleIdentifier: "" };
+    }
   }
   return next;
 }
 
 function retryableTechnicalError(error) {
+  if (error?.technicalRetryHandled) return false;
   const value = `${error?.code || ""} ${error?.name || ""} ${error?.message || error || ""}`;
   if (/page_access_blocked|page_redirect_mismatch|分辨率不足|文件过大|资源上限|不支持的图片格式|下载失败（4\d\d）/i.test(value)) return false;
   return /invalid_json|JSON|parse|解析|decode|解码|corrupt|sharp|unsupported image|network|fetch|socket|ECONN|ETIMEDOUT|timeout|timed out|aborted|abort|unavailable|请求失败|下载失败/i.test(value);
@@ -615,6 +634,9 @@ export async function runImageSearchSkill({
   trustedKnowledgeOrigins = [], knowledgeAccessIdentity = "", knowledgeQueryOptions = {},
   concurrency = {}, existingImages = [], signal, adapters = {}, onCapabilityCall,
 } = {}) {
+  const retrievalSession = adapters.retrievalSession || (adapters.createImageRetrievalSession || createImageRetrievalSession)({ signal });
+  const ownsRetrievalSession = !adapters.retrievalSession;
+  try {
   const startedAt = Date.now();
   const batchId = randomUUID();
   const searchFn = adapters.searchWebBatch || searchWebBatch;
@@ -691,7 +713,7 @@ export async function runImageSearchSkill({
     metrics.pageExtractionCalls += 1;
     metrics.resourceReuse.pages.attempts += 1;
     increment(metrics.resourceReuse.pages.attemptsByUrl, url);
-    return measure("pageExtraction", () => (adapters.fetchImagePageContent || fetchImagePageContent)(url, { signal, onRequest: networkEvent(metrics.resourceReuse.pages) }));
+    return measure("pageExtraction", () => (adapters.fetchImagePageContent || fetchImagePageContent)(url, { signal, retrievalSession, onRequest: networkEvent(metrics.resourceReuse.pages) }));
   }, () => { metrics.technicalRetries.pageExtraction += 1; })));
   const assetDirectory = path.join(root, "output", "image-assets", `simple-${batchId}`);
   const publicPrefix = `/image-assets/simple-${batchId}`;
@@ -901,8 +923,8 @@ export async function runImageSearchSkill({
               evidence.downloadAttempts += 1;
               metrics.resourceReuse.images.attempts += 1;
               increment(metrics.resourceReuse.images.attemptsByUrl, candidate.knowledgeAssetKey || candidate.imageUrl);
-              const result = await measure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, candidate.knowledgeAssetKey || candidate.imageUrl); }, trustedKnowledgeOrigins }));
-              return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType"].map((key) => [key, result[key]]));
+              const result = await measure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal, retrievalSession, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, candidate.knowledgeAssetKey || candidate.imageUrl); }, trustedKnowledgeOrigins }));
+              return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
             }, () => { metrics.technicalRetries.download += 1; })));
             if (record) record.downloadStatus = "success";
             return { ...candidate, ...technical };
@@ -992,7 +1014,8 @@ export async function runImageSearchSkill({
           const rejection = failedHardRequirement(gateSlot, effectiveAudit) || (fallbackPlan ? controlledFallbackRejection(fallbackPlan, effectiveAudit) : null);
           const qualifiedAudit = finalizeAuditEligibility(effectiveAudit, rejection);
           if (rejection) {
-            if (record) { record.judgmentStatus = "rejected"; record.failureReason = rejection; }
+            if (rejection === "needs_user_judgment") incompleteJudgment = true;
+            if (record) { record.judgmentStatus = rejection === "needs_user_judgment" ? "needs_user_judgment" : "rejected"; record.failureReason = rejection; }
             judged.push({ candidate, audit: qualifiedAudit, rejection });
             continue;
           }
@@ -1417,8 +1440,8 @@ export async function runImageSearchSkill({
               const cacheKey = `preview:${candidate.knowledgeAssetKey}`;
               const technical = await reuse(downloadCache, metrics.resourceReuse.images, cacheKey, () => downloadQueue.add(async () => {
                 metrics.previewFetchAttempts += 1;
-                const result = await downloadFn({ ...candidate, imageUrl: preview.url, title: preview.filename || candidate.title }, { directory: assetDirectory, publicPrefix, signal, minWidth: 1, minHeight: 1, maxBytes: 14 * 1024 * 1024, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins });
-                return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType"].map((key) => [key, result[key]]));
+                const result = await downloadFn({ ...candidate, imageUrl: preview.url, title: preview.filename || candidate.title }, { directory: assetDirectory, publicPrefix, signal, retrievalSession, minWidth: 1, minHeight: 1, maxBytes: 14 * 1024 * 1024, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins });
+                return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
               }));
               previewTechnicalByAsset.set(candidate.knowledgeAssetKey, technical);
               if (record) record.previewStatus = "success";
@@ -1445,8 +1468,8 @@ export async function runImageSearchSkill({
                 metrics.downloadAttempts += 1;
                 metrics.matchedFileDownloadAttempts += 1;
                 evidence.downloadAttempts += 1;
-                const result = await measure("originalDownload", () => measure("download", () => downloadFn({ ...candidate, imageUrl: matchedFile.url, title: matchedFile.filename || candidate.title }, { directory: assetDirectory, publicPrefix, signal, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins })));
-                return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType"].map((key) => [key, result[key]]));
+                const result = await measure("originalDownload", () => measure("download", () => downloadFn({ ...candidate, imageUrl: matchedFile.url, title: matchedFile.filename || candidate.title }, { directory: assetDirectory, publicPrefix, signal, retrievalSession, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins })));
+                return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
               }));
               metrics.matchedFileDownloadSuccess += 1;
               const localized = { ...candidate, ...rescued, originalDownloaded: true, originalDownloadStatus: "success", previewFilePath: rescued.filePath, previewPublicUrl: rescued.publicUrl, previewSha256: rescued.sha256, previewWidth: rescued.width, previewHeight: rescued.height, previewBytes: rescued.bytes, previewContentType: rescued.contentType };
@@ -1541,7 +1564,7 @@ export async function runImageSearchSkill({
               const rejection = failedHardRequirement(gateSlot, effectiveAudit);
               const qualifiedAudit = finalizeAuditEligibility(effectiveAudit, rejection);
               if (record) {
-                record.judgmentStatus = rejection ? "rejected" : qualifiedAudit.matchLevel === "representative" ? "representative" : "approved_not_selected";
+                record.judgmentStatus = rejection === "needs_user_judgment" ? "needs_user_judgment" : rejection ? "rejected" : qualifiedAudit.matchLevel === "representative" ? "representative" : "approved_not_selected";
                 record.failureReason = rejection || null;
               }
               judgmentsByAsset.set(candidate.knowledgeAssetKey, { candidate, audit: qualifiedAudit, rejection });
@@ -1605,8 +1628,8 @@ export async function runImageSearchSkill({
               metrics.downloadAttempts += 1;
               metrics.matchedFileDownloadAttempts += 1;
               evidence.downloadAttempts += 1;
-              const result = await measure("originalDownload", () => measure("download", () => downloadFn({ ...entry.candidate, imageUrl: matchedFile.url, title: matchedFile.filename || entry.candidate.title }, { directory: assetDirectory, publicPrefix, signal, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins })));
-              return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType"].map((key) => [key, result[key]]));
+              const result = await measure("originalDownload", () => measure("download", () => downloadFn({ ...entry.candidate, imageUrl: matchedFile.url, title: matchedFile.filename || entry.candidate.title }, { directory: assetDirectory, publicPrefix, signal, retrievalSession, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins })));
+              return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
             }));
             metrics.matchedFileDownloadSuccess += 1;
             const localized = { ...entry.candidate, ...technical, originalDownloaded: true, originalDownloadStatus: "success" };
@@ -1906,8 +1929,17 @@ export async function runImageSearchSkill({
       evidence.webExecution.queryReports ||= [];
       for (const [queryIndex, query] of queries.entries()) {
         if (webBudget.pages >= networkPageLimit || webBudget.effectivePages.size >= sourcePagesPerSlot || webBudget.downloads >= downloadsPerSlot) { evidence.webExecution.stopReason = "slot_resource_budget"; break; }
-        const reserve = Math.min(queries.length - queryIndex - 1, Math.max(0, networkPageLimit - webBudget.pages - 1));
-        evidence.webExecution.currentAllowance = { pages: Math.min(networkPageLimit - webBudget.pages - reserve, sourcePagesPerSlot - webBudget.effectivePages.size - Math.min(reserve, sourcePagesPerSlot - webBudget.effectivePages.size - 1)), downloads: Math.max(1, downloadsPerSlot - webBudget.downloads - Math.min(reserve, downloadsPerSlot - webBudget.downloads - 1)) };
+        // Admit a bounded current-query pool while keeping one real opportunity
+        // for the next expression. Finish this admitted pool before advancing.
+        const reserve = queryIndex < queries.length - 1 ? 1 : 0;
+        const pageRemaining = Math.min(networkPageLimit - webBudget.pages, sourcePagesPerSlot - webBudget.effectivePages.size);
+        const downloadRemaining = downloadsPerSlot - webBudget.downloads;
+        evidence.webExecution.currentAllowance = {
+          pages: pageRemaining - Math.min(reserve, Math.max(0, pageRemaining - 1)),
+          downloads: downloadRemaining - Math.min(reserve, Math.max(0, downloadRemaining - 1)),
+          reservedPages: Math.min(reserve, Math.max(0, pageRemaining - 1)),
+          reservedDownloads: Math.min(reserve, Math.max(0, downloadRemaining - 1)),
+        };
         evidence.webExecution.executedQueries.push(query);
         const current = await runWebQueryLayer(layerSlot, layerConstraints, [query], evidence, `${layerName}:q${evidence.webExecution.executedQueries.length}`, fallbackPlan);
         result = { ...current, candidates: mergePublicCandidates(result.candidates, current.candidates || []), sourceEvidence: unique([...result.sourceEvidence, ...(current.sourceEvidence || [])]) };
@@ -1953,7 +1985,7 @@ export async function runImageSearchSkill({
         for (const item of evidence.groundingRedirectUnresolved) warnings.push(`${layerName} 搜索来源未解析：grounding_redirect_unresolved：${item.title || item.pageUrl}`);
       }
       const searchedPages = (pagesResult.status === "fulfilled" ? pagesResult.value : []).filter((item, index, array) => item?.pageUrl && array.findIndex((other) => other.pageUrl === item.pageUrl) === index);
-      const queryReport = { query: layerQueries[0], returnedPages: searchedPages.length, accessedPages: 0, pageFailures: 0, effectivePages: 0, rawResources: 0, technicalFiltered: 0, resizeDuplicates: 0, relevanceFiltered: 0, downloadPool: 0, downloadAttempts: 0, downloadSuccess: 0, visionAudits: 0, selected: false };
+      const queryReport = { query: layerQueries[0], allowance: { ...evidence.webExecution.currentAllowance }, returnedPages: searchedPages.length, accessedPages: 0, pageFailures: 0, effectivePages: 0, rawResources: 0, technicalFiltered: 0, resizeDuplicates: 0, relevanceFiltered: 0, downloadPool: 0, admittedCandidates: 0, deferredCandidates: 0, downloadAttempts: 0, downloadSuccess: 0, visionAudits: 0, selected: false };
       evidence.webExecution.queryReports.push(queryReport);
       const failureStart = evidence.pageFailures.length;
       const expandedPages = expandHotelSourcePages(searchedPages, layerSlot)
@@ -1961,17 +1993,6 @@ export async function runImageSearchSkill({
         .sort((a, b) => pageSourcePriority(b) - pageSourcePriority(a) || basicScore(b, layerSlot) - basicScore(a, layerSlot));
       const pageAllowance = evidence.webExecution.currentAllowance.pages;
       const selectedPages = expandedPages.slice(0, pageAllowance);
-      // A derived hotel landing page and its matched gallery are one source
-      // group. Inspect both before moving to another query, without opening
-      // unrelated pages beyond the slot's cumulative network budget.
-      if (isHotel && selectedPages.length && selectedPages.length < expandedPages.length) {
-        const selectedUrls = new Set(selectedPages.map((page) => page.pageUrl));
-        for (const page of expandedPages) {
-          if (selectedPages.length >= sourcePagesPerSlot || webBudget.pages + selectedPages.length >= networkPageLimit) break;
-          const paired = selectedPages.some((selected) => selected.derivedFromPageUrl === page.pageUrl || page.derivedFromPageUrl === selected.pageUrl);
-          if (paired && !selectedUrls.has(page.pageUrl)) { selectedPages.push(page); selectedUrls.add(page.pageUrl); }
-        }
-      }
       const allPages = selectedPages;
       queryReport.accessedPages = allPages.length;
       for (const page of allPages) webBudget.pageUrls.add(page.pageUrl);
@@ -1984,9 +2005,9 @@ export async function runImageSearchSkill({
       const extractedGroups = await Promise.all(allPages.map(async (page) => {
         try {
           // Legacy test adapters can own extraction; production shares only the raw page.
-          if (adapters.extractPageImages) return await pageQueue.add(() => withOneTechnicalRetry(async () => { metrics.pageExtractionCalls += 1; return webMeasure("pageExtraction", () => extractFn(page, { signal, maxImages: 24, semanticTerms })); }, (error) => { metrics.technicalRetries.pageExtraction += 1; warnings.push(`${layerName} 网页提图技术重试：${page.pageUrl}：${error?.message || error}`); }));
+          if (adapters.extractPageImages) return await pageQueue.add(() => withOneTechnicalRetry(async () => { metrics.pageExtractionCalls += 1; return webMeasure("pageExtraction", () => extractFn(page, { signal, retrievalSession, maxImages: 24, semanticTerms })); }, (error) => { metrics.technicalRetries.pageExtraction += 1; warnings.push(`${layerName} 网页提图技术重试：${page.pageUrl}：${error?.message || error}`); }));
           const started = Date.now();
-          try { return await extractFn(page, { signal, maxImages: 24, semanticTerms, loadPage }); }
+          try { return await extractFn(page, { signal, retrievalSession, maxImages: 24, semanticTerms, loadPage }); }
           finally { evidence.webExecution.operationMs ||= {}; evidence.webExecution.operationMs.pageExtraction = (evidence.webExecution.operationMs.pageExtraction || 0) + Date.now() - started; }
         }
         catch (error) { const classified = failureLayer(error); const failure = classified === "download" ? "page_fetch" : classified; evidence.pageFailures.push({ pageUrl: page.pageUrl, layer: failure, reason: error?.message || String(error) }); warnings.push(`${layerName} 网页图片提取失败：${page.pageUrl}：${error?.message || error}`); return []; }
@@ -2002,8 +2023,12 @@ export async function runImageSearchSkill({
       Object.assign(queryReport, relevance.counts, { insufficientInDownloadPool: 0, visionBatchSizes: [] });
       evidence.webExecution.relevanceCounts ||= { strong_match: 0, explicit_mismatch: 0, insufficient_evidence: 0, insufficientInDownloadPool: 0 };
       for (const [key,value] of Object.entries(relevance.counts)) evidence.webExecution.relevanceCounts[key] += value;
-      const effective = new Set(relevance.candidates.map(item => item.pageUrl).filter(Boolean));
+      const accepted = new Map(relevance.candidates.map(candidate => [candidate.imageUrl,candidate]));
+      // Only pages actually opened for extraction consume the effective-page
+      // budget. Provider-direct image provenance is not another page visit.
+      const effective = new Set(allPages.filter((page, index) => extractedGroups[index].some(candidate => accepted.has(candidate.imageUrl))).map(page => page.pageUrl));
       queryReport.effectivePages = effective.size;
+      queryReport.directSourcePages = new Set(directCandidates.filter(candidate => accepted.has(candidate.imageUrl)).map(candidate => candidate.pageUrl).filter(Boolean)).size;
       for (const url of effective) webBudget.effectivePages.add(url);
       queryReport.downloadPool = relevance.candidates.length;
       evidence.webCandidateFiltering ||= { before: 0, after: 0, filtered: [] };
@@ -2011,17 +2036,24 @@ export async function runImageSearchSkill({
       evidence.webCandidateFiltering.after += webPreparation.after;
       evidence.webCandidateFiltering.filtered.push(...webPreparation.filtered);
       evidence.webCandidateFiltering.filtered.push(...relevance.filtered);
-      const accepted = new Map(relevance.candidates.map(candidate => [candidate.imageUrl,candidate]));
       for (let i = 0; i < extractedGroups.length; i += 1) extractedGroups[i] = extractedGroups[i].filter(candidate=>accepted.has(candidate.imageUrl)).map(candidate=>accepted.get(candidate.imageUrl));
       for (let i = directCandidates.length - 1; i >= 0; i -= 1) { if (!accepted.has(directCandidates[i].imageUrl)) directCandidates.splice(i, 1); else directCandidates[i]=accepted.get(directCandidates[i].imageUrl); }
       const perPageCap = Math.max(2, Math.ceil(downloadsPerSlot / Math.max(1, allPages.length)));
       const diverseExtracted = extractedGroups.flatMap((group, index) => [...group].sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot)).slice(0, isHotel && allPages[index]?.officialHint ? Math.max(4, downloadsPerSlot) : perPageCap));
       const returnedCandidates = uniqueImageAssets([...extractedGroups.flat(), ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))));
-      // Current-query candidates have priority over opening another query.
-      // The next query may use whatever cumulative slot budget remains, but
-      // a speculative reservation must not strand already-returned candidates.
-      const remainingDownloadBudget = Math.max(0, downloadsPerSlot - webBudget.downloads);
-      const rawCandidates = uniqueImageAssets([...diverseExtracted, ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot))).slice(0, remainingDownloadBudget);
+      const remainingDownloadBudget = Math.min(Math.max(0, downloadsPerSlot - webBudget.downloads), evidence.webExecution.currentAllowance.downloads);
+      const rankedCandidates = uniqueImageAssets([...diverseExtracted, ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot)));
+      const rawCandidates = rankedCandidates.slice(0, remainingDownloadBudget);
+      const admittedKeys = new Set(rawCandidates.map(candidate => webImageAssetKey(candidate.imageUrl)));
+      const rankedKeys = new Set(rankedCandidates.map(candidate => webImageAssetKey(candidate.imageUrl)));
+      for (const candidate of returnedCandidates) {
+        const key = webImageAssetKey(candidate.imageUrl);
+        candidate.webDownloadAdmission = admittedKeys.has(key) ? "admitted" : "deferred";
+        candidate.webDownloadDeferredReason = admittedKeys.has(key) ? null : rankedKeys.has(key) ? "query_download_allowance" : "source_diversity_limit";
+        candidate.webQueries = [...layerQueries];
+      }
+      queryReport.admittedCandidates = rawCandidates.length;
+      queryReport.deferredCandidates = returnedCandidates.length - rawCandidates.length;
       for (const candidate of rawCandidates) { webBudget.assets.add(webImageAssetKey(candidate.imageUrl)); candidate.candidateId = stableCandidateId(slot.slotId, candidate); }
       webBudget.downloads += rawCandidates.length;
       queryReport.insufficientInDownloadPool = rawCandidates.filter(candidate=>candidate.downloadRelevance?.state==='insufficient_evidence').length;
@@ -2040,8 +2072,8 @@ export async function runImageSearchSkill({
             metrics.resourceReuse.images.attempts += 1;
             const metricKey = candidate.sourceKind === "knowledge_library" ? candidate.knowledgeRecordId : candidate.imageUrl;
             increment(metrics.resourceReuse.images.attemptsByUrl, metricKey);
-            const result = await webMeasure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal, onRequest: candidate.sourceKind === "knowledge_library" ? () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, metricKey); } : networkEvent(metrics.resourceReuse.images), trustedKnowledgeOrigins }));
-            return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType"].map((key) => [key, result[key]]));
+            const result = await webMeasure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal, retrievalSession, onRequest: candidate.sourceKind === "knowledge_library" ? () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, metricKey); } : networkEvent(metrics.resourceReuse.images), trustedKnowledgeOrigins }));
+            return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
           }, (error) => { metrics.technicalRetries.download += 1; warnings.push(`${layerName} 候选下载技术重试：${error?.message || error}`); })));
           if (knowledgeRecord) knowledgeRecord.downloadStatus = "success";
           queryReport.downloadSuccess += 1;
@@ -2058,7 +2090,22 @@ export async function runImageSearchSkill({
           return null;
         }
       }));
-      const downloaded = downloadedResults.filter((item) => item?.filePath && item?.sha256 && !webBudget.hashes.has(item.sha256) && webBudget.hashes.add(item.sha256)).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot));
+      const downloaded = [];
+      queryReport.contentDuplicates = 0;
+      for (const candidate of downloadedResults.filter(item => item?.filePath && item?.sha256)) {
+        // Downloaded duplicates remain traceable local candidates even though
+        // they do not consume another visual judgment.
+        const retained = retainedCandidates.find(item => item.candidateId === candidate.candidateId);
+        if (retained) Object.assign(retained, publicCandidate(candidate, null, "not_auto_reviewed"));
+        if (webBudget.hashes.has(candidate.sha256)) {
+          queryReport.contentDuplicates += 1;
+          if (retained) retained.webProcessingReason = "duplicate_downloaded_content";
+          continue;
+        }
+        webBudget.hashes.add(candidate.sha256);
+        downloaded.push(candidate);
+      }
+      downloaded.sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot));
       evidence.downloadedCandidates = (evidence.downloadedCandidates || 0) + downloaded.length;
       if (!downloaded.length) {
         evidence.visualJudgmentCompleted = true;
@@ -2228,7 +2275,12 @@ export async function runImageSearchSkill({
   };
   metrics.previewAuditTimeMs = timingsMs.previewAudit;
   metrics.originalDownloadTimeMs = timingsMs.originalDownload;
+  if (ownsRetrievalSession) await retrievalSession.close();
+  metrics.imageRetrieval = retrievalSession.getDiagnostics();
   return { batchId, status: resultStatus(results), results, warnings: [], metrics: { ...metrics, knowledgeAverageSlotSearchMs: metrics.knowledgeCalls ? Math.round(timingsMs.knowledgeSearch / metrics.knowledgeCalls) : 0, knowledgeSlotOutcomes, knowledgeOnlyVerified: resolvedSourceMode === "knowledge_only" && metrics.searchCalls === 0 && metrics.commonsCalls === 0, concurrencyPeak: { slots: slotQueue.peak, search: searchQueue.peak, pages: pageQueue.peak, downloads: downloadQueue.peak, vision: visionQueue.peak }, durationMs: Date.now() - startedAt } };
+  } finally {
+    if (ownsRetrievalSession) await retrievalSession.close();
+  }
 }
 
 export function imageSlotPriority(slot) {

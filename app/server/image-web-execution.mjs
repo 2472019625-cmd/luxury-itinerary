@@ -11,13 +11,24 @@ export function buildWebExecutionQueries(slot, queries, purpose = "", route = nu
   const core = slot.queryCore || {};
   const shortQueries = unique(queries);
   const visualIdentity = slot.exactIdentityRequired === true && english(core.identityEn) ? core.identityEn : "";
-  const parts = unique([core.subjectEn, core.actionEn].filter(english));
+  const englishSubject = [core.subjectEn, core.subject].find(english) || "";
+  const englishAction = [core.actionEn, core.action].find(english) || "";
+  const hasSubject = Boolean(name(core.subject) || name(core.subjectEn));
+  const hasAction = Boolean(name(core.action) || name(core.actionEn));
+  // A translated fragment must never replace the complete Planner query.
+  // Static scenes legitimately have no action; otherwise both Core parts
+  // need an English expression before we construct an English query.
+  const completeEnglishCore = hasSubject && englishSubject && (!hasAction || englishAction);
+  const parts = completeEnglishCore ? unique([englishSubject, englishAction]) : [];
   if (visualIdentity && !parts.join(" ").toLowerCase().includes(visualIdentity.toLowerCase())) parts.push(visualIdentity);
-  const structuredEnglish = parts.join(" ");
-  const first = structuredEnglish || shortQueries.find(english);
-  const structuredChinese = unique([core.subject, core.action]).join(" ");
+  const structuredEnglish = completeEnglishCore ? parts.join(" ") : "";
+  const incompleteEnglishParts = !completeEnglishCore && (hasSubject || hasAction)
+    ? unique([englishSubject, englishAction, [englishSubject, englishAction].filter(Boolean).join(" ")]).map(value => value.toLowerCase()) : [];
+  const first = structuredEnglish || shortQueries.find(query => english(query) && !incompleteEnglishParts.includes(query.toLowerCase()));
+  const structuredChinese = unique([core.subject || core.subjectEn, core.action || core.actionEn]).join(" ");
   const fallback = structuredChinese || shortQueries.find((query) => !english(query)) || shortQueries.find((query) => query !== first);
-  const ordered = first ? unique([first, fallback]) : shortQueries.slice(0, 2);
+  const ordered = first ? unique([first, fallback])
+    : unique([structuredChinese, ...shortQueries.filter(query => !incompleteEnglishParts.includes(query.toLowerCase()))]).slice(0, 2);
   if (slot.exactIdentityRequired === true) {
     if (!name(core.identity)) return [];
     const context = route?.entityType === "hotel_experience" ? "" : englishName(slot.region || slot.country);

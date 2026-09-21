@@ -1,43 +1,7 @@
 import * as cheerio from "cheerio";
-import dns from "node:dns/promises";
-import net from "node:net";
-
-const blockedHosts = new Set(["localhost", "0.0.0.0", "::", "::1"]);
-
-function isPrivateIp(address) {
-  if (!net.isIP(address)) return false;
-  if (address.includes(":")) return address === "::1" || address.startsWith("fc") || address.startsWith("fd") || address.startsWith("fe80:");
-  const [a, b] = address.split(".").map(Number);
-  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
-}
-
-export async function assertPublicUrl(value) {
-  const url = new URL(value);
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error("不支持的图片地址协议");
-  if (blockedHosts.has(url.hostname.toLowerCase())) throw new Error("已阻止本地网络地址");
-  const records = await dns.lookup(url.hostname, { all: true });
-  if (!records.length || records.some((item) => isPrivateIp(item.address))) throw new Error("已阻止私有网络地址");
-  return url;
-}
-
-export async function fetchPublicUrl(value, { signal, headers = {}, timeoutMs = 20_000, maxRedirects = 5, fetchImpl = fetch, onRequest } = {}) {
-  let current = (await assertPublicUrl(value)).href;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const combinedSignal = signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-  try {
-    for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
-      await assertPublicUrl(current);
-      onRequest?.(current);
-      const response = await fetchImpl(current, { redirect: 'manual', headers, signal: combinedSignal });
-      if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-      const location = response.headers.get('location');
-      if (!location) throw new Error('重定向响应缺少地址');
-      current = new URL(location, current).href;
-    }
-    throw new Error('重定向次数过多');
-  } finally { clearTimeout(timer); }
-}
+import { fetchPublicImageResource, IMAGE_ACCEPT, IMAGE_USER_AGENT } from './public-image-http.mjs';
+export { assertPublicUrl, fetchPublicUrl } from './public-image-http.mjs';
+export { createImageRetrievalSession } from './image-retrieval-session.mjs';
 
 function absolute(value, baseUrl) {
   let normalized = String(value || "").trim().replace(/\\u0026/gi, "&").replace(/\\\//g, "/");
@@ -265,31 +229,28 @@ export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.
     const context = nodeSemanticContext($, element);
     for (const [name, value] of Object.entries(attributes)) if (/^data-/i.test(name) && imageLike(value)) scriptImageUrls(value).forEach((url) => push(url, `gallery-${name}`, '', true, `${context} ${objectSemanticText(attributes)}`));
   });
-  const seenAssets = new Set();
-  return candidates
-    .sort((a, b) => (b.semanticScore - b.genericActivityPenalty) - (a.semanticScore - a.genericActivityPenalty))
-    .filter((candidate) => {
-      const key = canonicalImageAssetKey(candidate.imageUrl);
-      if (!key || seenAssets.has(key)) return false;
-      seenAssets.add(key);
-      return true;
-    })
-    .slice(0, maxImages);
+  const assets = new Map();
+  for (const candidate of candidates.sort((a, b) => (b.semanticScore - b.genericActivityPenalty) - (a.semanticScore - a.genericActivityPenalty))) {
+    const key = canonicalImageAssetKey(candidate.imageUrl);
+    if (!key) continue;
+    const existing = assets.get(key);
+    if (existing) {
+      if (!existing.imageVariants.includes(candidate.imageUrl)) existing.imageVariants.push(candidate.imageUrl);
+    } else assets.set(key, { ...candidate, imageVariants: [candidate.imageUrl] });
+  }
+  return [...assets.values()].slice(0, maxImages);
 }
 
-export async function fetchImagePageContent(pageUrl, { signal, onRequest } = {}) {
-  const safeUrl = await assertPublicUrl(pageUrl);
-  const response = await fetchPublicUrl(safeUrl, {
-    headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36 LuxuryTravelImageResearch/1.1", accept: "text/html,application/xhtml+xml,image/avif,image/webp,image/png,image/jpeg" },
-    signal,
-    timeoutMs: 20_000,
-    onRequest,
+export async function fetchImagePageContent(pageUrl, { signal, onRequest, retrievalSession, fetchImpl, timeoutMs = 20_000 } = {}) {
+  const response = await fetchPublicImageResource(pageUrl, {
+    headers: { 'user-agent': IMAGE_USER_AGENT, accept: `text/html,application/xhtml+xml,${IMAGE_ACCEPT}` },
+    signal, timeoutMs, onRequest, retrievalSession, fetchImpl, maxBytes: 5_000_000, skipImageBody: true,
   });
   const type = response.headers.get("content-type") || "";
-  if (type.startsWith("image/") && response.ok) return { responseUrl: response.url, directImage: true };
-  if (!type.includes("text/html")) return { responseUrl: response.url, empty: true };
+  if (type.startsWith("image/")) return { responseUrl: response.responseUrl, directImage: true, acquisitionMethod: 'http' };
+  if (!/text\/html|application\/xhtml\+xml/i.test(type)) return { responseUrl: response.responseUrl, empty: true, acquisitionMethod: 'http' };
   const requestedUrl = new URL(pageUrl);
-  const finalUrl = new URL(response.url);
+  const finalUrl = new URL(response.responseUrl);
   if (requestedUrl.hostname === finalUrl.hostname && requestedUrl.pathname !== finalUrl.pathname) {
     const ignored = new Set(["activity", "activities", "experience", "experiences", "the", "at", "in", "and", "visit"]);
     const tokens = (pathname) => pathname.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 4 && !ignored.has(token));
@@ -299,18 +260,26 @@ export async function fetchImagePageContent(pageUrl, { signal, onRequest } = {})
       const error = new Error(`来源页跳转到无关页面：${finalUrl.href}`); error.code = "page_redirect_mismatch"; throw error;
     }
   }
-  const html = await response.text();
-  if (html.length > 5_000_000) throw new Error("网页正文超过提图安全上限");
-  if (!response.ok && !html) throw new Error(`网页提取失败（${response.status}）`);
-  if ([401, 403, 429].includes(response.status) && /Just a moment|cf-chl-|captcha|Access Denied/i.test(html.slice(0, 20_000))) {
-    const error = new Error(`网页访问被站点拦截（${response.status}）`); error.code = "page_access_blocked"; throw error;
-  }
-  return { html, responseUrl: response.url };
+  return { html: response.buffer.toString('utf8'), responseUrl: response.responseUrl, acquisitionMethod: 'http' };
 }
 
-export async function extractPageImages(page, { signal, maxImages = 36, semanticTerms = [], loadPage = fetchImagePageContent } = {}) {
-  const content = await loadPage(page.pageUrl, { signal });
-  if (content.directImage) return [{ ...page, imageUrl: content.responseUrl, kind: "direct-search-result", alt: page.title || "", highResHint: true }];
+export async function extractPageImages(page, { signal, maxImages = 36, semanticTerms = [], loadPage = fetchImagePageContent, retrievalSession, onRequest } = {}) {
+  const content = await loadPage(page.pageUrl, { signal, retrievalSession, onRequest });
+  if (content.directImage) return [{ ...page, imageUrl: content.responseUrl, kind: "direct-search-result", alt: '', highResHint: true, acquisitionMethod: content.acquisitionMethod || 'http' }];
   if (content.empty) return [];
-  return extractImageCandidatesFromHtml(content.html, { ...page, requestedPageUrl: page.pageUrl, pageUrl: content.responseUrl }, { responseUrl: content.responseUrl, maxImages, semanticTerms });
+  const extract = (result) => extractImageCandidatesFromHtml(result.html, { ...page, requestedPageUrl: page.pageUrl, pageUrl: result.responseUrl, acquisitionMethod: result.acquisitionMethod || 'http' }, { responseUrl: result.responseUrl, maxImages, semanticTerms });
+  const candidates = extract(content);
+  const needsBrowser = !candidates.length || (candidates.length < 3 && /<script\b/i.test(content.html));
+  if (retrievalSession && needsBrowser) {
+    try {
+      const rendered = await retrievalSession.renderPage(content.responseUrl || page.pageUrl, { onRequest });
+      const browserCandidates = extract(rendered);
+      const all = new Map([...candidates, ...browserCandidates].map((candidate) => [canonicalImageAssetKey(candidate.imageUrl), candidate]));
+      return [...all.values()].slice(0, maxImages);
+    } catch (error) {
+      if (signal?.aborted || (!candidates.length && error.code !== 'browser_budget_exhausted')) throw error;
+      // Static candidates remain usable if optional same-page rendering is unavailable.
+    }
+  }
+  return candidates;
 }
