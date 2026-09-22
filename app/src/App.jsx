@@ -14,6 +14,7 @@ import { coverLayout } from './lib/coverLayout.js';
 import { buildCustomerTravelEntityData, sameTravelEntityName } from './lib/travelEntityDisplay.js';
 import { normalizeHighlightsForDisplay } from './lib/highlightDisplay.js';
 import { deriveFeaturedCardLayout } from './lib/featuredCardLayout.js';
+import { deriveHotelStayLine } from './lib/hotelStayPresentation.js';
 const VisualBindingsContext = React.createContext(undefined);
 
 const ICON = "/assets/icons/";
@@ -204,16 +205,18 @@ function Overview({ days, title = "行程总览" }) {
   })}</div></section>;
 }
 
-function HotelsOverview({ hotels = [], policy, title = "臻选酒店", introTitle = "住进风景深处，也住进旅程的黄金位置", introCopy = "每一处下榻都服务于路线节奏：或更接近游猎现场，或以完整度假体验承接长途移动后的松弛时刻。" }) {
+function HotelsOverview({ hotels = [], days = [], destination = "", policy, title = "臻选酒店", introTitle = "住进风景深处，也住进旅程的黄金位置", introCopy = "每一处下榻都服务于路线节奏：或更接近游猎现场，或以完整度假体验承接长途移动后的松弛时刻。" }) {
   if (!hotels.length) return null;
   const displayTitle = !title || title === "臻选下榻" ? "臻选酒店" : title;
   const isOdd = hotels.length % 2 === 1;
   const { entries, hasFeatured } = deriveFeaturedCardLayout(hotels, "hotel");
   return <section className="journey-feature-section hotels-section" data-edit-path="hotels"><SectionTitle en="SIGNATURE STAYS" zh={displayTitle} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`hotel-grid${isOdd ? " hotel-grid-odd" : ""}${hasFeatured ? " hotel-grid-featured" : ""}`}>{entries.map(({ item: hotel, originalIndex: hotelIndex, isFeatured }) => {
     const factRows = Array.isArray(hotel.factRows) ? hotel.factRows.filter((row) => String(row?.text || "").trim()) : [];
+    const stayLine = deriveHotelStayLine(hotel, days, hotels, destination);
+    const [stayTiming, stayRoute] = stayLine.split("｜");
     return <article className={`hotel-card${isFeatured ? " hotel-card-wide" : ""}${hotel.images?.[0] ? "" : " hotel-card-no-image"}`} key={hotel.id || hotel.officialName} data-edit-path={`hotels.${hotelIndex}`}>
     {hotel.images?.[0] ? <div className="hotel-image"><SafeImage src={hotel.images[0].src || hotel.images[0]} alt={hotel.shortName || hotel.officialName} fallbackLabel="酒店图片待补充" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" style={{ objectPosition: hotel.images[0].focus || "50% 50%" }} /></div> : <MissingImageState label="酒店图片待补充" compact className="card-missing-image" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" />}
-    <div className="hotel-copy"><div className="hotel-kicker"><span>{hotel.region}</span><em>{hotel.nights}晚</em></div><h3>{hotel.shortName || hotel.officialName}</h3>{hotel.shortName && hotel.officialName && !sameTravelEntityName(hotel.shortName, hotel.officialName) && <p className="hotel-official-name">{hotel.officialName}</p>}
+    <div className="hotel-copy">{stayLine && <div className="hotel-stay-line"><span className="hotel-stay-pill">{stayTiming}</span>{stayRoute && <span className="hotel-stay-route">｜{stayRoute}</span>}</div>}<h3>{hotel.shortName || hotel.officialName}</h3>{hotel.shortName && hotel.officialName && !sameTravelEntityName(hotel.shortName, hotel.officialName) && <p className="hotel-official-name">{hotel.officialName}</p>}
       {factRows.length > 0 ? <ul className="hotel-fact-rows">{factRows.map((row) => <li key={row.key || row.label}><span className="hotel-fact-label">{row.label}</span><span className="hotel-fact-text">{row.text}</span></li>)}</ul> : <>
         {hotel.editorialCopy && <p className="hotel-editorial">{hotel.editorialCopy}</p>}
         {hotel.proofPoints?.length > 0 && <div className="hotel-proof-points">{hotel.proofPoints.map((point) => <span key={point}>{point}</span>)}</div>}
@@ -420,7 +423,7 @@ export function Itinerary({ data, scale = 1 }) {
 }
 
 function ItineraryContent({ data, scale = 1 }) {
-  return <div className="export-frame" style={{ width: `${2000 * scale}px` }}><main id="itinerary" className="itinerary-canvas" style={{ transform: scale === 1 ? undefined : `scale(${scale})` }}><Cover data={data} /><div className="page-content intro-content"><Highlights items={data.highlights} title={data.highlightsSectionTitle} />{data.showOverviewSection !== false && <Overview days={data.days} title={data.overviewSectionTitle} />}<HotelsOverview hotels={data.hotels} policy={data.hotelReplacementPolicy} title={data.hotelSectionTitle} introTitle={data.hotelIntroTitle} introCopy={data.hotelIntroCopy} /><DiningOverview items={data.diningExperiences} policy={data.diningPolicy} title={data.diningSectionTitle} introTitle={data.diningIntroTitle} introCopy={data.diningIntroCopy} /><TransportOverview items={data.transportSummary} disclaimer={data.transportDisclaimer} title={data.transportSectionTitle} introTitle={data.transportIntroTitle} introCopy={data.transportIntroCopy} /><SectionTitle en="HOLIDAY MEET" zh="行程细节" /></div><div className="days-wrap">{data.days.map((day, index) => <DaySection day={day} index={index} key={`${day.date}-${index}`} />)}</div><div className="page-content closing-content"><Expenses data={data} />{data.showBookingSection !== false && <BookingFlow />}<SecurityAndPayment payment={data.payment} showSecuritySection={data.showSecuritySection !== false} showPaymentSection={data.showPaymentSection !== false} /><Notes notes={data.notes} title={data.notesSectionTitle} intro={data.notesIntro} /></div><Footer /></main></div>;
+  return <div className="export-frame" style={{ width: `${2000 * scale}px` }}><main id="itinerary" className="itinerary-canvas" style={{ transform: scale === 1 ? undefined : `scale(${scale})` }}><Cover data={data} /><div className="page-content intro-content"><Highlights items={data.highlights} title={data.highlightsSectionTitle} />{data.showOverviewSection !== false && <Overview days={data.days} title={data.overviewSectionTitle} />}<HotelsOverview hotels={data.hotels} days={data.days} destination={data.destination} policy={data.hotelReplacementPolicy} title={data.hotelSectionTitle} introTitle={data.hotelIntroTitle} introCopy={data.hotelIntroCopy} /><DiningOverview items={data.diningExperiences} policy={data.diningPolicy} title={data.diningSectionTitle} introTitle={data.diningIntroTitle} introCopy={data.diningIntroCopy} /><TransportOverview items={data.transportSummary} disclaimer={data.transportDisclaimer} title={data.transportSectionTitle} introTitle={data.transportIntroTitle} introCopy={data.transportIntroCopy} /><SectionTitle en="HOLIDAY MEET" zh="行程细节" /></div><div className="days-wrap">{data.days.map((day, index) => <DaySection day={day} index={index} key={`${day.date}-${index}`} />)}</div><div className="page-content closing-content"><Expenses data={data} />{data.showBookingSection !== false && <BookingFlow />}<SecurityAndPayment payment={data.payment} showSecuritySection={data.showSecuritySection !== false} showPaymentSection={data.showPaymentSection !== false} /><Notes notes={data.notes} title={data.notesSectionTitle} intro={data.notesIntro} /></div><Footer /></main></div>;
 }
 
 function CoverGradientProof({ data }) {

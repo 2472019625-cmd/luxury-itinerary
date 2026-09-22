@@ -50,6 +50,11 @@ const results = [];
 try {
   for (const scenario of scenarios) {
     const page = await browser.newPage();
+    await page.setRequestInterception(true);
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/auth/session") request.respond({ status: 200, contentType: "application/json", body: '{"enabled":false}' });
+      else request.continue();
+    });
     await page.setViewport({ width: 2000, height: 1200, deviceScaleFactor: 1 });
     const errors = [];
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });

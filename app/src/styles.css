@@ -288,8 +288,9 @@ img { display: block; max-width: 100%; }
   font-size: 31px;
 }
 .hotel-copy, .transport-copy { padding: 42px 48px 50px; }
-.hotel-kicker { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 18px; }
-.hotel-kicker span, .hotel-kicker em { padding: 8px 17px 10px; border-radius: 999px; color: var(--gold-deep); background: rgba(212,186,154,.2); font-size: 25px; font-style: normal; font-weight: 500; line-height: 1; }
+.hotel-stay-line { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; color: var(--gold-deep); font-family: "Source Han Sans CN", "Microsoft YaHei", sans-serif; font-size: 25px; font-weight: 600; line-height: 1.35; white-space: nowrap; }
+.hotel-stay-pill { display: inline-flex; align-items: center; min-height: 40px; padding: 2px 14px; border-radius: 999px; background: rgba(190, 143, 47, 0.11); }
+.hotel-stay-route { min-width: 0; }
 .hotel-copy h3, .transport-copy h3 { margin: 0; color: #3f3a35; font-family: "Source Han Serif CN", serif; font-size: 48px; font-weight: 700; line-height: 1.28; }
 .hotel-official-name { margin: 8px 0 0; color: var(--muted); font: 400 24px/1.45 Poppins, "Source Han Sans CN", sans-serif; }
 .hotel-fact-rows { display: grid; gap: 24px; margin: 30px 0 0; padding: 0; list-style: none; }
