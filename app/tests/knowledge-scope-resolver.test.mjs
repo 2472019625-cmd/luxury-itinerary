@@ -91,6 +91,54 @@ test("酒店、地区和轻微目录拼写差异均通过真实上下文确定�
   assert.deepEqual(duplicateBrand.nodeIds, ["saruni-mara"]);
 });
 
+test("酒店目录二次确认复用同一身份容错，且同名简称仍不得越过消歧", () => {
+  for (const [hotel, location, expectedNode] of [
+    ["The Ritz-Carlton, Masai Mara Safari Camp", "Masai Mara", "ritz"],
+    ["JW Marriott Hotel Nairobi", "Nairobi", "jw"],
+  ]) {
+    const slot = {
+      moduleType: "hotel",
+      hotel,
+      location,
+      exactIdentityRequired: true,
+      queryCore: { subject: "酒店代表性空间", identity: hotel },
+    };
+    const firstResolution = resolveKnowledgeScope(slot, hierarchy);
+    assert.deepEqual(firstResolution.nodeIds, [expectedNode]);
+    const confirmation = confirmHotelDirectory(slot, hierarchy);
+    assert.equal(confirmation.status, "resolved");
+    assert.deepEqual(confirmation.resolution.nodeIds, [expectedNode]);
+    const plan = buildKnowledgeScopePlan(slot, firstResolution, hierarchy);
+    assert.deepEqual(plan.scopes.map((scope) => scope.resolution.nodeIds), [[expectedNode]]);
+    assert.equal(plan.blockedReason, null);
+  }
+
+  const ambiguous = confirmHotelDirectory({
+    moduleType: "hotel",
+    hotel: "Saruni Leopard Hill",
+    exactIdentityRequired: true,
+    queryCore: { subject: "酒店代表性空间", identity: "Saruni Leopard Hill" },
+  }, hierarchy);
+  assert.notEqual(ambiguous.status, "resolved");
+  assert.equal(ambiguous.resolution, null);
+
+  const englishRegionTree = buildKnowledgeHierarchy([
+    { node_id: "root-en", formal_name: "Root" },
+    { node_id: "kenya-en", formal_name: "Kenya", parent_node_id: "root-en" },
+    { node_id: "mara-en", formal_name: "Masai Mara", parent_node_id: "kenya-en" },
+    { node_id: "ritz-en", formal_name: "Ritz Carton", parent_node_id: "mara-en" },
+  ]);
+  const englishRegionProof = confirmHotelDirectory({
+    moduleType: "hotel",
+    hotel: "The Ritz-Carlton, Masai Mara Safari Camp",
+    country: "Kenya",
+    exactIdentityRequired: true,
+    queryCore: { subject: "酒店代表性空间", identity: "The Ritz-Carlton, Masai Mara Safari Camp" },
+  }, englishRegionTree);
+  assert.equal(englishRegionProof.status, "resolved");
+  assert.deepEqual(englishRegionProof.resolution.nodeIds, ["ritz-en"]);
+});
+
 test("消歧只在候选节点中选择唯一事实匹配，无法唯一时保持未解决", () => {
   const resolved = resolveKnowledgeClarification({ moduleType: "day", location: "安博塞利" }, ["amboseli", "serengeti"], hierarchy);
   assert.deepEqual(resolved.nodeIds, ["amboseli"]);

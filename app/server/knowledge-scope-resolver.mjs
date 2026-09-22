@@ -409,19 +409,26 @@ export function confirmHotelDirectory(slot, hierarchy) {
   const entity = hotelEntityForSlot(slot);
   const targets = unique([slot.hotel, slot.hotelOfficialName, slot.queryCore?.identity,
     ...(entity ? entityNames(entity) : [])]);
+  const nonHotelScopeNames = unique([
+    slot.country,
+    slot.destination,
+    slot.visualContext?.destination,
+    entity?.country,
+    entity?.region,
+  ]).map(normalized);
   const names = targets.map(name => ({name, tokens: clean(name).toLowerCase().split(/[^\p{L}\p{N}]+/u)
     .filter(t => t && !/^(?:the|hotel|lodge|camp|resort|tented|member|of|collection)$/i.test(t))}));
   const fullCandidates = [];
   const abbreviatedCandidates = [];
   for (const node of hierarchy?.records || []) {
     if (GENERIC_NODE_NAMES.has(normalized(node.formalName))) continue;
-    if ([slot.country,slot.destination,slot.visualContext?.destination].filter(Boolean)
-      .some(country => normalized(country) === normalized(node.formalName))) continue;
+    if (nonHotelScopeNames.includes(normalized(node.formalName))) continue;
     const pathNames = unique([...node.pathSegments, ...node.pathSegments.flatMap(segment =>
       TRAVEL_ENTITY_REGISTRY.filter(e => entityNames(e).some(n => normalized(n) === normalized(segment))).flatMap(entityNames))]);
     const tokens = new Set(pathNames.join(' ').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));
     const leafTokens = clean(node.formalName).toLowerCase().split(/[^\p{L}\p{N}]+/u);
     if (names.some(({name, tokens: required}) => normalized(node.formalName) === normalized(name)
+      || (leafTokens.length >= 2 && strictIdentityMatches(node.formalName, name))
       || (required.length > 0 && required.every(t => tokens.has(t)) && required.some(t => leafTokens.includes(t))))) {
       fullCandidates.push(node);
     } else if (leafTokens.length >= 2 && names.some(({tokens: required}) =>

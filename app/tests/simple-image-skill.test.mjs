@@ -58,6 +58,51 @@ test("明确实体目录缺失零Knowledge请求；专属体验no_match最多两
   }
 });
 
+test("酒店目录含轻微拼写误差时仍向已确认目录发出Knowledge请求", async (t) => {
+  const hierarchy = buildKnowledgeHierarchy([
+    { node_id: "root", formal_name: "根知识库" },
+    { node_id: "kenya", formal_name: "肯尼亚", parent_node_id: "root" },
+    { node_id: "mara", formal_name: "马赛马拉", parent_node_id: "kenya" },
+    { node_id: "ritz", formal_name: "Ritz Carton", parent_node_id: "mara" },
+    { node_id: "jw", formal_name: "JW Marriot Hotel Nairobi", parent_node_id: "kenya" },
+  ]);
+  const root = await mkdtemp(path.join(os.tmpdir(), "hotel-directory-query-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const calls = [];
+  const hotels = [
+    ["ritz-slot", "The Ritz-Carlton, Masai Mara Safari Camp", "Masai Mara"],
+    ["jw-slot", "JW Marriott Hotel Nairobi", "Nairobi"],
+  ].map(([id, hotel, location]) => slot(id, {
+    moduleType: "hotel",
+    hotel,
+    location,
+    country: "Kenya",
+    subject: "酒店代表性空间",
+    activity: "",
+    exactIdentityRequired: true,
+    queryCore: { subject: "酒店代表性空间", identity: hotel },
+    fidelityQuery: "酒店外观",
+    alternateQueries: ["hotel exterior"],
+  }));
+  const result = await runImageSearchSkill({
+    root,
+    slots: hotels,
+    sourceMode: "knowledge_only",
+    knowledgeBaseUrl: "http://knowledge.invalid",
+    adapters: {
+      loadKnowledgeHierarchy: async () => hierarchy,
+      searchKnowledgeImages: async ({ queries, scopeNodeIds }) => {
+        calls.push({ queries: [...queries], scopeNodeIds: [...scopeNodeIds] });
+        return { status: "completed", queryText: queries[0], scopeState: "empty", records: [], candidates: [] };
+      },
+    },
+  });
+  assert.deepEqual(calls.map((call) => call.scopeNodeIds[0]).sort(), ["jw", "ritz"]);
+  assert.ok(calls.every((call) => call.queries.length === 1));
+  assert.ok(result.results.every((item) => item.pipelineEvidence.knowledgeSearch.knowledgeQueryExecuted === true));
+  assert.ok(result.results.every((item) => item.pipelineEvidence.explicitEntityFastPath.knowledgeStopReason === "entity_directory_empty"));
+});
+
 test("实体Web保留短Query动作，身份未知或审核未完成不自动放行", () => {
   const target = { moduleType: "dining", diningLocation: "Cloud Table", region: "Cloud City", subject: "餐厅内景",exactIdentityRequired:true,queryCore:{identity:"Cloud Table"} };
   const route = { ...explicitEntityRoute(target), knowledgeStopReason: "entity_directory_no_match" };
