@@ -25,6 +25,81 @@ const judgment = (candidate, good) => ({
   relevance: good ? 95 : 20, luxury: 90, cleanliness: 90, composition: 90, score: good ? 95 : 20,
 });
 
+for (const recover of [true, false]) test(`原查询留出的页面在剩余预算内续用且不重新搜索：${recover ? '最后页面取得合格图' : '累计上限停止'}`, async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'web-pending-pages-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let searches = 0, commons = 0;
+  const visited = [];
+  const result = await runImageSearchSkill({
+    root, slots: [slot], downloadsPerSlot: 6, sourcePagesPerSlot: 4,
+    visionApiKey: 'fixture', visionBaseUrl: 'https://vision.invalid', visionModel: 'fixture',
+    adapters: {
+      searchWebBatch: async () => {
+        searches += 1;
+        return Array.from({ length: recover ? 4 : 6 }, (_, index) => ({ pageUrl: `https://example.com/query-${searches}/page-${index + 1}` }));
+      },
+      searchCommonsImages: async () => { commons += 1; return []; },
+      extractPageImages: async page => {
+        visited.push(page.pageUrl);
+        if (recover && page.pageUrl.endsWith('query-1/page-4')) return [{ ...page, imageUrl: 'https://example.com/wildebeest-river-crossing.jpg', alt: 'wildebeest herd river crossing' }];
+        const error = new Error('fixture access challenge');
+        Object.assign(error, { code: 'page_access_blocked', status: 200, challengeDetected: true, technicalRetryHandled: true });
+        throw error;
+      },
+      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+        const filePath = path.join(directory, 'recovered.jpg');
+        await sharp({ create: { width: 1200, height: 800, channels: 3, background: '#358859' } }).jpeg().toFile(filePath);
+        return { ...candidate, filePath, publicUrl: `${publicPrefix}/recovered.jpg`, sha256: 'pending-photo', width: 1200, height: 800 };
+      },
+      judgeCandidatesBatch: async ({ candidates }) => candidates.map(candidate => judgment(candidate, true)),
+    },
+  });
+  const output = result.results[0];
+  const execution = output.pipelineEvidence.webExecution;
+  assert.equal(searches, 2);
+  assert.equal(commons, 1);
+  assert.equal(visited.length, 8);
+  assert.equal(new Set(visited).size, 8);
+  assert.equal(visited.at(-1), 'https://example.com/query-1/page-4');
+  assert.equal(execution.resumedPages, 1);
+  assert.deepEqual(execution.queryReports.map(report => report.resumed), [false, false, true]);
+  assert.equal(output.pipelineEvidence.pageFailures[0].status, 200);
+  assert.equal(output.pipelineEvidence.pageFailures[0].challengeDetected, true);
+  assert.equal(output.searchDiagnostic.web.pagesAccessed, 8);
+  assert.equal(result.metrics.businessBatches, 1);
+  assert.equal(result.metrics.automaticFollowupRounds, 0);
+  if (recover) {
+    assert.equal(output.status, 'success');
+    assert.equal(output.selected.originalDownloaded, true);
+    assert.equal(output.searchDiagnostic.web.pageFailures, 7);
+    assert.equal(output.searchDiagnostic.web.remainingDownloads, 5);
+  } else {
+    assert.equal(output.selected, null);
+    assert.equal(execution.stopReason, 'slot_resource_budget');
+    assert.equal(execution.remainingPages, 0);
+    assert.ok(execution.pendingPages > 0);
+  }
+});
+
+test('取消后不访问待续用页面或发起下一查询', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'web-pending-cancel-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const controller = new AbortController();
+  let searches = 0;
+  const visited = [];
+  const result = await runImageSearchSkill({
+    root, slots: [slot], sourcePagesPerSlot: 4, signal: controller.signal,
+    adapters: {
+      searchWebBatch: async () => { searches += 1; return Array.from({ length: 4 }, (_, index) => ({ pageUrl: `https://example.com/page-${index + 1}` })); },
+      searchCommonsImages: async () => [],
+      extractPageImages: async page => { visited.push(page.pageUrl); controller.abort(); return []; },
+    },
+  });
+  assert.equal(searches, 1);
+  assert.ok(!visited.includes('https://example.com/page-4'));
+  assert.equal(result.results[0].searchDiagnostic.web.stopReason, 'aborted');
+});
+
 test('单页官方图库只有非目标空间时，同一下载预算保留其他来源页的候选', () => {
   const ranked = [
     ...Array.from({ length: 6 }, (_, i) => ({ imageUrl: `https://official.example/room-${i}.jpg`, pageUrl: 'https://official.example/gallery' })),

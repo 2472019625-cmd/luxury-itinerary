@@ -10,7 +10,7 @@ import { Readable } from 'node:stream';
 import { gzipSync, brotliCompressSync, deflateSync } from 'node:zlib';
 import { extractImageCandidatesFromHtml, fetchImagePageContent, extractPageImages, createImageRetrievalSession } from '../server/page-images.mjs';
 import { downloadCandidate } from '../server/image-download.mjs';
-import { assertPublicUrl, decodedImageBody, fetchPublicUrl, fetchPublicImageResource, readImageResponse, retryAfterMs } from '../server/public-image-http.mjs';
+import { assertPublicUrl, classifyImageHttpResponse, decodedImageBody, fetchPublicUrl, fetchPublicImageResource, readImageResponse, retryAfterMs } from '../server/public-image-http.mjs';
 
 const origin = 'https://93.184.216.34';
 async function temporaryDirectory(t) {
@@ -117,6 +117,21 @@ test('per-domain acquisition serializes transfers, while different hosts can pro
   const same = session.acquire(`${origin}/b`).then((release) => { sameHostEntered = true; return release; });
   const other = await session.acquire('https://8.8.8.8/a');
   assert.equal(sameHostEntered, false); other(); first(); (await same)(); await session.close();
+});
+
+test('captcha configuration inside readable HTML is not an access challenge', async () => {
+  const html = '<html><head><title>File: Great Rift Valley - Wikimedia Commons</title><script>mw.config.set({"wgConfirmEditCaptchaNeededForGenericEdit":"hcaptcha","wgConfirmEditForceShowCaptcha":false}); const text="verify you are human";</script><script src="https://js.hcaptcha.com/1/api.js"></script></head><body><h1>Great Rift Valley</h1><img src="/valley.jpg"></body></html>';
+  assert.equal(classifyImageHttpResponse(200, 'text/html', html), null);
+  assert.equal(classifyImageHttpResponse(200, 'text/html', '<!-- captcha-required --><script type="application/json">{"captcha":"required","access denied":false}</script><h1>Gallery</h1>'), null);
+  assert.equal(classifyImageHttpResponse(200, 'text/html', `<script>const template = '<div class="h-captcha"></div>';</script><h1>Gallery</h1>`), null);
+  const content = await fetchImagePageContent(`${origin}/gallery`, { fetchImpl: async () => new Response(html, { headers: { 'content-type': 'text/html' } }) });
+  assert.match(content.html, /valley.jpg/);
+  for (const body of ['<h1>Verify you are human</h1>', '<form id="challenge-form"></form>', '<div class="h-captcha"></div>']) {
+    assert.equal(classifyImageHttpResponse(200, 'text/html', body).challengeDetected, true);
+  }
+  const forbidden = classifyImageHttpResponse(403, 'text/plain', 'Forbidden');
+  assert.equal(forbidden.code, 'page_access_blocked');
+  assert.equal(forbidden.challengeDetected, false);
 });
 
 test('one retrieval session remembers only rejected or missing source pages', async () => {

@@ -581,6 +581,76 @@ function progressiveScopeResolutions(startResolution, countryResolution, hierarc
   return untilCountry;
 }
 
+function exactGeographicNames(value) {
+  const key = normalized(value);
+  const entity = TRAVEL_ENTITY_REGISTRY.find((item) => ["place", "park", "conservancy"].includes(item.entityType)
+    && entityNames(item).some((name) => normalized(name) === key));
+  return unique([value, ...(entity ? entityNames(entity) : [])]).map(normalized);
+}
+
+function entityProbeIdentityAnchors(slot = {}) {
+  const requested = unique([slot.queryCore?.identity, slot.queryCore?.identityEn]);
+  const target = TRAVEL_ENTITY_REGISTRY.find((item) => entityNames(item).some((name) => requested.some((value) => normalized(value) === normalized(name))));
+  const regionNames = target?.region ? exactGeographicNames(target.region) : [];
+  const regionIsInCanonicalName = regionNames.some((region) => normalized(target?.canonicalName).includes(region));
+  const aliases = target ? entityNames(target).filter((name) => !regionIsInCanonicalName
+    || regionNames.some((region) => normalized(name).includes(region))) : [];
+  // Broad brand aliases (e.g. a chain without its property location) cannot
+  // identify one photo in a regional result. Caller-provided scope hints are
+  // deliberately not added to these entity identity anchors.
+  return unique([...requested, ...aliases]).filter((name) => !regionIsInCanonicalName
+    || regionNames.some((region) => normalized(name).includes(region)));
+}
+
+function resolveEntityParentProbe(slot, rootResolution, hierarchy, fastPath) {
+  if (rootResolution?.status !== "resolved") return null;
+  const target = TRAVEL_ENTITY_REGISTRY.find((item) => entityNames(item).some((name) => normalized(name) === normalized(fastPath.entityName)));
+  const fallbackLocations = unique([
+    ...(Array.isArray(slot.scopeFallbackLocations) ? slot.scopeFallbackLocations : []),
+    ...(Array.isArray(slot.visualContext?.scopeFallbackLocations) ? slot.visualContext.scopeFallbackLocations : []),
+  ]).filter((value) => {
+    const entity = TRAVEL_ENTITY_REGISTRY.find((item) => entityNames(item).some((name) => normalized(name) === normalized(value)));
+    if (entity && !["place", "park", "conservancy"].includes(entity.entityType)) return false;
+    // A structured stop may also name the overnight hotel. An unknown venue
+    // does not become a geographic scope merely because it is in this list.
+    return !/\b(?:hotel|resort|lodge|camp|restaurant|museum|airport|viewpoint)\b|酒店|度假村|营地|餐厅|博物馆|机场|观景台/iu.test(value);
+  });
+  const regionValues = unique([slot.region, slot.location, slot.visualContext?.geographicLocation, target?.region, ...fallbackLocations]);
+  const geographicEntities = TRAVEL_ENTITY_REGISTRY.filter((item) => ["place", "park", "conservancy"].includes(item.entityType)
+    && entityNames(item).some((name) => regionValues.some((value) => normalized(value) === normalized(name))));
+  const explicitCountries = unique([slot.country, slot.destination, slot.visualContext?.destination]);
+  const registryCountries = unique([target?.country, ...geographicEntities.map((item) => item.country)]);
+  // Facts may corroborate an already resolved country ancestor only by an
+  // exact standalone name. Never infer a country from free-text day facts or
+  // treat an arbitrary geographic ancestor as a country.
+  const factNames = new Set(unique(rootResolution.facts || []).map(normalized));
+  const confirmedCountryAncestors = ancestorChain(rootResolution, hierarchy).slice(1).filter((node) => {
+    const parent = hierarchy?.byId?.get(node.parentNodeId);
+    return parent && !parent.parentNodeId && factNames.has(normalized(node.formalName));
+  }).map((node) => node.formalName);
+  const countries = (explicitCountries.length ? explicitCountries : registryCountries.length ? registryCountries : confirmedCountryAncestors).flatMap(exactGeographicNames);
+  const identities = new Set(fastPath.identityAnchors.map(normalized));
+  const regions = regionValues
+    .filter((name) => !identities.has(normalized(name)) && !countries.includes(normalized(name))).flatMap(exactGeographicNames);
+  const fallbackNames = new Set(fallbackLocations.flatMap(exactGeographicNames));
+  if (!countries.length || !regions.length) return null;
+  const matches = (hierarchy?.records || []).filter((node) => {
+    if (!node.parentNodeId || !regions.includes(normalized(node.formalName)) || countries.includes(normalized(node.formalName))) return false;
+    if (GENERIC_NODE_NAMES.has(normalized(node.formalName))) return false;
+    const type = resolutionEntityType(resolutionForNode(node));
+    if (type && !["place", "park", "conservancy"].includes(type)) return false;
+    const ancestors = ancestorChain(resolutionForNode(node), hierarchy).slice(1);
+    // Unregistered fallback place names are usable only at the confirmed
+    // country's immediate regional level, not an arbitrary nested venue.
+    if (!type && fallbackNames.has(normalized(node.formalName))
+      && !countries.includes(normalized(ancestors[0]?.formalName))) return false;
+    return ancestors.some((parent) => parent.parentNodeId && countries.includes(normalized(parent.formalName)));
+  });
+  // Multiple matching places, including nested alternatives, are not a
+  // license to choose a region or climb through additional parent scopes.
+  return matches.length === 1 ? resolutionForNode(matches[0], "confirmed_entity_parent_probe") : null;
+}
+
 export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierarchy) {
   const purpose = classifyKnowledgeImagePurpose(slot);
   const hotelModule = moduleKind(slot) === "hotel";
@@ -623,10 +693,10 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
   ]);
 
   if (hotelModule && ["hotel_space", "hotel_experience"].includes(purpose) && (resolvedSpecificHotel || hotelScopeBypass)) {
-    // Hotel cards search only inside the confirmed hotel directory. Broad
-    // hotel-value queries make child-directory guessing unnecessary, and a
-    // missing/empty hotel directory must fall through to the existing Web
-    // source instead of searching other hotels at region/country level.
+    // An existing hotel directory keeps its current child/root behavior;
+    // an empty result falls through to Web. Only the explicit-identity route
+    // below may schedule a bounded regional probe when that directory is
+    // genuinely absent.
     const confirmedRoot = hotelDirectoryConfirmation?.resolution || rootResolution;
     const confirmedChild = semanticCategory(slot) === "accommodation" ? resolveKnowledgeChildScope(slot, confirmedRoot, hierarchy) : null;
     if (confirmedChild?.decision.entered && resolutionContains(confirmedRoot, confirmedChild.scopeResolution, hierarchy)) {
@@ -714,6 +784,16 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
       addScope(scopes, exact, role, exact, "entity_identity", fastPath.identityAnchors);
     }
     else if (fastPath.identityKnown && rootResolution?.reason === "test_adapter_without_hierarchy") addScope(scopes, rootResolution, role, rootResolution, "entity_identity", fastPath.identityAnchors);
+    else if (fastPath.identityKnown && rootResolution?.status !== "ambiguous"
+      && (hotelModule ? hotelDirectoryConfirmation?.status === "unresolved" : matches.length === 0)) {
+      const parentProbe = resolveEntityParentProbe(slot, rootResolution, hierarchy, fastPath);
+      if (parentProbe) {
+        addScope(scopes, parentProbe, "entity_parent_probe", parentProbe, "entity_probe", entityProbeIdentityAnchors(slot));
+        scopes[0].maxQueries = 2;
+        fastPath.parentProbeUsed = true;
+        refined.decision.reason = "entity_directory_missing_probe_one_confirmed_region";
+      }
+    }
     fastPath.hotelDirectoryConfirmation = hotelDirectoryConfirmation;
     fastPath.knowledgeStopReason = !fastPath.identityKnown ? "identity_unknown" : !scopes.length
       ? "entity_directory_missing" : null;
@@ -725,7 +805,7 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
     blockedReason: fastPath.matched && !scopes.length ? fastPath.knowledgeStopReason : hotelModule && ["hotel_space", "hotel_experience"].includes(purpose) && !scopes.length
       ? "hotel_directory_unresolved"
       : ["hotel_space", "hotel_experience"].includes(purpose) && !scopes.length ? "hotel_scope_and_fallback_unresolved" : null,
-    stopBoundary: fastPath.matched ? (["hotel", "hotel_experience"].includes(fastPath.entityType) ? "hotel_root" : "entity_identity") : hotelModule && ["hotel_space", "hotel_experience"].includes(purpose) ? "hotel_root"
+    stopBoundary: fastPath.parentProbeUsed ? "entity_parent_probe" : fastPath.matched ? (["hotel", "hotel_experience"].includes(fastPath.entityType) ? "hotel_root" : "entity_identity") : hotelModule && ["hotel_space", "hotel_experience"].includes(purpose) ? "hotel_root"
       : ["hotel_space", "hotel_experience"].includes(purpose) ? (resolvedSpecificHotel || hotelScopeBypass ? "hotel_root" : "country")
       : purpose === "explicit_entity" ? "entity_identity"
         : "country",
@@ -1498,7 +1578,80 @@ export function buildKnowledgeQuery(slot = {}, scopeResolution = null) {
   return buildKnowledgeQueryPlan(slot, scopeResolution, { maxQueries: 4 }).queries[0] || "";
 }
 
+function probeIdentityText(value) {
+  return clean(value).normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function containsCompleteProbeIdentity(value, anchor) {
+  const text = probeIdentityText(value);
+  const identity = probeIdentityText(anchor);
+  if (!identity) return false;
+  if (/\p{Script=Han}/u.test(identity)) return text.replace(/ /g, "").includes(identity.replace(/ /g, ""));
+  return ` ${text} `.includes(` ${identity} `);
+}
+
+function entityProbeEvidenceDecision(evidence, identityAnchors, entityType) {
+  const target = TRAVEL_ENTITY_REGISTRY.find((entity) => entityNames(entity).some((name) => identityAnchors.some((anchor) => normalized(anchor) === normalized(name))));
+  const targetType = target?.entityType || (entityType === "hotel_experience" ? "hotel" : entityType);
+  const otherEntities = TRAVEL_ENTITY_REGISTRY.filter((entity) => entity.id !== target?.id
+    && ["hotel", "restaurant", "attraction", "airport"].includes(entity.entityType)
+    && (!targetType || targetType === "entity" || entity.entityType === targetType));
+  const pieces = (item) => item.basis === "knowledge_path" ? sourcePathSegments(item.text) : [item.text];
+  const conflict = evidence.find((item) => otherEntities.some((entity) => entityProbeIdentityAnchors({ queryCore: { identity: entity.canonicalName } })
+    .some((anchor) => pieces(item).some((text) => containsCompleteProbeIdentity(text, anchor)))));
+  const supported = evidence.find((item) => identityAnchors.some((anchor) => pieces(item).some((text) => containsCompleteProbeIdentity(text, anchor))));
+  return {
+    match: conflict ? false : supported ? true : null,
+    identityStatus: conflict ? "conflict" : supported ? "supported" : "insufficient",
+    mode: "entity_probe",
+    basis: (conflict || supported)?.basis || "none",
+    quote: (conflict || supported)?.text || "",
+    reason: conflict ? "knowledge_source_path_mismatch" : supported ? "image_bound_entity_identity_confirmed" : "entity_probe_identity_insufficient",
+    anchors: [...identityAnchors],
+  };
+}
+
+function entityProbeImageEvidence(candidate = {}) {
+  const descriptors = [candidate.knowledgeMatchedFile, candidate.knowledgePreview].filter(Boolean);
+  const filenames = unique(descriptors.map((item) => item.filename));
+  const paths = unique(descriptors.map((item) => item.sourceDisplayPath));
+  const fileKey = (value) => clean(value).normalize("NFKC").toLowerCase();
+  // Result-level source_paths may describe several returned images. Only a
+  // uniquely matching basename binds one of those paths to this image.
+  for (const filename of filenames) {
+    const matching = unique(candidate.knowledgeSourcePaths || []).filter((value) => fileKey(sourcePathSegments(value).at(-1)) === fileKey(filename));
+    if (matching.length === 1) paths.push(matching[0]);
+  }
+  return { filenames, paths: unique(paths) };
+}
+
+export function knowledgeEntityProbeEvidence(slot = {}, candidate = {}) {
+  const { paths, filenames } = entityProbeImageEvidence(candidate);
+  const evidence = [...paths.map((text) => ({ text, basis: "knowledge_path" })), ...filenames.map((text) => ({ text, basis: "image_metadata" }))];
+  const decision = entityProbeEvidenceDecision(evidence, entityProbeIdentityAnchors(slot), explicitEntityRoute(slot).entityType);
+  return { ...decision, scopePath: candidate.knowledgeEvidenceResolution?.fullPath || null };
+}
+
+export function knowledgeEntityProbeAuditCandidate(candidate = {}) {
+  if (candidate.knowledgeSourcePathMode !== "entity_probe") return candidate;
+  const { paths, filenames } = entityProbeImageEvidence(candidate);
+  return {
+    ...candidate,
+    // Every one of these fields is read as evidence by image-audit. Shared
+    // result fragments, query echoes and parent pages must not be promoted to
+    // photo-local identity evidence when searching a regional directory.
+    alt: filenames.join(" | "), imageTitle: "", caption: "", structuredImageText: "",
+    localContext: "", entitySectionText: "", entityPagePath: "", pageUrl: "", pagePosition: "chrome",
+    title: filenames[0] || "", summary: "", semanticText: "", knowledgeFragmentContent: "",
+    knowledgeSourcePaths: paths,
+  };
+}
+
 export function knowledgeSourcePathMatches(scopeResolution, sourcePaths = [], { mode = "entity_identity", identityAnchors = [] } = {}) {
+  if (mode === "entity_probe") return { ...entityProbeEvidenceDecision(
+    unique(Array.isArray(sourcePaths) ? sourcePaths : []).flatMap((sourcePath) => sourcePathSegments(sourcePath).map((text) => ({ text, basis: "knowledge_path" }))),
+    identityAnchors,
+  ), scopePath: scopeResolution?.fullPath || null };
   if (!scopeResolution || scopeResolution.status !== "resolved" || !scopeResolution.node) return { match: null, reason: "scope_unresolved" };
   if (!Array.isArray(sourcePaths) || !sourcePaths.length) return { match: null, reason: "source_path_missing" };
   const meaningful = scopeResolution.node.pathSegments.filter((segment) => !GENERIC_NODE_NAMES.has(normalized(segment)) && normalized(segment).length >= 3);

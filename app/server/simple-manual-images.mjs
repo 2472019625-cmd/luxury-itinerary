@@ -8,6 +8,8 @@ import { downloadCandidate } from "./image-download.mjs";
 import { refreshKnowledgeMatchedFile } from "./knowledge-image-search.mjs";
 import { candidateQualification, isHardRejectedCandidate } from "./image-candidate-eligibility.mjs";
 import { getSlotImage, setSlotImage } from "../src/lib/imageSlots.js";
+import { imageSearchPresentation } from "../src/lib/imageSearchPresentation.js";
+import { buildImageSearchDiagnostic } from "./image-search-diagnostics.mjs";
 
 const MIME_EXTENSIONS = Object.freeze({ "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" });
 const manualRenders = new Map();
@@ -115,10 +117,13 @@ function imageLocation(item = {}, data = {}, plan = {}) {
   return planned.primaryVisualSubject || planned.subject || "行程图片";
 }
 
-function blockingItems(items = [], data = {}, plan = {}) {
+function blockingItems(items = [], data = {}, plan = {}, reviews = []) {
   return items.filter((item) => item.required).map((item) => {
     if (item.kind === "copy") return { kind: "copy", id: item.id, targetPath: item.targetPath || "", label: copyLocation(item.targetPath, data), message: "这段文案尚未生成完成，可以只重新生成这一项。", action: "retry_copy" };
-    if (item.kind === "image") return { kind: "image", id: item.id, slotId: item.id, label: imageLocation(item, data, plan), message: "这张必需图片尚未补齐，可重新搜索、选择或上传。", action: "handle_image" };
+    if (item.kind === "image") {
+      const explanation = imageSearchPresentation(reviews.find(review => review.slotId === item.id));
+      return { kind: "image", id: item.id, slotId: item.id, label: imageLocation(item, data, plan), message: `${explanation.title}。${explanation.detail}`, action: "handle_image" };
+    }
     if (item.kind === "renderer") return { kind: "renderer", id: item.id, label: "2000px 高清成品", message: "内容已经齐全，但最后排版检查尚未通过。", action: "retry_renderer" };
     return { kind: item.kind || "confirmation", id: item.id, targetPath: item.targetPath || "", label: "生成前确认信息", message: "这项客户信息需要先确认，不能由系统自动改写。", action: "review_facts" };
   });
@@ -206,6 +211,7 @@ function candidateCanBeSelected(result, imageResult, candidate) {
 }
 
 function slotReviewStatus(imageResult = {}, candidates = []) {
+  if (["processing", "running", "queued", "pending"].includes(imageResult.status)) return "processing";
   if (imageResult.status === "success") return imageResult.selected?.userProvided ? "uploaded" : imageResult.selected?.userSelected ? "human_selected" : "auto_selected";
   const hardRejected = candidates.filter((candidate) => candidate.autoRejected || candidate.status === "hard_rejected");
   const auditPending = candidates.some((candidate) => ["processing", "audit_pending", "pending"].includes(candidate.autoReviewStatus));
@@ -235,12 +241,17 @@ function editableImageBinding(context, slotId) {
 export function buildSimpleManualImagePayload(store, projectId) {
   const { project, run, plan, result } = projectContext(store, projectId);
   const resultById = new Map((result.imageExecution?.results || []).map((item) => [item.slotId, item]));
-  const slots = manualSlotIds(result, plan).map((slotId) => {
+  // Successful positions can also be searched again from the picker. Include
+  // their latest search explanation without changing required/missing gates.
+  const reviewSlotIds = [...new Set([...manualSlotIds(result, plan), ...resultById.keys()])];
+  const slots = reviewSlotIds.map((slotId) => {
     const imageResult = resultById.get(slotId) || { slotId, status: "needs_user_action", candidates: [] };
     const selectables = selectableIds(result, imageResult);
     const binding = result.data?.simpleImageSlotBindings?.[slotId] || plan.slotBindings?.[slotId];
     const candidates = visibleCandidatePool(imageResult).map((candidate) => frontendCandidate(candidate, slotId, binding, selectables.has(candidate.candidateId)));
     const planned = plan.imageSlots.find((item) => item.slotId === slotId);
+    const currentSearch = imageResult.manualAction?.currentSearchFallbackResult || imageResult;
+    const searchDiagnostic = currentSearch.searchDiagnostic || buildImageSearchDiagnostic(currentSearch);
     return {
       slotId,
       module: moduleName(slotId),
@@ -249,7 +260,8 @@ export function buildSimpleManualImagePayload(store, projectId) {
       status: slotReviewStatus(imageResult, candidates),
       required: planned ? planned.required !== false : binding?.required === true,
       originalVisualTarget: imageResult.manualAction?.originalVisualTarget || (planned ? { location: planned.location, hotel: planned.hotel, activity: planned.activity, subject: planned.subject, visualGoal: planned.visualGoal } : null),
-      currentResult: imageResult.manualAction?.currentSearchFallbackResult || { technicalStatus: imageResult.technicalStatus, matchReason: imageResult.matchReason },
+      currentResult: { previousStatus: currentSearch.previousStatus, status: currentSearch.status, technicalStatus: currentSearch.technicalStatus, matchReason: currentSearch.matchReason },
+      searchDiagnostic,
       candidateCount: candidates.length,
       selectableCandidateIds: [...selectables],
       userRequiredActions: imageResult.manualAction?.userRequiredActions || (binding?.manualEditorCard ? ["upload_real_image"] : ["upload_real_image", "explicit_single_slot_search"]),
@@ -264,7 +276,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
   const canEnterFinal = unresolvedRequired.length === 0 && Boolean(result.outputPath);
   const outputUrl = canEnterFinal ? `/api/simple/projects/${projectId}/output` : null;
   const notices = unresolvedNotices(result.unresolvedItems || []);
-  const blockers = blockingItems(result.unresolvedItems || [], result.data || {}, plan);
+  const blockers = blockingItems(result.unresolvedItems || [], result.data || {}, plan, slots);
   const draftRendered = result.renderStatus === "success" && result.render?.mode === "draft";
   const reviewBySlotId = new Map(slots.map((slot) => [slot.slotId, slot]));
   const editorBindings = Object.fromEntries(Object.entries(result.data?.simpleImageSlotBindings || plan.slotBindings || {}).map(([slotId, binding]) => {
@@ -795,7 +807,7 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
     requestKind: "user_requested_single_slot_search",
     manualAction: {
       ...(previous.manualAction || {}),
-      currentSearchFallbackResult: { previousStatus: returned.status, technicalStatus: returned.technicalStatus, matchReason: returned.matchReason, queriesUsed: returned.queriesUsed, sourceEvidence: returned.sourceEvidence, pipelineEvidence: returned.pipelineEvidence },
+      currentSearchFallbackResult: { previousStatus: returned.status, technicalStatus: returned.technicalStatus, matchReason: returned.matchReason, queriesUsed: returned.queriesUsed, sourceEvidence: returned.sourceEvidence, pipelineEvidence: returned.pipelineEvidence, searchDiagnostic: returned.searchDiagnostic || buildImageSearchDiagnostic(returned) },
       selectableCandidates: uniqueCandidates([...(previous.manualAction?.selectableCandidates || []), ...(returned.status === "success" && returned.selected ? [returned.selected] : [])]),
       lastExplicitSearchAt: new Date().toISOString(),
       preservedExistingSelection: true,
@@ -808,7 +820,7 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
     candidates: mergedCandidates,
     manualAction: {
       ...(previous.manualAction || {}),
-      currentSearchFallbackResult: { previousStatus: returned.status, technicalStatus: returned.technicalStatus, matchReason: returned.matchReason, queriesUsed: returned.queriesUsed, sourceEvidence: returned.sourceEvidence, pipelineEvidence: returned.pipelineEvidence },
+      currentSearchFallbackResult: { previousStatus: returned.status, technicalStatus: returned.technicalStatus, matchReason: returned.matchReason, queriesUsed: returned.queriesUsed, sourceEvidence: returned.sourceEvidence, pipelineEvidence: returned.pipelineEvidence, searchDiagnostic: returned.searchDiagnostic || buildImageSearchDiagnostic(returned) },
       rejectedCandidates: uniqueCandidates([...(previous.manualAction?.rejectedCandidates || []), ...mergedCandidates]),
       lastExplicitSearchAt: new Date().toISOString(),
     },
@@ -871,7 +883,7 @@ export async function researchSimpleImageSlots({ store, root, projectId, slotIds
       candidates: mergedCandidates,
       manualAction: {
         ...(previous.manualAction || {}),
-        currentSearchFallbackResult: { previousStatus: returned.status, technicalStatus: returned.technicalStatus, matchReason: returned.matchReason, queriesUsed: returned.queriesUsed, sourceEvidence: returned.sourceEvidence, pipelineEvidence: returned.pipelineEvidence },
+        currentSearchFallbackResult: { previousStatus: returned.status, technicalStatus: returned.technicalStatus, matchReason: returned.matchReason, queriesUsed: returned.queriesUsed, sourceEvidence: returned.sourceEvidence, pipelineEvidence: returned.pipelineEvidence, searchDiagnostic: returned.searchDiagnostic || buildImageSearchDiagnostic(returned) },
         rejectedCandidates: uniqueCandidates([...(previous.manualAction?.rejectedCandidates || []), ...mergedCandidates]),
         lastExplicitSearchAt: now,
       },

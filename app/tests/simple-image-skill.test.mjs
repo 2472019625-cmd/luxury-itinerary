@@ -12,7 +12,7 @@ import { buildKnowledgeHierarchy, explicitEntityRoute } from "../server/knowledg
 
 const slot = (id, overrides = {}) => ({ slotId: id, moduleType: "day", required: true, location: "塞伦盖蒂", activity: "全天游猎", subject: "草原环境与游猎行动", searchIntent: ["草原游猎", "野生动物观察"], visualGoal: "表现进入草原后的环境建立", visualContext: { dayRole: "环境建立", avoid: ["与相邻 DAY 相同机位"] }, copyTargetId: `copy-${id}`, aspectRatio: "16:9", userLocked: false, ...overrides });
 
-test("明确实体目录缺失零Knowledge请求；专属体验no_match最多两词且不扩Scope", async (t) => {
+test("明确实体目录缺失时仅补查确认地区；专属体验no_match最多两词且不扩Scope", async (t) => {
   const hierarchy = buildKnowledgeHierarchy([
     { node_id: "root", formal_name: "根知识库" },
     { node_id: "country", formal_name: "肯尼亚", parent_node_id: "root" },
@@ -50,10 +50,11 @@ test("明确实体目录缺失零Knowledge请求；专属体验no_match最多两
       assert.ok(evidence.knowledgeSearch.attempts.every((attempt) => attempt.scopeNodeIds.join() === "hotel"));
       assert.equal(evidence.explicitEntityFastPath.knowledgeStopReason, target.slotId === "exclusive-empty" ? "entity_directory_empty" : "entity_directory_no_match");
     } else {
-      assert.equal(knowledgeCalls.length, 0);
-      assert.equal(evidence.knowledgeSearch.status, "entity_directory_missing");
-      assert.equal(evidence.knowledgeSearch.knowledgeQueryExecuted, false);
-      assert.equal(evidence.explicitEntityFastPath.knowledgeStopReason, "entity_directory_missing");
+      assert.equal(knowledgeCalls.length, 2);
+      assert.ok(knowledgeCalls.every(call => call.scopeNodeIds.join() === "region"));
+      assert.equal(evidence.knowledgeSearch.knowledgeQueryExecuted, true);
+      assert.equal(evidence.explicitEntityFastPath.parentProbeUsed, true);
+      assert.equal(evidence.explicitEntityFastPath.knowledgeStopReason, "entity_directory_no_match");
     }
   }
 });
@@ -144,6 +145,130 @@ const completeAudit = (candidateOrId, overrides = {}) => ({
   ...overrides,
 });
 
+test("父级补查同asset后续逐图路径可补齐身份，复用视觉且共享说明不能升级", async (t) => {
+  const hierarchy = buildKnowledgeHierarchy([
+    { node_id: "root", formal_name: "Root" },
+    { node_id: "country", formal_name: "Kenya", parent_node_id: "root" },
+    { node_id: "region", formal_name: "Amboseli", parent_node_id: "country" },
+  ]);
+  for (const mode of ["bound_path", "shared_only", "existing_path", "incomplete_audit"]) await t.test(mode, async (st) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "entity-probe-evidence-refresh-"));
+    st.after(() => rm(root, { recursive: true, force: true }));
+    const identity = "Aurora Wilderness Lodge";
+    const target = slot(`probe-refresh-${mode}`, {
+      moduleType: "hotel", hotel: identity, location: "Amboseli", country: "Kenya", activity: "", subject: "酒店外观", primaryVisualSubject: "酒店外观",
+      exactIdentityRequired: true, queryCore: { subject: "酒店外观", subjectEn: "hotel exterior", identity }, fidelityQuery: "酒店外观", alternateQueries: ["hotel exterior"],
+    });
+    let knowledgeCalls = 0, auditCalls = 0, webCalls = 0, originalDownloads = 0;
+    const result = await runImageSearchSkill({
+      root, slots: [target], sourceMode: "knowledge_first", knowledgeBaseUrl: "http://knowledge.invalid", knowledgeQueriesPerSlot: 2,
+      visionApiKey: "fixture", visionBaseUrl: "http://vision.invalid", visionModel: "fixture",
+      adapters: {
+        loadKnowledgeHierarchy: async () => hierarchy,
+        searchKnowledgeImages: async ({ queries, scopeNodeIds }) => {
+          knowledgeCalls += 1;
+          assert.deepEqual(scopeNodeIds, ["region"]);
+          const descriptorPath = mode === "existing_path" && knowledgeCalls === 1 ? "Kenya/Amboseli/Unknown/hero.jpg"
+            : knowledgeCalls === 2 && mode !== "shared_only" ? `Kenya/Amboseli/${identity}/hero.jpg` : null;
+          const candidate = {
+            imageUrl: "https://knowledge.invalid/preview/hero.jpg", sourceKind: "knowledge_library", knowledgeAssetId: "same-real-asset",
+            knowledgeRecordId: `record-${knowledgeCalls}`, title: "hero.jpg", alt: identity, knowledgeFragmentContent: identity,
+            knowledgeSourcePaths: knowledgeCalls === 2 ? [`Kenya/Amboseli/${identity}/other-photo.jpg`] : ["Kenya/Amboseli/general/other-photo.jpg"],
+            knowledgePreview: { url: "https://knowledge.invalid/preview/hero.jpg", filename: "hero.jpg", versionId: "same-version", sourceDisplayPath: descriptorPath },
+            knowledgeMatchedFile: { url: "https://knowledge.invalid/original/hero.jpg", filename: "hero.jpg", versionId: "same-version" },
+          };
+          return { status: "completed", queryId: `query-${knowledgeCalls}`, queryText: queries[0], candidates: [candidate], records: [] };
+        },
+        downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+          const original = candidate.imageUrl.includes("/original/");
+          if (original) originalDownloads += 1;
+          const filename = original ? "original.jpg" : "preview.jpg";
+          const filePath = path.join(directory, filename);
+          await sharp({ create: { width: 1400, height: 900, channels: 3, background: "#617347" } }).jpeg().toFile(filePath);
+          return { ...candidate, filePath, publicUrl: `${publicPrefix}/${filename}`, sha256: filename, width: 1400, height: 900 };
+        },
+        judgeCandidatesBatch: async ({ candidates }) => {
+          auditCalls += 1;
+          assert.equal(knowledgeCalls, 1, "后续只更新确定性身份证据，不追加视觉调用");
+          assert.equal(candidates[0].alt, "hero.jpg");
+          const audit = completeAudit(candidates[0], {
+            auditEvidenceVersion: 2, identityMatch: false, hotelIdentityMatch: false, eligible: false,
+            identityEvidence: { status: "insufficient", basis: "none", explanation: "酒店外观无唯一标识" },
+          });
+          if (mode === "incomplete_audit") delete audit.nonAI;
+          return [audit];
+        },
+        searchWebBatch: async () => { webCalls += 1; return []; },
+        searchCommonsImages: async () => [],
+      },
+    });
+    const output = result.results[0];
+    assert.equal(knowledgeCalls, 2);
+    assert.equal(auditCalls, 1);
+    assert.equal(result.metrics.knowledgeUniqueCandidates, 1);
+    assert.equal(result.metrics.knowledgeMergedDuplicates, 1);
+    if (mode === "bound_path") {
+      assert.equal(output.status, "success");
+      assert.equal(output.selected.hardJudgment.identityEvidence.status, "supported");
+      assert.equal(output.selected.knowledgePreview.sourceDisplayPath, `Kenya/Amboseli/${identity}/hero.jpg`);
+      assert.equal(webCalls, 0);
+      assert.equal(originalDownloads, 1);
+    } else {
+      assert.equal(output.selected, null);
+      assert.equal(output.candidates[0].qualificationStatus, "unreviewed");
+      assert.equal(originalDownloads, 0);
+      assert.equal(webCalls > 0, mode !== "incomplete_audit", "共享描述不能升权，审核缺字段也不能被路径补齐抹平");
+    }
+  });
+});
+
+test("Commons元数据和HTML回退诊断保留到最终候选与执行记录", async (t) => {
+  const pageUrl = "https://commons.wikimedia.org/wiki/File:Safari.jpg";
+  const imageUrl = "https://upload.wikimedia.org/wikipedia/commons/a/ab/Safari.jpg";
+  const failure = { code: "commons_api_invalid_json", status: 200, challengeDetected: false, privateDetail: "must-not-persist" };
+  const summary = { code: failure.code, status: 200, challengeDetected: false };
+  const metadata = { originalImageUrl: imageUrl, originalMime: "image/jpeg", mediaType: "BITMAP", originalBytes: 250000, license: "CC BY 2.0", licenseUrl: "https://creativecommons.org/licenses/by/2.0/", creator: "Fixture photographer" };
+  for (const mode of ["api", "html", "failed"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "simple-commons-evidence-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const result = await runImageSearchSkill({
+      root, sourceMode: "web_only", slots: [slot(`commons-${mode}`, { exactIdentityRequired: false })],
+      visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture",
+      adapters: {
+        searchWebBatch: async () => [{ pageUrl, title: "Safari gallery" }], searchCommonsImages: async () => [],
+        fetchImagePageContent: async () => {
+          if (mode === "failed") throw Object.assign(new Error("File page unavailable"), { code: "page_http_error", status: 404, commonsApiFailure: failure });
+          return mode === "api" ? { imageCandidates: [{ imageUrl, pageUrl, title: "Safari photograph", alt: "草原环境与游猎行动", acquisitionMethod: "commons_api", ...metadata }], responseUrl: pageUrl, acquisitionMethod: "commons_api" }
+            : { html: `<img src="${imageUrl}" alt="草原环境与游猎行动">`, responseUrl: pageUrl, acquisitionMethod: "http", commonsApiFailure: failure };
+        },
+        downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+          const filePath = path.join(directory, "commons-evidence.jpg");
+          await writeDistinctTestImage(filePath);
+          return { ...candidate, filePath, publicUrl: `${publicPrefix}/commons-evidence.jpg`, sha256: "commons-evidence", width: 1400, height: 900 };
+        },
+        judgeCandidatesBatch: async ({ candidates }) => candidates.map(candidate => completeAudit(candidate)),
+      },
+    });
+    const image = result.results[0];
+    assert.doesNotMatch(JSON.stringify(image), /must-not-persist/);
+    if (mode === "api") {
+      assert.equal(image.status, "success");
+      for (const [key, value] of Object.entries(metadata)) assert.equal(image.selected[key], value, key);
+      assert.equal(image.selected.acquisitionMethod, "commons_api");
+      assert.equal(image.selected.originalWidth, 1400);
+      assert.equal(image.selected.originalHeight, 900);
+    } else if (mode === "html") {
+      assert.equal(image.status, "success");
+      assert.deepEqual(image.selected.commonsApiFailure, summary);
+      assert.deepEqual(image.pipelineEvidence.commonsApiFallbacks, [{ pageUrl, ...summary, acquisitionMethod: "http" }]);
+    } else {
+      assert.equal(image.selected, null);
+      assert.deepEqual(image.pipelineEvidence.pageFailures[0].commonsApiFailure, summary);
+      assert.equal(image.pipelineEvidence.pageFailures[0].status, 404);
+    }
+  }
+});
+
 const knowledgeFixture = (queryText, { queryId = `qry-${queryText}`, count = 4, prefix = queryId, assetIds = [], fragment = queryText, sourcePaths = [] } = {}) => {
   const records = Array.from({ length: count }, (_, index) => ({
     recordId: `${prefix}-record-${index + 1}`,
@@ -194,6 +319,98 @@ async function writeDistinctTestImage(filePath, index = 1) {
   }
   await sharp(data, { raw: { width, height, channels: 3 } }).resize(1400, 900, { kernel: "nearest" }).jpeg().toFile(filePath);
 }
+
+test("父级补查保留完整实体查询，仅逐图证据可自动采用；共用说明无身份时转Web，审核缺字段仍人工", async t => {
+  const hierarchy = buildKnowledgeHierarchy([
+    { node_id: "root", formal_name: "根知识库" },
+    { node_id: "country", formal_name: "Testland", parent_node_id: "root" },
+    { node_id: "region", formal_name: "Lake District", parent_node_id: "country" },
+  ]);
+  for (const mode of ["bound", "shared-only", "incomplete"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "entity-parent-pipeline-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const calls = [], visionInputs = [], downloaded = [];
+    let webCalls = 0;
+    const result = await runImageSearchSkill({
+      root, sourceMode: "knowledge_first", knowledgeBaseUrl: "http://knowledge.invalid", knowledgeQueriesPerSlot: 1,
+      trustedKnowledgeOrigins: ["http://192.168.100.210:9000"],
+      slots: [slot(`probe-${mode}`, { moduleType: "hotel", hotel: "Fixture River Hotel", location: "Lake District", region: "Lake District", country: "Testland", subject: "酒店外观", activity: "", primaryVisualSubject: "酒店建筑外观", exactIdentityRequired: true, queryCore: { subject: "酒店外观", identity: "Fixture River Hotel" }, fidelityQuery: "酒店外观", alternateQueries: ["hotel exterior"] })],
+      visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture",
+      adapters: {
+        loadKnowledgeHierarchy: async () => hierarchy,
+        searchKnowledgeImages: async ({ queries, scopeNodeIds }) => {
+          calls.push({ queries, scopeNodeIds });
+          const fixture = knowledgeFixture(queries[0], { prefix: "probe-image", count: 1, fragment: "Fixture River Hotel shared result description", sourcePaths: ["Testland/Lake District/Fixture River Hotel/different-file.jpg"] });
+          if (mode === "bound") fixture.candidates[0].knowledgeMatchedFile.sourceDisplayPath = "Testland/Lake District/Fixture River Hotel/probe-image-1.jpg";
+          return fixture;
+        },
+        downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+          downloaded.push(candidate.imageUrl);
+          const filePath = path.join(directory, `photo-${downloaded.length}.jpg`);
+          await writeDistinctTestImage(filePath, downloaded.length);
+          return { ...candidate, filePath, publicUrl: `${publicPrefix}/${path.basename(filePath)}`, sha256: `probe-${downloaded.length}`, width: 1400, height: 900 };
+        },
+        judgeCandidatesBatch: async ({ candidates }) => {
+          visionInputs.push(...candidates);
+          return candidates.map(candidate => completeAudit(candidate, mode === "incomplete" ? { visibleLocationConflict: undefined } : {}));
+        },
+        searchWebBatch: async () => { webCalls += 1; return []; }, searchCommonsImages: async () => [],
+      },
+    });
+    assert.equal(calls.length, 1, "配置1次查询不能因父级补查而扩成2次");
+    assert.deepEqual(calls[0].scopeNodeIds, ["region"]);
+    assert.ok(calls[0].queries.every(query => query.includes("Fixture River Hotel")));
+    assert.equal(result.results[0].searchDiagnostic.knowledge.parentProbeUsed, true);
+    assert.equal(result.results[0].searchDiagnostic.knowledge.directoryStatus, "not_found");
+    assert.equal(visionInputs[0].knowledgeFragmentContent, "");
+    assert.ok(!visionInputs[0].alt.includes("shared result"));
+    if (mode === "bound") {
+      assert.equal(result.results[0].status, "success");
+      assert.equal(result.results[0].selected.hardJudgment.identityEvidence.status, "supported");
+      assert.equal(downloaded.filter(url => url.includes("/original/")).length, 1);
+      assert.equal(webCalls, 0);
+    } else {
+      assert.equal(result.results[0].selected, null);
+      assert.equal(downloaded.filter(url => url.includes("/original/")).length, 0);
+      assert.equal(webCalls > 0, mode === "shared-only");
+      if (mode === "incomplete") assert.equal(result.results[0].status, "needs_user_action");
+    }
+  }
+});
+
+test("父级补查遇目录澄清即停止，不换Scope重发或越过查询预算", async t => {
+  const hierarchy = buildKnowledgeHierarchy([
+    { node_id: "root", formal_name: "根知识库" },
+    { node_id: "country", formal_name: "Testland", parent_node_id: "root" },
+    { node_id: "region", formal_name: "Lake District", parent_node_id: "country" },
+  ]);
+  for (const clarificationAt of [1, 2]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "entity-probe-clarification-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const scopes = [];
+    let webCalls = 0;
+    const result = await runImageSearchSkill({
+      root, sourceMode: "knowledge_first", knowledgeBaseUrl: "http://knowledge.invalid", knowledgeQueriesPerSlot: 2,
+      slots: [slot("clarification-probe", { moduleType: "hotel", hotel: "Fixture River Hotel", location: "Lake District", country: "Testland", subject: "酒店外观", activity: "", primaryVisualSubject: "酒店建筑外观", exactIdentityRequired: true, queryCore: { subject: "酒店外观", identity: "Fixture River Hotel" }, fidelityQuery: "酒店外观", alternateQueries: ["hotel exterior"] })],
+      adapters: {
+        loadKnowledgeHierarchy: async () => hierarchy,
+        searchKnowledgeImages: async ({ scopeNodeIds }) => {
+          scopes.push(scopeNodeIds);
+          return scopes.length === clarificationAt
+            ? { status: "needs_clarification", clarificationNodeIds: ["region"], candidates: [], records: [] }
+            : { status: "completed", scopeState: "no_match", candidates: [], records: [] };
+        },
+        searchWebBatch: async () => { webCalls += 1; return []; }, searchCommonsImages: async () => [],
+      },
+    });
+    assert.equal(scopes.length, clarificationAt);
+    assert.ok(scopes.every(ids => ids.length === 1 && ids[0] === "region"));
+    assert.equal(result.results[0].technicalStatus, "knowledge_needs_clarification");
+    assert.equal(result.results[0].status, "needs_user_action");
+    assert.equal(result.metrics.knowledgeClarificationRetries, 0);
+    assert.equal(webCalls, 0);
+  }
+});
 
 test("知识库异步查询保留 query_id、来源路径与实际下载 origin", async () => {
   const responses = [
@@ -2445,7 +2662,8 @@ test("Web累计预算不随Query重置，下载失败和超预算候选都保留
     },
   });
   assert.equal(calls, 2);
-  assert.equal(result.results[0].pipelineEvidence.webExecution.stopReason, "queries_exhausted");
+  assert.equal(result.results[0].pipelineEvidence.webExecution.stopReason, "slot_resource_budget");
+  assert.equal(result.results[0].pipelineEvidence.webExecution.remainingDownloads, 0);
   assert.equal(result.results[0].pipelineEvidence.webExecution.downloadsUsed, 2);
   assert.equal(result.results[0].candidates.length, 10);
   assert.equal(result.results[0].candidates.filter((item) => item.originalDownloadStatus === "failed").length, 2);

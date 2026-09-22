@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { fetchPublicImageResource, IMAGE_ACCEPT, IMAGE_USER_AGENT } from './public-image-http.mjs';
+import { commonsFileTitleFromUrl, fetchCommonsFileImage } from './commons-search.mjs';
 export { assertPublicUrl, fetchPublicUrl } from './public-image-http.mjs';
 export { createImageRetrievalSession } from './image-retrieval-session.mjs';
 
@@ -242,13 +243,30 @@ export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.
 }
 
 export async function fetchImagePageContent(pageUrl, { signal, onRequest, retrievalSession, fetchImpl, timeoutMs = 20_000 } = {}) {
+  const started = Date.now();
+  let commonsApiFailure;
+  const commonsTitle = commonsFileTitleFromUrl(pageUrl);
+  if (commonsTitle) {
+    try {
+      const candidate = await fetchCommonsFileImage(pageUrl, { signal, onRequest, retrievalSession, fetchImpl, timeoutMs });
+      return { imageCandidates: [candidate], responseUrl: candidate.pageUrl, acquisitionMethod: 'commons_api' };
+    } catch (error) {
+      // Only missing/broken metadata can fall back to the normal file page.
+      // A real block, unsafe redirect, unsupported original media or exhausted
+      // deadline is terminal; never use HTML thumbnails to bypass those gates.
+      const metadataUnavailable = ['commons_imageinfo_missing', 'commons_dimensions_missing', 'commons_api_invalid_json', 'commons_api_error'].includes(error.code)
+        || error.code === 'page_http_error' && error.status === 404;
+      if (signal?.aborted || !metadataUnavailable || !/\.(?:jpe?g|png|webp)$/i.test(commonsTitle)) throw error;
+      commonsApiFailure = { code: error.code, status: error.status || null, challengeDetected: error.challengeDetected === true };
+    }
+  }
   const response = await fetchPublicImageResource(pageUrl, {
     headers: { 'user-agent': IMAGE_USER_AGENT, accept: `text/html,application/xhtml+xml,${IMAGE_ACCEPT}` },
-    signal, timeoutMs, onRequest, retrievalSession, fetchImpl, maxBytes: 5_000_000, skipImageBody: true,
-  });
+    signal, timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), onRequest, retrievalSession, fetchImpl, maxBytes: 5_000_000, skipImageBody: true,
+  }).catch(error => { if (commonsApiFailure) error.commonsApiFailure = commonsApiFailure; throw error; });
   const type = response.headers.get("content-type") || "";
-  if (type.startsWith("image/")) return { responseUrl: response.responseUrl, directImage: true, acquisitionMethod: 'http' };
-  if (!/text\/html|application\/xhtml\+xml/i.test(type)) return { responseUrl: response.responseUrl, empty: true, acquisitionMethod: 'http' };
+  if (type.startsWith("image/")) return { responseUrl: response.responseUrl, directImage: true, acquisitionMethod: 'http', ...(commonsApiFailure && { commonsApiFailure }) };
+  if (!/text\/html|application\/xhtml\+xml/i.test(type)) return { responseUrl: response.responseUrl, empty: true, acquisitionMethod: 'http', ...(commonsApiFailure && { commonsApiFailure }) };
   const requestedUrl = new URL(pageUrl);
   const finalUrl = new URL(response.responseUrl);
   if (requestedUrl.hostname === finalUrl.hostname && requestedUrl.pathname !== finalUrl.pathname) {
@@ -260,14 +278,15 @@ export async function fetchImagePageContent(pageUrl, { signal, onRequest, retrie
       const error = new Error(`来源页跳转到无关页面：${finalUrl.href}`); error.code = "page_redirect_mismatch"; throw error;
     }
   }
-  return { html: response.buffer.toString('utf8'), responseUrl: response.responseUrl, acquisitionMethod: 'http' };
+  return { html: response.buffer.toString('utf8'), responseUrl: response.responseUrl, acquisitionMethod: 'http', ...(commonsApiFailure && { commonsApiFailure }) };
 }
 
-export async function extractPageImages(page, { signal, maxImages = 36, semanticTerms = [], loadPage = fetchImagePageContent, retrievalSession, onRequest } = {}) {
-  const content = await loadPage(page.pageUrl, { signal, retrievalSession, onRequest });
+export async function extractPageImages(page, { signal, maxImages = 36, semanticTerms = [], loadPage = fetchImagePageContent, retrievalSession, onRequest, fetchImpl, timeoutMs } = {}) {
+  const content = await loadPage(page.pageUrl, { signal, retrievalSession, onRequest, fetchImpl, timeoutMs });
+  if (content.imageCandidates) return content.imageCandidates.map(candidate => ({ ...page, ...candidate })).slice(0, maxImages);
   if (content.directImage) return [{ ...page, imageUrl: content.responseUrl, kind: "direct-search-result", alt: '', highResHint: true, acquisitionMethod: content.acquisitionMethod || 'http' }];
   if (content.empty) return [];
-  const extract = (result) => extractImageCandidatesFromHtml(result.html, { ...page, requestedPageUrl: page.pageUrl, pageUrl: result.responseUrl, acquisitionMethod: result.acquisitionMethod || 'http' }, { responseUrl: result.responseUrl, maxImages, semanticTerms });
+  const extract = (result) => extractImageCandidatesFromHtml(result.html, { ...page, requestedPageUrl: page.pageUrl, pageUrl: result.responseUrl, acquisitionMethod: result.acquisitionMethod || 'http', ...(content.commonsApiFailure && { commonsApiFailure: content.commonsApiFailure }) }, { responseUrl: result.responseUrl, maxImages, semanticTerms });
   const candidates = extract(content);
   const needsBrowser = !candidates.length || (candidates.length < 3 && /<script\b/i.test(content.html));
   if (retrievalSession && needsBrowser) {

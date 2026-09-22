@@ -170,7 +170,18 @@ export async function readImageResponse(response, { maxBytes = 5_000_000, timeou
 
 export function classifyImageHttpResponse(status, type = '', body = '') {
   const sample = String(body).slice(0, 80_000);
-  const challenge = /cf-chl-|challenge-platform|<title[^>]*>\s*(?:just a moment|attention required)|(?:verify|checking) (?:that )?you are human|captcha(?:[-_ ](?:container|challenge|required)|["'])|access denied|请求被拦截|访问验证|人机验证/i.test(sample);
+  // Captcha libraries/configuration also occur on readable articles (including
+  // MediaWiki's edit configuration). Require a challenge UI or visible denial,
+  // not a word in an inline script, JSON setting or HTML comment.
+  const markup = sample.replace(/<!--[\s\S]*?-->/g, '');
+  const staticMarkup = markup.replace(/<(script|style)\b([^>]*)>[\s\S]*?(?:<\/\1\s*>|$)/gi, '<$1$2></$1>');
+  const challengeUi = /<(?:script|iframe)\b[^>]*\bsrc\s*=\s*["'][^"']*(?:\/cdn-cgi\/challenge-platform\/|\/cf-chl-)/i.test(staticMarkup)
+    || /<(?:form|div|iframe|input)\b[^>]*\b(?:id|class|name)\s*=\s*["'][^"']*\b(?:challenge-form|cf-chl-widget|captcha-container|captcha-challenge|h-captcha|g-recaptcha)\b/i.test(staticMarkup);
+  const visibleMarkup = staticMarkup.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
+  const visibleText = visibleMarkup.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  const challengeHeading = /<(?:title|h1|h2)\b[^>]*>\s*(?:just a moment|attention required|access denied|verify (?:that )?you are human|请求被拦截|访问验证|人机验证)/i.test(visibleMarkup);
+  const visibleDenial = visibleText.length < 1500 && /(?:verify|checking) (?:that )?you are human|access denied|请求被拦截|访问验证|人机验证/i.test(visibleText);
+  const challenge = challengeUi || challengeHeading || visibleDenial;
   if (challenge || [401, 403].includes(status)) return { code: 'page_access_blocked', message: '来源站点要求验证或拒绝访问', retryable: false, challengeDetected: challenge };
   if (status === 429) return { code: 'page_rate_limited', message: '来源站点请求受限', retryable: true };
   if (status === 503) return { code: 'page_service_unavailable', message: '来源站点暂时不可用', retryable: true };

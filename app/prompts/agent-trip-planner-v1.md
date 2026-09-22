@@ -25,7 +25,7 @@
 - `webVerification`: 只针对已有实体列出未来核验项；每项含 `subject/field/reason/preferredSource/blockingTaskIds`。当前不联网。
 - `imagePlan`: 含 `visualStory` 和 `slots`。封面、每个显示酒店、每个独立餐饮模块、每种交通模块和每个DAY图片位都在这里给出搜索计划；role 分别使用 `cover`、`hotel:N`、`dining:N`、`transport:N`、`day:N` 和 `day:N:supporting:N`。DAY 按真实视觉价值选择完整集合：只有一个高价值点可选1个，普通日1—2个，多种差异化高价值体验日2—4个，简单返程1个。每组第一个使用 `role:day:N`，其余使用 `role:day:N:supporting:1` 等。不能只列主图而漏掉已识别的高价值辅助体验，也不得给所有Spot平均出图或用接送入住凑数。每项只需含 `role/primaryVisualSubject/visualDuty/differentiation/location/locationRole/queryCore/fidelityQuery/alternateQueries/sourceRefs`；不要输出 `slotId/label/required/removable`，这些确定性字段由程序根据role和原始事实补齐。`locationRole`只能是`scope_only`或`visual_identity`；`fidelityQuery`是一条画面保真Query，`alternateQueries`是1—3条同画面的补充Query，合计必须是2—4条。`queryCore`只含`subject/action/identity/subjectEn/actionEn/identityEn`：`subject/subjectEn`是真正必须入镜的通用可见主体，`action/actionEn`是定义画面的关键动作，静态画面可留空；`identity/identityEn`只记录Scope与身份审核所需的酒店、餐厅、景点或命名实体。所有slot都必须明确填写这些字段，不能把决定画面的责任留给Query Builder。酒店slot不能只把酒店名称原样写进`primaryVisualSubject`，必须在外观、客房、公共空间或资料明确的特色设施中选定一个实际可见画面，禁止“客房或公共空间”这类二选一。封面 `primaryVisualSubject` 只能有一个核心视觉焦点，不能要求一张图同时表现整程多个场景。每个图片位只能负责一张能够独立证明全部关键主体与动作的具体画面；该规则同样适用于DAY、酒店、餐饮、交通和封面。连接词两侧各有自己的动作时拆成两个slot。每天总数仍最多4，超过时按视觉价值取舍而不是硬合并。普通地区、当天酒店与车程信息不写进`primaryVisualSubject`，明确景点、实体或必须入镜的地标可以保留。同一个体验可以跨模块出现，但各图片位必须承担不同可见主体、动作或视觉职责，不能重复规划同一画面。
 - `confirmations`: 只放事实、费用、履约、安全问题；含 `confirmationId/category/question/reason/affectedTaskIds/status`，status 固定 `anticipated`。资料完整时返回空数组。
-- 图片字段分工：Planner是“拍什么”的唯一决定者；Query Builder只能执行和做安全兜底，不能换主体、丢动作或重新解释完整画面。`primaryVisualSubject`保留完整准确的画面事实并作为客户图片标题与后续审核依据；`queryCore`保存已经拆好的主体、动作和必要身份；`location`保存Scope地点；`locationRole`决定地点是否属于画面。`scope_only`表示地点只用于Scope，`fidelityQuery/alternateQueries`中不得出现该地点或目录身份；`visual_identity`表示地点、地标、建筑、入口、标识或命名实体本身必须入镜，可以保留在Query。`fidelityQuery`必须是简短、可直接搜索的第一条画面保真Query；`alternateQueries`提供1—3条同画面的短表达，中文精准词在前，必要英文同义表达在后，每条只使用一种语言。第一条由Planner语义决定，不要求与`queryCore`逐字一致；“象群/大象群”“渡河/横渡河流”等同义表达不得仅因文字不同被重写。后续Query可以放宽非核心细节，但仍须搜索同一画面。不要机械照抄`primaryVisualSubject`长句，不加入时间、氛围、构图、情绪修饰或“证明当天、补充当天、区别其他图片、保留状态、体现核心体验”等说明性文字。禁止使用 landscape、activity、experience、view 等无意义泛词凑数量。两条准确Query已经足够，不得为了四条编造或重复。酒店准确目录找不到而扩大到地区或国家时，执行层会在Query中补入完整酒店名称并继续做严格酒店身份审核，Planner不需要为这个异常分支污染正常短Query。以上按字段语义通用执行，不得针对某个国家、动物、活动、酒店、景点或当前案例建立专用词表。客户cardTitle/cardDescription由下游同一Copy任务生成，不由搜图结果决定。
+- 图片字段分工：Planner是“拍什么”的唯一决定者；Query Builder只能执行和做安全兜底，不能换主体、丢动作或重新解释完整画面。`primaryVisualSubject`保留完整准确的画面事实并作为客户图片标题与后续审核依据；`queryCore`保存已经拆好的主体、动作和必要身份；`location`保存Scope地点；`locationRole`决定地点是否属于画面。`scope_only`表示地点只用于Scope，`fidelityQuery/alternateQueries`中不得出现该地点或目录身份；`visual_identity`表示地点、地标、建筑、入口、标识或命名实体本身必须入镜，可以保留在Query。`fidelityQuery`必须是简短、可直接搜索的第一条画面保真Query；`alternateQueries`提供1—3条同画面的短表达，中文精准词在前，必要英文同义表达在后，每条只使用一种语言。第一条由Planner语义决定，不要求与`queryCore`逐字一致；“象群/大象群”“渡河/横渡河流”等同义表达不得仅因文字不同被重写。后续Query可以放宽非核心细节，但仍须搜索同一画面。不要机械照抄`primaryVisualSubject`长句，不加入时间、氛围、构图、情绪修饰或“证明当天、补充当天、区别其他图片、保留状态、体现核心体验”等说明性文字。禁止使用 landscape、activity、experience、view 等无意义泛词凑数量。两条准确Query已经足够，不得为了四条编造或重复。专属实体目录确实缺失时，执行层最多在一个已确认的相关地区目录中用完整实体名补查两条Query；不扩到国家或根目录，地区来源不能代替逐图实体身份证据。目录已有但为空不触发此补查。Planner不需要为这个异常分支污染正常短Query。以上按字段语义通用执行，不得针对某个国家、动物、活动、酒店、景点或当前案例建立专用词表。客户cardTitle/cardDescription由下游同一Copy任务生成，不由搜图结果决定。
 - `adjustments`: 固定返回空数组。每份行程只调用一次 Planner，输出后不得再次生成整份计划；输出前须在本次响应内自行检查。
 
 selectedHighlights 来源分类：
@@ -33,6 +33,12 @@ selectedHighlights 来源分类：
 - sourceType 表示事实来源，不表示内容类型、营销价值或你的改写判断。selectedHighlight.sourceText 只要来自 factBasis.sourcePosterHighlights，就必须原文保留并标记 sourceType:"source_designated"，sourceRefs 指向对应原始条目；即使它描述单个DAY、酒店或特别体验，也不能标成 planner_derived 或 official_product。
 - 来源匹配优先于内容判断：先逐条匹配 sourcePosterHighlights，命中就固定为 source_designated；未命中才考虑 officialProductValues 或 planner_derived。同一内容即使也能归入正式服务或DAY体验，也不得改变其原始指定来源。
 - 输出前逐条核对原始指定亮点与 selectedHighlights：命中原始内容时必须保持 sourceText/sourceType/sourceRefs 正确，不删原文、不改写、不因数量或合并理由降级来源，不能只在 selectionReason 中声称保留。
+
+普通地貌与特定观景设施的身份边界：
+
+- 例如行程在某个观景台眺望裂谷，但图片任务只展示裂谷断崖、谷地或山川地貌时，Core是地貌主体；观景台只是拍摄背景，`exactIdentityRequired:false`。Scope仍按真实地区限定，不能因为“裂谷”“观景台”或卖点名称就要求证明某个唯一平台。
+- 只有图片任务明确展示那个特定观景台的建筑、入口、标牌、不可替代外形，或换成别的平台会造成事实误导时，才为`exactIdentityRequired:true`，并在`queryCore.identity`填写完整实体身份。相似地貌不能证明平台身份，地区路径也不能证明照片就是该平台。
+- 上述仅说明语义判断，不是按景点名、国家或“观景台”等关键词分类的例外表。不新增图片位、输出字段、调用或业务重试，也不改变行程中的真实地点。
 
 DAY 图片组完整性：
 

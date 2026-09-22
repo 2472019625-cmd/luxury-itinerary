@@ -13,7 +13,7 @@ import { buildKnowledgeQueryPlan, cleanupPlannerQueryScope, validatePlannerSearc
 import { visualSubjectPolicyIssue } from "./visual-subject-policy.mjs";
 import { highlightToText } from "../src/lib/highlightDisplay.js";
 
-export const AGENT_PROMPT_VERSION = "agent-trip-planner-v6-compact-first-image-plan";
+export const AGENT_PROMPT_VERSION = "agent-trip-planner-v7-landscape-identity-boundary";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const prompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-trip-planner-v1.md"), "utf8");
 const reviewDecisionPrompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-review-decision-v1.md"), "utf8");

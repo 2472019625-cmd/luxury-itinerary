@@ -1009,7 +1009,7 @@ test("Scope Plan 预先确定逐级范围和不同图片用途的停止边界", 
   assert.equal(knowledgeSourcePathMatches(entityPlan.scopes[0].evidenceResolution, ["肯尼亚/安博塞利/Observation Hill/view.jpg"], { identityAnchors: entityPlan.scopes[0].identityAnchors }).match, true);
 });
 
-test("酒店精确目录不存在时停止知识库，不扩大到地区或国家", () => {
+test("酒店精确目录不存在时只补查一个已确认地区，不扩大到国家", () => {
   const slot = {
     moduleType: "hotel",
     hotel: "Aurora Wilderness Lodge",
@@ -1025,9 +1025,11 @@ test("酒店精确目录不存在时停止知识库，不扩大到地区或国�
   const root = resolveKnowledgeScope(slot, hierarchy);
   assert.deepEqual(root.nodeIds, ["amboseli"]);
   const scopePlan = buildKnowledgeScopePlan(slot, root, hierarchy);
-  assert.deepEqual(scopePlan.scopes, []);
-  assert.equal(scopePlan.stopBoundary, "hotel_root");
-  assert.equal(scopePlan.blockedReason, "entity_directory_missing");
+  assert.deepEqual(scopePlan.scopes.map((scope) => ({ ids: scope.resolution.nodeIds, role: scope.role, mode: scope.sourcePathMode, maxQueries: scope.maxQueries })), [
+    { ids: ["amboseli"], role: "entity_parent_probe", mode: "entity_probe", maxQueries: 2 },
+  ]);
+  assert.equal(scopePlan.stopBoundary, "entity_parent_probe");
+  assert.equal(scopePlan.blockedReason, null);
 });
 
 test("景点目录缺失时停止知识库，不将已解析的地区当成实体目录", () => {

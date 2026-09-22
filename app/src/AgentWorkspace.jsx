@@ -162,7 +162,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     statusNotice={payload.canEnterFinal
       ? { title:"内容已经补齐", message:"正式成品已通过检查，可以进入 Step 5 查看和下载。" }
       : { title:"可编辑草稿已生成", message:payload.draftRendered ? "未完成项目已在对应位置保留提醒；你可以先编辑文案、补图和检查版面，正式下载会在问题补齐后开放。" : "可以先在编辑器处理未完成项目；草稿长图生成未通过时，请按下方提醒检查对应模块。", items:pendingSummary }}
-  />{busy && <div className="agent-execution-notice">正在处理 {busy.split(":").slice(0, -1).join(":")}，只会更新当前图片位。</div>}{error && <div className="agent-error">{error}</div>}</div>;
+  />{busy && <div className="agent-execution-notice">{busy.endsWith(":research") ? "正在为当前图片位置搜索并检查候选。" : "正在保存当前图片位置的修改。"}</div>}{error && <div className="agent-error">{error}</div>}</div>;
 }
 
 export function AgentWorkspace({ ItineraryComponent }) {

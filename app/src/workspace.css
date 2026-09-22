@@ -24,6 +24,8 @@
 .image-picker-modal > nav button { padding: 9px 15px; border: 1px solid #d8c8b0; border-radius: 999px; background: #fff; color: #665744; cursor: pointer; }
 .image-picker-modal > nav button.active { border-color: var(--ws-gold); background: #f6efe2; color: var(--ws-gold-deep); }
 .image-picker-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start; align-items: start; gap: 16px; overflow: auto; overscroll-behavior: contain; padding: 22px 28px; }
+.image-picker-grid > .image-search-notice { grid-column: 1 / -1; text-align: left; font-size: 13px; }
+.image-picker-grid > .image-search-notice strong { font-size: 14px; }
 .image-picker-grid > button { min-width: 0; overflow: hidden; padding: 0; border: 1px solid #dfd4c4; border-radius: 12px; background: #fff; color: var(--ws-ink); text-align: left; cursor: pointer; }
 .image-picker-grid > button:hover { border-color: var(--ws-gold); box-shadow: 0 8px 22px #5a432018; }
 .image-picker-grid > button:disabled { opacity: 1; cursor: not-allowed; }

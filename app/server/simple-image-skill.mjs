@@ -9,11 +9,12 @@ import { ImageDeduper } from "./image-dedupe.mjs";
 import { downloadCandidate, imageResolutionPolicyForSlot } from "./image-download.mjs";
 import { searchWebBatch } from "./image-search.mjs";
 import { normalizeImageSourceMode, searchKnowledgeImages } from "./knowledge-image-search.mjs";
-import { applyKnowledgeScopeToQueryPlan, buildKnowledgeQueryPlan, buildKnowledgeScopePlan, buildKnowledgeVisualTarget, classifyKnowledgeImagePurpose, explicitEntityRoute, createKnowledgeScopeResolver, knowledgeSourcePathMatches } from "./knowledge-scope-resolver.mjs";
+import { applyKnowledgeScopeToQueryPlan, buildKnowledgeQueryPlan, buildKnowledgeScopePlan, buildKnowledgeVisualTarget, classifyKnowledgeImagePurpose, explicitEntityRoute, createKnowledgeScopeResolver, knowledgeSourcePathMatches, knowledgeEntityProbeEvidence, knowledgeEntityProbeAuditCandidate } from "./knowledge-scope-resolver.mjs";
 import { IMAGE_AUDIT_EVIDENCE_VERSION, isHardRejectionCode, isIdentityEvidenceUnresolved, normalizeHardRejectCode } from "./image-candidate-eligibility.mjs";
 import { canonicalImageAssetKey, createImageRetrievalSession, extractPageImages, fetchImagePageContent } from "./page-images.mjs";
 import { searchCommonsImages } from "./commons-search.mjs";
 import { buildWebExecutionQueries, classifyWebFallback } from "./image-web-execution.mjs";
+import { buildImageSearchDiagnostic } from "./image-search-diagnostics.mjs";
 import { prepareWebCandidates, gateWebCandidates, webHotelIdentityEvidence, webHotelPropertyPage, webImageAssetKey } from "./web-image-candidates.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -354,11 +355,32 @@ function knowledgeAssetIdentity(candidate = {}) {
   return sourceIdentity ? `source:${createHash("sha256").update(sourceIdentity).digest("hex")}` : "";
 }
 
+function fillProbeDescriptor(previous, incoming) {
+  if (!previous || !incoming) return previous || incoming || null;
+  for (const field of ["versionId", "knowledgeId", "sourcePathId", "filename"]) {
+    if (text(previous[field]) && text(incoming[field]) && text(previous[field]) !== text(incoming[field])) return previous;
+  }
+  if (previous.url && incoming.url) {
+    try {
+      const before = new URL(previous.url), after = new URL(incoming.url);
+      if (before.origin !== after.origin || before.pathname !== after.pathname) return previous;
+    } catch { if (previous.url !== incoming.url) return previous; }
+  }
+  const filled = { ...previous };
+  for (const field of ["filename", "sourceDisplayPath", "sourcePathId", "knowledgeId", "versionId"]) {
+    if (!text(filled[field]) && text(incoming[field])) filled[field] = incoming[field];
+  }
+  return filled;
+}
+
 function mergeKnowledgeCandidate(previous, candidate, { queryText, queryId, recordId } = {}) {
   const queries = unique([...(previous?.knowledgeQueries || []), queryText]);
   const queryIds = unique([...(previous?.knowledgeQueryIds || []), queryId]);
   const recordIds = unique([...(previous?.knowledgeRecordIds || []), recordId, candidate.knowledgeRecordId]);
   const sourcePaths = unique([...(previous?.knowledgeSourcePaths || []), ...(candidate.knowledgeSourcePaths || [])]);
+  const assetKey = knowledgeAssetIdentity(candidate);
+  const sameProbeAsset = previous?.knowledgeSourcePathMode === "entity_probe" && candidate.knowledgeSourcePathMode === "entity_probe"
+    && /^(?:asset|version|knowledge):/.test(assetKey) && knowledgeAssetIdentity(previous) === assetKey;
   const merged = {
     ...(previous || candidate),
     ...candidate,
@@ -367,8 +389,8 @@ function mergeKnowledgeCandidate(previous, candidate, { queryText, queryId, reco
     knowledgeQueryIds: queryIds,
     knowledgeRecordIds: recordIds,
     knowledgeSourcePaths: sourcePaths,
-    knowledgePreview: previous?.knowledgePreview || candidate.knowledgePreview || null,
-    knowledgeMatchedFile: previous?.knowledgeMatchedFile || candidate.knowledgeMatchedFile || null,
+    knowledgePreview: sameProbeAsset ? fillProbeDescriptor(previous?.knowledgePreview, candidate.knowledgePreview) : previous?.knowledgePreview || candidate.knowledgePreview || null,
+    knowledgeMatchedFile: sameProbeAsset ? fillProbeDescriptor(previous?.knowledgeMatchedFile, candidate.knowledgeMatchedFile) : previous?.knowledgeMatchedFile || candidate.knowledgeMatchedFile || null,
     semanticScore: Math.max(Number(previous?.semanticScore || 0), Number(candidate.semanticScore || 0)),
     searchRank: Math.min(Number(previous?.searchRank || Number.POSITIVE_INFINITY), Number(candidate.searchRank || Number.POSITIVE_INFINITY)),
   };
@@ -442,6 +464,10 @@ function hardJudgment(audit = null) {
   };
 }
 
+function commonsApiFailureSummary(failure) {
+  return { code: failure?.code || "commons_api_failed", status: Number.isInteger(failure?.status) ? failure.status : null, challengeDetected: failure?.challengeDetected === true };
+}
+
 function publicCandidate(candidate, audit = null, rejection = null) {
   const fromKnowledgeLibrary = candidate.sourceKind === "knowledge_library";
   const normalizedRejection = normalizeHardRejectCode(rejection);
@@ -478,6 +504,14 @@ function publicCandidate(candidate, audit = null, rejection = null) {
     sourceTitle: candidate.title || "",
     sourceKind: candidate.sourceKind || null,
     acquisitionMethod: candidate.acquisitionMethod || null,
+    originalImageUrl: fromKnowledgeLibrary ? null : candidate.originalImageUrl || null,
+    originalMime: candidate.originalMime || null,
+    mediaType: candidate.mediaType || null,
+    originalBytes: Number(candidate.originalBytes || 0) || null,
+    license: candidate.license || null,
+    licenseUrl: candidate.licenseUrl || null,
+    creator: candidate.creator || null,
+    ...(candidate.commonsApiFailure ? { commonsApiFailure: commonsApiFailureSummary(candidate.commonsApiFailure) } : {}),
     downloadedImageUrl: fromKnowledgeLibrary ? null : candidate.downloadedImageUrl || null,
     downloadVariantAttempts: Number(candidate.downloadVariantAttempts || 0),
     knowledgeAssetKey: candidate.knowledgeAssetKey || null,
@@ -592,6 +626,22 @@ function finalizeAuditEligibility(audit, rejection = null) {
 }
 
 export function applyKnowledgeSourcePathEvidence(slot, audit, pathDecision = {}) {
+  if (!audit) return audit;
+  if (pathDecision.mode === "entity_probe") {
+    if (isHardRejectionCode(audit.hardRejectCode) || audit.visibleIdentityConflict === true || audit.visibleLocationConflict === true || audit.identityEvidence?.status === "conflict") return audit;
+    if (pathDecision.match === false) return { ...audit, eligible: false, identityMatch: false, hardRejectCode: text(slot.hotel) ? "wrong_hotel" : "wrong_subject" };
+    if (pathDecision.match === true) return {
+      ...audit, identityMatch: true, hotelIdentityMatch: true,
+      identityEvidence: { status: "supported", basis: pathDecision.basis, quote: pathDecision.quote, evidenceIds: [], explanation: "目标完整身份与当前图片文件的独立元数据相符" },
+      auditEvidenceVersion: IMAGE_AUDIT_EVIDENCE_VERSION,
+    };
+    if (audit.auditEvidenceVersion === IMAGE_AUDIT_EVIDENCE_VERSION && audit.identityEvidence?.status === "supported" && audit.identityEvidence.basis === "visible_identifier") return audit;
+    return {
+      ...audit, eligible: false, identityMatch: false, hotelIdentityMatch: false,
+      auditEvidenceVersion: IMAGE_AUDIT_EVIDENCE_VERSION,
+      identityEvidence: { status: "insufficient", basis: "none", evidenceIds: [], explanation: "父级地区和结果共用说明不能证明当前图片的具体实体身份" },
+    };
+  }
   if (pathDecision.match === false) {
     const identityBound = pathDecision.mode === "entity_identity";
     return { ...audit, locationMatch: identityBound ? audit.locationMatch : false, hotelIdentityMatch: identityBound && text(slot.hotel) ? false : audit.hotelIdentityMatch, eligible: false, hardRejectCode: identityBound && text(slot.hotel) ? "wrong_hotel" : "wrong_location", reason: [audit.reason, `知识库来源路径与目标 scope 不一致：${pathDecision.scopePath || "unknown"}`].filter(Boolean).join("；") };
@@ -860,7 +910,7 @@ export async function runImageSearchSkill({
         else if (kind === "failed") metrics.knowledgeFailed += 1;
       };
       const candidateRecord = (candidate) => recordMap.get(candidate?.knowledgeAssetKey);
-      const pathDecisionFor = (candidate) => knowledgeSourcePathMatches(candidate.knowledgeEvidenceResolution, candidate.knowledgeSourcePaths, {
+      const pathDecisionFor = (candidate) => candidate.knowledgeSourcePathMode === "entity_probe" ? knowledgeEntityProbeEvidence(layerSlot, candidate) : knowledgeSourcePathMatches(candidate.knowledgeEvidenceResolution, candidate.knowledgeSourcePaths, {
         mode: candidate.knowledgeSourcePathMode,
         identityAnchors: candidate.knowledgeIdentityAnchors,
       });
@@ -1035,7 +1085,7 @@ export async function runImageSearchSkill({
           judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:scope-${scopeIndex + 1}:query-${queryIndex + 1}:batch-${auditBatches}`, async (recordAttempt) => withOneTechnicalRetry(async (attempt) => {
             recordAttempt();
             metrics.batchVisionCalls += 1;
-            return measure("batchVision", () => judgeFn({ slot: auditSlot, candidates: downloaded, apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal, allowContractRepair: attempt === 1, onContractRepair: recordContractRepair(recordAttempt) }));
+            return measure("batchVision", () => judgeFn({ slot: auditSlot, candidates: downloaded.map(knowledgeEntityProbeAuditCandidate), apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal, allowContractRepair: attempt === 1, onContractRepair: recordContractRepair(recordAttempt) }));
           }, (error) => { metrics.technicalRetries.vision += 1; warnings.push(`${layerName} 视觉判断技术重试：${error?.message || error}`); })));
         } catch (error) {
           const reviewStatus = error?.code === "audit_timeout" ? "review_timeout" : "not_auto_selected";
@@ -1219,7 +1269,7 @@ export async function runImageSearchSkill({
             attempts.push({ queryText, queryId: lastResult?.queryId || null, status: lastResult?.status || "failed", requestReuse: invoked.reuse, scopeState: lastResult?.scopeState || null, message: lastResult?.message || null, scopeIndex, scopeRole: plannedScope.role, scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, scope: lastResult?.scope || null, startedAt: new Date(attemptStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: lastResult?.durationMs ?? Date.now() - attemptStartedAt, candidateCount: lastResult?.candidates?.length || 0, errorId: lastResult?.errorId || null });
             if (lastResult?.status === "needs_clarification") {
               metrics.knowledgeNeedsClarification += 1;
-              if (!clarificationUsed && lastResult.clarificationNodeIds?.length && scopeResolution.reason !== "test_adapter_without_hierarchy") {
+              if (plannedScope.role !== "entity_parent_probe" && !clarificationUsed && lastResult.clarificationNodeIds?.length && scopeResolution.reason !== "test_adapter_without_hierarchy") {
                 clarificationUsed = true;
                 clarificationResolution = await knowledgeScopeResolver.clarify(layerSlot, lastResult.clarificationNodeIds);
                 if (clarificationResolution.status === "resolved") {
@@ -1355,7 +1405,7 @@ export async function runImageSearchSkill({
         else if (kind === "failed") metrics.knowledgeFailed += 1;
       };
       const candidateRecord = (candidate) => recordMap.get(candidate?.knowledgeAssetKey);
-      const pathDecisionFor = (candidate) => knowledgeSourcePathMatches(candidate.knowledgeEvidenceResolution, candidate.knowledgeSourcePaths, {
+      const pathDecisionFor = (candidate) => candidate.knowledgeSourcePathMode === "entity_probe" ? knowledgeEntityProbeEvidence(layerSlot, candidate) : knowledgeSourcePathMatches(candidate.knowledgeEvidenceResolution, candidate.knowledgeSourcePaths, {
         mode: candidate.knowledgeSourcePathMode,
         identityAnchors: candidate.knowledgeIdentityAnchors,
       });
@@ -1394,8 +1444,8 @@ export async function runImageSearchSkill({
           queryIds: unique([...(priorRecord?.queryIds || []), provenance.queryId]),
           queryTexts: unique([...(priorRecord?.queryTexts || []), provenance.queryText]),
           sourcePaths: unique([...(priorRecord?.sourcePaths || []), ...(rawRecord?.sourcePaths || []), ...(merged.knowledgeSourcePaths || [])]),
-          preview: priorRecord?.preview || rawRecord?.preview || merged.knowledgePreview || null,
-          matchedFile: priorRecord?.matchedFile || rawRecord?.matchedFile || merged.knowledgeMatchedFile || null,
+          preview: merged.knowledgeSourcePathMode === "entity_probe" ? merged.knowledgePreview : priorRecord?.preview || rawRecord?.preview || merged.knowledgePreview || null,
+          matchedFile: merged.knowledgeSourcePathMode === "entity_probe" ? merged.knowledgeMatchedFile : priorRecord?.matchedFile || rawRecord?.matchedFile || merged.knowledgeMatchedFile || null,
           previewStatus: priorRecord?.previewStatus || "pending",
           downloadStatus: priorRecord?.downloadStatus || "not_requested",
           judgmentStatus: priorRecord?.judgmentStatus || "pending",
@@ -1479,7 +1529,25 @@ export async function runImageSearchSkill({
         const prepared = [];
         for (const candidate of allCandidates) {
           const record = candidateRecord(candidate);
-          const sourcePathMismatch = pathDecisionFor(candidate).match === false;
+          const pathDecision = pathDecisionFor(candidate);
+          const existingJudgment = judgmentsByAsset.get(candidate.knowledgeAssetKey);
+          // A later query may fill this same asset's missing per-image path.
+          // Reuse its completed visual decision; shared result text remains
+          // excluded by pathDecisionFor and incomplete/failed audits stay manual.
+          if (candidate.knowledgeSourcePathMode === "entity_probe" && pathDecision.match !== null
+            && /^(?:asset|version|knowledge):/.test(candidate.knowledgeAssetKey)
+            && existingJudgment?.rejection === "needs_user_judgment" && completeVisualJudgment(existingJudgment.audit)
+            && isIdentityEvidenceUnresolved(existingJudgment.audit)) {
+            const effectiveAudit = applyKnowledgeSourcePathEvidence(layerSlot, existingJudgment.audit, pathDecision);
+            const rejection = failedHardRequirement(eligibilitySlot, effectiveAudit);
+            const audit = finalizeAuditEligibility(effectiveAudit, rejection);
+            judgmentsByAsset.set(candidate.knowledgeAssetKey, { candidate: { ...existingJudgment.candidate, ...candidate }, audit, rejection });
+            if (record) {
+              record.judgmentStatus = rejection === "needs_user_judgment" ? "needs_user_judgment" : rejection ? "rejected" : audit.matchLevel === "representative" ? "representative" : "approved_not_selected";
+              record.failureReason = rejection || null;
+            }
+          }
+          const sourcePathMismatch = pathDecision.match === false;
           const preview = candidate.knowledgePreview || (!candidate.knowledgeMatchedFile && candidate.imageUrl ? { url: candidate.imageUrl, filename: candidate.title, relation: "legacy_preview" } : null);
           if (!preview?.url) {
             if (record) {
@@ -1587,7 +1655,7 @@ export async function runImageSearchSkill({
               judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:preview-batch-${auditBatches}`, async (recordAttempt) => withOneTechnicalRetry(async (attempt) => {
                 recordAttempt();
                 metrics.batchVisionCalls += 1;
-                return measure("previewAudit", () => measure("batchVision", () => judgeFn({ slot: auditSlot, candidates: batch, apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal, allowContractRepair: attempt === 1, onContractRepair: recordContractRepair(recordAttempt) })));
+                return measure("previewAudit", () => measure("batchVision", () => judgeFn({ slot: auditSlot, candidates: batch.map(knowledgeEntityProbeAuditCandidate), apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal, allowContractRepair: attempt === 1, onContractRepair: recordContractRepair(recordAttempt) })));
               }, (error) => { metrics.technicalRetries.vision += 1; warnings.push(`${layerName} 视觉判断技术重试：${error?.message || error}`); })));
             } catch (error) {
               const rejection = error?.code === "audit_timeout" ? "review_timeout" : "needs_user_judgment";
@@ -1785,7 +1853,8 @@ export async function runImageSearchSkill({
         const resolutionSummary = originalFailedEntries
           .map((entry) => entry.candidate.originalWidth && entry.candidate.originalHeight ? `${entry.candidate.originalWidth}×${entry.candidate.originalHeight}` : null)
           .filter(Boolean).join("、");
-        const unresolved = judged.some((entry) => ["needs_user_judgment", "review_timeout"].includes(entry.rejection));
+        const unresolved = judged.some((entry) => ["needs_user_judgment", "review_timeout"].includes(entry.rejection)
+          && !(entry.candidate.knowledgeSourcePathMode === "entity_probe" && completeVisualJudgment(entry.audit) && isIdentityEvidenceUnresolved(entry.audit)));
         return {
           kind: originalFailed || unresolved ? "inconclusive" : "no_eligible",
           candidates: mergedPublic,
@@ -1857,8 +1926,15 @@ export async function runImageSearchSkill({
             syncEvidence("blocked", scopedPlan.validationError.code);
             return { kind: "inconclusive", candidates: publicCandidates, sourceEvidence: [...sourceEvidence], actualSubject: null, matchReason: scopedPlan.validationError.message, technicalStatus: scopedPlan.validationError.code };
           }
-          const availableScopedQueries = scopedPlan.queries;
-          const scopedQueries = hotelKnowledgeModule
+          const probe = plannedScope.role === "entity_parent_probe";
+          const availableScopedQueries = probe ? scopedPlan.queries.map(query => {
+            const anchors = plannedScope.identityAnchors || [];
+            const normalized = value => String(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+            if (anchors.some(anchor => normalized(query).includes(normalized(anchor)))) return query;
+            const identity = anchors.find(anchor => /[\u3400-\u9fff]/u.test(anchor) === /[\u3400-\u9fff]/u.test(query)) || anchors[0] || layerSlot.queryCore?.identity;
+            return identity ? `${identity} ${query}` : query;
+          }) : scopedPlan.queries;
+          const scopedQueries = probe ? unique(availableScopedQueries).slice(0, Math.max(0, Math.min(2, plannedScope.maxQueries || 2, knowledgeQueriesPerSlot))) : hotelKnowledgeModule
             ? (plannedScope.role === "hotel_child" ? availableScopedQueries.slice(0, 2) : availableScopedQueries)
             : availableScopedQueries.slice(0, 2);
           queryPlan.byScope.push({ role: plannedScope.role, nodeIds: [...(scopeResolution.nodeIds || [])], fullPath: scopeResolution.fullPath || null, queries: [...scopedQueries] });
@@ -1885,7 +1961,7 @@ export async function runImageSearchSkill({
             attempts.push({ queryText, queryId: lastResult?.queryId || null, status: lastResult?.status || "failed", requestReuse: invoked.reuse, scopeState: lastResult?.scopeState || null, message: lastResult?.message || null, scopeIndex, scopeRole: plannedScope.role, scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, scope: lastResult?.scope || null, startedAt: new Date(attemptStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: lastResult?.durationMs ?? Date.now() - attemptStartedAt, candidateCount: lastResult?.candidates?.length || 0, errorId: lastResult?.errorId || null });
             if (lastResult?.status === "needs_clarification") {
               metrics.knowledgeNeedsClarification += 1;
-              if (!clarificationUsed && lastResult.clarificationNodeIds?.length && scopeResolution.reason !== "test_adapter_without_hierarchy") {
+              if (plannedScope.role !== "entity_parent_probe" && !clarificationUsed && lastResult.clarificationNodeIds?.length && scopeResolution.reason !== "test_adapter_without_hierarchy") {
                 clarificationUsed = true;
                 clarificationResolution = await knowledgeScopeResolver.clarify(layerSlot, lastResult.clarificationNodeIds);
                 if (clarificationResolution.status === "resolved") {
@@ -1979,7 +2055,14 @@ export async function runImageSearchSkill({
       evidence.webExecution ||= { plannedQueries: queries, executedQueries: [], wallClockMs: 0, stopReason: null };
       let result = { kind: "no_candidate", candidates: [], sourceEvidence: [], technicalStatus: "web_identity_or_query_empty" };
       evidence.webExecution.queryReports ||= [];
+      const pendingPages = new Map();
+      const terminal = (kind) => ["success", "visual_unavailable", "visual_failed", "inconclusive"].includes(kind);
+      const hasBudget = () => webBudget.pages < networkPageLimit && webBudget.effectivePages.size < sourcePagesPerSlot && webBudget.downloads < downloadsPerSlot;
+      const mergeResult = (current) => {
+        result = { ...current, candidates: mergePublicCandidates(result.candidates, current.candidates || []), sourceEvidence: unique([...result.sourceEvidence, ...(current.sourceEvidence || [])]) };
+      };
       for (const [queryIndex, query] of queries.entries()) {
+        if (signal?.aborted) { evidence.webExecution.stopReason = "aborted"; break; }
         if (webBudget.pages >= networkPageLimit || webBudget.effectivePages.size >= sourcePagesPerSlot || webBudget.downloads >= downloadsPerSlot) { evidence.webExecution.stopReason = "slot_resource_budget"; break; }
         // Admit a bounded current-query pool while keeping one real opportunity
         // for the next expression. Finish this admitted pool before advancing.
@@ -1993,10 +2076,29 @@ export async function runImageSearchSkill({
           reservedDownloads: Math.min(reserve, Math.max(0, downloadRemaining - 1)),
         };
         evidence.webExecution.executedQueries.push(query);
-        const current = await runWebQueryLayer(layerSlot, layerConstraints, [query], evidence, `${layerName}:q${evidence.webExecution.executedQueries.length}`, fallbackPlan);
-        result = { ...current, candidates: mergePublicCandidates(result.candidates, current.candidates || []), sourceEvidence: unique([...result.sourceEvidence, ...(current.sourceEvidence || [])]) };
+        const current = await runWebQueryLayer(layerSlot, layerConstraints, [query], evidence, `${layerName}:q${evidence.webExecution.executedQueries.length}`, fallbackPlan, { pendingPages });
+        mergeResult(current);
         if (["success", "search_failed", "visual_unavailable", "visual_failed", "inconclusive"].includes(current.kind)) { evidence.webExecution.stopReason = current.kind === "success" ? evidence.webExecution.qualityStopReason || "eligible_pool_exhausted" : current.kind; break; }
       }
+      // Reserve opportunities for later expressions first, then use already
+      // discovered pages. This does not call the search provider again.
+      while (!signal?.aborted && !terminal(result.kind) && hasBudget() && pendingPages.size) {
+        const query = pendingPages.values().next().value.query;
+        const pages = [...pendingPages.values()].filter(item => item.query === query).map(item => item.page);
+        for (const page of pages) pendingPages.delete(page.pageUrl);
+        evidence.webExecution.currentAllowance = {
+          pages: Math.min(networkPageLimit - webBudget.pages, sourcePagesPerSlot - webBudget.effectivePages.size),
+          downloads: downloadsPerSlot - webBudget.downloads, reservedPages: 0, reservedDownloads: 0,
+        };
+        const current = await runWebQueryLayer(layerSlot, layerConstraints, [query], evidence, `${layerName}:pending`, fallbackPlan, { pendingPages, pages });
+        mergeResult(current);
+        if (terminal(current.kind)) evidence.webExecution.stopReason = current.kind === "success" ? evidence.webExecution.qualityStopReason || "eligible_pool_exhausted" : current.kind;
+      }
+      evidence.webExecution.pendingPages = pendingPages.size;
+      evidence.webExecution.remainingPages = Math.max(0, Math.min(networkPageLimit - webBudget.pages, sourcePagesPerSlot - webBudget.effectivePages.size));
+      evidence.webExecution.remainingDownloads = Math.max(0, downloadsPerSlot - webBudget.downloads);
+      if (signal?.aborted) evidence.webExecution.stopReason = "aborted";
+      else if (!terminal(result.kind) && !hasBudget()) evidence.webExecution.stopReason = "slot_resource_budget";
       evidence.webExecution.wallClockMs += Date.now() - started;
       evidence.webExecution.pagesUsed = webBudget.pages;
       evidence.webExecution.effectivePagesUsed = webBudget.effectivePages.size;
@@ -2005,7 +2107,7 @@ export async function runImageSearchSkill({
       evidence.webExecution.stopReason ||= queries.length ? "queries_exhausted" : "target_identity_or_query_empty";
       return result;
     }
-    async function runWebQueryLayer(layerSlot, layerConstraints, layerQueries, evidence, layerName, fallbackPlan = null) {
+    async function runWebQueryLayer(layerSlot, layerConstraints, layerQueries, evidence, layerName, fallbackPlan = null, { pendingPages = new Map(), pages: resumedPages = null } = {}) {
       const sourceChoice = "web";
       const webMeasure = async (stage, worker) => {
         const started = Date.now();
@@ -2020,15 +2122,23 @@ export async function runImageSearchSkill({
       const knowledgeRawCandidates = [];
       const knowledgeCandidates = [];
       const [pagesResult, commonsResult] = await Promise.allSettled([
-        searchQueue.add(() => tracked("image_search", `${slot.slotId}:${layerName}`, async (recordAttempt) => withOneTechnicalRetry(async () => {
+        resumedPages ? Promise.resolve(resumedPages) : searchQueue.add(() => tracked("image_search", `${slot.slotId}:${layerName}`, async (recordAttempt) => withOneTechnicalRetry(async () => {
           recordAttempt(); metrics.searchCalls += 1;
           return webMeasure("searchProvider", () => searchFn({ queries: layerQueries, apiKey: searchApiKey, baseUrl: searchBaseUrl, model: searchModel, count: sourcePagesPerSlot, signal }));
         }, (error) => { metrics.technicalRetries.search += 1; warnings.push(`${layerName} 搜索技术重试：${error?.message || error}`); }))),
-        isHotel || webBudget.commonsCalled ? Promise.resolve([]) : searchQueue.add(async () => { webBudget.commonsCalled = true; metrics.commonsCalls += 1; return webMeasure("commons", () => commonsFn(layerQueries[0], { signal, count: downloadsPerSlot })); }),
+        resumedPages || isHotel || webBudget.commonsCalled ? Promise.resolve([]) : searchQueue.add(async () => { webBudget.commonsCalled = true; metrics.commonsCalls += 1; return webMeasure("commons", () => commonsFn(layerQueries[0], { signal, count: downloadsPerSlot })); }),
       ]);
       evidence.searchCompleted = evidence.searchCompleted || (sourceChoice === "knowledge" ? knowledgeResult?.status === "completed" : pagesResult.status === "fulfilled");
       if (pagesResult.status === "rejected") warnings.push(`${layerName} 搜索失败：${pagesResult.reason?.message || pagesResult.reason}`);
       if (commonsResult.status === "rejected") warnings.push(`${layerName} Commons 搜索失败：${commonsResult.reason?.message || commonsResult.reason}`);
+      if (commonsResult.status === "rejected") {
+        evidence.commonsFailures ||= [];
+        const error = commonsResult.reason;
+        evidence.commonsFailures.push({ code: error?.code || "commons_search_failed", status: Number.isInteger(error?.status) ? error.status : null, challengeDetected: error?.challengeDetected === true });
+      } else if (Array.isArray(commonsResult.value?.diagnostics)) {
+        evidence.commonsDiagnostics ||= [];
+        evidence.commonsDiagnostics.push(...commonsResult.value.diagnostics);
+      }
       if (knowledgeError) warnings.push(`${layerName} 知识库搜索失败：${knowledgeError.message || knowledgeError}`);
       if (knowledgeResult?.status === "needs_clarification") warnings.push(`${layerName} 知识库需要明确目录范围`);
       if (knowledgeResult?.status === "failed") warnings.push(`${layerName} 知识库查询失败：${knowledgeResult.errorId || "unknown"}`);
@@ -2039,6 +2149,7 @@ export async function runImageSearchSkill({
       const searchedPages = (pagesResult.status === "fulfilled" ? pagesResult.value : []).filter((item, index, array) => item?.pageUrl && array.findIndex((other) => other.pageUrl === item.pageUrl) === index);
       const queryReport = { query: layerQueries[0], allowance: { ...evidence.webExecution.currentAllowance }, returnedPages: searchedPages.length, accessedPages: 0, pageFailures: 0, effectivePages: 0, rawResources: 0, technicalFiltered: 0, resizeDuplicates: 0, relevanceFiltered: 0, downloadPool: 0, admittedCandidates: 0, deferredCandidates: 0, downloadAttempts: 0, downloadSuccess: 0, visionAudits: 0, selected: false };
       evidence.webExecution.queryReports.push(queryReport);
+      queryReport.resumed = Boolean(resumedPages);
       const failureStart = evidence.pageFailures.length;
       const expandedPages = expandHotelSourcePages(searchedPages, layerSlot)
         .filter((page) => !webBudget.pageUrls.has(page.pageUrl))
@@ -2047,6 +2158,10 @@ export async function runImageSearchSkill({
       queryReport.cachedUnavailablePages = expandedPages.length - availablePages.length;
       const pageAllowance = evidence.webExecution.currentAllowance.pages;
       const selectedPages = availablePages.slice(0, pageAllowance);
+      queryReport.deferredPages = availablePages.length - selectedPages.length;
+      for (const page of availablePages.slice(pageAllowance)) if (!pendingPages.has(page.pageUrl)) pendingPages.set(page.pageUrl, { page, query: layerQueries[0] });
+      for (const page of selectedPages) pendingPages.delete(page.pageUrl);
+      if (resumedPages) evidence.webExecution.resumedPages = (evidence.webExecution.resumedPages || 0) + selectedPages.length;
       const allPages = selectedPages;
       queryReport.accessedPages = allPages.length;
       for (const page of allPages) webBudget.pageUrls.add(page.pageUrl);
@@ -2061,10 +2176,17 @@ export async function runImageSearchSkill({
           // Legacy test adapters can own extraction; production shares only the raw page.
           if (adapters.extractPageImages) return await pageQueue.add(() => withOneTechnicalRetry(async () => { metrics.pageExtractionCalls += 1; return webMeasure("pageExtraction", () => extractFn(page, { signal, retrievalSession, maxImages: 24, semanticTerms })); }, (error) => { metrics.technicalRetries.pageExtraction += 1; warnings.push(`${layerName} 网页提图技术重试：${page.pageUrl}：${error?.message || error}`); }));
           const started = Date.now();
-          try { return await extractFn(page, { signal, retrievalSession, maxImages: 24, semanticTerms, loadPage }); }
+          try { return await extractFn(page, { signal, retrievalSession, maxImages: 24, semanticTerms, loadPage: async (url) => {
+            const content = await loadPage(url);
+            if (content.commonsApiFailure) {
+              evidence.commonsApiFallbacks ||= [];
+              evidence.commonsApiFallbacks.push({ pageUrl: url, ...commonsApiFailureSummary(content.commonsApiFailure), acquisitionMethod: content.acquisitionMethod || "http" });
+            }
+            return content;
+          } }); }
           finally { evidence.webExecution.operationMs ||= {}; evidence.webExecution.operationMs.pageExtraction = (evidence.webExecution.operationMs.pageExtraction || 0) + Date.now() - started; }
         }
-        catch (error) { retrievalSession?.rememberUnavailablePage?.(page.pageUrl, error); const classified = failureLayer(error); const failure = classified === "download" ? "page_fetch" : classified; evidence.pageFailures.push({ pageUrl: page.pageUrl, layer: failure, reason: error?.message || String(error) }); warnings.push(`${layerName} 网页图片提取失败：${page.pageUrl}：${error?.message || error}`); return []; }
+        catch (error) { retrievalSession?.rememberUnavailablePage?.(page.pageUrl, error); const classified = failureLayer(error); const failure = classified === "download" ? "page_fetch" : classified; evidence.pageFailures.push({ pageUrl: page.pageUrl, layer: failure, code: error?.code || null, status: Number.isInteger(error?.status) ? error.status : null, challengeDetected: error?.challengeDetected === true, ...(error?.commonsApiFailure ? { commonsApiFailure: commonsApiFailureSummary(error.commonsApiFailure) } : {}), reason: error?.message || String(error) }); warnings.push(`${layerName} 网页图片提取失败：${page.pageUrl}：${error?.message || error}`); return []; }
       }));
       evidence.semanticExtractionCompleted = true;
       const webPreparation = prepareWebCandidates([...extractedGroups.flat(), ...directCandidates]);
@@ -2254,6 +2376,7 @@ export async function runImageSearchSkill({
       }
       if (route.matched) {
         const search = evidence.knowledgeSearch;
+        route.parentProbeUsed = Boolean(search?.scopePlan?.scopes?.some(scope => scope.role === "entity_parent_probe"));
         route.knowledgeStopReason = !route.identityKnown ? "identity_unknown"
           : ["knowledge_scope_unresolved", "knowledge_hotel_scope_unresolved", "knowledge_entity_directory_missing"].includes(knowledge.technicalStatus) ? "entity_directory_missing"
           : knowledge.kind === "success" ? null
@@ -2273,6 +2396,10 @@ export async function runImageSearchSkill({
         }
       }
       if (resolvedSourceMode === "knowledge_only" || knowledge.kind === "success") return knowledge;
+      if (route.parentProbeUsed && knowledge.kind === "knowledge_needs_clarification") {
+        evidence.sourceFallback = { entered: false, reason: "entity_parent_probe_needs_clarification", knowledgeStatus: knowledge.technicalStatus };
+        return knowledge;
+      }
       const fallback = classifyWebFallback(knowledge, layerSlot, route);
       evidence.sourceFallback = { entered: false, reason: fallback.reason, knowledgeStatus: knowledge.technicalStatus || knowledge.kind };
       if (!fallback.allowed) return knowledge;
@@ -2324,7 +2451,7 @@ export async function runImageSearchSkill({
   let completedSlots = 0;
   onCapabilityCall?.({ phase: "slot_progress", capabilityId: "image_slot_progress", completedSlots, totalSlots: slots.length });
   const results = await Promise.all([...slots].sort((a, b) => imageSlotPriority(a) - imageSlotPriority(b)).map((slot) => slotQueue.add(async () => {
-    try { return await processSlot(slot); }
+    try { const result = await processSlot(slot); return { ...result, searchDiagnostic: buildImageSearchDiagnostic(result) }; }
     catch (error) { return { slotId: slot?.slotId || null, status: "failed", selected: null, candidates: [], queriesUsed: [], sourceEvidence: [], actualSubject: null, matchReason: error?.message || String(error), technicalStatus: "slot_failed", warnings: [], constraints: null, durationMs: 0 }; }
     finally { completedSlots += 1; onCapabilityCall?.({ phase: "slot_progress", capabilityId: "image_slot_progress", completedSlots, totalSlots: slots.length, target: slot.slotId }); }
   })));
