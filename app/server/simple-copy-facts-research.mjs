@@ -25,7 +25,7 @@ const browserExecutables = [
 function normalizedCandidateSources(candidate = {}) {
   const sources = [];
   if (clean(candidate.sourceUrl) || clean(candidate.sourceExcerpt)) {
-    sources.push({ sourceUrl: candidate.sourceUrl, sourceExcerpt: candidate.sourceExcerpt, sourceMediaType: candidate.sourceMediaType });
+    sources.push({ sourceUrl: candidate.sourceUrl, sourceExcerpt: candidate.sourceExcerpt, sourceMediaType: candidate.sourceMediaType, sourceClass: candidate.sourceClass });
   }
   if (Array.isArray(candidate.sources)) sources.push(...candidate.sources);
   const seen = new Set();
@@ -134,6 +134,14 @@ function declaredControlledSourceClass(candidate = {}) {
   return "";
 }
 
+function mayKeepUnavailableDiningOfficialCandidate({ candidate = {}, request = {}, directlyAllowed = false, verificationAttempts = [] } = {}) {
+  if (request.entityKind !== "dining") return false;
+  if (!verificationAttempts.length || verificationAttempts.some((item) => item.status >= 200 && item.status < 300)) return false;
+  const declared = clean(candidate.sourceClass);
+  const declaredOfficial = ["official_entity", "official_brand", "operator_or_tourism_authority"].includes(declared);
+  return !isKnownLowTrustSource(candidate.sourceUrl) && (directlyAllowed || declaredOfficial);
+}
+
 function entityEvidenceTokens(entityName) {
   const latin = entityDomainTokens(entityName);
   const cjk = clean(entityName).toLowerCase().match(/[\u4e00-\u9fff]{2,}/g) || [];
@@ -202,14 +210,14 @@ function pageEstablishesOfficialEntity(body, responseUrl, request) {
   const identityThreshold = Math.min(2, tokens.length);
   if (!identityThreshold || matched.length < identityThreshold) return false;
 
-  const hasEntitySchema = /"@type"\s*:\s*(?:\[[^\]]*)?["']?(?:hotel|lodgingbusiness|resort|campground|organization|corporation|brand)\b/i.test(jsonLd)
+  const hasEntitySchema = /"@type"\s*:\s*(?:\[[^\]]*)?["']?(?:hotel|lodgingbusiness|resort|campground|restaurant|foodestablishment|organization|corporation|brand)\b/i.test(jsonLd)
     && /"(?:name|brand|parentOrganization)"\s*:/i.test(jsonLd);
   let canonicalSameHost = false;
   const canonical = htmlAttribute(html, "link(?=[^>]*\\brel=[\"']canonical[\"'])", "href");
   if (canonical) {
     try { canonicalSameHost = hostMatches(new URL(canonical, responseUrl).hostname, new URL(responseUrl).hostname); } catch { canonicalSameHost = false; }
   }
-  const hasFirstPartyBookingSurface = /(?:official\s+(?:site|website)|book\s+(?:now|a stay|your stay)|reserve\s+(?:now|a room)|check\s+availability)/i.test(html);
+  const hasFirstPartyBookingSurface = /(?:official\s+(?:site|website)|book\s+(?:now|a stay|your stay|a table)|reserve\s+(?:now|a room|a table)|check\s+availability|view\s+(?:the\s+)?menu)/i.test(html);
   let registeredLabel = "";
   try {
     const labels = new URL(responseUrl).hostname.replace(/^www\./, "").split(".");
@@ -296,11 +304,11 @@ export function buildCopyFactsResearchRequest({ researchRequest, model = COPY_FA
         role: "system",
         content: [
           "你是 Copy Skill 内部的事实研究员，不是独立 Pipeline 阶段。只研究输入实体与指定类别。",
-          "official_entity_facts 一次研究输入酒店的全部指定类别，来源优先级为：实体/品牌官网与 Fact Sheet → 品牌官方新闻稿 → 正式运营方或旅游主管机构 → 建筑/设计机构的具体项目页 → 可信酒店行业媒体 → 主流 OTA。后五类只作为官方缺失字段的候选，必须返回具体页面和原文，不能用搜索摘要代替。",
+          "official_entity_facts 一次只研究输入中的明确实体、focus 与指定类别。酒店来源优先级为：实体/品牌官网与 Fact Sheet → 品牌官方新闻稿 → 正式运营方或旅游主管机构 → 建筑/设计机构的具体项目页 → 可信酒店行业媒体 → 主流 OTA。餐饮只研究指定餐厅或明确酒店中的 focus 体验，优先实体官网、酒店/品牌官方详情页与正式运营方页面，不用泛化餐饮知识补齐。所有候选必须返回具体页面和原文，不能用搜索摘要代替。",
           "authoritative_current_facts 只能采用政府、使领馆、正式国际组织或输入指定的正式运营方页面。没有可靠来源时返回空 facts，不要猜测。",
           "公开研究只能补充实体客观是什么、有什么，绝不能推断或改变本订单购买了什么。不得声明本次房型、包含项、价格、已保证车型、已预订服务或正式状态。",
-          "酒店类别固定按输入的‘位置、客房、设计、设施’理解。客房只描述酒店公开房型或景观选择，不得推断本次预订房型；OTA 只能候选支持位置、一般房型与设施，不能证明设计。",
-          "每个指定类别最多返回一条精炼事实；一条只保留一个可直接用于文案的核心事实，不要把设施、活动、儿童政策和多段宣传合并成长段。每条事实可返回 1—3 个相互独立的候选页面，按上述来源优先级排序，每个页面必须附上该页自身的原文证据和 sourceClass。sourceClass 只能是 official_entity、official_brand、official_press、operator_or_tourism_authority、architect_or_design_studio、trusted_trade_media、major_ota。sourceClass 只是候选标签，程序会独立核验。",
+          "entityKind=hotel 时，类别固定按输入的‘位置、客房、设计、设施’理解。客房只描述酒店公开房型或景观选择，不得推断本次预订房型；OTA 只能候选支持位置、一般房型与设施，不能证明设计。entityKind=dining 时，只核实 focus 对应的餐饮形式和体验特色；不得把酒店其他餐厅、泛化菜单、未经确认的具体菜品酒款、价格、包含状态或服务流程写成事实。",
+          "每个指定类别最多返回一条精炼事实；一条只保留一个可直接用于文案的核心事实，不要把设施、活动、儿童政策和多段宣传合并成长段。餐饮研究总计最多返回两条事实。每条事实可返回 1—3 个相互独立的候选页面，按上述来源优先级排序，每个页面必须附上该页自身的原文证据和 sourceClass。sourceClass 只能是 official_entity、official_brand、official_press、operator_or_tourism_authority、architect_or_design_studio、trusted_trade_media、major_ota。程序会核对候选来源；餐饮的实体官网、品牌官网或正式运营方页面若仅因技术原因无法再次访问，可按餐饮非履约体验事实的窄例外保留。",
           "品牌官网可能由母品牌官方域托管；不要仅按酒店名与域名字符是否相同判断。优先返回实体或品牌官方具体页，并在页面标题、结构化数据或正文中确认实体全名。输入 officialDomains 时优先使用这些已知官方域。",
           "禁止采用博客、论坛、用户评论、社交平台、百科和图片。每个来源必须给出可访问的具体页面 URL 和页面中的简短原文证据。只输出 JSON：{facts:[{category,fact,sources:[{sourceUrl,sourceExcerpt,sourceMediaType:\"page\",sourceClass}]}]}。没有可靠事实时输出 {facts:[]}。",
         ].join("\n"),
@@ -474,6 +482,11 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
         }
       }
       if (!reason && verificationAttempts.length && !verificationAttempts.some((item) => item.status >= 200 && item.status < 300)) reason = "source_unavailable";
+      if (reason === "source_unavailable" && mayKeepUnavailableDiningOfficialCandidate({ candidate, request: researchRequest, directlyAllowed, verificationAttempts })) {
+        reason = "";
+        resolvedSourceUrl = sourceUrl;
+        resolvedSourceClass = clean(candidate.sourceClass) || "official_entity";
+      }
     }
     if (reason) {
       rejected.push({ category, fact, sourceUrl, reason, ...(verificationAttempts.length ? { verificationAttempts } : {}) });

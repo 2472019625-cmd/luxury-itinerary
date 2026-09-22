@@ -183,23 +183,16 @@ function hotelCopyFacts(hotel = {}) {
   };
 }
 
-function diningCopyGuidance(item = {}) {
-  const name = clean(`${item.title || ""} ${item.officialName || ""}`);
-  if (/Sundowner|落日酒会/i.test(name)) return "产品化参考句：喝一杯 Sundowner，让黄昏时的短暂停留成为游猎与晚间安排之间的品饮体验。可直接采用或轻量改写，不扩写额外分句；不增加具体酒水、服务配置或旅程总结。";
-  if (/星空(?:晚宴|晚餐)/.test(name)) return "产品化参考句：在天际甲板享用星空晚宴，让这顿晚餐拥有不同于普通餐厅的用餐环境。可直接采用或轻量改写，不扩写额外分句；不增加其他天象、布置或服务配置。";
-  if (/酒窖|品酒/.test(name)) return "产品化参考句：在私人酒窖慢慢品酒，为当天增加一段节奏更缓的品鉴体验。可直接采用或轻量改写，不扩写额外分句；不增加人员、藏酒配置、具体酒款、酒款品质或包含承诺，不在总览正文重复局部收费。";
-  if (/Bush\s*Breakfast|丛林早餐|野外早餐/i.test(name)) return "产品化参考句：把早餐安排到野外，让清晨的自然体验延续到用餐。可直接采用或轻量改写，不扩写额外分句；不增加布置、制作、热饮、周边动植物或菜单。";
-  if (/百兽宴|Carnivore/i.test(name)) return "产品化参考句：晚餐品尝非洲“百兽宴”的特色烤肉，让这顿饭以明确的非洲风味区别于普通晚餐。可直接采用或轻量改写，不扩写额外分句；不增加菜品数量、座席、上菜、切割、烹饪或服务流程，也不追加整程收尾。";
-  if (item.officialName || /餐厅|烤肉/.test(name)) return "产品化参考句须从 sourceEvidence 已确认的餐饮类型、风味或品尝重点切入，并说明它与普通用餐的直接差异。只写一个完整句子；不增加菜品数量、座席、上菜、切割、烹饪或服务流程，也不追加整程收尾。";
-  return "先解释已确认的餐饮类型、品饮内容或用餐方式，再说明它与普通三餐的差异及一个直接客户价值；不新增可独立核验的现场配置。";
+function diningCopyGuidance() {
+  return "根据 sourceEvidence 与 verifiedFacts 只选择一个最有辨识度的餐饮锚点，可以是风味或品饮内容、用餐方式、服务动作或特色场景；必要时补充一个直接相关的已确认事实。优先写一个完整短句，确有必要时最多两句。让特色从具体内容中自然显现，不强制比较普通用餐，也不追加抽象价值总结。不照抄固定模板，不增加无依据的菜单、食材、酒款、人员、布置、制作方式、服务流程、费用或包含承诺。";
 }
 
-function officialDomainsFromHotel(hotel = {}) {
+function officialDomainsFromEntity(entity = {}) {
   return unique([
-    ...(Array.isArray(hotel.officialDomains) ? hotel.officialDomains : []),
-    hotel.officialDomain,
-    hotel.website,
-    hotel.officialUrl,
+    ...(Array.isArray(entity.officialDomains) ? entity.officialDomains : []),
+    entity.officialDomain,
+    entity.website,
+    entity.officialUrl,
   ].map((value) => {
     const candidate = clean(value);
     if (!candidate) return "";
@@ -210,11 +203,38 @@ function officialDomainsFromHotel(hotel = {}) {
 function hotelResearchRequest(hotel = {}) {
   const entityName = clean(hotel.officialName || hotel.shortName);
   if (!entityName) return null;
-  const officialDomains = officialDomainsFromHotel(hotel);
+  const officialDomains = officialDomainsFromEntity(hotel);
   return {
     researchType: "official_entity_facts",
     entityName,
+    entityKind: "hotel",
     categories: ["位置", "客房", "设计", "设施"],
+    ...(officialDomains.length ? { officialDomains } : {}),
+  };
+}
+
+function matchingDiningHotel(item = {}, hotels = []) {
+  const location = clean(item.location).toLowerCase();
+  if (!location) return null;
+  return hotels.find((hotel) => unique([hotel.officialName, hotel.shortName, hotel.canonicalName, hotel.name])
+    .map((name) => clean(name).toLowerCase())
+    .filter(Boolean)
+    .includes(location)) || null;
+}
+
+function diningResearchRequest(item = {}, hotels = []) {
+  const hostHotel = matchingDiningHotel(item, hotels);
+  const parserConfirmedRestaurant = /^imported-dining-restaurant-/i.test(clean(item.id));
+  const explicitDiningEntity = clean(item.entityName || item.restaurantName || (parserConfirmedRestaurant ? item.officialName : ""));
+  const entityName = clean(hostHotel?.officialName || hostHotel?.shortName || explicitDiningEntity);
+  if (!entityName) return null;
+  const officialDomains = officialDomainsFromEntity(hostHotel || item);
+  return {
+    researchType: "official_entity_facts",
+    entityName,
+    entityKind: "dining",
+    focus: clean(item.officialName || item.title),
+    categories: ["餐饮形式", "体验特色"],
     ...(officialDomains.length ? { officialDomains } : {}),
   };
 }
@@ -699,18 +719,22 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
       relevantContext: itineraryContext, layoutHints: { placement: "hotel_fact_rows", itemIndex: index }, outputSchema: hotelFactRowsSchema, researchRequest, required: false,
     }));
   });
-  data.diningExperiences.forEach((item, index) => copyTasks.push(copyTask({
-    targetId: `copy:dining:${item.id || index + 1}`, targetPath: `diningExperiences.${index}.editorialCopy`, moduleType: "dining",
-    facts: {
-      id: item.id,
-      title: item.title,
-      officialName: item.officialName,
-      sourceEvidence: item.sourceEvidence || [],
-      copyGuidance: diningCopyGuidance(item),
-    },
-    plannerGoal: "优先写一个完整短句；只有来源包含两个必须分别表达的餐饮信息时才写两句。采用“餐饮动作或内容 → 已确认的体验方式/场景 → 与普通用餐的直接差异或价值”的产品句式。第一句必须以吃、喝、品、早餐、晚餐或明确餐饮类型为语义主体；优先直接采用 facts.copyGuidance 的产品化参考句，确需贴合 title 或 sourceEvidence 时只做轻量改写。Dining 不承担当天或整趟旅程的收束职责：餐饮内容、体验方式、场景和直接价值写清后立即结束，不总结一天，不告别地点，也不为旅程收尾。即使移除场景和氛围修饰，正文仍必须让客户看懂餐饮内容、体验方式和差异。允许味觉、品饮、场景和氛围表达，也允许基于已确认体验做通常语义范围内的自然动作展开，不要求 sourceEvidence 出现完全相同原句；但不能先写风景再补餐饮。不得借用本批其他 Dining target 的事实。卡片已单独展示 title、location 与 status，正文不重复 DAY 编号、完整 title、officialName、地点名和状态标签。局部升级收费只保留在 sourceEvidence，不进入总览正文，也不得暗示升级消费已包含；不新增会改变费用、订单或履约理解的具体硬事实。",
-    relevantContext: itineraryContext, layoutHints: { placement: "dining_card", itemIndex: index }, outputSchema: diningCopySchema, required: false,
-  })));
+  data.diningExperiences.forEach((item, index) => {
+    const researchRequest = diningResearchRequest(item, sourceData.hotels);
+    copyTasks.push(copyTask({
+      targetId: `copy:dining:${item.id || index + 1}`, targetPath: `diningExperiences.${index}.editorialCopy`, moduleType: "dining",
+      facts: {
+        id: item.id,
+        title: item.title,
+        officialName: item.officialName,
+        location: item.location,
+        sourceEvidence: item.sourceEvidence || [],
+        copyGuidance: diningCopyGuidance(),
+      },
+      plannerGoal: "这是整趟旅行独立的特色餐饮总览卡，不是 DAY 行程段落。优先写一个完整短句，确有必要时最多两句。先从 sourceEvidence 与 verifiedFacts 中选择一个最有辨识度的餐饮锚点，可以是风味或品饮内容、用餐方式、服务动作或特色场景；必要时只补一个直接相关的已确认事实。让特色从具体内容中自然显现，不强制写“与普通用餐不同”，也不追加抽象客户价值总结。遵守 facts.copyGuidance，但不得把它当成可直接照抄的产品化参考句。存在 verifiedFacts 时最多选择 2 条与当前餐饮直接相关的事实，不做网页摘要；不存在或研究失败时仅使用 sourceEvidence，保持克制并继续生成。不得写具体 DAY、当天、随后、游猎归来、开启一天、结束一天等行程推进或前后衔接，不总结一天，不告别地点，也不为整趟旅程收尾。正文必须让客户独立看懂当前餐饮最特别的内容、方式、动作或场景，不得借用本批其他 Dining target 的事实。卡片已单独展示 title、location 与 status，正文不重复 DAY 编号、完整 title、officialName、地点名和状态标签。局部升级收费只保留在 sourceEvidence，不进入总览正文，也不得暗示升级消费已包含；不新增会改变费用、订单或履约理解的具体硬事实。",
+      relevantContext: itineraryContext, layoutHints: { placement: "dining_card", itemIndex: index }, outputSchema: diningCopySchema, researchRequest, required: false,
+    }));
+  });
   data.transportSummary.forEach((item, index) => {
     const facts = {
       ...item,
