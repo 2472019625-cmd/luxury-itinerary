@@ -3,6 +3,8 @@ import test from "node:test";
 import { materializeSimpleSkillPlan } from "../server/simple-plan-adapter.mjs";
 import { applySimpleSkillResults } from "../server/simple-pipeline-writeback.mjs";
 import { selectCustomerRenderData } from "../server/customer-render-data.mjs";
+import { runCopyWriterSkill, validateCopyCommitments, validateCopyValue } from "../server/simple-copy-skill.mjs";
+import { publicSheyouProductValues } from "../config/sheyou-product-values.mjs";
 
 function fixture() {
   const days = [0, 1].map((index) => ({
@@ -38,6 +40,28 @@ function fixture() {
   };
   return { data, agentPlan };
 }
+
+test("亮点从 Copy 到写回和客户导出保持标题正文结构，正式服务名是标题", async () => {
+  const { data, agentPlan } = fixture();
+  agentPlan.selectedHighlights = publicSheyouProductValues().slice(0, 2).map((value) => ({ ...value, sourceType: 'official_product' }));
+  const plan = materializeSimpleSkillPlan({ data, agentPlan });
+  const tasks = plan.copyTasks.filter((task) => task.moduleType === 'product_highlight');
+  assert.deepEqual(tasks.map((task) => task.outputSchema.properties.title.const), ['一家一团', '1V1专属定制']);
+  const copyExecution = await runCopyWriterSkill({ tasks, requestJson: async ({ messages }) => {
+    const payload = JSON.parse(messages.at(-1).content);
+    return { json: { results: payload.tasks.map((task) => ({ targetId: task.targetId, targetPath: task.targetPath, value: { title: task.outputSchema.properties.title.const, description: '围绕真实需求持续沟通，让同行者按自己的节奏旅行。' } })) } };
+  } });
+  assert.ok(copyExecution.results.every((item) => item.status === 'success'));
+  const written = applySimpleSkillResults({ preparedData: plan.preparedData, copyTasks: tasks, copyExecution });
+  assert.equal(written.requiredUnresolved.length, 0);
+  assert.deepEqual(written.data.highlights, copyExecution.results.map((item) => item.value));
+  assert.deepEqual(selectCustomerRenderData(written.data).highlights, written.data.highlights);
+  const schema = tasks[0].outputSchema;
+  for (const invalid of ['一家一团——完整说明仍然不能代替结构化输出。', { title: '一家一团' }, { title: '一家一团', description: '   ' }, { title: '其他名称', description: '完整正文' }]) {
+    assert.ok(validateCopyValue(invalid, schema).length > 0, JSON.stringify(invalid));
+  }
+  assert.ok(validateCopyCommitments({ title: '一家一团', description: '保证看到大象。' }, tasks[0]).some((message) => message.includes('保证性结果')));
+});
 
 test("Program 为 subtitle、DAY theme、spot description 与酒店 proofPoints 物化精确 Copy targets", () => {
   const { data, agentPlan } = fixture();

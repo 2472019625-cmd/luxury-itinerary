@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { applyContentSafetyGate, reviewCustomerContent } from '../server/content-quality.mjs';
+import { normalizeHighlightForDisplay } from '../src/lib/highlightDisplay.js';
 
 function goodSample() {
   return {
@@ -35,6 +36,16 @@ test('qualified luxury brand copy passes all COPY-001—COPY-017 rule results', 
   assert.ok(result.ruleResults.every((item) => ['complete_rule_pass','partial_check_pass','no_applicable_data'].includes(item.status)));
   assert.ok(result.ruleResults.some((item) => item.status === 'partial_check_pass'));
   assert.ok(result.ruleResults.some((item) => item.status === 'no_applicable_data'));
+});
+
+test('structured highlights preserve content review and safety checks for their descriptions', () => {
+  const data = goodSample();
+  data.highlights = data.highlights.map(normalizeHighlightForDisplay);
+  assert.equal(reviewCustomerContent(data).passed, true);
+  data.highlights[0].description = '保证看到所有动物，并说明供应商底价。';
+  const issues = applyContentSafetyGate(data).report.issues;
+  assert.ok(issues.some((item) => item.code === 'unsupported_promise' && item.path === 'highlights'));
+  assert.ok(issues.some((item) => item.code === 'internal_leak' && item.path === 'highlights'));
 });
 
 test('detects bare selling points, supplier logs, encyclopedia and discount language', () => {

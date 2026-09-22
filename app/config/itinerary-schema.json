@@ -28,7 +28,15 @@
       }
     },
     "sourcePosterHighlights": { "type": "array", "items": { "type": "string" }, "title": "原始海报亮点" },
-    "highlights": { "type": "array", "items": { "type": "string" }, "title": "产品亮点" },
+    "highlights": {
+      "type": "array", "title": "产品亮点",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "object", "required": ["title", "description"], "additionalProperties": false, "properties": { "title": { "type": "string" }, "description": { "type": "string" } } }
+        ]
+      }
+    },
     "hotelReplacementPolicy": { "type": "string", "title": "住宿统一说明" },
     "transportDisclaimer": { "type": "string", "title": "交通统一说明" },
     "diningSectionTitle": { "type": "string", "const": "特色餐饮", "title": "特色餐饮板块标题" },

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { judgeCandidatesBatch } from "../server/image-audit.mjs";
+import { completeVisualJudgment } from "../server/image-audit-contract.mjs";
 import { candidateQualification, IMAGE_AUDIT_EVIDENCE_VERSION, isIdentityEvidenceUnresolved } from "../server/image-candidate-eligibility.mjs";
 
 const identitySlot = {
@@ -46,6 +47,135 @@ async function audit(candidates, judgments, slot = identitySlot) {
   assert.equal(calls, 1, "source evidence and visual judgment share one request");
   return { results, request };
 }
+
+test("缺失冲突字段只补判一次，完整候选不重判且合并后可自动采用", async (t) => {
+  const { candidate } = await fixtures(t);
+  const partial = judgment(candidate.candidateId);
+  delete partial.visibleLocationConflict;
+  delete partial.visibleIdentityConflict;
+  const other = { ...candidate, candidateId: "photo-2" };
+  const requests = [], repairs = [];
+  const results = await judgeCandidatesBatch({
+    slot: { exactIdentityRequired: false }, candidates: [candidate, other],
+    apiKey: "fixture", baseUrl: "https://vision.invalid", model: "fixture",
+    onContractRepair: record => repairs.push(record),
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      const judgments = requests.length === 1 ? [partial, judgment(other.candidateId)] : [
+        { candidateId: candidate.candidateId, visibleLocationConflict: false, visibleIdentityConflict: false, score: 1 },
+        { candidateId: other.candidateId, eligible: false },
+      ];
+      return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ judgments }) } }] }) };
+    },
+  });
+  assert.equal(requests.length, 2);
+  assert.deepEqual(repairs, [{ candidates: [{ candidateId: candidate.candidateId, missingFields: ["visibleLocationConflict", "visibleIdentityConflict"] }] }]);
+  assert.ok(results.every(completeVisualJudgment));
+  assert.ok(results.every(result => candidateQualification({ hardJudgment: result }) === "eligible"));
+  assert.equal(results[0].score, 94, "补判不得修改已经有效的分数");
+  assert.equal(results.find(item => item.candidateId === other.candidateId).auditContract.repairAttempted, false);
+  const prompt = requests[0].messages[0].content.find(item => item.type === "text").text;
+  assert.match(prompt, /"visibleLocationConflict":true或false/);
+  assert.match(prompt, /"visibleIdentityConflict":true或false/);
+});
+
+test("补判不能覆盖原始硬拒绝或有效布尔判断", async (t) => {
+  const { candidate } = await fixtures(t);
+  const partial = judgment(candidate.candidateId, { eligible: false, subjectMatch: false, hardRejectCode: "wrong_subject" });
+  delete partial.visibleLocationConflict;
+  let calls = 0;
+  const [result] = await judgeCandidatesBatch({
+    slot: { exactIdentityRequired: false }, candidates: [candidate], apiKey: "fixture", baseUrl: "https://vision.invalid", model: "fixture",
+    fetchImpl: async () => {
+      const judgments = ++calls === 1 ? [partial] : [judgment(candidate.candidateId)];
+      return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ judgments }) } }] }) };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.eligible, false);
+  assert.equal(result.subjectMatch, false);
+  assert.equal(result.hardRejectCode, "wrong_subject");
+  assert.equal(candidateQualification({ hardJudgment: result }), "rejected");
+});
+
+test("补判失败或仍缺字段不默认放行，也不丢弃同批完整候选", async (t) => {
+  const { candidate } = await fixtures(t);
+  const partial = judgment(candidate.candidateId);
+  delete partial.visibleIdentityConflict;
+  for (const mode of ["malformed", "missing", "disabled"]) {
+    let calls = 0;
+    const results = await judgeCandidatesBatch({
+      slot: { exactIdentityRequired: false }, candidates: [candidate, { ...candidate, candidateId: "photo-2" }],
+      apiKey: "fixture", baseUrl: "https://vision.invalid", model: "fixture", allowContractRepair: mode !== "disabled",
+      fetchImpl: async () => {
+        calls += 1;
+        const content = calls === 1 ? JSON.stringify({ judgments: [partial, judgment("photo-2")] })
+          : mode === "malformed" ? "not valid JSON" : JSON.stringify({ judgments: [{ candidateId: candidate.candidateId }] });
+        return { ok: true, json: async () => ({ choices: [{ message: { content } }] }) };
+      },
+    });
+    assert.equal(calls, mode === "disabled" ? 1 : 2);
+    const incomplete = results.find(item => item.candidateId === candidate.candidateId);
+    assert.equal(completeVisualJudgment(incomplete), false);
+    assert.deepEqual(incomplete.auditContract.missingFields, ["visibleIdentityConflict"]);
+    assert.equal(candidateQualification({ hardJudgment: incomplete }), "unreviewed");
+    assert.equal(completeVisualJudgment(results.find(item => item.candidateId === "photo-2")), true);
+  }
+});
+
+test("补判发现可见身份冲突时保留冲突而非默认false", async (t) => {
+  const { candidate } = await fixtures(t);
+  const partial = judgment(candidate.candidateId);
+  delete partial.visibleIdentityConflict;
+  let calls = 0;
+  const [result] = await judgeCandidatesBatch({
+    slot: { exactIdentityRequired: false }, candidates: [candidate], apiKey: "fixture", baseUrl: "https://vision.invalid", model: "fixture",
+    fetchImpl: async () => {
+      const judgments = ++calls === 1 ? [partial] : [{ candidateId: candidate.candidateId, visibleIdentityConflict: true }];
+      return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ judgments }) } }] }) };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.visibleIdentityConflict, true);
+  assert.equal(completeVisualJudgment(result), true);
+  assert.equal(result.eligible, false);
+  assert.equal(candidateQualification({ hardJudgment: result }), "rejected");
+});
+
+test("补判读取响应体超时保留完整候选，外部取消不得再触发重试", async (t) => {
+  const { candidate } = await fixtures(t);
+  const partial = judgment(candidate.candidateId);
+  delete partial.visibleLocationConflict;
+  for (const mode of ["deadline", "cancel"]) {
+    const controller = new AbortController();
+    let calls = 0;
+    const operation = judgeCandidatesBatch({
+      slot: { exactIdentityRequired: false }, candidates: [candidate, { ...candidate, candidateId: "photo-2" }],
+      apiKey: "fixture", baseUrl: "https://vision.invalid", model: "fixture",
+      timeoutMs: mode === "deadline" ? 100 : 5000, signal: controller.signal,
+      fetchImpl: async (_url, options) => {
+        calls += 1;
+        if (calls === 1) return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ judgments: [partial, judgment("photo-2")] }) } }] }) };
+        return { ok: true, json: () => new Promise((_resolve, reject) => {
+          const guard = setTimeout(() => reject(new Error("test guard: expected request cancellation")), 1000);
+          const abort = () => { clearTimeout(guard); reject(options.signal.reason); };
+          if (options.signal.aborted) abort(); else options.signal.addEventListener("abort", abort, { once: true });
+          if (mode === "cancel") setTimeout(() => controller.abort(new Error("cancel fixture")), 5);
+        }) };
+      },
+    });
+    if (mode === "cancel") {
+      await assert.rejects(operation, error => error.message === "cancel fixture" && error.technicalRetryHandled === true);
+    } else {
+      const results = await operation;
+      const incomplete = results.find(item => item.candidateId === candidate.candidateId);
+      assert.equal(incomplete.auditContract.repairErrorCode, "audit_timeout");
+      assert.equal(candidateQualification({ hardJudgment: incomplete }), "unreviewed");
+      assert.equal(completeVisualJudgment(results.find(item => item.candidateId === "photo-2")), true);
+    }
+    assert.equal(calls, 2);
+  }
+});
 
 test("audit keeps the full portrait and landscape frames, with numbers outside the photographs", async (t) => {
   const { directory } = await fixtures(t);

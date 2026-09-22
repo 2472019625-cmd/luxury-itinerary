@@ -11,6 +11,7 @@ import { compileAgentExecutionPlan, filterImagePlanForModules } from "./agent-pl
 import { validateReviewDecisionBatch } from "./agent-review-decision.mjs";
 import { buildKnowledgeQueryPlan, cleanupPlannerQueryScope, validatePlannerSearchIntent } from "./knowledge-scope-resolver.mjs";
 import { visualSubjectPolicyIssue } from "./visual-subject-policy.mjs";
+import { highlightToText } from "../src/lib/highlightDisplay.js";
 
 export const AGENT_PROMPT_VERSION = "agent-trip-planner-v6-compact-first-image-plan";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -87,7 +88,7 @@ export function buildAgentFactBasis(data = {}, report = {}) {
     hotels,
     transport: (Array.isArray(data.transportSummary) ? data.transportSummary : []).map((item, index) => ({ id: cleanText(item.id) || `transport-${index + 1}`, category: cleanText(item.category || item.title || item.label), serviceLevel: cleanText(item.serviceLevel), model: cleanText(item.model) || null, modelGuaranteed: item.modelGuaranteed === true, usageLabel: cleanText(item.usageLabel) || null, features: item.features || [], status: item.status || null, currentCopy: cleanText(item.editorialCopy || item.description) })).filter((item) => item.category).slice(0, 20),
     diningExperiences: (Array.isArray(data.diningExperiences) ? data.diningExperiences : []).map((item, index) => ({ id: cleanText(item.id) || `dining-${index + 1}`, name: cleanText(item.title || item.officialName), officialName: cleanText(item.officialName) || null, location: cleanText(item.location) || null, status: item.status || item.feeBoundary || null, currentCopy: cleanText(item.editorialCopy) })).filter((item) => item.name).slice(0, 20),
-    coreExperiences: unique([...(Array.isArray(data.highlights) ? data.highlights : []), ...days.map((day) => cleanText(day.title || day.route))]).slice(0, 24),
+    coreExperiences: unique([...(Array.isArray(data.highlights) ? data.highlights.map(highlightToText) : []), ...days.map((day) => cleanText(day.title || day.route))]).slice(0, 24),
     days: days.map((day, index) => ({
       day: index + 1,
       date: cleanText(day.date) || null,
@@ -320,6 +321,68 @@ function fallbackPlannerRaw(factBasis = {}, reason = "planner_system_failure") {
   };
 }
 
+const visualChoicePattern = /或者|或|二选一|\bor\b|\//i;
+const visualWordSegmenter = new Intl.Segmenter("zh", { granularity: "word" });
+const visualWords = (value) => [...visualWordSegmenter.segment(cleanText(value).normalize("NFKC").toLowerCase())]
+  .filter((part) => part.isWordLike).map((part) => part.segment);
+function includesWordSequence(words, expected) {
+  return expected.length > 0 && words.some((_, index) => expected.every((word, offset) => words[index + offset] === word));
+}
+
+function repairEquivalentVisualChoice(slot) {
+  const core = slot.queryCore || {};
+  const fields = [core.subject, core.action, core.identity, core.subjectEn, core.actionEn, core.identityEn].map(cleanText);
+  if (typeof slot.exactIdentityRequired !== "boolean" || (slot.exactIdentityRequired && !fields[2])
+    || !fields[0] || fields.some((field) => visualChoicePattern.test(field))) return null;
+  const alternatives = cleanText(slot.primaryVisualSubject).split(/或者|或|二选一|\bor\b|\//i).map(cleanText);
+  if (alternatives.length < 2 || alternatives.length > 3 || alternatives.some((part) => !part)) return null;
+  const queries = [cleanText(slot.fidelityQuery), ...(Array.isArray(slot.alternateQueries) ? slot.alternateQueries.map(cleanText) : [])];
+  if (!validatePlannerSearchIntent(queries).valid || queries.some((query) => visualChoicePattern.test(query))) return null;
+  const identities = unique([fields[2], fields[5]]).map(visualWords);
+  const languages = [{ subject: fields[0], action: fields[1] },
+    ...(fields[3] && (!fields[1] || fields[4]) ? [{ subject: fields[3], action: fields[4] }] : [])]
+    .map(({ subject, action }) => ({ subject: visualWords(subject), action: visualWords(action) }));
+  const supports = (value, { subject, action }, full = false, branch = false) => {
+    const words = visualWords(value);
+    if (action.length && !includesWordSequence(words, action)) return false;
+    if (full) return includesWordSequence(words, subject)
+      && (slot.exactIdentityRequired !== true || identities.some((identity) => includesWordSequence(words, identity)));
+    // A shared generic word alone cannot prove that two choices are the same
+    // subject. Accept only a complete multiword Core, or its ordered fragments
+    // ending at the subject itself (never a different facility/action suffix).
+    if (subject.length < 2) return false;
+    if (!branch && includesWordSequence(words, subject)) return true;
+    const withoutContext = [...words];
+    for (const context of [...identities, action].filter((part) => part.length)) {
+      for (let index = withoutContext.length - context.length; index >= 0; index -= 1) {
+        if (context.every((word, offset) => withoutContext[index + offset] === word)) withoutContext.splice(index, context.length);
+      }
+    }
+    let cursor = -1;
+    const matched = subject.filter((word) => {
+      const index = withoutContext.indexOf(word, cursor + 1);
+      if (index < 0) return false;
+      cursor = index;
+      return true;
+    });
+    return matched.length >= 2 && matched.length * 3 >= subject.length * 2
+      && matched.at(-1) === withoutContext.at(-1);
+  };
+  if (!languages.some((language) => alternatives.every((part) => supports(part, language, false, true)))) return null;
+  if (!queries.every((query) => languages.some((language) => supports(query, language)))) return null;
+  const supportingQuery = queries.find((query) => languages.some((language) => supports(query, language, true)));
+  if (!supportingQuery) return null;
+  const primaryVisualSubject = unique([slot.exactIdentityRequired === true ? fields[2] : "", fields[0], fields[1]]).join(" ");
+  if (visualSubjectPolicyIssue(primaryVisualSubject, core)) return null;
+  return { primaryVisualSubject, repair: {
+    code: "equivalent_visual_choice_resolved",
+    message: "已按Planner明确且由原查询共同佐证的同一主体与动作消解画面二选一描述",
+    originalPrimaryVisualSubject: slot.primaryVisualSubject,
+    primaryVisualSubject,
+    supportingQuery,
+  } };
+}
+
 function completePlannerObjectEnd(source, start) {
   const stack = [];
   let inString = false;
@@ -409,8 +472,14 @@ function applyPlannerFailOpen(plan, validationErrors = []) {
     const role = slot.role || slot.slotId || "图片位";
     const issues = issuesByRole.get(role) || [];
     const localRepairs = [];
-    let unresolved = issues.some((issue) => !QUERY_REPAIRABLE_CODES.has(issue.code) && issue.code !== "invalid_supporting_visual");
     let repaired = { ...slot };
+    const visualRepair = issues.some((issue) => issue.code === "ambiguous_visual_subject") ? repairEquivalentVisualChoice(slot) : null;
+    if (visualRepair) {
+      repaired.primaryVisualSubject = visualRepair.primaryVisualSubject;
+      localRepairs.push(visualRepair.repair);
+    }
+    let unresolved = issues.some((issue) => !QUERY_REPAIRABLE_CODES.has(issue.code) && issue.code !== "invalid_supporting_visual"
+      && !(issue.code === "ambiguous_visual_subject" && visualRepair));
 
     if (issues.some((issue) => issue.code === "invalid_supporting_visual") && String(role).includes(":supporting:")) {
       repaired.required = false;

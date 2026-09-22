@@ -85,7 +85,7 @@ export function copyRequestJson({ failTargetId = null, delayMs = 60 } = {}) {
       let value = `已按${task.moduleType}真实事实完成的客户文案`;
       if (task.moduleType === "cover") value = "肯尼亚草原私享之旅";
       if (task.moduleType === "cover_subtitle") value = "从草原飞机进入安博塞利，以私家游猎展开完整自然旅程";
-      if (task.moduleType === "product_highlight") value = `${task.facts.selectedByPlanner}｜解释这项已确认配置对客户的具体价值。`;
+      if (task.moduleType === "product_highlight") value = { title: task.outputSchema.properties?.title?.const || '私享体验', description: '解释这项已确认配置对客户的具体价值。' };
       if (task.moduleType === "hotel") value = "坐落于安博塞利核心景观区域，以真实开阔视野与完整营地空间构成值得期待的住宿体验。";
       if (task.moduleType === "hotel_proof_points") value = ["开阔景观中的居停空间", "贴近自然环境的住宿体验"];
       if (task.moduleType === "dining") value = "在真实行程所列的用餐场景中品尝当地风味，让餐食本身成为旅途体验的一部分。";

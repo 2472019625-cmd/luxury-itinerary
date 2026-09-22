@@ -1,5 +1,6 @@
 import { COPY_RULE_IDS } from '../config/copy-rule-runtime.mjs';
 import { validateNotesSchema } from '../src/lib/notesSchema.js';
+import { highlightToText, normalizeHighlightForDisplay } from '../src/lib/highlightDisplay.js';
 import { buildFactProvenanceReport, hasAuthoritativeSupport, SPECIFIC_TIME_CLAIM, TIME_SENSITIVE_CONTEXT } from './fact-provenance.mjs';
 
 const INTERNAL = /成本|利润|毛利|供应商底价|采购价|结算价|内部报价|基本房型报价|报价测算逻辑|加价倍率|图片未通过终审|审核分数|候选状态|来源账本|内部路径|原始资料照片|经地点核验/i;
@@ -70,7 +71,7 @@ function moduleText(data) {
 
 function customerCopyFields(data) {
   return [
-    ['title', data.title], ['subtitle', data.subtitle], ['highlights', list(data.highlights).join('；')],
+    ['title', data.title], ['subtitle', data.subtitle], ['highlights', list(data.highlights).map(highlightToText).join('；')],
     ...list(data.hotels).flatMap((item, index) => [[`hotels.${index}.editorialCopy`, item.editorialCopy], [`hotels.${index}.proofPoints`, list(item.proofPoints).join('；')]]),
     ...list(data.diningExperiences).map((item, index) => [`diningExperiences.${index}.editorialCopy`, item.editorialCopy]),
     ...list(data.transportSummary).map((item, index) => [`transportSummary.${index}.editorialCopy`, item.editorialCopy]),
@@ -114,15 +115,15 @@ function checkSubtitle(data, issues) {
 }
 
 function checkHighlights(data, sourceData, issues) {
-  const items = list(data.highlights).map(text).filter(Boolean);
+  const items = list(data.highlights).map(highlightToText).filter(Boolean);
   if (!items.length || items.length > 6) issues.push(issue('COPY-005','highlight_count','highlights','产品亮点应存在且最多6条'));
   const normalized = items.map(canonical);
   if (new Set(normalized).size !== normalized.length) issues.push(issue('COPY-005','highlight_duplicate','highlights','产品亮点存在完全重复'));
   items.forEach((item, index) => {
-    const parts = item.split(/[：:]/);
-    if (parts.length < 2 || chars(parts.slice(1).join('：')) < 8) issues.push(issue('COPY-005','highlight_bare_value',`highlights.${index}`,'亮点必须使用“短标题：客户具体价值”，不能只有裸标签'));
+    const { title, description } = normalizeHighlightForDisplay(item);
+    if (!title || chars(description) < 8) issues.push(issue('COPY-005','highlight_bare_value',`highlights.${index}`,'亮点必须包含短标题和客户具体价值，不能只有裸标签'));
     if (/^(?:顶奢连住|私人保护区|一价全包|草原飞机|一家一团|专属用车|深度游猎)$/.test(item)) issues.push(issue('COPY-005','highlight_bare_label',`highlights.${index}`,'亮点是裸卖点，没有解释客户得到的价值'));
-    if (parts[0] && chars(parts[0]) > 8) issues.push(issue('COPY-005','highlight_title_long',`highlights.${index}`,'亮点冒号前应是2—8字价值锚点，不能写成长句'));
+    if (title && chars(title) > 8) issues.push(issue('COPY-005','highlight_title_long',`highlights.${index}`,'亮点标题应是2—8字价值锚点，不能写成长句'));
     if (DISCOUNT_TONE.test(item)) issues.push(issue('COPY-005','highlight_discount_tone',`highlights.${index}`,'产品亮点不得使用特惠、超值等廉价促销表达'));
   });
   for (let index = 1; index < items.length; index += 1) if (similarity(items[index - 1], items[index]) > 0.72) issues.push(issue('COPY-005','highlight_near_duplicate',`highlights.${index}`,'相邻亮点只是换词重复'));

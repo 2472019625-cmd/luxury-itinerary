@@ -3,6 +3,8 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { judgeCandidatesBatch } from "./image-audit.mjs";
+import { completeVisualJudgment } from "./image-audit-contract.mjs";
+export { completeVisualJudgment } from "./image-audit-contract.mjs";
 import { ImageDeduper } from "./image-dedupe.mjs";
 import { downloadCandidate, imageResolutionPolicyForSlot } from "./image-download.mjs";
 import { searchWebBatch } from "./image-search.mjs";
@@ -436,6 +438,7 @@ function hardJudgment(audit = null) {
     eligible: audit.eligible,
     hardRejectCode: normalizeHardRejectCode(audit.hardRejectCode),
     matchLevel: audit.matchLevel || null,
+    ...(audit.auditContract ? { auditContract: audit.auditContract } : {}),
   };
 }
 
@@ -447,7 +450,8 @@ function publicCandidate(candidate, audit = null, rejection = null) {
   const originalDownloadFailed = rejection === "preview_found_original_download_failed";
   const originalFailureCode = candidate.originalDownloadFailureCode || null;
   const effectiveAudit = autoRejected && audit ? { ...audit, eligible: false, matchLevel: "mismatch", hardRejectCode: normalizedRejection } : audit;
-  const qualificationStatus = autoRejected ? "rejected" : effectiveAudit?.eligible === true ? "eligible" : "unreviewed";
+  const incompleteReview = ["needs_user_judgment", "review_timeout"].includes(rejection) || effectiveAudit?.auditContract?.complete === false;
+  const qualificationStatus = autoRejected ? "rejected" : !incompleteReview && effectiveAudit?.eligible === true ? "eligible" : "unreviewed";
   const originalDownloaded = Boolean(candidate.originalDownloaded && candidate.publicUrl && candidate.filePath);
   const previewUrl = candidate.previewPublicUrl || candidate.knowledgePreview?.url || candidate.previewUrl || (fromKnowledgeLibrary ? candidate.imageUrl : candidate.publicUrl);
   const reviewStatus = autoRejected ? "hard_reject"
@@ -461,6 +465,7 @@ function publicCandidate(candidate, audit = null, rejection = null) {
     : originalDownloadFailed ? "manual_only"
       : autoRejected || (audit && rejection && !["review_timeout", "needs_user_judgment"].includes(rejection)) ? "review_rejected"
       : reviewTimeout ? "review_timeout"
+        : incompleteReview ? "needs_user_judgment"
         : rejection === "not_auto_reviewed" || !audit ? "not_auto_reviewed"
           : "review_approved_not_selected";
   return {
@@ -536,19 +541,6 @@ function resultStatus(results) {
   return "failed";
 }
 
-const hardBooleanFields = ["locationMatch", "visibleLocationConflict", "hotelIdentityMatch", "visibleIdentityConflict", "activityMatch", "coreActionMatch", "subjectMatch", "coreSubjectMatch", "identityMatch", "subjectClear", "subjectLargeEnough", "subjectPrimary", "transportTypeMatch", "watermarkFree", "nonAI", "photographic", "technicalUsable", "eligible"];
-const qualityScoreFields = ["score", "relevance", "luxury", "cleanliness", "composition"];
-
-export function completeVisualJudgment(audit) {
-  return Boolean(audit
-    && typeof audit.candidateId === "string" && audit.candidateId.trim()
-    && hardBooleanFields.every((field) => typeof audit[field] === "boolean")
-    && qualityScoreFields.every((field) => Number.isFinite(audit[field]))
-    && typeof audit.matchLevel === "string" && ["exact", "exact_match", "representative", "mismatch"].includes(audit.matchLevel)
-    && typeof audit.hardRejectCode === "string"
-    && typeof audit.actualSubject === "string" && audit.actualSubject.trim());
-}
-
 export function failedHardRequirement(slot, audit) {
   if (isIdentityEvidenceUnresolved(audit)) return "needs_user_judgment";
   const constraints = buildImageConstraints(slot);
@@ -564,6 +556,8 @@ export function failedHardRequirement(slot, audit) {
   const contextualHotelWithoutVisibleConflict = explicitHardCode === "wrong_hotel" && !identityBound && audit.visibleIdentityConflict === false;
   const auxiliaryTransportWithoutCoreRequirement = explicitHardCode === "wrong_transport_type" && !constraints.transportType;
   if (isHardRejectionCode(explicitHardCode) && !scopeOnlyLocationWithoutVisibleConflict && !contextualHotelWithoutVisibleConflict && !auxiliaryTransportWithoutCoreRequirement) return explicitHardCode;
+  if (audit.visibleLocationConflict === true) return "wrong_location";
+  if (audit.visibleIdentityConflict === true) return identityBound && text(slot.hotel) ? "wrong_hotel" : "wrong_subject";
   if (core.visualLocation && audit.locationMatch !== true) return "wrong_location";
   if (identityBound && text(slot.hotel) && audit.hotelIdentityMatch !== true) return "wrong_hotel";
   if (constraints.transportType && audit.transportTypeMatch !== true) return "wrong_transport_type";
@@ -806,6 +800,18 @@ export async function runImageSearchSkill({
     if (slot.userLocked) return { slotId: slot.slotId, status: "needs_user_action", selected: null, candidates: [], queriesUsed: [], sourceEvidence: [], actualSubject: null, matchReason: "图片位已由用户锁定，未执行自动搜索", technicalStatus: "user_locked", warnings: [], constraints, durationMs: Date.now() - slotStartedAt };
     const warnings = [];
     const pipelineEvidence = layerEvidence();
+    const recordContractRepair = (recordAttempt, queryReport) => ({ candidates }) => {
+      recordAttempt();
+      metrics.batchVisionCalls += 1;
+      metrics.technicalRetries.vision += 1;
+      pipelineEvidence.auditContractRepairs ||= [];
+      pipelineEvidence.auditContractRepairs.push({ candidates });
+      if (queryReport) {
+        queryReport.visionAudits += candidates.length;
+        queryReport.visionBatchSizes.push(candidates.length);
+      }
+      warnings.push(`视觉判断缺字段，已对 ${candidates.length} 张候选执行一次技术补全`);
+    };
     if (!queriesUsed.length) {
       const queryFailure = buildKnowledgeQueryPlan(slot, null, { maxQueries: maxQueriesPerSlot }).validationError;
       pipelineEvidence.knowledgeSearch = { status: "blocked", queryPlan: { queries: [], validationError: queryFailure || null } };
@@ -1026,10 +1032,10 @@ export async function runImageSearchSkill({
             context: contextText(layerSlot.visualContext),
             module: layerSlot.moduleType,
           };
-          judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:scope-${scopeIndex + 1}:query-${queryIndex + 1}:batch-${auditBatches}`, async (recordAttempt) => withOneTechnicalRetry(async () => {
+          judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:scope-${scopeIndex + 1}:query-${queryIndex + 1}:batch-${auditBatches}`, async (recordAttempt) => withOneTechnicalRetry(async (attempt) => {
             recordAttempt();
             metrics.batchVisionCalls += 1;
-            return measure("batchVision", () => judgeFn({ slot: auditSlot, candidates: downloaded, apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal }));
+            return measure("batchVision", () => judgeFn({ slot: auditSlot, candidates: downloaded, apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal, allowContractRepair: attempt === 1, onContractRepair: recordContractRepair(recordAttempt) }));
           }, (error) => { metrics.technicalRetries.vision += 1; warnings.push(`${layerName} 视觉判断技术重试：${error?.message || error}`); })));
         } catch (error) {
           const reviewStatus = error?.code === "audit_timeout" ? "review_timeout" : "not_auto_selected";
@@ -1578,10 +1584,10 @@ export async function runImageSearchSkill({
                 context: contextText(layerSlot.visualContext),
                 module: layerSlot.moduleType,
               };
-              judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:preview-batch-${auditBatches}`, async (recordAttempt) => withOneTechnicalRetry(async () => {
+              judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:preview-batch-${auditBatches}`, async (recordAttempt) => withOneTechnicalRetry(async (attempt) => {
                 recordAttempt();
                 metrics.batchVisionCalls += 1;
-                return measure("previewAudit", () => measure("batchVision", () => judgeFn({ slot: auditSlot, candidates: batch, apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal })));
+                return measure("previewAudit", () => measure("batchVision", () => judgeFn({ slot: auditSlot, candidates: batch, apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal, allowContractRepair: attempt === 1, onContractRepair: recordContractRepair(recordAttempt) })));
               }, (error) => { metrics.technicalRetries.vision += 1; warnings.push(`${layerName} 视觉判断技术重试：${error?.message || error}`); })));
             } catch (error) {
               const rejection = error?.code === "audit_timeout" ? "review_timeout" : "needs_user_judgment";
@@ -2196,11 +2202,11 @@ export async function runImageSearchSkill({
         let judgments;
         const started = Date.now();
         try {
-          judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:wave${offset / batchSize + 1}`, async (recordAttempt) => withOneTechnicalRetry(async () => {
+          judgments = await visionQueue.add(() => tracked("visual_judgment", `${slot.slotId}:${layerName}:wave${offset / batchSize + 1}`, async (recordAttempt) => withOneTechnicalRetry(async (attempt) => {
             recordAttempt(); metrics.batchVisionCalls += 1;
             queryReport.visionAudits += wave.length;
             queryReport.visionBatchSizes.push(wave.length);
-            return webMeasure("batchVision", () => judgeFn({ slot: { ...layerSlot, ...layerConstraints, label: text(layerSlot.subject) || slot.slotId, context: contextText(layerSlot.visualContext), module: layerSlot.moduleType }, candidates: wave, apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal }));
+            return webMeasure("batchVision", () => judgeFn({ slot: { ...layerSlot, ...layerConstraints, label: text(layerSlot.subject) || slot.slotId, context: contextText(layerSlot.visualContext), module: layerSlot.moduleType }, candidates: wave, apiKey: visionApiKey, baseUrl: visionBaseUrl, model: visionModel, signal, allowContractRepair: attempt === 1, onContractRepair: recordContractRepair(recordAttempt, queryReport) }));
           }, (error) => { metrics.technicalRetries.vision += 1; warnings.push(`${layerName} 视觉判断技术重试：${error?.message || error}`); })));
         } catch (error) {
           warnings.push(`${layerName} 批量视觉判断未完成：${error?.message || error}`);
@@ -2221,6 +2227,9 @@ export async function runImageSearchSkill({
           if (selected) { evidence.webExecution.qualityStop = true; evidence.webExecution.qualityStopReason = ["exact", "exact_match"].includes(selected.selected.matchLevel) ? "exact" : "high_quality_eligible"; return selected; }
         }
         if (judged.some((item) => item.rejection === "needs_user_judgment")) {
+          // An incomplete judgment must not hide a fully judged usable peer.
+          const selected = await chooseBest();
+          if (selected) return selected;
           return { kind: "inconclusive", candidates: preserve(), sourceEvidence, technicalStatus: "visual_judgment_inconclusive" };
         }
       }

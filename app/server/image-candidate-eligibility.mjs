@@ -53,6 +53,7 @@ export function candidateQualification(candidate = {}) {
   // An outer manual-review reason must never mask a specific terminal hard
   // rejection such as wrong_subject or wrong_hotel.
   if (isHardRejectionCode(candidate.rejection) || isHardRejectionCode(candidate.hardJudgment?.hardRejectCode)) return "rejected";
+  if (candidate.hardJudgment?.auditContract?.complete === false) return "unreviewed";
   if (isIdentityEvidenceUnresolved(candidate.hardJudgment || candidate)) return "unreviewed";
   if (candidate.qualificationStatus === "eligible") return "eligible";
   if (candidate.hardJudgment?.eligible === true || candidate.eligible === true) return "eligible";

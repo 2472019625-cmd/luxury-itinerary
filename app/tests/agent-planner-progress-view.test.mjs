@@ -73,3 +73,12 @@ test("可编辑草稿状态明确说明问题可在编辑页继续处理", () =>
   assert.match(summary, /编辑页继续补充/);
   assert.match(action, /编辑页继续处理/);
 });
+
+test("定制重点从结构化及历史亮点提取标题，不将对象转成字符串占位", () => {
+  const snapshot = { result: { data: { highlights: [
+    { title: '一家一团', description: '同一行程围绕本组同行者安排。' },
+    { title: '1V1专属定制', description: '由定制师持续沟通优化方案。' },
+    '从容停留——留下完整体验时间。',
+  ] } } };
+  assert.deepEqual(getDesignerHighlights(snapshot), ['一家一团', '1V1专属定制', '从容停留']);
+});

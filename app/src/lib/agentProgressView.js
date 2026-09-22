@@ -1,3 +1,5 @@
+import { highlightToText, normalizeHighlightForDisplay } from './highlightDisplay.js';
+
 export const SIMPLE_DESIGNER_STAGES = [
   { key: "parser", sourceKeys: ["parser"], label: "整理你上传的行程资料", shortLabel: "资料", routePosition: 0 },
   { key: "planner", sourceKeys: ["planner"], label: "梳理路线与体验重点", shortLabel: "规划", routePosition: 22 },
@@ -40,6 +42,8 @@ export function getDesignerTripTitle(snapshot, localProject) {
 function highlightLabel(value) {
   const text = cleanText(value).replace(/^特别体验[:：]\s*/, "");
   if (!text) return "";
+  const parsed = normalizeHighlightForDisplay(text);
+  if (parsed.description && parsed.title) return parsed.title.slice(0, 12);
   const [lead, detail] = text.split(/[|｜]/).map(cleanText);
   if (lead && lead.length <= 12) return lead;
   if (detail && detail.length <= 12) return detail;
@@ -59,7 +63,7 @@ export function getDesignerHighlights(snapshot, localProject, limit = 4) {
   const labels = [];
   for (const source of sources) {
     for (const value of Array.isArray(source) ? source : []) {
-      for (const part of String(value || "").split(/\r?\n/)) {
+      for (const part of (typeof value === "string" ? value : highlightToText(value)).split(/\r?\n/)) {
         const label = highlightLabel(part);
         if (!label || seen.has(label)) continue;
         seen.add(label);

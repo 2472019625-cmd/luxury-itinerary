@@ -164,3 +164,27 @@
 验证：首轮受影响测试 272 项，271 通过，唯一失败为既有批准收款二维码资产缺失（对应代码与测试未被合并修改）；最终冲突修复后知识库、图片技能与文案规则 138/138 通过。`npm run build` 成功，`npm run test:sites` 4/4 通过；构建仅有既有大包提示。没有重启用户服务、推送远端或执行新一轮真实 Excel 生成，不能把自动化结果作为独立验收。先前发现的渲染地址问题不在这次合并范围内。
 
 非敏感测试日志位于 `D:\CodexRuntime\agent-runtime\luxury-itinerary\2026-09-22-merge-frontend`，保留至交接后 7 天供排查，再由登记清理流程检查无人使用后退休；没有新增常驻服务。
+
+## 2026-09-22 亮点结构、JW 规划与审核字段修复；DAY 3 单独调研
+
+本轮按用户要求只实施前三项，第四项只定位问题。基于已合并远端 frontend-v1 的 `d235d1d`，分支仍为 `codex/image-retrieval-reliability`。未修改环境配置、模型配置、用户运行结果、知识库数据或第四项的 HTTP/Commons 搜索实现。
+
+- `COPY-STRUCT-01`：亮点 Copy 的输出改成 `{title, description}`，标题、正文均为必需非空字段。已确认正式产品服务从配置读取标题并以 schema const 保留，不另建“一家一团”等硬编码名单。编辑器保持对象结构，进度摘要、事实基座和质量/承诺检查读取对象正文；兼容旧数据中短标题后的 `——`，不拆已经分开的正文内破折号。涉及 Adapter、Copy、行程 schema、Workspace、highlightDisplay、agentProgressView、content-quality 与 Copy Skill 提示词。
+- `IMG-REL-25`：上轮 JW Marriott 槽位并非卡在远端目录修复，而是 Planner 的“现代外观或城市天际线中的酒店建筑”被判二选一。现在只在既定结构化 Core 单一、原查询能完整证明 Core/必要身份、描述分支具有一致词面证据时局部收敛，保留原始模型描述与修复依据，不重新调用 Planner、不改身份/查询/Scope。不同动物、空间、动作、泛化 Core、查询不一致和非法身份布尔字段仍挂起。实现 `agent-trip-planner.mjs`，专用测试 `planner-visual-choice-repair.test.mjs`。
+- `IMG-REL-26`：视觉提示词 JSON 示例补上原先漏写的 `visibleLocationConflict`、`visibleIdentityConflict`。新增共享审核字段合同，合法 JSON 缺字段时只对同一图片批次补判一次，且只合并原来缺失或类型错误的字段；与网络/解析技术重试共用一次补救额度，同一补判共享原批次截止时间。失败或仍不完整保留待人工状态与具体缺失字段，不默认 false；完整合格候选仍可自动采用，补判发现可见冲突必须硬拒绝，不能被原 eligible=true 覆盖。同批普通代表图不再被另一张不完整判断提前挡住。涉及 `image-audit-contract.mjs`、`image-audit.mjs`、`simple-image-skill.mjs`、`image-candidate-eligibility.mjs`。
+
+验证：亮点相关 49 个不同测试通过；Planner 专项 6/6，并在跨模块回归中复核。跨模块首轮 226 项中 225 通过，新增可见冲突守卫抢先覆盖了既有 wrong_hotel 拒绝码；已调整为先保留有效明确硬拒绝码，再处理缺码可见冲突。最终图片技能/安全/管线/规则覆盖 127/127，视觉证据与补判 18/18；其余未再变动的跨模块测试复用首轮通过结果。验证包括真实审核函数的模拟响应→知识库 preview→补判→matched_file 原件下载→自动采用，以及补判失败、有效判断不可覆盖、技术重试额度、超时、外部取消、同批不完整候选、正冲突拒绝。`npm run build` 和构建后 `npm run test:sites` 4/4 通过，仅有既有大包提示。
+
+复用现有 Vite，使用全新合成行程及全新浏览器 context，实际按 2000px 渲染：两条正式服务的新对象及旧字符串均分别显示 H3 标题和 P 正文，无溢出、交叠或截断，页面脚本/控制台错误和失败请求均为 0。截图和 DOM 摘要在本轮外部运行目录的 `ui/`。这只是最终前端代码的合成视觉检查，没有重新上传真实 Excel 跑整轮联网生成，也未重启用户管理的 4180 后端；新后端行为需服务加载后用全新项目确认，旧结果不会自动补图，不宣布独立验收通过。二维码资产与渲染地址仍按本轮范围保留。
+
+### 第四项调研：DAY 3 大裂谷观景台为何没有找到图
+
+只读证据来自项目 `4597b3d0-be3c-435b-879f-381210c731bf`、运行 `76188098-c9f2-4f81-babf-ecf588796ae8`、图片位 `image:day:3:primary`，历史结果 `not_found / no_technical_candidate`。
+
+1. Knowledge 未实际查询：Planner 要求精确实体身份，程序知道目标“东非大裂谷观景台”，但目录未匹配这个实体。虽然能定位“肯尼亚 / 纳瓦沙湖”，精确实体分支不使用宽泛地区范围，记录为 `entity_directory_missing`、`scopes=[]`、`attempts=[]`。这不能证明整个知识库没有相关图片；是实体路由准入问题。入口 `knowledge-scope-resolver.mjs` 的实体范围解析与 `simple-image-skill.mjs` 的 `runLayer`。
+2. Web 实际已触发：两条查询共访问 7 页，全部提取失败，有效页 0；Commons 提供 3 张已下载候选，三张都未通过视觉。停止原因 `queries_exhausted`，页面预算 7/8、下载预算 3/6，未耗尽资源额度。第一条查询的第 4 个页面未访问，剩余页没有待续用队列；Commons 只在首条查询执行。入口 `simple-image-skill.mjs` 的 `runSourceLayer` 查询、页面分配与 Commons 调用。
+3. HTTP 拦截存在确定误报：本轮只读请求一个历史失败的 Commons File 页面，返回 HTTP 200、117907 字节正常 HTML。页面正常配置 `wgConfirmEditCaptchaNeededForGenericEdit:"hcaptcha"` 被 `public-image-http.mjs` 的宽泛 captcha 正则误判为访问挑战。同份 HTML 直接解析得到 23 个图片资源候选，但正常流程在 `page-images.mjs` 的 loadPage 就抛错，未进入静态提图或浏览器回退。本次实测证明该误判路径，历史日志未记录 HTTP 状态，不能反推所有历史失败页都是此原因。
+4. Commons 后备候选过滤不完整：三张历史下载为 Soil conservation literature、Photo-era magazine、Engineer update 的 PDF 首页 JPEG 缩略图。`commons-search.mjs` 请求 MIME 却未据原始 MIME 排除文档，又优先取 thumburl，所以占用下载/审核机会后才被视觉正确拒绝。还用对象枚举顺序代替 API 的 page.index 排名。
+5. 图片资源未必不存在：只读 imageinfo 查询历史来源中的三个照片 File 标题，仍返回 JPEG 原图元数据及 1280×850、1798×1197、5261×2851 尺寸。没有下载原图或进行新视觉审核，不能据此宣布有三张合格可用图。后续可研究正确识别挑战页、Commons File→imageinfo 图片获取与文档过滤、保留真实排名、在现有预算内续用已返回页面，以及补足 HTTP 状态诊断；本轮未实施第四项。
+
+运行资源：`D:\CodexRuntime\agent-runtime\luxury-itinerary\2026-09-22-contract-fixes`，只含合成资料、测试/构建日志和 UI 证据，保留至 2026-09-29 后由登记清理流程检查消费者再退休。测试临时目录按各测试清理，临时浏览器已关闭并确认 PID 退出。自建 `ui/chrome-profile` 清理被自动审批拒绝，仅返回 `blocked by policy`；没有换方法重试，已在 `ui/ui-resources.json` 登记保留，不能视为磁盘已清理。

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { copyTaskQueue } from "./copy-task-queue.mjs";
 import { requestDeepSeekJson } from "./deepseek-client.mjs";
 import { COPY_FACTS_RESEARCH_MODEL, runCopyFactsResearch, validateCopyResearchRequest } from "./simple-copy-facts-research.mjs";
+import { highlightToText } from "../src/lib/highlightDisplay.js";
 
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const skillPrompt = readFileSync(path.join(workspaceRoot, "skills", "copy-writer", "SKILL.md"), "utf8");
@@ -101,6 +102,7 @@ export function normalizeCopyValueForSchema(value, schema = {}) {
 function copyText(value) {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(copyText).join("\n");
+  if (value && typeof value === "object" && (Object.hasOwn(value, "title") || Object.hasOwn(value, "description"))) return highlightToText(value);
   return "";
 }
 

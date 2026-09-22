@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { normalizeTravelEntityName, resolveTravelEntity } from "../src/lib/travelEntityDisplay.js";
 import { TRAVEL_ENTITY_REGISTRY } from "../src/data/travelEntityRegistry.js";
+import { normalizeHighlightForDisplay } from "../src/lib/highlightDisplay.js";
+import { publicSheyouProductValues } from "../config/sheyou-product-values.mjs";
 
 const stringSchema = Object.freeze({ type: "string", minLength: 1 });
 const subtitleSchema = Object.freeze({ type: "string", minLength: 1, maxLength: 76 });
@@ -688,13 +690,26 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     actualCount: selectedHighlights.length,
     targetRange: { min: 5, max: 7 },
   }] : [];
-  data.highlights = selectedHighlights.map((item) => clean(item.sourceText));
-  selectedHighlights.forEach((selection, index) => copyTasks.push(copyTask({
-    targetId: `copy:highlight:${index + 1}`, targetPath: `highlights.${index}`, moduleType: "product_highlight",
-    facts: { selectedByPlanner: selection.sourceText, sourceType: selection.sourceType, sourceRefs: selection.sourceRefs || [], selectionReason: selection.selectionReason || "" },
-    plannerGoal: "只写 Planner 已确定的这一条亮点，输出短标题加具体客户价值说明；一条只解释一个购买理由，不得为了饱满再叠加其他独立卖点，也不得新增、删除、换序或重新选择亮点。",
-    relevantContext: itineraryContext, layoutHints: { placement: "highlights", itemIndex: index }, required: true,
-  })));
+  data.highlights = selectedHighlights.map((item) => normalizeHighlightForDisplay(clean(item.sourceText)));
+  selectedHighlights.forEach((selection, index) => {
+    const officialValue = selection.sourceType === "official_product"
+      ? publicSheyouProductValues().find((item) => clean(item.sourceText) === clean(selection.sourceText))
+      : null;
+    const confirmedTitle = officialValue ? normalizeHighlightForDisplay(officialValue.sourceText).title : "";
+    copyTasks.push(copyTask({
+      targetId: `copy:highlight:${index + 1}`, targetPath: `highlights.${index}`, moduleType: "product_highlight",
+      facts: { selectedByPlanner: selection.sourceText, sourceType: selection.sourceType, sourceRefs: selection.sourceRefs || [], selectionReason: selection.selectionReason || "" },
+      plannerGoal: "只写 Planner 已确定的这一条亮点，返回 {title, description} 对象：title 只放短标题，description 单独放具体客户价值说明，不得把整句说明塞进 title。title 约定 const 时原样保留正式服务名称。一条只解释一个购买理由，不得为了饱满再叠加其他独立卖点，也不得新增、删除、换序或重新选择亮点。",
+      outputSchema: {
+        type: "object", required: ["title", "description"], additionalProperties: false,
+        properties: {
+          title: { type: "string", minLength: 1, pattern: "\\S", ...(confirmedTitle ? { const: confirmedTitle } : {}) },
+          description: { type: "string", minLength: 1, pattern: "\\S" },
+        },
+      },
+      relevantContext: itineraryContext, layoutHints: { placement: "highlights", itemIndex: index }, required: true,
+    }));
+  });
 
   data.hotels.forEach((hotel, index) => {
     const researchRequest = hotelResearchRequest(hotel);

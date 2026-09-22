@@ -2010,6 +2010,78 @@ test("前四张全部不合格时继续审核当前候选池下一批四张", as
   assert.equal(result.results[0].candidates.filter((candidate) => candidate.candidateStatus === "not_auto_reviewed").length, 0);
 });
 
+test("知识库视觉字段补全后自动下载原件采用，补判复用技术重试额度", async (t) => {
+  for (const mode of ["repaired", "network_then_incomplete"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "simple-image-contract-repair-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    let requests = 0;
+    const fetched = [];
+    const result = await runImageSearchSkill({
+      root, sourceMode: "knowledge_only", knowledgeBaseUrl: "http://knowledge.invalid", knowledgeScopeNodeIds: ["mara"], knowledgeQueriesPerSlot: 1,
+      trustedKnowledgeOrigins: ["http://192.168.100.210:9000"],
+      slots: [slot("repair-preview", { location: "Masai Mara", subject: "leopard", activity: "leopard safari", primaryVisualSubject: "leopard", exactIdentityRequired: false })],
+      visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture",
+      adapters: {
+        searchKnowledgeImages: async ({ queries }) => knowledgeFixture(queries[0], { prefix: "repair-preview", count: 1, fragment: "leopard safari" }),
+        downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+          fetched.push(candidate.imageUrl);
+          const filePath = path.join(directory, `repair-${fetched.length}.jpg`);
+          await writeDistinctTestImage(filePath, fetched.length);
+          return { ...candidate, filePath, publicUrl: `${publicPrefix}/${path.basename(filePath)}`, sha256: `repair-${fetched.length}`, width: 1400, height: 900 };
+        },
+        judgeCandidatesBatch: args => judgeCandidatesBatch({ ...args, fetchImpl: async () => {
+          requests += 1;
+          if (mode === "network_then_incomplete" && requests === 1) throw new Error("fetch failed: ECONNRESET");
+          const judgments = args.candidates.map(candidate => {
+            const audit = completeAudit(candidate, { actualSubject: "leopard" });
+            if (mode !== "repaired" || requests === 1) { delete audit.visibleLocationConflict; delete audit.visibleIdentityConflict; }
+            return audit;
+          });
+          return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ judgments }) } }] }) };
+        } }),
+        searchWebBatch: async () => { throw new Error("不得访问公网"); }, searchCommonsImages: async () => { throw new Error("不得访问 Commons"); },
+      },
+    });
+    assert.equal(requests, 2, "网络重试与字段补判共享一次补救额度");
+    assert.equal(result.metrics.batchVisionCalls, 2);
+    assert.equal(result.metrics.technicalRetries.vision, 1);
+    if (mode === "repaired") {
+      assert.equal(result.results[0].status, "success");
+      assert.equal(result.results[0].selected.originalDownloaded, true);
+      assert.equal(result.results[0].selected.hardJudgment.auditContract.complete, true);
+      assert.equal(result.results[0].pipelineEvidence.auditContractRepairs.length, 1);
+      assert.equal(fetched.filter(url => url.includes("/original/")).length, 1);
+    } else {
+      assert.equal(result.results[0].selected, null);
+      assert.equal(result.results[0].status, "needs_user_action");
+      assert.equal(fetched.filter(url => url.includes("/original/")).length, 0);
+      assert.equal(result.results[0].candidates[0].qualificationStatus, "unreviewed");
+    }
+  }
+});
+
+test("Web同批缺字段不能阻止其他低于早停分数的完整代表图自动采用", async (t) => {
+  const result = await runAuditedFixture(t, slot("partial-peer", { exactIdentityRequired: false }), { candidateCount: 2, judgments: candidates => candidates.map((candidate, index) => ({
+    candidateId: candidate.candidateId, actualSubject: "草原环境与游猎行动", matchLevel: "representative", score: 70, relevance: 70,
+    ...(index === 1 ? { visibleIdentityConflict: undefined, auditContract: { complete: false, missingFields: ["visibleIdentityConflict"], repairAttempted: true } } : {}),
+  })) });
+  assert.equal(result.results[0].status, "success");
+  assert.equal(result.results[0].selected.matchLevel, "representative");
+  assert.equal(result.results[0].selected.sourceTitle, "受控候选页");
+  const unresolved = result.results[0].candidates.find(candidate => candidate.hardJudgment?.auditContract?.complete === false);
+  assert.equal(unresolved.qualificationStatus, "unreviewed");
+  assert.notEqual(unresolved.candidateId, result.results[0].selected.candidateId);
+  assert.equal(result.results[0].candidates.filter(candidate => candidate.selected).length, 1);
+});
+
+test("补判返回明确可见地点或身份冲突时不得沿用原eligible通过", () => {
+  const target = slot("conflict-repair", { exactIdentityRequired: false, locationRole: "scope_only" });
+  for (const [field, expected] of [["visibleLocationConflict", "wrong_location"], ["visibleIdentityConflict", "wrong_subject"]]) {
+    const audit = completeAudit("conflict-photo", { [field]: true, auditContract: { complete: true, repairAttempted: true } });
+    assert.equal(failedHardRequirement(target, audit), expected);
+  }
+});
+
 test("知识库返回10张 preview 全部保留，首批四张出现高质量eligible后早停且只下载最终采用的1张 matched_file", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-image-preview-first-ten-"));
   t.after(() => rm(root, { recursive: true, force: true }));
