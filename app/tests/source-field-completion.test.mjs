@@ -282,7 +282,7 @@ test("DAY notice 只读取当天来源事实，不受既有 DAY Copy 回顾其�
   assert.deepEqual(plan.preparedData.days[0].dayNotices, []);
 });
 
-test("Dining Copy 任务允许已确认体验的自然展开但禁止新增现场事实", () => {
+test("Dining Copy 任务使用写作约束而非可照抄参考句，通用体验不额外联网", () => {
   const data = {
     title: "肯尼亚1日行程", subtitle: "", destination: "肯尼亚", sourcePosterHighlights: [], highlights: [], hotels: [], transportSummary: [], notes: [],
     diningExperiences: [{ id: "d1", title: "Sundowner 落日酒会", officialName: "Sundowner 落日酒会", location: "马赛马拉", status: "included", feeBoundary: "included", sourceEvidence: ["DAY 1 详细行程：傍晚享用 Sundowner 落日酒会"], editorialCopy: "", images: [] }],
@@ -290,26 +290,52 @@ test("Dining Copy 任务允许已确认体验的自然展开但禁止新增现�
   };
   const plan = materializeSimpleSkillPlan({ data, agentPlan: agentPlanFor(data) });
   const task = plan.copyTasks.find((item) => item.moduleType === "dining");
-  assert.deepEqual(Object.keys(task.facts).sort(), ["copyGuidance", "id", "officialName", "sourceEvidence", "title"]);
-  assert.match(task.plannerGoal, /体验方式\/场景/);
-  assert.match(task.plannerGoal, /直接差异或价值/);
+  assert.deepEqual(Object.keys(task.facts).sort(), ["copyGuidance", "id", "location", "officialName", "sourceEvidence", "title"]);
+  assert.match(task.plannerGoal, /独立的特色餐饮总览卡/);
+  assert.match(task.plannerGoal, /最有辨识度的餐饮锚点/);
   assert.match(task.plannerGoal, /不重复 DAY 编号/);
   assert.match(task.plannerGoal, /完整 title、officialName、地点名和状态标签/);
-  assert.match(task.plannerGoal, /不要求 sourceEvidence 出现完全相同原句/);
-  assert.match(task.plannerGoal, /餐饮内容、体验方式、场景和直接价值/);
-  assert.match(task.plannerGoal, /与普通用餐的直接差异/);
-  assert.match(task.plannerGoal, /第一句必须以吃、喝、品、早餐、晚餐或明确餐饮类型为语义主体/);
-  assert.match(task.plannerGoal, /即使移除场景和氛围修饰/);
-  assert.match(task.plannerGoal, /餐饮动作或内容/);
-  assert.match(task.plannerGoal, /Dining 不承担当天或整趟旅程的收束职责/);
-  assert.match(task.plannerGoal, /写清后立即结束/);
-  assert.match(task.plannerGoal, /优先直接采用 facts.copyGuidance/);
-  assert.match(task.facts.copyGuidance, /喝一杯 Sundowner/);
-  assert.match(task.facts.copyGuidance, /可直接采用或轻量改写/);
-  assert.match(task.facts.copyGuidance, /不扩写额外分句/);
+  assert.match(task.plannerGoal, /不强制写“与普通用餐不同”/);
+  assert.match(task.plannerGoal, /不追加抽象客户价值总结/);
+  assert.match(task.plannerGoal, /不得写具体 DAY、当天、随后、游猎归来、开启一天、结束一天/);
+  assert.match(task.plannerGoal, /不为整趟旅程收尾/);
+  assert.match(task.plannerGoal, /不得把它当成可直接照抄的产品化参考句/);
+  assert.match(task.facts.copyGuidance, /不照抄固定模板/);
+  assert.match(task.facts.copyGuidance, /只选择一个最有辨识度的餐饮锚点/);
+  assert.doesNotMatch(task.facts.copyGuidance, /喝一杯 Sundowner|可直接采用或轻量改写|产品化参考句/);
+  assert.equal(task.researchRequest, undefined);
   assert.match(task.plannerGoal, /不得借用本批其他 Dining target 的事实/);
   assert.doesNotMatch(task.plannerGoal, /抽象体验价值/);
   assert.equal(task.outputSchema.maxLength, 96);
+});
+
+test("明确酒店专属餐饮与命名餐厅获得一次轻量事实研究请求", () => {
+  const hotel = { id: "h1", officialName: "Example Safari Camp", shortName: "Example Safari Camp", sourceEvidence: [] };
+  const data = {
+    title: "肯尼亚1日行程", subtitle: "", destination: "肯尼亚", sourcePosterHighlights: [], highlights: [], hotels: [hotel], transportSummary: [], notes: [],
+    diningExperiences: [
+      { id: "d1", title: "星空晚宴", officialName: "", location: "Example Safari Camp", sourceEvidence: ["DAY 1：酒店安排星空晚宴"], editorialCopy: "", images: [] },
+      { id: "imported-dining-restaurant-the-carnivore-day-1", title: "非洲百兽宴 The Carnivore", officialName: "The Carnivore", location: "内罗毕", sourceEvidence: ["DAY 1：晚餐前往 The Carnivore"], editorialCopy: "", images: [] },
+    ],
+    days: [{ date: null, theme: "城市与晚宴", routeNodes: ["内罗毕"], description: "晚间用餐。", vehicle: "商务车", mealPlan: {}, dayNotices: [], spots: [] }],
+  };
+  const plan = materializeSimpleSkillPlan({ data, agentPlan: agentPlanFor(data) });
+  const tasks = plan.copyTasks.filter((item) => item.moduleType === "dining");
+  assert.equal(tasks.length, 2);
+  assert.deepEqual(tasks[0].researchRequest, {
+    researchType: "official_entity_facts",
+    entityName: "Example Safari Camp",
+    entityKind: "dining",
+    focus: "星空晚宴",
+    categories: ["餐饮形式", "体验特色"],
+  });
+  assert.deepEqual(tasks[1].researchRequest, {
+    researchType: "official_entity_facts",
+    entityName: "The Carnivore",
+    entityKind: "dining",
+    focus: "The Carnivore",
+    categories: ["餐饮形式", "体验特色"],
+  });
 });
 
 test("DAY notice 无来源政策数字会被拒绝，合法短提醒可写回且其他 DAY 事实不变", async () => {

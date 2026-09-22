@@ -24,6 +24,23 @@ test("Copy Facts Research 只接受两类显式请求", () => {
   assert.match(prompt.messages[0].content, /1—3 个相互独立的候选页面/);
 });
 
+test("Dining Facts Research 只研究指定实体中的当前餐饮 focus", () => {
+  const prompt = buildCopyFactsResearchRequest({
+    researchRequest: {
+      researchType: "official_entity_facts",
+      entityName: "Example Safari Camp",
+      entityKind: "dining",
+      focus: "Sundowner",
+      categories: ["餐饮形式", "体验特色"],
+    },
+  });
+  assert.match(prompt.messages[0].content, /只研究指定餐厅或明确酒店中的 focus 体验/);
+  assert.match(prompt.messages[0].content, /餐饮研究总计最多返回两条事实/);
+  assert.match(prompt.messages[0].content, /不得把酒店其他餐厅、泛化菜单/);
+  assert.match(prompt.messages[1].content, /"entityKind":"dining"/);
+  assert.match(prompt.messages[1].content, /"focus":"Sundowner"/);
+});
+
 test("Facts Research 非法 JSON 或结构只在当前研究调用内技术重试", async () => {
   const payloads = [
     { choices: [{ message: { content: '{"facts":[{"category":"景观"' }, finish_reason: "stop" }] },
@@ -325,4 +342,33 @@ test("来源不可访问与没有候选按字段区分", async () => {
     { category: "位置", status: "source_unavailable" },
     { category: "设计", status: "not_found" },
   ]);
+});
+
+test("餐饮正式来源仅因网络不可访问时沿用现有 verifiedFacts，酒店与软404不受影响", async () => {
+  const unavailable = async (url) => ({ ok: false, status: 403, url, headers: { get: () => "text/html" }, text: async () => "blocked" });
+  const diningRequest = { researchType: "official_entity_facts", entityName: "Example Dining", entityKind: "dining", focus: "Table-side Grill", categories: ["体验特色"] };
+  const candidate = { category: "体验特色", fact: "烤肉由服务人员巡桌现切。", sourceUrl: "https://example-group.test/dining/example/", sourceExcerpt: "carved at your table", sourceMediaType: "page", sourceClass: "official_brand" };
+
+  const dining = await verifyCopyFactsResearch({ researchRequest: diningRequest, candidates: [candidate], fetchSource: unavailable, fetchBrowserSource: null });
+  assert.equal(dining.verifiedFacts.length, 1);
+  assert.equal(dining.verifiedFacts[0].fact, candidate.fact);
+  assert.equal(dining.verifiedFacts[0].sourceClass, "official_brand");
+
+  const hotel = await verifyCopyFactsResearch({
+    researchRequest: { ...diningRequest, entityKind: "hotel", categories: ["设施"] },
+    candidates: [{ ...candidate, category: "设施", fact: "设有餐厅。" }],
+    fetchSource: unavailable,
+    fetchBrowserSource: null,
+  });
+  assert.equal(hotel.verifiedFacts.length, 0);
+  assert.equal(hotel.rejected[0].reason, "source_unavailable");
+
+  const soft404 = await verifyCopyFactsResearch({
+    researchRequest: diningRequest,
+    candidates: [candidate],
+    fetchSource: async (url) => textResponse("<title>Page Not Found 404 Error</title>", undefined, url),
+    fetchBrowserSource: null,
+  });
+  assert.equal(soft404.verifiedFacts.length, 0);
+  assert.equal(soft404.rejected[0].reason, "source_unavailable");
 });

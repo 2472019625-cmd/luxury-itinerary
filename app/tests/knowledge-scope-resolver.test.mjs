@@ -71,6 +71,24 @@ test('酒店目录只在完整层级佐证时容忍一个拼写差异，不能�
   assert.equal(confirmHotelDirectory(ritz, duplicate).status, 'ambiguous');
 });
 
+test("酒店简称拼写容错不能跨过祖先地区证据", () => {
+  const records = [
+    { node_id: "root", formal_name: "Root" },
+    { node_id: "kenya", formal_name: "Kenya", parent_node_id: "root" },
+    { node_id: "nairobi", formal_name: "Nairobi", parent_node_id: "kenya" },
+    { node_id: "wrong-ritz", formal_name: "Ritz Carton", parent_node_id: "nairobi" },
+  ];
+  const slot = { moduleType: "hotel", hotel: "The Ritz-Carlton, Masai Mara Safari Camp", country: "Kenya" };
+  assert.equal(confirmHotelDirectory(slot, buildKnowledgeHierarchy(records)).status, "unresolved");
+  const bothRegions = buildKnowledgeHierarchy([...records,
+    { node_id: "mara", formal_name: "Masai Mara", parent_node_id: "kenya" },
+    { node_id: "correct-ritz", formal_name: "Ritz Carton", parent_node_id: "mara" },
+  ]);
+  const proof = confirmHotelDirectory(slot, bothRegions);
+  assert.equal(proof.status, "resolved");
+  assert.deepEqual(proof.resolution.nodeIds, ["correct-ritz"]);
+});
+
 const hierarchy = buildKnowledgeHierarchy([
   { node_id: "root", formal_name: "根知识库", parent_node_id: null },
   { node_id: "kenya", formal_name: "肯尼亚", parent_node_id: "root" },
@@ -109,6 +127,54 @@ test("酒店、地区和轻微目录拼写差异均通过真实上下文确定�
 
   const duplicateBrand = resolveKnowledgeScope({ moduleType: "hotel", hotel: "Saruni Leopard Hill", location: "Kenya" }, hierarchy);
   assert.deepEqual(duplicateBrand.nodeIds, ["saruni-mara"]);
+});
+
+test("酒店目录二次确认复用同一身份容错，且同名简称仍不得越过消歧", () => {
+  for (const [hotel, location, expectedNode] of [
+    ["The Ritz-Carlton, Masai Mara Safari Camp", "Masai Mara", "ritz"],
+    ["JW Marriott Hotel Nairobi", "Nairobi", "jw"],
+  ]) {
+    const slot = {
+      moduleType: "hotel",
+      hotel,
+      location,
+      exactIdentityRequired: true,
+      queryCore: { subject: "酒店代表性空间", identity: hotel },
+    };
+    const firstResolution = resolveKnowledgeScope(slot, hierarchy);
+    assert.deepEqual(firstResolution.nodeIds, [expectedNode]);
+    const confirmation = confirmHotelDirectory(slot, hierarchy);
+    assert.equal(confirmation.status, "resolved");
+    assert.deepEqual(confirmation.resolution.nodeIds, [expectedNode]);
+    const plan = buildKnowledgeScopePlan(slot, firstResolution, hierarchy);
+    assert.deepEqual(plan.scopes.map((scope) => scope.resolution.nodeIds), [[expectedNode]]);
+    assert.equal(plan.blockedReason, null);
+  }
+
+  const ambiguous = confirmHotelDirectory({
+    moduleType: "hotel",
+    hotel: "Saruni Leopard Hill",
+    exactIdentityRequired: true,
+    queryCore: { subject: "酒店代表性空间", identity: "Saruni Leopard Hill" },
+  }, hierarchy);
+  assert.notEqual(ambiguous.status, "resolved");
+  assert.equal(ambiguous.resolution, null);
+
+  const englishRegionTree = buildKnowledgeHierarchy([
+    { node_id: "root-en", formal_name: "Root" },
+    { node_id: "kenya-en", formal_name: "Kenya", parent_node_id: "root-en" },
+    { node_id: "mara-en", formal_name: "Masai Mara", parent_node_id: "kenya-en" },
+    { node_id: "ritz-en", formal_name: "Ritz Carton", parent_node_id: "mara-en" },
+  ]);
+  const englishRegionProof = confirmHotelDirectory({
+    moduleType: "hotel",
+    hotel: "The Ritz-Carlton, Masai Mara Safari Camp",
+    country: "Kenya",
+    exactIdentityRequired: true,
+    queryCore: { subject: "酒店代表性空间", identity: "The Ritz-Carlton, Masai Mara Safari Camp" },
+  }, englishRegionTree);
+  assert.equal(englishRegionProof.status, "resolved");
+  assert.deepEqual(englishRegionProof.resolution.nodeIds, ["ritz-en"]);
 });
 
 test("消歧只在候选节点中选择唯一事实匹配，无法唯一时保持未解决", () => {

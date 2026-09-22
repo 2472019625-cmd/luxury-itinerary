@@ -108,6 +108,21 @@ function clean(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function researchFallbackPolicy(task = {}) {
+  if (task.moduleType === "dining") return {
+    label: "餐饮事实研究",
+    zeroFactBoundary: "禁止依赖模型常识新增菜单、食材、酒款、人员、布置、制作方式、服务流程、费用或包含状态；只能使用当前 task 的 sourceEvidence，资料不足时保持克制。",
+    notFound: "Copy 只能使用原始供应商资料中明确属于当前餐饮体验的事实，不以泛化餐饮介绍填充。",
+    failed: "Copy 仅使用当前餐饮体验的原始供应商事实继续生成，不以模型常识补充菜单、酒款、服务或现场配置。",
+  };
+  return {
+    label: "酒店事实研究",
+    zeroFactBoundary: "禁止依赖模型常识新增酒店设施、设计、景观或服务；只能选择当前 task 中已有的供应商事实，资料不足时保持克制或返回事实不足 warning。",
+    notFound: "Copy 只能使用原始供应商资料中明确属于该酒店的事实，资料不足时保持克制，不以产品角色或泛化酒店介绍填充。",
+    failed: "Copy 仅使用原始供应商资料中明确属于该酒店的事实继续生成，不以模型常识补充设施、设计、景观或服务。",
+  };
+}
+
 export function buildHotelFactRows(research = {}) {
   const verifiedByCategory = new Map((research.verifiedFacts || []).map((item) => [clean(item?.category), item]));
   const statusByCategory = new Map((research.categoryOutcomes || []).map((item) => [clean(item?.category), clean(item?.status)]));
@@ -363,6 +378,7 @@ export async function runCopyWriterSkill({
     }
     try {
       const research = await researchPromise;
+      const researchPolicy = researchFallbackPolicy(task);
       researchResultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, ...research });
       const writerTask = {
         ...task,
@@ -373,7 +389,7 @@ export async function runCopyWriterSkill({
             status: research.status,
             verifiedFactCount: research.verifiedFacts?.length || 0,
             categoryOutcomes: research.categoryOutcomes || [],
-            zeroFactBoundary: research.verifiedFacts?.length ? null : "禁止依赖模型常识新增酒店设施、设计、景观或服务；只能选择当前 task 中已有的供应商事实，资料不足时保持克制或返回事实不足 warning。",
+            zeroFactBoundary: research.verifiedFacts?.length ? null : researchPolicy.zeroFactBoundary,
           },
         },
         factStatuses: { ...task.factStatuses, externalFacts: research.status, externalFactCount: research.verifiedFacts?.length || 0 },
@@ -383,20 +399,21 @@ export async function runCopyWriterSkill({
         resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: buildHotelFactRows(research), warnings: [] });
       } else writerTaskById.set(task.targetId, writerTask);
       if (research.status !== "success") {
-        const message = `${research.entityName} 酒店事实研究未获得可核验结果；Copy 只能使用原始供应商资料中明确属于该酒店的事实，资料不足时保持克制，不以产品角色或泛化酒店介绍填充。`;
+        const message = `${research.entityName} ${researchPolicy.label}未获得可核验结果；${researchPolicy.notFound}`;
         researchWarningById.set(task.targetId, message);
         if (task.moduleType === "hotel_fact_rows") resultById.get(task.targetId).warnings.push(message);
         warnings.push({ code: "copy_facts_not_found", targetId: task.targetId, message });
       } else if ((research.categoryOutcomes || []).some((item) => item.status !== "success")) {
         const missing = research.categoryOutcomes.filter((item) => item.status !== "success").map((item) => `${item.category}:${item.status}`).join("、");
-        const message = `${research.entityName} 酒店事实研究部分字段未获得可核验结果（${missing}）；Copy 继续使用已核验事实，不补写缺失字段。`;
+        const message = `${research.entityName} ${researchPolicy.label}部分字段未获得可核验结果（${missing}）；Copy 继续使用已核验事实，不补写缺失字段。`;
         researchWarningById.set(task.targetId, message);
         if (task.moduleType === "hotel_fact_rows") resultById.get(task.targetId).warnings.push(message);
         warnings.push({ code: "copy_facts_partial", targetId: task.targetId, message });
       }
     } catch (error) {
+      const researchPolicy = researchFallbackPolicy(task);
       const researchError = { code: error?.code || "copy_facts_research_failed", message: error?.message || String(error) };
-      const fallbackMessage = `${task.researchRequest.entityName} 酒店事实研究发生技术故障；Copy 仅使用原始供应商资料中明确属于该酒店的事实继续生成，不以模型常识补充设施、设计、景观或服务。`;
+      const fallbackMessage = `${task.researchRequest.entityName} ${researchPolicy.label}发生技术故障；${researchPolicy.failed}`;
       researchResultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, status: "failed", verifiedFacts: [], error: researchError });
       const writerTask = {
         ...task,
@@ -407,7 +424,7 @@ export async function runCopyWriterSkill({
             status: "failed",
             verifiedFactCount: 0,
             error: researchError,
-            zeroFactBoundary: "禁止依赖模型常识新增酒店设施、设计、景观或服务；只能选择当前 task 中已有的供应商事实，资料不足时保持克制或返回事实不足 warning。",
+            zeroFactBoundary: researchPolicy.zeroFactBoundary,
           },
         },
         factStatuses: { ...task.factStatuses, externalFacts: "failed", externalFactCount: 0 },

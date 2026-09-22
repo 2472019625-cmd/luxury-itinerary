@@ -136,8 +136,8 @@ function DiningOverview({ items = [], policy, title = "特色餐饮", introTitle
   if (!items.length) return null;
   const isOdd = items.length % 2 === 1;
   const { entries, hasFeatured } = deriveFeaturedCardLayout(items, "dining");
-  const resolvedIntroTitle = introTitle || "值得专门期待的特色用餐";
-  const resolvedIntroCopy = introCopy || "从特色美食、品饮体验到不同的用餐方式，每一项都以清楚的餐饮重点和体验差异，说明它为什么值得期待。";
+  const resolvedIntroTitle = introTitle || "旅途中的风味时刻";
+  const resolvedIntroCopy = introCopy || "精选行程中最具代表性的餐饮与品饮体验，让不同风味、用餐方式与在地场景，共同构成旅途的味觉记忆。";
   return <section className="journey-feature-section dining-section" data-edit-path="dining"><SectionTitle en="CULINARY JOURNEY" zh={title} /><div className="feature-intro"><span>{resolvedIntroTitle}</span><p>{resolvedIntroCopy}</p></div><div className={`dining-grid${isOdd ? " dining-grid-odd" : ""}${hasFeatured ? " dining-grid-featured" : ""}`}>{entries.map(({ item, originalIndex: itemIndex, isFeatured: isWide }) => {
     const images = (item.images?.length ? item.images : item.image ? [item.image] : []).slice(0, 2);
     return <article className={`dining-card${isWide ? " dining-card-wide" : ""}`} key={item.id || item.title} data-edit-path={`dining.${itemIndex}`}>

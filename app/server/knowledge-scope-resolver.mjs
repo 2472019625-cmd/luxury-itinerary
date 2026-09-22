@@ -409,25 +409,33 @@ export function confirmHotelDirectory(slot, hierarchy) {
   const entity = hotelEntityForSlot(slot);
   const targets = unique([slot.hotel, slot.hotelOfficialName, slot.queryCore?.identity,
     ...(entity ? entityNames(entity) : [])]);
-  const names = targets.map(name => ({name, tokens: clean(name).toLowerCase().split(/[^\p{L}\p{N}]+/u)
-    .filter(t => t && !/^(?:the|hotel|lodge|camp|resort|tented|member|of|collection)$/i.test(t))}));
+  const nonHotelScopeNames = unique([
+    slot.country,
+    slot.destination,
+    slot.visualContext?.destination,
+    entity?.country,
+    entity?.region,
+  ]).map(normalized);
+  const hotelNameTokens = name => clean(name).toLowerCase().split(/[^\p{L}\p{N}]+/u)
+    .filter(t => t && !/^(?:the|hotel|lodge|camp|resort|tented|member|of|collection)$/i.test(t));
+  const names = targets.map(name => ({name, tokens: hotelNameTokens(name)}));
   const fullCandidates = [];
   const abbreviatedCandidates = [];
   for (const node of hierarchy?.records || []) {
     if (GENERIC_NODE_NAMES.has(normalized(node.formalName))) continue;
-    if ([slot.country,slot.destination,slot.visualContext?.destination].filter(Boolean)
-      .some(country => normalized(country) === normalized(node.formalName))) continue;
+    if (nonHotelScopeNames.includes(normalized(node.formalName))) continue;
     const pathNames = unique([...node.pathSegments, ...node.pathSegments.flatMap(segment =>
       TRAVEL_ENTITY_REGISTRY.filter(e => entityNames(e).some(n => normalized(n) === normalized(segment))).flatMap(entityNames))]);
     const tokens = new Set(pathNames.join(' ').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));
     const leafTokens = clean(node.formalName).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    const leafNameTokens = hotelNameTokens(node.formalName);
     // A single spelling error in the hotel leaf is tolerable only when its
     // other distinctive name and location tokens corroborate the same path.
     // This never turns a shared brand or a different property into a match.
     const corroboratedTypo = names.some(({tokens: required}) => {
-      if (required.length < 3 || leafTokens.length < 2) return false;
-      const exactLeaf = leafTokens.filter(token => required.includes(token));
-      const missingLeaf = leafTokens.filter(token => !required.includes(token));
+      if (required.length < 3 || leafNameTokens.length < 2) return false;
+      const exactLeaf = leafNameTokens.filter(token => required.includes(token));
+      const missingLeaf = leafNameTokens.filter(token => !required.includes(token));
       const missingTarget = required.filter(token => !tokens.has(token));
       return exactLeaf.length >= 1 && missingLeaf.length === 1 && missingTarget.length === 1
         && missingLeaf[0].length >= 5 && missingTarget[0].length >= 5

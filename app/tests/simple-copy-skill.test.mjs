@@ -123,6 +123,30 @@ test("研究结果只注入当前 target，研究技术失败时酒店使用供�
   assert.equal(result.metrics.modelCalls, 1);
 });
 
+test("餐饮轻量事实研究失败时继续调用 Copy，并使用餐饮专属安全边界", async () => {
+  const dining = {
+    ...task("dining", "diningExperiences.0.editorialCopy", "dining"),
+    facts: { sourceEvidence: ["DAY 1：在酒店安排星空晚宴"] },
+    researchRequest: { researchType: "official_entity_facts", entityName: "Example Safari Camp", entityKind: "dining", focus: "星空晚宴", categories: ["餐饮形式", "体验特色"] },
+  };
+  const result = await runCopyWriterSkill({
+    tasks: [dining],
+    researchFacts: async () => { throw Object.assign(new Error("官方餐饮页面暂不可用"), { code: "copy_facts_research_failed" }); },
+    requestJson: async ({ messages }) => {
+      const payload = JSON.parse(messages.at(-1).content);
+      const writerTask = payload.tasks[0];
+      assert.equal(writerTask.facts.factsResearchOutcome.status, "failed");
+      assert.match(writerTask.facts.factsResearchOutcome.zeroFactBoundary, /菜单、食材、酒款/);
+      assert.doesNotMatch(writerTask.facts.factsResearchOutcome.zeroFactBoundary, /酒店设施、设计/);
+      return { json: { results: [{ targetId: "dining", targetPath: dining.targetPath, value: "享用已确认的星空晚宴，在特别用餐场景中感受不同于普通晚餐的节奏。" }] }, attemptUsages: [{}] };
+    },
+  });
+  assert.equal(result.results[0].status, "success");
+  assert.ok(result.results[0].warnings.some((warning) => /餐饮事实研究发生技术故障/.test(warning)));
+  assert.equal(result.metrics.researchCalls, 1);
+  assert.equal(result.metrics.modelCalls, 1);
+});
+
 test("hotel editorialCopy、proofPoints 和 factRows 共用一次研究，factRows 不增加 Writer 输出", async () => {
   const request = { researchType: "official_entity_facts", entityName: "Faru Faru Lodge", categories: ["位置", "客房", "设计", "设施"] };
   const editorial = { ...task("hotel-copy", "hotels.0.editorialCopy", "hotel"), researchRequest: request };

@@ -156,3 +156,11 @@
 问题编号 `IMG-REL-23`（知识库酒店图使用泛化 Core）、`IMG-REL-24`（统一 900×500 误拦方形卡片图）。分支仍为 `codex/image-retrieval-reliability`。`simple-image-skill.mjs` 移除知识库酒店图对 Planner 主体和动作的替换，知识库与 Web 以同一份 `minimumVisualProof` 判断候选。`image-download.mjs` 对酒店、餐饮和交通卡按当前 2000px 图片框及最多 1.35 倍放大计算最低宽高，明确宽卡使用宽卡尺寸；封面和 DAY 保留原门槛。普通酒店卡允许 750×750 进入视觉审核，过小原件与宽卡不误放行；知识库匹配原件和 Web 下载共用新门槛，缓存键包含尺寸口径。`simple-plan-adapter.mjs` 透传明确宽卡布局。`renderer/render.mjs` 和 `simple-renderer.mjs` 在真实 2000px 排版中测量卡片图片放大倍数，超过上限时草稿提示、正式输出阻断，覆盖自动调整宽卡后的尺寸变化。正式规则 IMG-009 与落实对照表已同步。
 
 自动化：`npm run test:simple-skills` 149/149，调整后的酒店 750×750 知识库采用单例 1/1，图片安全与管线 38/38，Planner/Adapter 相关 30/30，规则覆盖 2/2，`npm run build` 与 `npm run test:sites` 4/4 均通过。构建只保留既有混合导入与大包提示。测试证明确定性门槛、Core 透传和最终版式判定；尚未完成最终代码的全新 Excel 项目真实回归，也未取得新的真实 Soroi 候选。只读端口检查仅见用户管理的 4180 服务，未见 4174；本轮未重启该服务或用旧进程证明新代码。待当前服务加载修改后，以全新项目核对 Soroi 与 Ritz 的真实候选、实际 2000px 图片清晰度和自动采用结果，再交独立复核；不宣布验收通过。二维码批准资产缺失仍按用户决定保持原状。
+
+## 2026-09-22 合并远端 frontend-v1
+
+问题编号 `MRG-FE-20260922`。按用户要求，把远端 `origin/codex/simple-pipeline-frontend-v1` 的 `50bc758`（含 `a31355a` 酒店目录修复、`50bc758` 餐饮事实研究与总览文案）合入当前 `codex/image-retrieval-reliability`，合并前为 `c053d5b`。唯一文本冲突在 `knowledge-scope-resolver.mjs`。最终保留远端的地区节点排除，并统一正式名称与目录名称的通用词过滤，使 `JW Marriot Hotel Nairobi` 在完整名称与地点佐证下容忍一个拼写差异；不直接叠加可跳过路径佐证的宽泛身份条件。新增反例证明 `Nairobi/Ritz Carton` 不能被当作马赛马拉 Ritz，而正确地区目录仍可解析。原图片尺寸门槛、Knowledge/Web Core 一致性、Stay 优先及真实渲染放大检查均保留。
+
+验证：首轮受影响测试 272 项，271 通过，唯一失败为既有批准收款二维码资产缺失（对应代码与测试未被合并修改）；最终冲突修复后知识库、图片技能与文案规则 138/138 通过。`npm run build` 成功，`npm run test:sites` 4/4 通过；构建仅有既有大包提示。没有重启用户服务、推送远端或执行新一轮真实 Excel 生成，不能把自动化结果作为独立验收。先前发现的渲染地址问题不在这次合并范围内。
+
+非敏感测试日志位于 `D:\CodexRuntime\agent-runtime\luxury-itinerary\2026-09-22-merge-frontend`，保留至交接后 7 天供排查，再由登记清理流程检查无人使用后退休；没有新增常驻服务。
