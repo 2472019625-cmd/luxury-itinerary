@@ -7,6 +7,25 @@ import { fetchPublicImageResource, readImageResponse, IMAGE_ACCEPT, IMAGE_USER_A
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const extensions = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" };
 
+// These card sizes are the rendered pixels in the 2000px itinerary. A source
+// may be cropped to the card, but should not need more than modest enlargement.
+const cardDisplaySizes = {
+  hotel: { standard: [976, 570], wide: [1180, 620] },
+  dining: { standard: [976, 520], wide: [1120, 570] },
+  transport: { standard: [976, 470], wide: [1180, 640] },
+};
+export const MAX_CARD_IMAGE_UPSCALE = 1.35;
+
+export function imageResolutionPolicyForSlot(slot = {}) {
+  const cards = cardDisplaySizes[String(slot.moduleType || "").toLowerCase()];
+  if (!cards) return { minWidth: 900, minHeight: 500 };
+  const [displayWidth, displayHeight] = slot.displayLayout === "wide" ? cards.wide : cards.standard;
+  return {
+    minWidth: Math.ceil(displayWidth / MAX_CARD_IMAGE_UPSCALE),
+    minHeight: Math.ceil(displayHeight / MAX_CARD_IMAGE_UPSCALE),
+  };
+}
+
 function technicalImageError(message, code, details = {}) {
   return Object.assign(new Error(message), { code, ...details });
 }

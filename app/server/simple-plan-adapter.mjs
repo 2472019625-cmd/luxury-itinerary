@@ -845,7 +845,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     const hotelSubject = clean(hotelPlan.primaryVisualSubject) || clean(hotel.officialName);
     const hotelDuty = clean(hotelPlan.visualDuty) || `确认并展示${hotel.officialName || hotel.shortName}最能体现真实住宿品质的代表性空间`;
     addSlot(slot({ slotId, moduleType: "hotel", required: true, location: plannedLocation(hotelPlan, hotel.region), hotel: clean(hotel.officialName), subject: hotelSubject, visualGoal: hotelDuty, visualContext: { region: hotel.region, hotelPositioning: hotel.selectionReason || "", signatureExperience: hotel.signatureExperience || "", avoid: [] }, copyTargetId, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "hotel", itemIndex: index, fieldPath: `hotels.${index}.images.0`, imageIndex: 0, required: true });
-    Object.assign(imageSlots.at(-1), { primaryVisualSubject: hotelSubject, visualDuty: hotelDuty, ...plannedQueryFields(hotelPlan) });
+    Object.assign(imageSlots.at(-1), { primaryVisualSubject: hotelSubject, visualDuty: hotelDuty, displayLayout: hotel.layout === "wide" ? "wide" : "standard", ...plannedQueryFields(hotelPlan) });
   });
   data.diningExperiences.forEach((item, index) => {
     const slotId = `image:dining:${item.id || index + 1}:primary`;
@@ -853,7 +853,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     const diningSubject = clean(diningPlan.primaryVisualSubject) || clean(item.officialName || item.title);
     const diningDuty = clean(diningPlan.visualDuty) || `展示${item.title || "特色餐饮"}真实的用餐形态、环境与体验氛围`;
     addSlot(slot({ slotId, moduleType: "dining", required: false, location: plannedLocation(diningPlan, item.location), activity: clean(item.title), subject: diningSubject, visualGoal: diningDuty, visualContext: { location: item.location, experience: item.title, status: item.status || item.feeBoundary || "", avoid: [] }, copyTargetId: `copy:dining:${item.id || index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "dining", itemIndex: index, fieldPath: `diningExperiences.${index}.images.0`, imageIndex: 0, required: false });
-    Object.assign(imageSlots.at(-1), { primaryVisualSubject: diningSubject, visualDuty: diningDuty, ...plannedQueryFields(diningPlan) });
+    Object.assign(imageSlots.at(-1), { primaryVisualSubject: diningSubject, visualDuty: diningDuty, displayLayout: item.layout === "wide" ? "wide" : "standard", ...plannedQueryFields(diningPlan) });
   });
   data.transportSummary.forEach((item, index) => {
     const slotId = `image:transport:${item.id || index + 1}:primary`;
@@ -861,7 +861,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     const transportSubject = clean(transportPlan.primaryVisualSubject) || clean(item.modelGuaranteed ? item.model : item.category);
     const transportDuty = clean(transportPlan.visualDuty) || `准确展示${item.category || "本次主要交通方式"}及其真实移动体验，不形成未确认车型承诺`;
     addSlot(slot({ slotId, moduleType: "transport", required: false, location: plannedLocation(transportPlan, item.location || data.destination), activity: clean(item.category), subject: transportSubject, visualGoal: transportDuty, visualContext: { destination: data.destination, category: item.category, serviceLevel: item.serviceLevel, usageLabel: item.usageLabel, modelGuaranteed: item.modelGuaranteed === true ? "已确认车型" : "车型未保证", avoid: [] }, copyTargetId: `copy:transport:${item.id || index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "transport", itemIndex: index, fieldPath: `transportSummary.${index}.images.0`, imageIndex: 0, required: false });
-    Object.assign(imageSlots.at(-1), { primaryVisualSubject: transportSubject, visualDuty: transportDuty, ...plannedQueryFields(transportPlan) });
+    Object.assign(imageSlots.at(-1), { primaryVisualSubject: transportSubject, visualDuty: transportDuty, displayLayout: item.layout === "wide" ? "wide" : "standard", ...plannedQueryFields(transportPlan) });
   });
   data.days.forEach((day, index) => {
     const role = dayRole(effectiveAgentPlan, index);

@@ -431,7 +431,8 @@ test("酒店按高价值类别逐个查询，第二类找到合格图后立即�
       },
       searchWebBatch: async () => { webCalls += 1; return []; },
       searchCommonsImages: async () => { commonsCalls += 1; return []; },
-      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+      downloadCandidate: async (candidate, { directory, publicPrefix, minWidth, minHeight }) => {
+        if (minWidth !== 1) assert.deepEqual([minWidth, minHeight], [723, 423]);
         const filePath = path.join(directory, candidate.title);
         await sharp({ create: { width: 1400, height: 900, channels: 3, background: "#715b45" } }).jpeg().toFile(filePath);
         return { ...candidate, filePath, publicUrl: `${publicPrefix}/${candidate.title}`, sha256: candidate.knowledgeRecordId, width: 1400, height: 900 };
@@ -482,12 +483,17 @@ test("酒店根目录递归包含子目录时只使用根Scope并在首个合格
         const records = Array.from({ length: 4 }, (_, index) => ({ recordId: `hotel-exterior-${index + 1}`, filename: `exterior-${index + 1}.jpg`, fragmentContent: "hotel exterior", sourcePaths: [`肯尼亚/安博塞利/AngamaAmboseli/exterior-${index + 1}.jpg`] }));
         return { status: "completed", queryId: "hotel-hit", queryText: queries[0], durationMs: 1, records, candidates: records.map((record) => ({ imageUrl: `http://192.168.100.210:9000/${record.filename}`, pageUrl: "http://192.168.100.210:8020/q/hotel-hit", title: record.filename, sourceKind: "knowledge_library", knowledgeRecordId: record.recordId, knowledgeQueryId: "hotel-hit", knowledgeSourcePaths: record.sourcePaths })) };
       },
-      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+      downloadCandidate: async (candidate, { directory, publicPrefix, minWidth, minHeight }) => {
+        if (minWidth !== 1) assert.deepEqual([minWidth, minHeight], [723, 423]);
         const filePath = path.join(directory, candidate.title);
-        await sharp({ create: { width: 1400, height: 900, channels: 3, background: "#715b45" } }).jpeg().toFile(filePath);
-        return { ...candidate, filePath, publicUrl: `${publicPrefix}/${candidate.title}`, sha256: candidate.knowledgeRecordId, width: 1400, height: 900 };
+        await sharp({ create: { width: 750, height: 750, channels: 3, background: "#715b45" } }).jpeg().toFile(filePath);
+        return { ...candidate, filePath, publicUrl: `${publicPrefix}/${candidate.title}`, sha256: candidate.knowledgeRecordId, width: 750, height: 750 };
       },
-      judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate) => completeAudit(candidate, { actualSubject: "hotel exterior", score: 95, reason: "matched" })),
+      judgeCandidatesBatch: async ({ slot: auditSlot, candidates }) => {
+        assert.equal(auditSlot.minimumVisualProof.subject, "酒店外观");
+        assert.match(auditSlot.minimumVisualProof.identityRequirement, /Angama Amboseli/);
+        return candidates.map((candidate) => completeAudit(candidate, { actualSubject: "hotel exterior", score: 95, reason: "matched" }));
+      },
       searchWebBatch: async () => { throw new Error("不得调用公网"); },
       searchCommonsImages: async () => { throw new Error("不得调用 Commons"); },
     },
@@ -495,6 +501,7 @@ test("酒店根目录递归包含子目录时只使用根Scope并在首个合格
   assert.deepEqual(calls.map((item) => item.scope), ["hotel"]);
   assert.deepEqual(calls.map((item) => item.query), ["酒店外观"]);
   assert.equal(calls.length, 1);
+  assert.equal(result.results[0].selected.width, 750);
   assert.equal(result.results[0].status, "success");
   assert.deepEqual(result.results[0].pipelineEvidence.knowledgeSearch.scopePlan.scopes.map((item) => item.role), ["hotel_root"]);
   assert.equal(result.metrics.businessBatches, 1);
@@ -1475,7 +1482,8 @@ test("官方 Gallery 命中后补取酒店落地页，并优先下载可确认�
           { ...page, imageUrl:"https://images.ctfassets.net/demo/sabora-lounge.jpg?w=2400", alt:"Singita Sabora lounge", semanticText:"Singita Sabora Tented Camp public lounge interior" },
         ];
       },
-      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+      downloadCandidate: async (candidate, { directory, publicPrefix, minWidth, minHeight }) => {
+        assert.deepEqual([minWidth, minHeight], [723, 423]);
         downloadedUrls.push(candidate.imageUrl);
         index += 1;
         const filePath = path.join(directory, `hotel-${index}.jpg`);

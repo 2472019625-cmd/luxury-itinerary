@@ -5,7 +5,8 @@ import test from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import sharp from 'sharp';
 import { assertPublicUrl, fetchPublicUrl } from '../server/page-images.mjs';
-import { downloadCandidate, fetchTrustedKnowledgeUrl } from '../server/image-download.mjs';
+import { downloadCandidate, fetchTrustedKnowledgeUrl, imageResolutionPolicyForSlot } from '../server/image-download.mjs';
+import { reviewCardImageUpscales } from '../server/simple-renderer.mjs';
 
 test('image network boundary rejects local, private and non-http addresses', async () => {
   await assert.rejects(assertPublicUrl('file:///etc/passwd'), /协议/);
@@ -51,4 +52,34 @@ test('low-resolution knowledge originals report their actual and required dimens
       && error.minWidth === 900
       && error.minHeight === 500,
   );
+});
+
+test('hotel card resolution follows the rendered crop rather than a fixed 900px width', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'hotel-card-resolution-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const standard = imageResolutionPolicyForSlot({ moduleType: 'hotel' });
+  const wide = imageResolutionPolicyForSlot({ moduleType: 'hotel', displayLayout: 'wide' });
+  assert.deepEqual(standard, { minWidth: 723, minHeight: 423 });
+  assert.deepEqual(wide, { minWidth: 875, minHeight: 460 });
+  assert.deepEqual(imageResolutionPolicyForSlot({ moduleType: 'day' }), { minWidth: 900, minHeight: 500 });
+  const buffer = await sharp({ create: { width: 750, height: 750, channels: 3, background: '#887766' } }).jpeg().toBuffer();
+  const fetchImpl = async () => new Response(buffer, { status: 200, headers: { 'content-type': 'image/jpeg', 'content-length': String(buffer.length) } });
+  const candidate = { sourceKind: 'knowledge_library', imageUrl: 'http://192.168.100.210:9000/original/hotel.jpg', title: 'hotel.jpg' };
+  const options = { directory, publicPrefix: '/test', trustedKnowledgeOrigins: ['http://192.168.100.210:9000'], fetchImpl };
+  const downloaded = await downloadCandidate(candidate, { ...options, ...standard });
+  assert.equal(downloaded.width, 750);
+  assert.equal(downloaded.height, 750);
+  await assert.rejects(downloadCandidate(candidate, { ...options, ...wide }), (error) => error.code === 'image_resolution_insufficient' && error.minWidth === 875);
+});
+
+test('the final 2000px layout blocks a card that becomes too enlarged', () => {
+  const layout = { cardImageUpscales: [
+    { selector: '[data-edit-path="hotels.0"]', scale: 976 / 750 },
+    { selector: '[data-edit-path="hotels.1"]', scale: 1180 / 750 },
+  ] };
+  const finalIssues = reviewCardImageUpscales(layout);
+  assert.equal(finalIssues.length, 1);
+  assert.equal(finalIssues[0].selector, '[data-edit-path="hotels.1"]');
+  assert.equal(finalIssues[0].severity, 'blocker');
+  assert.equal(reviewCardImageUpscales(layout, 'draft')[0].severity, 'warning');
 });

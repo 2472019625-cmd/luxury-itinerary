@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isUsableFinalImageSource, validateItineraryFacts } from "../src/lib/itineraryRules.js";
 import { selectCustomerRenderData } from "./customer-render-data.mjs";
+import { MAX_CARD_IMAGE_UPSCALE } from "./image-download.mjs";
 import { FIXED_MODULE_NAMES, SIMPLE_PIPELINE_DEFAULT_ORIGIN, fixedModuleExpectations, validateApprovedPayment } from "./simple-fixed-modules.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -56,6 +57,17 @@ export function reviewFixedModuleLayout(expected = {}, layout = {}) {
   return issues;
 }
 
+export function reviewCardImageUpscales(layout = {}, mode = "final") {
+  return (layout.cardImageUpscales || [])
+    .filter((item) => Number.isFinite(item.scale) && item.scale > MAX_CARD_IMAGE_UPSCALE)
+    .map((item) => ({
+      severity: mode === "draft" ? "warning" : "blocker",
+      code: "image_upscale_excessive",
+      selector: item.selector,
+      message: `图片在实际版面放大 ${item.scale.toFixed(2)} 倍，超过 ${MAX_CARD_IMAGE_UPSCALE} 倍上限`,
+    }));
+}
+
 function runRenderer(args, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -92,6 +104,7 @@ export async function runSimpleRenderer({ data, projectId, root = appRoot, origi
   if (layout.width !== 2000) issues.push({ severity: draft ? "warning" : "blocker", code: "wrong_width", message: `成品宽度为 ${layout.width}px` });
   for (const item of layout.overflows || []) issues.push({ severity: draft ? "warning" : "blocker", code: "text_overflow", message: `文字或模块溢出：${item.selector}` });
   for (const item of layout.brokenImages || []) issues.push({ severity: draft ? "warning" : "blocker", code: "broken_image", message: `图片未能正常渲染：${item.src}` });
+  issues.push(...reviewCardImageUpscales(layout, mode));
   issues.push(...reviewFixedModuleLayout(preflight.expectedFixedModules, layout).map((item) => draft ? { ...item, severity: "warning" } : item));
   for (const item of layout.largeGaps || []) issues.push({ severity: "warning", code: "large_gap", message: `检测到异常大空白 ${item.gap}px` });
   const passed = existsSync(outputPath) && !issues.some((item) => item.severity === "blocker");

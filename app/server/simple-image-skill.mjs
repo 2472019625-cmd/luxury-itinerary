@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { judgeCandidatesBatch } from "./image-audit.mjs";
 import { ImageDeduper } from "./image-dedupe.mjs";
-import { downloadCandidate } from "./image-download.mjs";
+import { downloadCandidate, imageResolutionPolicyForSlot } from "./image-download.mjs";
 import { searchWebBatch } from "./image-search.mjs";
 import { normalizeImageSourceMode, searchKnowledgeImages } from "./knowledge-image-search.mjs";
 import { applyKnowledgeScopeToQueryPlan, buildKnowledgeQueryPlan, buildKnowledgeScopePlan, buildKnowledgeVisualTarget, classifyKnowledgeImagePurpose, explicitEntityRoute, createKnowledgeScopeResolver, knowledgeSourcePathMatches } from "./knowledge-scope-resolver.mjs";
@@ -800,6 +800,8 @@ export async function runImageSearchSkill({
     const contractErrors = validateImageSlot(slot);
     if (contractErrors.length) return { slotId: slot?.slotId || null, status: "failed", selected: null, candidates: [], queriesUsed: [], sourceEvidence: [], actualSubject: null, matchReason: null, technicalStatus: "invalid_slot_contract", warnings: contractErrors, constraints: null, durationMs: Date.now() - slotStartedAt };
     const constraints = buildImageConstraints(slot);
+    const resolutionPolicy = imageResolutionPolicyForSlot(slot);
+    const resolutionCacheKey = `${resolutionPolicy.minWidth}x${resolutionPolicy.minHeight}`;
     const queriesUsed = buildImageQueries(slot, maxQueriesPerSlot);
     if (slot.userLocked) return { slotId: slot.slotId, status: "needs_user_action", selected: null, candidates: [], queriesUsed: [], sourceEvidence: [], actualSubject: null, matchReason: "图片位已由用户锁定，未执行自动搜索", technicalStatus: "user_locked", warnings: [], constraints, durationMs: Date.now() - slotStartedAt };
     const warnings = [];
@@ -966,12 +968,12 @@ export async function runImageSearchSkill({
         const downloadedResults = await Promise.all(downloadBatch.map(async (candidate) => {
           const record = candidateRecord(candidate);
           try {
-            const technical = await reuse(downloadCache, metrics.resourceReuse.images, candidate.imageUrl, () => downloadQueue.add(() => withOneTechnicalRetry(async () => {
+            const technical = await reuse(downloadCache, metrics.resourceReuse.images, `${candidate.imageUrl}:${resolutionCacheKey}`, () => downloadQueue.add(() => withOneTechnicalRetry(async () => {
               metrics.downloadAttempts += 1;
               evidence.downloadAttempts += 1;
               metrics.resourceReuse.images.attempts += 1;
               increment(metrics.resourceReuse.images.attemptsByUrl, candidate.knowledgeAssetKey || candidate.imageUrl);
-              const result = await measure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal, retrievalSession, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, candidate.knowledgeAssetKey || candidate.imageUrl); }, trustedKnowledgeOrigins }));
+              const result = await measure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal, retrievalSession, ...resolutionPolicy, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, candidate.knowledgeAssetKey || candidate.imageUrl); }, trustedKnowledgeOrigins }));
               return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
             }, () => { metrics.technicalRetries.download += 1; })));
             if (record) record.downloadStatus = "success";
@@ -1313,12 +1315,8 @@ export async function runImageSearchSkill({
 
     async function runKnowledgePreviewFirstLayer(layerSlot, layerConstraints, layerQueries, evidence, layerName) {
       const hotelKnowledgeModule = String(layerSlot.moduleType || "").trim().toLowerCase() === "hotel";
-      const hotelIdentity = text(layerSlot.hotel) || text(layerSlot.hotelOfficialName) || text(layerSlot.hotelShortName);
-      const eligibilitySlot = hotelKnowledgeModule ? {
-        ...layerSlot,
-        queryCore: { subject: "酒店代表性空间", action: "", identity: hotelIdentity },
-      } : layerSlot;
-      const eligibilityConstraints = hotelKnowledgeModule ? buildImageConstraints(eligibilitySlot) : layerConstraints;
+      const eligibilitySlot = layerSlot;
+      const eligibilityConstraints = layerConstraints;
       const attempts = [];
       const recordMap = new Map();
       const candidatePool = new Map();
@@ -1511,12 +1509,12 @@ export async function runImageSearchSkill({
             originalDownloadsUsed += 1;
             originalAttemptedAssets.add(candidate.knowledgeAssetKey);
             try {
-              const cacheKey = `original:${candidate.knowledgeAssetKey}`;
+              const cacheKey = `original:${candidate.knowledgeAssetKey}:${resolutionCacheKey}`;
               const rescued = await reuse(downloadCache, metrics.resourceReuse.images, cacheKey, () => downloadQueue.add(async () => {
                 metrics.downloadAttempts += 1;
                 metrics.matchedFileDownloadAttempts += 1;
                 evidence.downloadAttempts += 1;
-                const result = await measure("originalDownload", () => measure("download", () => downloadFn({ ...candidate, imageUrl: matchedFile.url, title: matchedFile.filename || candidate.title }, { directory: assetDirectory, publicPrefix, signal, retrievalSession, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins })));
+                const result = await measure("originalDownload", () => measure("download", () => downloadFn({ ...candidate, imageUrl: matchedFile.url, title: matchedFile.filename || candidate.title }, { directory: assetDirectory, publicPrefix, signal, retrievalSession, ...resolutionPolicy, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins })));
                 return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
               }));
               metrics.matchedFileDownloadSuccess += 1;
@@ -1671,12 +1669,12 @@ export async function runImageSearchSkill({
           }
           originalDownloadsUsed += 1;
           try {
-            const cacheKey = `original:${entry.candidate.knowledgeAssetKey}`;
+            const cacheKey = `original:${entry.candidate.knowledgeAssetKey}:${resolutionCacheKey}`;
             const technical = await reuse(downloadCache, metrics.resourceReuse.images, cacheKey, () => downloadQueue.add(async () => {
               metrics.downloadAttempts += 1;
               metrics.matchedFileDownloadAttempts += 1;
               evidence.downloadAttempts += 1;
-              const result = await measure("originalDownload", () => measure("download", () => downloadFn({ ...entry.candidate, imageUrl: matchedFile.url, title: matchedFile.filename || entry.candidate.title }, { directory: assetDirectory, publicPrefix, signal, retrievalSession, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins })));
+              const result = await measure("originalDownload", () => measure("download", () => downloadFn({ ...entry.candidate, imageUrl: matchedFile.url, title: matchedFile.filename || entry.candidate.title }, { directory: assetDirectory, publicPrefix, signal, retrievalSession, ...resolutionPolicy, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins })));
               return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
             }));
             metrics.matchedFileDownloadSuccess += 1;
@@ -2120,13 +2118,13 @@ export async function runImageSearchSkill({
       const downloadedResults = await Promise.all(rawCandidates.map(async (candidate) => {
         const knowledgeRecord = evidence.knowledgeSearch?.candidates?.find((item) => item.recordId === candidate.knowledgeRecordId);
         try {
-          const technical = await reuse(downloadCache, metrics.resourceReuse.images, candidate.imageUrl, () => downloadQueue.add(() => withOneTechnicalRetry(async () => {
+          const technical = await reuse(downloadCache, metrics.resourceReuse.images, `${candidate.imageUrl}:${resolutionCacheKey}`, () => downloadQueue.add(() => withOneTechnicalRetry(async () => {
             metrics.downloadAttempts += 1; evidence.downloadAttempts += 1;
             queryReport.downloadAttempts += 1;
             metrics.resourceReuse.images.attempts += 1;
             const metricKey = candidate.sourceKind === "knowledge_library" ? candidate.knowledgeRecordId : candidate.imageUrl;
             increment(metrics.resourceReuse.images.attemptsByUrl, metricKey);
-            const result = await webMeasure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal, retrievalSession, onRequest: candidate.sourceKind === "knowledge_library" ? () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, metricKey); } : networkEvent(metrics.resourceReuse.images), trustedKnowledgeOrigins }));
+            const result = await webMeasure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal, retrievalSession, ...resolutionPolicy, onRequest: candidate.sourceKind === "knowledge_library" ? () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, metricKey); } : networkEvent(metrics.resourceReuse.images), trustedKnowledgeOrigins }));
             return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
           }, (error) => { metrics.technicalRetries.download += 1; warnings.push(`${layerName} 候选下载技术重试：${error?.message || error}`); })));
           if (knowledgeRecord) knowledgeRecord.downloadStatus = "success";
