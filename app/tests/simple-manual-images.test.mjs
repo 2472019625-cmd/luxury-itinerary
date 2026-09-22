@@ -156,6 +156,18 @@ test("候选预览只发布本地素材路径，未下载与过滤候选保留�
   for (const original of [...remoteCandidates, ...localCandidates]) assert.deepEqual(saved.find(item => item.candidateId === original.candidateId), original);
 });
 
+test('换图界面不列出未下载的延后网页命中，运行记录仍保留来源证据', async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const deferred = { candidateId: 'deferred-homepage', imageUrl: 'https://soroi.com/unrelated.jpg', webDownloadAdmission: 'deferred', originalDownloadStatus: 'not_requested' };
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.imageExecution.results[0].candidates.push(deferred);
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const payload = buildSimpleManualImagePayload(value.store, value.projectId);
+  assert.equal(payload.imageReview.slots[0].candidates.some(candidate => candidate.candidateId === deferred.candidateId), false);
+  assert.equal(payload.project.data.imageCandidates.some(candidate => candidate.candidateId === deferred.candidateId), false);
+  assert.ok(value.store.getFinalResult(value.projectId, value.executionRunId).imageExecution.results[0].candidates.some(candidate => candidate.candidateId === deferred.candidateId));
+});
+
 test("Step4 区分候选待选、硬拒绝、审核超时和审核中", async (t) => {
   const value = await fixture({ includeOptionalDay: true }); t.after(() => rm(value.root, { recursive: true, force: true }));
   let result = value.store.getFinalResult(value.projectId, value.executionRunId);

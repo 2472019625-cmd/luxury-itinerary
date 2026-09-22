@@ -140,7 +140,7 @@ async function runSearchRequest({ userPrompt, apiKey, baseUrl, model, count, sig
       messages: [
         {
           role: "system",
-          content: `你是高端旅行图片资料搜索员。使用实时网络搜索，为后续网页图片提取寻找真实、可访问的来源页面。优先酒店、营地、航空公司、旅游局等官方网站及其图库，其次可信旅行媒体和 Wikimedia Commons。只返回 JSON：{"results":[{"title":"页面标题","url":"https://真实搜索结果页面","summary":"页面为什么可能包含所需图片"}]}。最多返回 ${Math.max(1, Math.min(12, count))} 条。URL 必须来自本次搜索结果，禁止编造 URL，禁止返回图片 data URI；尽量返回目标页面的 canonical URL，不要返回 vertexaisearch.cloud.google.com 中转跳转地址。`,
+          content: `你是高端旅行图片资料搜索员。使用实时网络搜索，为后续网页图片提取寻找真实、可访问的来源页面。搜索具体酒店时优先该酒店的专属介绍页及专属图库，核对页面路径和标题确实对应目标酒店；不要用品牌首页、地区总览或其他酒店页面充数。优先酒店、营地、航空公司、旅游局等官方网站，其次可信旅行媒体和 Wikimedia Commons。官网拒绝访问时仍返回本次搜索中可核验的第三方专属页面；不要猜测图片直链或绕过访问限制。只返回 JSON：{"results":[{"title":"页面标题","url":"https://真实搜索结果页面","summary":"页面为什么可能包含所需图片"}]}。最多返回 ${Math.max(1, Math.min(12, count))} 条。URL 必须来自本次搜索结果，禁止编造 URL，禁止返回图片 data URI；尽量返回目标页面的 canonical URL，不要返回 vertexaisearch.cloud.google.com 中转跳转地址。`,
         },
         { role: "user", content: userPrompt },
       ],

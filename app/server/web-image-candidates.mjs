@@ -31,6 +31,39 @@ export function webResourceFilterReason(candidate) {
 // Missing lexical support is uncertainty, never a demonstrated visual conflict.
 const grammar = new Set('a an the of on in at to from with by for and or under over near as is are being be it its this that photo photos image images photography'.split(' '));
 const terms = value => [...new Set(String(value || '').toLowerCase().normalize('NFKC').split(/[^a-z0-9\u4e00-\u9fff]+/u).filter(t => t.length >= 3 && !grammar.has(t)).map(t => t.replace(/(?:ing|ed|s)$/,'').replace(/(.)\1$/,'$1')))];
+const genericHotelTerms = new Set(['hotel', 'lodge', 'camp', 'safari', 'resort', 'luxury', 'tented', 'the']);
+function hotelIdentityTokens(slot) {
+  return terms(slot.hotelOfficialName || slot.hotel || slot.queryCore?.identity)
+    .filter(token => !genericHotelTerms.has(token));
+}
+function pathOf(value) {
+  try { return decodeURIComponent(new URL(value).pathname); } catch { return ''; }
+}
+export function webHotelPropertyPage(pageUrl, slot) {
+  if (!String(slot.moduleType || '').toLowerCase().includes('hotel')) return false;
+  const required = hotelIdentityTokens(slot);
+  const pageTokens = new Set(terms(pathOf(pageUrl)));
+  return required.length >= 2 && required.every(token => pageTokens.has(token));
+}
+// Provenance from an image file or a hotel-specific page is independent of
+// the search result's title. Site homepages and brand galleries prove nothing.
+export function webHotelIdentityEvidence(candidate, slot) {
+  if (!String(slot.moduleType || '').toLowerCase().includes('hotel')) return null;
+  const required = hotelIdentityTokens(slot);
+  if (required.length < 2) return null;
+  const resourcePath = pathOf(resourceUrl(candidate.downloadedImageUrl || candidate.imageUrl));
+  const imageText = [resourcePath, candidate.alt, candidate.imageTitle, candidate.caption, candidate.structuredImageText].filter(Boolean).join(' ');
+  const imageTokens = new Set(terms(imageText));
+  const pagePath = pathOf(candidate.pageUrl);
+  const imageNamed = required.every(token => imageTokens.has(token));
+  const propertyPage = webHotelPropertyPage(candidate.pageUrl, slot)
+    && required.some(token => imageTokens.has(token))
+    && candidate.pagePosition === 'content' && candidate.resourceRole !== 'ui';
+  if (!imageNamed && !propertyPage) return null;
+  const declared = candidate.depictedIdentity && terms(candidate.depictedIdentity).filter(token => !genericHotelTerms.has(token));
+  if (declared?.length >= 2 && !declared.every(token => required.includes(token))) return null;
+  return { basis: imageNamed ? 'image_metadata' : 'property_page', quote: imageNamed ? imageText.slice(0, 500) : pagePath.slice(0, 500) };
+}
 function matchTerms(values, evidence) {
   const words = terms(evidence);
   const alternatives = values.filter(Boolean).map(terms).filter(v => v.length);
@@ -57,24 +90,31 @@ export function imageRelevanceDecision(candidate, slot) {
     return words.every(t => localWords.some(w => w === t || (/[\u4e00-\u9fff]/u.test(t) && w.includes(t))));
   });
   const identityCore = slot.exactIdentityRequired === true;
+  const hotelProof = webHotelIdentityEvidence(candidate, slot);
   // A publisher-declared image identity can prove a conflict. Arbitrary names
   // in page text, and failure to match words, cannot establish one.
   const targetIdentity = (hotel && slot.hotel) || slot.entityName;
   const normalize = value => terms(value).sort().join('|');
   const declaredIdentityConflict = identityCore && targetIdentity && candidate.depictedIdentity
     && normalize(candidate.depictedIdentity) !== normalize(targetIdentity);
+  const filename = pathOf(resourceUrl(candidate.imageUrl)).split('/').pop()?.replace(/\.[^.]+$/, '') || '';
+  const filenameTokens = terms(filename).filter(token => !genericHotelTerms.has(token));
+  const namedOtherHotel = hotel && /(?:^|[-_\s])(?:hotel|lodge|camp|resort)$/i.test(filename)
+    && filenameTokens.length > 0 && !filenameTokens.some(token => hotelIdentityTokens(slot).includes(token));
   const explicitText = [candidate.alt, candidate.caption, candidate.structuredImageText].filter(Boolean).join(' ').toLowerCase();
   const negatedCore = [...terms(core.subjectEn), ...terms(core.actionEn)].some(t => new RegExp(`\\b(?:no|not|without)\\s+${t}\\b`, 'i').test(explicitText));
   // A hotel name on the page or image proves at most its identity. It cannot
   // make a room photograph a strong match for a requested exterior.
-  const state = declaredIdentityConflict || negatedCore ? 'explicit_mismatch'
-    : (!identityCore || identity) && subjectSupported && (!actionValues.length || action.matched) ? 'strong_match' : 'insufficient_evidence';
+  const identitySupportedForRank = hotel ? Boolean(hotelProof) : (!identityCore || identity);
+  const state = declaredIdentityConflict || namedOtherHotel || negatedCore ? 'explicit_mismatch'
+    : identitySupportedForRank && subjectSupported && (!actionValues.length || action.matched) ? 'strong_match' : 'insufficient_evidence';
   const pass = state !== 'explicit_mismatch';
   return { pass, state, status: pass ? 'pending_visual_confirmation' : 'filtered_before_download',
-    reason: declaredIdentityConflict ? 'declared_image_identity_conflict' : negatedCore ? 'explicit_core_negation' : state === 'strong_match' ? 'local_core_evidence' : 'local_evidence_insufficient_not_mismatch',
-    rankBoost: (state === 'strong_match' ? 100 : 0) + subject.matches.filter(t => !hotel || !genericHotelSubjectTerms.has(t)).length * 12 + action.matches.length * 10 + (identity ? 25 : 0),
+    reason: declaredIdentityConflict ? 'declared_image_identity_conflict' : namedOtherHotel ? 'named_other_hotel_in_image_filename' : negatedCore ? 'explicit_core_negation' : state === 'strong_match' ? 'local_core_evidence' : 'local_evidence_insufficient_not_mismatch',
+    rankBoost: (state === 'strong_match' ? 100 : 0) + (hotelProof ? 250 : 0) + subject.matches.filter(t => !hotel || !genericHotelSubjectTerms.has(t)).length * 12 + action.matches.length * 10 + (!hotel && identity ? 25 : 0),
     resourcePath,
     subjectMatches: subject.matches, actionMatches: action.matches, identitySupported: identity,
+    hotelIdentityEvidence: hotelProof,
     evidence: local.slice(0, 1400), evidenceSemantics: 'local_text_only_not_visual_judgment' };
 }
 export function gateWebCandidates(candidates, slot) {

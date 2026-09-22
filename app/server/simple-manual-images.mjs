@@ -155,6 +155,14 @@ function localCandidatePreviewUrl(candidate) {
     .find((value) => typeof value === "string" && value.startsWith("/image-assets/")) || "";
 }
 
+function visibleCandidatePool(imageResult = {}) {
+  // Preserve every provider result in the run ledger, but the editor should
+  // show only images actually acquired for review. Deferred search hits have
+  // neither a local preview nor an image-level audit.
+  return candidatePool(imageResult).filter((candidate) =>
+    candidate.webDownloadAdmission !== "deferred" || Boolean(localCandidatePreviewUrl(candidate)));
+}
+
 function frontendCandidate(candidate, slotId, binding, canSelect) {
   const hard = candidate.hardJudgment || {};
   const qualificationStatus = candidateQualification(candidate);
@@ -231,7 +239,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
     const imageResult = resultById.get(slotId) || { slotId, status: "needs_user_action", candidates: [] };
     const selectables = selectableIds(result, imageResult);
     const binding = result.data?.simpleImageSlotBindings?.[slotId] || plan.slotBindings?.[slotId];
-    const candidates = candidatePool(imageResult).map((candidate) => frontendCandidate(candidate, slotId, binding, selectables.has(candidate.candidateId)));
+    const candidates = visibleCandidatePool(imageResult).map((candidate) => frontendCandidate(candidate, slotId, binding, selectables.has(candidate.candidateId)));
     const planned = plan.imageSlots.find((item) => item.slotId === slotId);
     return {
       slotId,
@@ -250,7 +258,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
   });
   const imageCandidates = uniqueCandidates((result.imageExecution?.results || []).flatMap((imageResult) => {
     const binding = result.data?.simpleImageSlotBindings?.[imageResult.slotId] || plan.slotBindings?.[imageResult.slotId];
-    return candidatePool(imageResult).map((candidate) => frontendCandidate(candidate, imageResult.slotId, binding, candidateCanBeSelected(result, imageResult, candidate)));
+    return visibleCandidatePool(imageResult).map((candidate) => frontendCandidate(candidate, imageResult.slotId, binding, candidateCanBeSelected(result, imageResult, candidate)));
   }));
   const unresolvedRequired = (result.unresolvedItems || []).filter((item) => item.required);
   const canEnterFinal = unresolvedRequired.length === 0 && Boolean(result.outputPath);

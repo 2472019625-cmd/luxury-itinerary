@@ -51,6 +51,26 @@ test('唯一酒店简称可确认；同名目录不得按体验路线猜选；�
   assert.equal(confirmHotelDirectory(slot,buildKnowledgeHierarchy(records.slice(0,2))).status,'unresolved');
 });
 
+test('酒店目录只在完整层级佐证时容忍一个拼写差异，不能误选同集团或同名营地', () => {
+  const records = [
+    { node_id: 'r', formal_name: '根知识库' },
+    { node_id: 'k', formal_name: '肯尼亚', parent_node_id: 'r' },
+    { node_id: 'm', formal_name: '马赛马拉', parent_node_id: 'k' },
+    { node_id: 'ritz', formal_name: 'Ritz Carton', parent_node_id: 'm' },
+    { node_id: 'stay', formal_name: 'Stay', parent_node_id: 'ritz' },
+    { node_id: 'other', formal_name: 'Ritz Carton Nairobi', parent_node_id: 'k' },
+    { node_id: 'soroi', formal_name: 'Soroi Luxury Migration Camp', parent_node_id: 'm' },
+    { node_id: 'sibling', formal_name: 'Soroi Mara Bush Camp', parent_node_id: 'm' },
+  ];
+  const tree = buildKnowledgeHierarchy(records);
+  const ritz = { moduleType: 'hotel', hotel: 'The Ritz-Carlton, Masai Mara Safari Camp', location: '马赛马拉', country: '肯尼亚' };
+  assert.deepEqual(confirmHotelDirectory(ritz, tree).resolution.nodeIds, ['ritz']);
+  assert.deepEqual(buildKnowledgeScopePlan(ritz, resolveKnowledgeScope(ritz, tree), tree).scopes[0].resolution.nodeIds, ['stay']);
+  assert.deepEqual(confirmHotelDirectory({ moduleType: 'hotel', hotel: 'Soroi Luxury\nMigration Camp', location: '马赛马拉' }, tree).resolution.nodeIds, ['soroi']);
+  const duplicate = buildKnowledgeHierarchy([...records, { node_id: 'duplicate', formal_name: 'Ritz Carton', parent_node_id: 'm' }]);
+  assert.equal(confirmHotelDirectory(ritz, duplicate).status, 'ambiguous');
+});
+
 const hierarchy = buildKnowledgeHierarchy([
   { node_id: "root", formal_name: "根知识库", parent_node_id: null },
   { node_id: "kenya", formal_name: "肯尼亚", parent_node_id: "root" },
@@ -899,7 +919,7 @@ test("合格Planner Query在具体地点和国家Scope中保持原文与顺序�
 test("Scope Plan 预先确定逐级范围和不同图片用途的停止边界", () => {
   const hotelRoot = resolveKnowledgeScope({ moduleType: "hotel", hotel: "Angama Amboseli", subject: "Angama Amboseli" }, hierarchy);
   const hotelPlan = buildKnowledgeScopePlan({ moduleType: "hotel", hotel: "Angama Amboseli", subject: "Angama Amboseli" }, hotelRoot, hierarchy);
-  assert.deepEqual(hotelPlan.scopes.map((item) => item.resolution.nodeIds[0]), ["angama"]);
+  assert.deepEqual(hotelPlan.scopes.map((item) => item.resolution.nodeIds[0]), ["angama-stay", "angama"]);
   assert.equal(hotelPlan.stopBoundary, "hotel_root");
   assert.equal(hotelPlan.childScopeDecision.reason, "hotel_module_locked_to_confirmed_hotel_root");
 

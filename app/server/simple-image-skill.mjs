@@ -12,7 +12,7 @@ import { IMAGE_AUDIT_EVIDENCE_VERSION, isHardRejectionCode, isIdentityEvidenceUn
 import { canonicalImageAssetKey, createImageRetrievalSession, extractPageImages, fetchImagePageContent } from "./page-images.mjs";
 import { searchCommonsImages } from "./commons-search.mjs";
 import { buildWebExecutionQueries, classifyWebFallback } from "./image-web-execution.mjs";
-import { prepareWebCandidates, gateWebCandidates, webImageAssetKey } from "./web-image-candidates.mjs";
+import { prepareWebCandidates, gateWebCandidates, webHotelIdentityEvidence, webHotelPropertyPage, webImageAssetKey } from "./web-image-candidates.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -247,8 +247,8 @@ function basicScore(candidate, slot) {
 }
 
 function candidateRankScore(candidate, slot) {
-  const officialHotelPriority = String(slot.moduleType || "").toLowerCase().includes("hotel") && candidate.officialHint ? 1000 : 0;
-  return Number(candidate.downloadRelevance?.rankBoost || 0) + officialHotelPriority + basicScore(candidate, slot);
+  // An official homepage is weaker evidence than a property-specific image.
+  return Number(candidate.downloadRelevance?.rankBoost || 0) + basicScore(candidate, slot);
 }
 
 export function selectDiverseWebDownloads(rankedCandidates, allowance) {
@@ -277,8 +277,9 @@ export function selectDiverseWebDownloads(rankedCandidates, allowance) {
   return selected;
 }
 
-function pageSourcePriority(page = {}) {
+function pageSourcePriority(page = {}, slot = {}) {
   const value = `${page.pageUrl || ""} ${page.title || ""}`;
+  if (webHotelPropertyPage(page.pageUrl, slot)) return /\/(?:gallery|photos?|media)(?:\/|$)/i.test(page.pageUrl || "") ? 550 : 500;
   if (/\/(?:gallery|photos?|media)(?:\/|$)|\b(?:gallery|photos?|media)\b/i.test(value)) return 300;
   if (page.sourceKind === "derived_official_lodge_page") return 200;
   if (/\/(?:lodge|hotel|camp|resort|experience|destination)\//i.test(value)) return 150;
@@ -629,6 +630,21 @@ export function applyKnowledgeSourcePathEvidence(slot, audit, pathDecision = {})
     }
   }
   return next;
+}
+
+export function applyWebImageIdentityEvidence(slot, candidate, audit) {
+  const proof = webHotelIdentityEvidence(candidate, slot);
+  if (!proof || !audit || audit.auditEvidenceVersion !== IMAGE_AUDIT_EVIDENCE_VERSION) return audit;
+  if (audit.identityEvidence?.status === "conflict" || audit.visibleIdentityConflict === true || audit.visibleLocationConflict === true) return audit;
+  if (isHardRejectionCode(audit.hardRejectCode) || audit.matchLevel === "mismatch") return audit;
+  if (["coreSubjectMatch", "coreActionMatch", "subjectClear", "subjectLargeEnough", "subjectPrimary", "watermarkFree", "nonAI", "photographic", "technicalUsable"].some((field) => audit[field] === false)) return audit;
+  return {
+    ...audit,
+    hotelIdentityMatch: true,
+    identityMatch: true,
+    identityEvidence: { status: "supported", basis: proof.basis, evidenceIds: [proof.basis === "image_metadata" ? "resourcePath" : "entityPagePath"], quote: proof.quote, explanation: "酒店专属来源与图片级证据经程序核验，且画面审核未发现冲突", visibleIdentifier: audit.identityEvidence?.visibleIdentifier || "" },
+    reason: [audit.reason, "酒店专属来源已核验；原身份字段不一致已纠正"].filter(Boolean).join("；"),
+  };
 }
 
 function retryableTechnicalError(error) {
@@ -1839,7 +1855,7 @@ export async function runImageSearchSkill({
           }
           const availableScopedQueries = scopedPlan.queries;
           const scopedQueries = hotelKnowledgeModule
-            ? availableScopedQueries
+            ? (plannedScope.role === "hotel_child" ? availableScopedQueries.slice(0, 2) : availableScopedQueries)
             : availableScopedQueries.slice(0, 2);
           queryPlan.byScope.push({ role: plannedScope.role, nodeIds: [...(scopeResolution.nodeIds || [])], fullPath: scopeResolution.fullPath || null, queries: [...scopedQueries] });
           for (let queryIndex = 0; queryIndex < scopedQueries.length; queryIndex += 1) {
@@ -2022,7 +2038,7 @@ export async function runImageSearchSkill({
       const failureStart = evidence.pageFailures.length;
       const expandedPages = expandHotelSourcePages(searchedPages, layerSlot)
         .filter((page) => !webBudget.pageUrls.has(page.pageUrl))
-        .sort((a, b) => pageSourcePriority(b) - pageSourcePriority(a) || basicScore(b, layerSlot) - basicScore(a, layerSlot));
+        .sort((a, b) => pageSourcePriority(b, layerSlot) - pageSourcePriority(a, layerSlot) || basicScore(b, layerSlot) - basicScore(a, layerSlot));
       const availablePages = expandedPages.filter((page) => !retrievalSession?.unavailablePageReason?.(page.pageUrl));
       queryReport.cachedUnavailablePages = expandedPages.length - availablePages.length;
       const pageAllowance = evidence.webExecution.currentAllowance.pages;
@@ -2077,7 +2093,11 @@ export async function runImageSearchSkill({
       const returnedCandidates = uniqueImageAssets([...extractedGroups.flat(), ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))));
       const remainingDownloadBudget = Math.min(Math.max(0, downloadsPerSlot - webBudget.downloads), evidence.webExecution.currentAllowance.downloads);
       const rankedCandidates = uniqueImageAssets([...diverseExtracted, ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot)));
-      const rawCandidates = selectDiverseWebDownloads(rankedCandidates, remainingDownloadBudget);
+      const strongHotelCount = isHotel ? rankedCandidates.filter((item) => item.downloadRelevance?.state === "strong_match").length : 0;
+      // Keep one weaker fallback if strong hotel evidence exists. Downloading
+      // five weak homepage images beside one property image wastes the budget.
+      const focusedAllowance = strongHotelCount ? Math.min(remainingDownloadBudget, strongHotelCount + 1) : remainingDownloadBudget;
+      const rawCandidates = selectDiverseWebDownloads(rankedCandidates, focusedAllowance);
       const admittedKeys = new Set(rawCandidates.map(candidate => webImageAssetKey(candidate.imageUrl)));
       const rankedKeys = new Set(rankedCandidates.map(candidate => webImageAssetKey(candidate.imageUrl)));
       for (const candidate of returnedCandidates) {
@@ -2192,7 +2212,7 @@ export async function runImageSearchSkill({
         evidence.webExecution.auditBatches.push({ candidateIds: wave.map((item) => item.candidateId), durationMs: Date.now() - started });
         const auditMap = new Map((Array.isArray(judgments) ? judgments : []).map((audit) => [audit?.candidateId, audit]));
         for (const candidate of wave) {
-          const audit = auditMap.get(candidate.candidateId);
+          const audit = applyWebImageIdentityEvidence(layerSlot, candidate, auditMap.get(candidate.candidateId));
           if (!completeVisualJudgment(audit)) { judged.push({ candidate, audit: audit || null, rejection: "needs_user_judgment" }); continue; }
           const rejection = failedHardRequirement(layerSlot, audit) || (fallbackPlan ? controlledFallbackRejection(fallbackPlan, audit) : null);
           judged.push({ candidate, audit: finalizeAuditEligibility(audit, rejection), rejection });

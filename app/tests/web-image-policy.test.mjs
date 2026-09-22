@@ -6,9 +6,71 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { explicitEntityRoute } from '../server/knowledge-scope-resolver.mjs';
 import { buildWebExecutionQueries } from '../server/image-web-execution.mjs';
-import { prepareWebCandidates } from '../server/web-image-candidates.mjs';
+import { imageRelevanceDecision, prepareWebCandidates, webHotelIdentityEvidence } from '../server/web-image-candidates.mjs';
 import { extractImageCandidatesFromHtml } from '../server/page-images.mjs';
-import { runImageSearchSkill } from '../server/simple-image-skill.mjs';
+import { applyWebImageIdentityEvidence, failedHardRequirement, runImageSearchSkill } from '../server/simple-image-skill.mjs';
+
+test('酒店网页只凭专属页面或图片自身证据确认身份，别家酒店文件提前排除', () => {
+  const slot = { moduleType: 'hotel', hotel: 'Soroi Luxury\nMigration Camp', hotelOfficialName: 'Soroi Luxury\nMigration Camp', exactIdentityRequired: true, queryCore: { identity: 'Soroi Luxury Migration Camp', subject: '酒店外观' } };
+  assert.equal(buildWebExecutionQueries(slot, [])[0], 'Soroi Luxury Migration Camp exterior');
+  const homepage = { pageUrl: 'https://soroi.com/', imageUrl: 'https://soroi.com/wp-content/uploads/tent.jpg', alt: 'luxury tent' };
+  const property = { ...homepage, pageUrl: 'https://soroi.com/maasai-mara-camp-portfolio/soroi-luxury-migration-camp/', alt: 'Soroi luxury tent', pagePosition: 'content' };
+  assert.equal(webHotelIdentityEvidence(homepage, slot), null);
+  assert.equal(webHotelIdentityEvidence(property, slot)?.basis, 'property_page');
+  assert.equal(webHotelIdentityEvidence({ ...property, alt: 'luxury tent' }, slot), null);
+  assert.equal(imageRelevanceDecision({ ...homepage, imageUrl: 'https://www.chaloafrica.com/wp-content/uploads/Lukimbi-Safari-Lodge.jpg' }, slot).reason, 'named_other_hotel_in_image_filename');
+  const ritz = { moduleType: 'hotel', hotel: 'The Ritz-Carlton, Masai Mara Safari Camp' };
+  const photo = { imageUrl: 'https://secure.s.forbestravelguide.com/img/properties/the-ritz-carlton-masai-mara-safari-camp/extra-large/the-ritz-carlton-masai-mara-safari-camp-two-bedroom-suite.jpg', pageUrl: 'https://www.forbestravelguide.com/hotels/maasai-mara-kenya/the-ritz-carlton-masai-mara-safari-camp' };
+  assert.equal(webHotelIdentityEvidence(photo, ritz)?.basis, 'image_metadata');
+  assert.equal(webHotelIdentityEvidence({ imageUrl: 'https://example.com/ritz-carlton.jpg', pageUrl: 'https://example.com/brands/ritz-carlton/' }, ritz), null);
+});
+
+test('图片身份字段矛盾时，确定性图片证据可自动纠正；真实冲突仍拒绝', () => {
+  const slot = { moduleType: 'hotel', hotel: 'The Ritz-Carlton, Masai Mara Safari Camp', queryCore: { identity: 'The Ritz-Carlton, Masai Mara Safari Camp', subject: '酒店套房' }, exactIdentityRequired: true };
+  const candidate = { imageUrl: 'https://secure.s.forbestravelguide.com/img/properties/the-ritz-carlton-masai-mara-safari-camp/extra-large/the-ritz-carlton-masai-mara-safari-camp-two-bedroom-suite.jpg' };
+  const audit = { auditEvidenceVersion: 2, identityEvidence: { status: 'insufficient' }, candidateId: 'ritz-photo', actualSubject: '丽思卡尔顿营地套房', reason: '资源路径确认目标酒店', matchLevel: 'representative', hardRejectCode: 'none', locationMatch: true, visibleLocationConflict: false, hotelIdentityMatch: false, visibleIdentityConflict: false, activityMatch: true, coreActionMatch: true, subjectMatch: true, coreSubjectMatch: true, identityMatch: false, subjectClear: true, subjectLargeEnough: true, subjectPrimary: true, transportTypeMatch: true, watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true, eligible: false };
+  const corrected = applyWebImageIdentityEvidence(slot, candidate, audit);
+  assert.equal(corrected.identityEvidence.status, 'supported');
+  assert.equal(corrected.hotelIdentityMatch, true);
+  assert.equal(failedHardRequirement(slot, corrected), null);
+  assert.equal(applyWebImageIdentityEvidence(slot, candidate, { ...audit, visibleIdentityConflict: true }).hotelIdentityMatch, false);
+  assert.equal(applyWebImageIdentityEvidence(slot, candidate, { ...audit, hardRejectCode: 'wrong_subject' }).hotelIdentityMatch, false);
+});
+
+test('Soroi 专属第三方页可在官网首页与别家酒店图之间优先下载并自动采用', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'soroi-image-policy-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const slot = { slotId: 'image:hotel:soroi:primary', moduleType: 'hotel', hotel: 'Soroi Luxury\nMigration Camp', hotelOfficialName: 'Soroi Luxury\nMigration Camp', required: true, visualGoal: '酒店营地主图', visualContext: { destination: 'Kenya' }, copyTargetId: 'copy:hotel:soroi', aspectRatio: '16:9', userLocked: false, queryCore: { identity: 'Soroi Luxury Migration Camp', subject: '酒店外观' }, exactIdentityRequired: true };
+  const downloaded = [];
+  const propertyImage = 'https://travel.example.com/images/soroi-luxury-migration-camp-exterior.jpg';
+  const result = await runImageSearchSkill({ root, slots: [slot], sourceMode: 'web_only', searchApiKey: 'fixture', searchModel: 'fixture', visionApiKey: 'fixture', visionBaseUrl: 'https://vision.invalid', visionModel: 'fixture', downloadsPerSlot: 6, sourcePagesPerSlot: 2, adapters: {
+    searchWebBatch: async () => [
+      { pageUrl: 'https://soroi.com/', officialHint: true, title: 'Soroi homepage' },
+      { pageUrl: 'https://travel.example.com/hotels/soroi-luxury-migration-camp/', title: 'Soroi Luxury Migration Camp' },
+    ],
+    searchCommonsImages: async () => [],
+    extractPageImages: async (page) => page.pageUrl === 'https://soroi.com/'
+      ? [
+        { ...page, imageUrl: 'https://soroi.com/wp-content/uploads/Lukimbi-Safari-Lodge.jpg', alt: 'safari lodge', pagePosition: 'content' },
+        { ...page, imageUrl: 'https://soroi.com/wp-content/uploads/tent.jpg', alt: 'luxury tent', pagePosition: 'content' },
+        { ...page, imageUrl: 'https://soroi.com/wp-content/uploads/savanna.jpg', alt: 'savanna', pagePosition: 'content' },
+      ]
+      : [{ ...page, imageUrl: propertyImage, alt: 'Soroi Luxury Migration Camp exterior', pagePosition: 'content' }],
+    downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+      downloaded.push(candidate.imageUrl);
+      const fileName = `soroi-${downloaded.length}.jpg`;
+      const filePath = path.join(directory, fileName);
+      await sharp({ create: { width: 1600, height: 1000, channels: 3, background: '#75855d' } }).jpeg().toFile(filePath);
+      return { filePath, publicUrl: `${publicPrefix}/${fileName}`, sha256: fileName, width: 1600, height: 1000 };
+    },
+    judgeCandidatesBatch: async ({ candidates }) => candidates.map(candidate => ({ candidateId: candidate.candidateId, auditEvidenceVersion: 2, identityEvidence: { status: 'insufficient', basis: 'entity_page', quote: candidate.imageUrl }, actualSubject: '营地外观', reason: '来源页与画面符合目标酒店', matchLevel: 'representative', hardRejectCode: 'none', locationMatch: true, visibleLocationConflict: false, hotelIdentityMatch: false, visibleIdentityConflict: false, activityMatch: true, coreActionMatch: true, subjectMatch: true, coreSubjectMatch: true, identityMatch: false, subjectClear: true, subjectLargeEnough: true, subjectPrimary: true, transportType: 'none', transportTypeMatch: true, watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true, eligible: false, relevance: 95, luxury: 90, cleanliness: 95, composition: 90, score: 93 })),
+  } });
+  assert.equal(downloaded.length, 1, '先查到专属页面且审核通过时不再打开品牌首页');
+  assert.equal(downloaded[0], propertyImage);
+  assert.ok(downloaded.every(url => !url.includes('Lukimbi')));
+  assert.equal(result.results[0].status, 'success', JSON.stringify(result.results[0]));
+  assert.equal(result.results[0].selected?.hardJudgment?.identityEvidence?.status, 'supported');
+});
 
 const ordinary = (subject, subjectEn, action, actionEn, location) => ({moduleType:'day',subject,primaryVisualSubject:subject,location,locationRole:'visual_identity',destination:'Kenya',queryCore:{subject,subjectEn,action,actionEn,identity:location}});
 test('地点身份不能把渡河、湿地、送机、夜游变成实体主体',()=>{

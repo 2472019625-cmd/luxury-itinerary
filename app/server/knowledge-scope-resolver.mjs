@@ -420,9 +420,22 @@ export function confirmHotelDirectory(slot, hierarchy) {
     const pathNames = unique([...node.pathSegments, ...node.pathSegments.flatMap(segment =>
       TRAVEL_ENTITY_REGISTRY.filter(e => entityNames(e).some(n => normalized(n) === normalized(segment))).flatMap(entityNames))]);
     const tokens = new Set(pathNames.join(' ').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));
-    const leafTokens = clean(node.formalName).toLowerCase().split(/[^\p{L}\p{N}]+/u);
+    const leafTokens = clean(node.formalName).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    // A single spelling error in the hotel leaf is tolerable only when its
+    // other distinctive name and location tokens corroborate the same path.
+    // This never turns a shared brand or a different property into a match.
+    const corroboratedTypo = names.some(({tokens: required}) => {
+      if (required.length < 3 || leafTokens.length < 2) return false;
+      const exactLeaf = leafTokens.filter(token => required.includes(token));
+      const missingLeaf = leafTokens.filter(token => !required.includes(token));
+      const missingTarget = required.filter(token => !tokens.has(token));
+      return exactLeaf.length >= 1 && missingLeaf.length === 1 && missingTarget.length === 1
+        && missingLeaf[0].length >= 5 && missingTarget[0].length >= 5
+        && editDistance(missingLeaf[0], missingTarget[0]) === 1
+        && required.every(token => tokens.has(token) || token === missingTarget[0]);
+    });
     if (names.some(({name, tokens: required}) => normalized(node.formalName) === normalized(name)
-      || (required.length > 0 && required.every(t => tokens.has(t)) && required.some(t => leafTokens.includes(t))))) {
+      || (required.length > 0 && required.every(t => tokens.has(t)) && required.some(t => leafTokens.includes(t)))) || corroboratedTypo) {
       fullCandidates.push(node);
     } else if (leafTokens.length >= 2 && names.some(({tokens: required}) =>
       leafTokens.every(t => required.includes(t)))) {
@@ -607,6 +620,10 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
     // missing/empty hotel directory must fall through to the existing Web
     // source instead of searching other hotels at region/country level.
     const confirmedRoot = hotelDirectoryConfirmation?.resolution || rootResolution;
+    const confirmedChild = semanticCategory(slot) === "accommodation" ? resolveKnowledgeChildScope(slot, confirmedRoot, hierarchy) : null;
+    if (confirmedChild?.decision.entered && resolutionContains(confirmedRoot, confirmedChild.scopeResolution, hierarchy)) {
+      addScope(scopes, confirmedChild.scopeResolution, "hotel_child", confirmedRoot, "entity_identity");
+    }
     addScope(scopes, confirmedRoot, "hotel_root", confirmedRoot, "entity_identity");
     refined.decision.reason = "hotel_module_locked_to_confirmed_hotel_root";
   } else if (hotelModule && ["hotel_space", "hotel_experience"].includes(purpose)) {
@@ -681,7 +698,13 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
       ? resolutionForNode(matches[0], "explicit_entity_directory", rootResolution?.facts, rootResolution?.mappingKey) : null;
     scopes.length = 0;
     const role = ["hotel", "hotel_experience"].includes(fastPath.entityType) ? "hotel_root" : "entity";
-    if (fastPath.identityKnown && exact) addScope(scopes, exact, role, exact, "entity_identity", fastPath.identityAnchors);
+    if (fastPath.identityKnown && exact) {
+      const confirmedChild = hotelModule && role === "hotel_root" && semanticCategory(slot) === "accommodation" ? resolveKnowledgeChildScope(slot, exact, hierarchy) : null;
+      if (confirmedChild?.decision.entered && resolutionContains(exact, confirmedChild.scopeResolution, hierarchy)) {
+        addScope(scopes, confirmedChild.scopeResolution, "hotel_child", exact, "entity_identity", fastPath.identityAnchors);
+      }
+      addScope(scopes, exact, role, exact, "entity_identity", fastPath.identityAnchors);
+    }
     else if (fastPath.identityKnown && rootResolution?.reason === "test_adapter_without_hierarchy") addScope(scopes, rootResolution, role, rootResolution, "entity_identity", fastPath.identityAnchors);
     fastPath.hotelDirectoryConfirmation = hotelDirectoryConfirmation;
     fastPath.knowledgeStopReason = !fastPath.identityKnown ? "identity_unknown" : !scopes.length

@@ -1,5 +1,5 @@
 import { TRAVEL_ENTITY_REGISTRY } from "../src/data/travelEntityRegistry.js";
-const name = (value) => typeof value === "string" ? value.trim() : value?.officialName || value?.name || "";
+const name = (value) => String(typeof value === "string" ? value : value?.officialName || value?.name || "").replace(/\s+/g, " ").trim();
 const unique = (items) => [...new Set(items.filter(Boolean).map((item) => item.trim().replace(/\s+/g, " ")))];
 const english = (value) => Boolean(value && /[a-z]/i.test(value) && !/[\u4e00-\u9fff]/.test(value));
 const entityFor = (value) => TRAVEL_ENTITY_REGISTRY.find((entity) => [entity.canonicalName, ...(entity.aliases || []), ...Object.values(entity.displayNames || {})].some((alias) => alias && alias.toLowerCase() === name(value).toLowerCase()));
