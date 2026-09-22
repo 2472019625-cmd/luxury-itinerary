@@ -12,6 +12,9 @@ test("4174正式入口复用原Workspace五步前端而非简化项目页", () =
   assert.match(app, /<Workspace[^>]+agentMode=/);
   assert.match(workspace, /上传资料[\s\S]+确认信息[\s\S]+生成内容[\s\S]+编辑预览[\s\S]+下载版本/);
   assert.match(app, /agent-diagnostics[\s\S]+window\.location\.replace\("\/agent"\)/);
+  assert.match(app, /window\.location\.pathname === "\/"[\s\S]{0,180}window\.location\.replace\("\/agent"\)/);
+  assert.match(app, /params\.get\("templatePreview"\) !== "1"/);
+  assert.match(app, /!exportMode/);
   assert.match(diagnostic, /function SimpleManualImagePage/);
   assert.doesNotMatch(diagnostic, /智能体内部诊断|管理员/);
 });
@@ -89,6 +92,26 @@ test("Step4人工换图允许未自动采用候选且结果提示自动消失", 
   assert.match(editor, /setTimeout\(\(\) => setImageMessage/);
   assert.match(editor, /2800/);
   assert.match(editor, /if \(saved\) setPickerOpen\(false\)/);
+});
+
+test("编辑器将预订流程与资金安全提醒拆为独立显示模块", () => {
+  assert.match(workspace, /\{ id: "booking", label: "预订流程" \},\s*\{ id: "security", label: "资金安全提醒" \}/);
+  const visibility = workspace.slice(workspace.indexOf("function visibilityData"), workspace.indexOf("function versionSnapshot"));
+  assert.match(visibility, /visibility\.booking === false\) next\.showBookingSection = false/);
+  assert.match(visibility, /visibility\.security === false\) next\.showSecuritySection = false/);
+  assert.doesNotMatch(visibility, /visibility\.booking === false[^\n]+showSecuritySection/);
+  assert.match(workspace, /预订流程为品牌固定内容，可独立控制是否进入正式版本/);
+  assert.match(workspace, /资金安全提醒与其付款区域连续展示，可独立于预订流程显示或隐藏/);
+});
+
+test("酒店结构化事实同时进入最终展示和Step4编辑，并兼容旧项目文案", () => {
+  assert.match(app, /hotel\.factRows/);
+  assert.match(app, /className="hotel-fact-rows"/);
+  assert.match(app, /factRows\.length > 0[\s\S]{0,700}hotel\.editorialCopy/);
+  assert.match(workspace, /HOTEL_FACT_ROW_DEFINITIONS[\s\S]{0,220}location[\s\S]{0,220}rooms[\s\S]{0,220}design[\s\S]{0,220}facilities/);
+  assert.match(workspace, /酒店展示信息/);
+  assert.match(workspace, /updateHotelFactRow\(next\.hotels\[selection\.itemIndex\]/);
+  assert.match(workspace, /showLegacyHotelCopy[\s\S]{0,1500}旧项目兼容内容/);
 });
 
 test("生成步骤只展示定制师可理解的状态且不暴露技术运行信息", () => {

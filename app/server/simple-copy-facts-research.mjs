@@ -8,7 +8,11 @@ export const COPY_FACTS_RESEARCH_TYPES = Object.freeze(["official_entity_facts",
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
 const stripFence = (value) => clean(value).replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
 const imageUrlPattern = /\.(?:avif|gif|jpe?g|png|svg|webp)(?:[?#]|$)/i;
-const thirdPartyDomains = ["booking.com", "expedia.com", "tripadvisor.com", "agoda.com", "hotels.com", "trip.com", "facebook.com", "instagram.com", "youtube.com", "wikipedia.org"];
+const lowTrustDomains = ["tripadvisor.com", "facebook.com", "instagram.com", "youtube.com", "tiktok.com", "x.com", "twitter.com", "wikipedia.org", "wikivoyage.org"];
+const majorOtaDomains = ["booking.com", "expedia.com", "agoda.com", "hotels.com", "trip.com"];
+const officialPressDomains = ["pressarea.com", "prnewswire.com", "businesswire.com"];
+const trustedTradeDomains = ["sleepermagazine.com", "hospitalitydesign.com", "hotelmanagement-network.com", "hoteldesigns.net", "dezeen.com", "designboom.com", "archdaily.com", "travelweekly.com", "forbestravelguide.com"];
+const MAX_EXTERNAL_SOURCE_PAGES = 2;
 const authoritativeDomains = ["who.int", "iata.org", "icao.int"];
 const orderFactPattern = /(?:本次|客人|订单|报价|行程)[^。；]{0,16}(?:已订|预订|入住.*房型|房型|已含|包含|价格|费用|车型|包车|保证|确保)|(?:your|the) (?:booking|reservation|itinerary)[^.;]{0,24}(?:room|include|price|vehicle|guarantee)/i;
 const browserExecutables = [
@@ -29,6 +33,7 @@ function normalizedCandidateSources(candidate = {}) {
     sourceUrl: clean(source?.sourceUrl),
     sourceExcerpt: clean(source?.sourceExcerpt),
     sourceMediaType: clean(source?.sourceMediaType) || "page",
+    sourceClass: clean(source?.sourceClass),
   })).filter((source) => {
     const key = `${source.sourceUrl}\n${source.sourceExcerpt}`;
     if (seen.has(key)) return false;
@@ -53,6 +58,7 @@ function validateResearchResponseJson(json, researchRequest) {
       if (!clean(source?.sourceUrl)) errors.push(`facts.${index}.sources.${sourceIndex}.sourceUrl 不能为空`);
       if (!clean(source?.sourceExcerpt)) errors.push(`facts.${index}.sources.${sourceIndex}.sourceExcerpt 不能为空`);
       if (clean(source?.sourceMediaType) !== "page") errors.push(`facts.${index}.sources.${sourceIndex}.sourceMediaType 只能是 page`);
+      if (source?.sourceClass !== undefined && !["official_entity", "official_brand", "official_press", "operator_or_tourism_authority", "architect_or_design_studio", "trusted_trade_media", "major_ota"].includes(clean(source.sourceClass))) errors.push(`facts.${index}.sources.${sourceIndex}.sourceClass 不在允许枚举中`);
     });
   });
   return errors;
@@ -77,7 +83,7 @@ function isGovernmentHost(hostname) {
 function isAllowedOfficialSource(url, request) {
   let hostname;
   try { hostname = new URL(url).hostname.toLowerCase(); } catch { return false; }
-  if (thirdPartyDomains.some((domain) => hostMatches(hostname, domain))) return false;
+  if ([...lowTrustDomains, ...majorOtaDomains, ...officialPressDomains, ...trustedTradeDomains].some((domain) => hostMatches(hostname, domain))) return false;
   const declaredDomains = Array.isArray(request.officialDomains) ? request.officialDomains : [];
   if (declaredDomains.some((domain) => hostMatches(hostname, domain))) return true;
   if (request.researchType === "authoritative_current_facts") {
@@ -90,11 +96,85 @@ function isAllowedOfficialSource(url, request) {
   return entityDomainTokens(request.entityName).some((token) => normalizedLabel === token || normalizedLabel.startsWith(token));
 }
 
-function isKnownThirdPartySource(url) {
+function isKnownLowTrustSource(url) {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
-    return thirdPartyDomains.some((domain) => hostMatches(hostname, domain));
+    return lowTrustDomains.some((domain) => hostMatches(hostname, domain));
   } catch { return true; }
+}
+
+function externalSourceClass(url) {
+  let hostname;
+  try { hostname = new URL(url).hostname.toLowerCase(); } catch { return ""; }
+  if (majorOtaDomains.some((domain) => hostMatches(hostname, domain))) return "major_ota";
+  if (officialPressDomains.some((domain) => hostMatches(hostname, domain))) return "official_press";
+  if (trustedTradeDomains.some((domain) => hostMatches(hostname, domain))) return "trusted_trade_media";
+  if (isGovernmentHost(hostname)) return "tourism_authority";
+  return "";
+}
+
+function externalClassAllowsCategory(sourceClass, category) {
+  const normalized = clean(category);
+  if (!sourceClass) return false;
+  if (sourceClass === "major_ota") return /位置|客房|房型|设施|景观|公共空间|住宿体验/.test(normalized) && !/设计/.test(normalized);
+  if (sourceClass === "trusted_trade_media") return /位置|客房|房型|设计|设施|景观|公共空间|住宿体验/.test(normalized);
+  if (sourceClass === "architect_or_design_studio") return /设计|空间/.test(normalized);
+  if (sourceClass === "official_press" || sourceClass === "tourism_authority") return true;
+  return false;
+}
+
+function isBudgetedExternalClass(sourceClass) {
+  return sourceClass === "architect_or_design_studio" || sourceClass === "trusted_trade_media" || sourceClass === "major_ota";
+}
+
+function declaredControlledSourceClass(candidate = {}) {
+  const declared = clean(candidate.sourceClass);
+  if (declared === "operator_or_tourism_authority") return "tourism_authority";
+  if (declared === "architect_or_design_studio") return "architect_or_design_studio";
+  return "";
+}
+
+function entityEvidenceTokens(entityName) {
+  const latin = entityDomainTokens(entityName);
+  const cjk = clean(entityName).toLowerCase().match(/[\u4e00-\u9fff]{2,}/g) || [];
+  return [...new Set([...latin, ...cjk])];
+}
+
+function pageMentionsEntity(body, entityName) {
+  const text = clean(String(body || "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ")).toLowerCase();
+  const tokens = entityEvidenceTokens(entityName);
+  if (!tokens.length) return false;
+  return tokens.filter((token) => text.includes(token)).length >= Math.min(2, tokens.length);
+}
+
+function pageSupportsDeclaredControlledClass(body, entityName, sourceClass) {
+  if (!pageMentionsEntity(body, entityName)) return false;
+  const html = String(body || "");
+  const title = clean(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]);
+  const headings = [...html.matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi)].map((match) => clean(match[1].replace(/<[^>]+>/g, " "))).join(" ");
+  const jsonLd = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1]).join(" ");
+  const local = clean(`${title} ${headings} ${jsonLd}`).toLowerCase();
+  if (/(?:review|blog|forum|traveller|traveler|user review|guest review)/i.test(local)) return false;
+  if (sourceClass === "architect_or_design_studio") return /(?:architecture|architect|interior design|design studio|portfolio|project)/i.test(local);
+  if (sourceClass === "tourism_authority") return /(?:tourism|tourist board|conservancy|reserve|official|operator|government organization|organization)/i.test(local);
+  return false;
+}
+
+function canonicalPageUrl(body, responseUrl) {
+  const canonical = htmlAttribute(body, "link(?=[^>]*\\brel=[\"']canonical[\"'])", "href");
+  if (!canonical) return clean(responseUrl);
+  try { return new URL(canonical, responseUrl).href; } catch { return clean(responseUrl); }
+}
+
+function candidatePriority(candidate, request) {
+  const sourceUrl = clean(candidate?.sourceUrl);
+  if (isAllowedOfficialSource(sourceUrl, request)) return 0;
+  const sourceClass = externalSourceClass(sourceUrl) || declaredControlledSourceClass(candidate);
+  if (sourceClass === "official_press" || sourceClass === "tourism_authority") return 2;
+  if (sourceClass === "trusted_trade_media") return 3;
+  if (sourceClass === "major_ota") return 4;
+  if (isKnownLowTrustSource(sourceUrl)) return 9;
+  return 1;
 }
 
 function htmlAttribute(body, tagPattern, attribute) {
@@ -130,7 +210,17 @@ function pageEstablishesOfficialEntity(body, responseUrl, request) {
     try { canonicalSameHost = hostMatches(new URL(canonical, responseUrl).hostname, new URL(responseUrl).hostname); } catch { canonicalSameHost = false; }
   }
   const hasFirstPartyBookingSurface = /(?:official\s+(?:site|website)|book\s+(?:now|a stay|your stay)|reserve\s+(?:now|a room)|check\s+availability)/i.test(html);
-  return hasEntitySchema || (canonicalSameHost && hasFirstPartyBookingSurface);
+  let registeredLabel = "";
+  try {
+    const labels = new URL(responseUrl).hostname.replace(/^www\./, "").split(".");
+    const countrySecondLevels = new Set(["co", "com", "org", "net", "gov", "go"]);
+    registeredLabel = labels.length >= 3 && labels.at(-1).length === 2 && countrySecondLevels.has(labels.at(-2)) ? labels.at(-3) : labels.at(-2);
+  } catch {}
+  const normalizedOwnerLabel = clean(registeredLabel).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const ownerBlocks = [...jsonLd.matchAll(/"(?:brand|parentOrganization)"\s*:\s*(?:\{[^{}]*?"name"\s*:\s*"([^"]+)"[^{}]*?\}|"([^"]+)")/gi)]
+    .map((match) => clean(match[1] || match[2]).toLowerCase().replace(/[^a-z0-9]/g, ""));
+  const ownerMatchesDomain = Boolean(normalizedOwnerLabel) && ownerBlocks.some((owner) => owner.includes(normalizedOwnerLabel) || normalizedOwnerLabel.includes(owner));
+  return hasEntitySchema && canonicalSameHost && hasFirstPartyBookingSurface && ownerMatchesDomain;
 }
 
 function sourceUrlVariants(sourceUrl) {
@@ -198,7 +288,6 @@ export function buildCopyFactsResearchRequest({ researchRequest, model = COPY_FA
   return {
     model,
     stream: false,
-    response_format: { type: "json_object" },
     reasoning_effort: "low",
     thinking: { type: "disabled" },
     max_tokens: 6_000,
@@ -207,12 +296,13 @@ export function buildCopyFactsResearchRequest({ researchRequest, model = COPY_FA
         role: "system",
         content: [
           "你是 Copy Skill 内部的事实研究员，不是独立 Pipeline 阶段。只研究输入实体与指定类别。",
-          "official_entity_facts 只能采用实体官网、品牌官网或该实体所属官方组织的具体页面；第三方平台、媒体文章、社交平台和图片都不能自动成为已核验事实。",
+          "official_entity_facts 一次研究输入酒店的全部指定类别，来源优先级为：实体/品牌官网与 Fact Sheet → 品牌官方新闻稿 → 正式运营方或旅游主管机构 → 建筑/设计机构的具体项目页 → 可信酒店行业媒体 → 主流 OTA。后五类只作为官方缺失字段的候选，必须返回具体页面和原文，不能用搜索摘要代替。",
           "authoritative_current_facts 只能采用政府、使领馆、正式国际组织或输入指定的正式运营方页面。没有可靠来源时返回空 facts，不要猜测。",
           "公开研究只能补充实体客观是什么、有什么，绝不能推断或改变本订单购买了什么。不得声明本次房型、包含项、价格、已保证车型、已预订服务或正式状态。",
-          "每个指定类别最多返回一条精炼事实；一条只保留一个可直接用于文案的核心事实，不要把设施、活动、儿童政策和多段宣传合并成长段。每条事实可返回 1—3 个相互独立的官方候选页面，每个页面必须附上该页自身的原文证据。",
+          "酒店类别固定按输入的‘位置、客房、设计、设施’理解。客房只描述酒店公开房型或景观选择，不得推断本次预订房型；OTA 只能候选支持位置、一般房型与设施，不能证明设计。",
+          "每个指定类别最多返回一条精炼事实；一条只保留一个可直接用于文案的核心事实，不要把设施、活动、儿童政策和多段宣传合并成长段。每条事实可返回 1—3 个相互独立的候选页面，按上述来源优先级排序，每个页面必须附上该页自身的原文证据和 sourceClass。sourceClass 只能是 official_entity、official_brand、official_press、operator_or_tourism_authority、architect_or_design_studio、trusted_trade_media、major_ota。sourceClass 只是候选标签，程序会独立核验。",
           "品牌官网可能由母品牌官方域托管；不要仅按酒店名与域名字符是否相同判断。优先返回实体或品牌官方具体页，并在页面标题、结构化数据或正文中确认实体全名。输入 officialDomains 时优先使用这些已知官方域。",
-          "每个来源必须给出可访问的具体页面 URL 和页面中的简短原文证据。只输出 JSON：{facts:[{category,fact,sources:[{sourceUrl,sourceExcerpt,sourceMediaType:\"page\"}]}]}。没有可靠事实时输出 {facts:[]}。",
+          "禁止采用博客、论坛、用户评论、社交平台、百科和图片。每个来源必须给出可访问的具体页面 URL 和页面中的简短原文证据。只输出 JSON：{facts:[{category,fact,sources:[{sourceUrl,sourceExcerpt,sourceMediaType:\"page\",sourceClass}]}]}。没有可靠事实时输出 {facts:[]}。",
         ].join("\n"),
       },
       { role: "user", content: JSON.stringify({ ...researchRequest, checkedAt }) },
@@ -263,6 +353,7 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
   const verifiedFacts = [];
   const rejected = [];
   const verifiedCategories = new Set();
+  const externalPagesUsed = new Set();
   const sourceCache = new Map();
   const fetchPage = async (candidateUrl, fetcher, mode) => {
     const cacheKey = `${mode}:${candidateUrl}`;
@@ -286,13 +377,15 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
   const expandedCandidates = (Array.isArray(candidates) ? candidates : []).flatMap((candidate) => {
     const sources = normalizedCandidateSources(candidate);
     return sources.length ? sources.map((source) => ({ ...candidate, ...source, sources: undefined })) : [candidate];
-  });
+  }).map((candidate, index) => ({ ...candidate, _candidateOrder: index }))
+    .sort((left, right) => candidatePriority(left, researchRequest) - candidatePriority(right, researchRequest) || left._candidateOrder - right._candidateOrder);
   for (const candidate of expandedCandidates) {
     const category = clean(candidate?.category);
     const fact = clean(candidate?.fact);
     const sourceUrl = clean(candidate?.sourceUrl);
     const sourceExcerpt = clean(candidate?.sourceExcerpt);
     let resolvedSourceUrl = sourceUrl;
+    let resolvedSourceClass = "";
     let reason = "";
     let verificationAttempts = [];
     if (!category || !requestedCategories.has(category)) reason = "category_not_requested";
@@ -301,8 +394,20 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
     else if (candidate?.sourceMediaType === "image" || imageUrlPattern.test(sourceUrl)) reason = "image_not_fact_evidence";
     else if (verifiedCategories.has(category)) reason = "category_fact_limit_exceeded";
     const directlyAllowed = !reason && isAllowedOfficialSource(sourceUrl, researchRequest);
-    const mayVerifyParentBrandPage = !reason && researchRequest.researchType === "official_entity_facts" && !isKnownThirdPartySource(sourceUrl);
-    if (!reason && !directlyAllowed && !mayVerifyParentBrandPage) reason = "source_not_official_or_authoritative";
+    const declaredSourceClass = declaredControlledSourceClass(candidate);
+    const initialExternalClass = !reason ? (externalSourceClass(sourceUrl) || declaredSourceClass) : "";
+    if (!reason && isKnownLowTrustSource(sourceUrl)) reason = "source_not_approved";
+    if (!reason && initialExternalClass && researchRequest.researchType !== "official_entity_facts" && !directlyAllowed) reason = "source_not_official_or_authoritative";
+    if (!reason && initialExternalClass && !externalClassAllowsCategory(initialExternalClass, category)) reason = "source_class_not_allowed_for_category";
+    const mayVerifyParentBrandPage = !reason && researchRequest.researchType === "official_entity_facts" && !initialExternalClass;
+    const mayVerifyControlledExternal = !reason && researchRequest.researchType === "official_entity_facts" && Boolean(initialExternalClass);
+    if (!reason && !directlyAllowed && !mayVerifyParentBrandPage && !mayVerifyControlledExternal) reason = "source_not_official_or_authoritative";
+    if (!reason && isBudgetedExternalClass(initialExternalClass)) {
+      let externalPageKey = sourceUrl;
+      try { const parsed = new URL(sourceUrl); parsed.hash = ""; externalPageKey = parsed.href; } catch {}
+      if (!externalPagesUsed.has(externalPageKey) && externalPagesUsed.size >= MAX_EXTERNAL_SOURCE_PAGES) reason = "external_source_page_budget_exhausted";
+      else externalPagesUsed.add(externalPageKey);
+    }
     if (!reason) {
       for (const candidateUrl of sourceUrlVariants(sourceUrl)) {
         try {
@@ -321,16 +426,17 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
             reason = "source_excerpt_not_supported";
             break;
           }
-          const finalUrl = clean(response.url) || candidateUrl;
-          if (isKnownThirdPartySource(finalUrl)) {
-            reason = "source_not_official_or_authoritative";
+          const finalUrl = canonicalPageUrl(body, clean(response.url) || candidateUrl);
+          if (isKnownLowTrustSource(finalUrl)) {
+            reason = "source_not_approved";
             break;
           }
           const finalUrlDirectlyAllowed = isAllowedOfficialSource(finalUrl, researchRequest);
-          if (!directlyAllowed && !finalUrlDirectlyAllowed && !pageEstablishesOfficialEntity(body, finalUrl, researchRequest)) {
-            reason = "source_not_official_or_authoritative";
-            break;
-          }
+          const finalExternalClass = externalSourceClass(finalUrl) || initialExternalClass;
+          if (directlyAllowed || finalUrlDirectlyAllowed) resolvedSourceClass = "official_entity";
+          else if (researchRequest.researchType === "official_entity_facts" && finalExternalClass && externalClassAllowsCategory(finalExternalClass, category) && (declaredSourceClass ? pageSupportsDeclaredControlledClass(body, researchRequest.entityName, finalExternalClass) : pageMentionsEntity(body, researchRequest.entityName))) resolvedSourceClass = finalExternalClass;
+          else if (pageEstablishesOfficialEntity(body, finalUrl, researchRequest)) resolvedSourceClass = "official_brand";
+          else { reason = "source_not_official_or_authoritative"; break; }
           resolvedSourceUrl = finalUrl;
           reason = "";
           break;
@@ -344,13 +450,24 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
           verificationAttempts.push({ url: clean(response.url) || sourceUrl, status: response.status || null, mode: "browser" });
           if (response.ok && pageSignalsUnavailable(body)) reason = "source_unavailable";
           else if (response.ok && !/^image\//i.test(contentType) && sourceSupportsExcerpt(body, sourceExcerpt)) {
-            const finalUrl = clean(response.url) || sourceUrl;
+            const finalUrl = canonicalPageUrl(body, clean(response.url) || sourceUrl);
             const finalUrlDirectlyAllowed = isAllowedOfficialSource(finalUrl, researchRequest);
-            if (!isKnownThirdPartySource(finalUrl) && (directlyAllowed || finalUrlDirectlyAllowed || pageEstablishesOfficialEntity(body, finalUrl, researchRequest))) {
+            const finalExternalClass = externalSourceClass(finalUrl) || initialExternalClass;
+            if (isKnownLowTrustSource(finalUrl)) reason = "source_not_approved";
+            else if (directlyAllowed || finalUrlDirectlyAllowed) {
               resolvedSourceUrl = finalUrl;
+              resolvedSourceClass = "official_entity";
               reason = "";
             }
-            else reason = "source_not_official_or_authoritative";
+            else if (researchRequest.researchType === "official_entity_facts" && finalExternalClass && externalClassAllowsCategory(finalExternalClass, category) && (declaredSourceClass ? pageSupportsDeclaredControlledClass(body, researchRequest.entityName, finalExternalClass) : pageMentionsEntity(body, researchRequest.entityName))) {
+              resolvedSourceUrl = finalUrl;
+              resolvedSourceClass = finalExternalClass;
+              reason = "";
+            } else if (pageEstablishesOfficialEntity(body, finalUrl, researchRequest)) {
+              resolvedSourceUrl = finalUrl;
+              resolvedSourceClass = "official_brand";
+              reason = "";
+            } else reason = "source_not_official_or_authoritative";
           } else if (response.ok && !sourceSupportsExcerpt(body, sourceExcerpt)) reason = "source_excerpt_not_supported";
         } catch (error) {
           verificationAttempts.push({ url: sourceUrl, error: clean(error?.message || error), mode: "browser" });
@@ -362,10 +479,16 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
       rejected.push({ category, fact, sourceUrl, reason, ...(verificationAttempts.length ? { verificationAttempts } : {}) });
       continue;
     }
-    verifiedFacts.push({ category, fact, sourceUrl: resolvedSourceUrl, sourceExcerpt, checkedAt });
+    verifiedFacts.push({ category, fact, sourceUrl: resolvedSourceUrl, sourceExcerpt, sourceClass: resolvedSourceClass || "official_entity", checkedAt });
     verifiedCategories.add(category);
   }
-  return { researchType: researchRequest.researchType, entityName: clean(researchRequest.entityName), verifiedFacts, rejected };
+  const categoryOutcomes = [...requestedCategories].map((category) => {
+    if (verifiedCategories.has(category)) return { category, status: "success" };
+    const categoryRejections = rejected.filter((item) => item.category === category);
+    const unavailable = categoryRejections.length > 0 && categoryRejections.every((item) => item.reason === "source_unavailable");
+    return { category, status: unavailable ? "source_unavailable" : "not_found" };
+  });
+  return { researchType: researchRequest.researchType, entityName: clean(researchRequest.entityName), verifiedFacts, rejected, categoryOutcomes, externalSourcePagesUsed: externalPagesUsed.size };
 }
 
 export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, model = COPY_FACTS_RESEARCH_MODEL, signal, requestResearch = requestCopyFactsResearch, fetchSource = fetchPublicUrl } = {}) {
