@@ -1944,20 +1944,27 @@ export async function runImageSearchSkill({
         const resolutionSummary = originalFailedEntries
           .map((entry) => entry.candidate.originalWidth && entry.candidate.originalHeight ? `${entry.candidate.originalWidth}×${entry.candidate.originalHeight}` : null)
           .filter(Boolean).join("、");
-        const unresolved = judged.some((entry) => ["needs_user_judgment", "review_timeout"].includes(entry.rejection)
-          && !(entry.candidate.knowledgeSourcePathMode === "entity_probe" && completeVisualJudgment(entry.audit) && isIdentityEvidenceUnresolved(entry.audit)));
+        const unresolved = validCandidates.some((candidate) => {
+          const entry = judgmentsByAsset.get(candidate.knowledgeAssetKey);
+          return !entry || !completeVisualJudgment(entry.audit)
+            || (["needs_user_judgment", "review_timeout"].includes(entry.rejection)
+              && !(entry.candidate.knowledgeSourcePathMode === "entity_probe" && isIdentityEvidenceUnresolved(entry.audit)));
+        });
         return {
           kind: originalFailed || unresolved ? "inconclusive" : "no_eligible",
+          visualAuditComplete: !unresolved,
           candidates: mergedPublic,
           sourceEvidence: [...sourceEvidence],
           actualSubject: judged.find((entry) => entry.audit?.actualSubject)?.audit.actualSubject || null,
-          matchReason: onlyResolutionFailures
+          matchReason: unresolved ? "部分 preview 审核未完成，需要人工判断"
+            : onlyResolutionFailures
             ? `preview 已找到并审核，但知识库原件尺寸不足${resolutionSummary ? `（${resolutionSummary}）` : ""}，未降低清晰度门槛`
             : originalFailed ? "preview 已找到并审核，但原件下载或技术检查失败"
-              : unresolved ? "部分 preview 审核未完成，需要人工判断" : `${layerName} preview 均有明确硬拒绝或不满足采用条件`,
-          technicalStatus: onlyResolutionFailures ? "knowledge_original_resolution_insufficient"
+              : `${layerName} preview 均有明确硬拒绝或不满足采用条件`,
+          technicalStatus: unresolved ? "visual_judgment_inconclusive"
+            : onlyResolutionFailures ? "knowledge_original_resolution_insufficient"
             : originalFailed ? "preview_found_original_download_failed"
-              : unresolved ? "visual_judgment_inconclusive" : "no_eligible_candidate",
+              : "no_eligible_candidate",
         };
       };
 
@@ -2090,7 +2097,21 @@ export async function runImageSearchSkill({
               }
             }
             if (lastResult?.status === "needs_clarification") {
-              if (candidatePool.size) return await assessCurrentCandidates({ final: true });
+              if (candidatePool.size) {
+                const assessed = await assessCurrentCandidates({ final: true });
+                if (assessed?.kind === "success") return assessed;
+                // A later ambiguous directory remains terminal even when an
+                // earlier preview was usable but its original was not.
+                syncEvidence("needs_clarification");
+                return {
+                  kind: "knowledge_needs_clarification",
+                  candidates: assessed?.candidates || [],
+                  sourceEvidence: [...sourceEvidence],
+                  actualSubject: assessed?.actualSubject || null,
+                  matchReason: "知识库后续查询需要明确目录范围，保留已审核候选供人工处理",
+                  technicalStatus: "knowledge_needs_clarification",
+                };
+              }
               syncEvidence("needs_clarification");
               return { kind: "knowledge_needs_clarification", candidates: [], sourceEvidence: [...sourceEvidence], actualSubject: null, technicalStatus: "knowledge_needs_clarification" };
             }
@@ -2512,7 +2533,7 @@ export async function runImageSearchSkill({
         evidence.sourceFallback = { entered: false, reason: "entity_parent_probe_needs_clarification", knowledgeStatus: knowledge.technicalStatus };
         return knowledge;
       }
-      const fallback = classifyWebFallback(knowledge, layerSlot, route);
+      const fallback = classifyWebFallback(knowledge, layerSlot, route, layerQueries);
       evidence.sourceFallback = { entered: false, reason: fallback.reason, knowledgeStatus: knowledge.technicalStatus || knowledge.kind };
       if (!fallback.allowed) return knowledge;
       metrics.knowledgeFirstWebFallbacks += 1;

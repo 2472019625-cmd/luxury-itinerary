@@ -2660,6 +2660,133 @@ test("所有合格 preview 的原件都低清时明确报告尺寸并保留人�
   assert.equal(result.metrics.knowledgeNotFound, 0);
 });
 
+test("知识库 preview 审核完整但原件不可用时同批转 Web，审核未完成则停留人工", async (t) => {
+  const hierarchy = buildKnowledgeHierarchy([
+    { node_id: "root", formal_name: "根知识库" },
+    { node_id: "kenya", formal_name: "Kenya", parent_node_id: "root" },
+    { node_id: "nairobi", formal_name: "Nairobi", parent_node_id: "kenya" },
+  ]);
+  for (const mode of ["resolution", "download", "audit-incomplete"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), `knowledge-original-web-${mode}-`));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    let webCalls = 0;
+    let imageIndex = 0;
+    const result = await runImageSearchSkill({
+      root, sourceMode: "knowledge_first", knowledgeBaseUrl: "http://192.168.100.210:8020",
+      knowledgeQueriesPerSlot: 1,
+      trustedKnowledgeOrigins: ["http://192.168.100.210:9000"],
+      sourcePagesPerSlot: 1, downloadsPerSlot: 3,
+      slots: [slot(`original-web-${mode}`, {
+        location: "Nairobi", country: "Kenya", subject: "游客与长颈鹿", activity: "喂长颈鹿",
+        primaryVisualSubject: "游客喂长颈鹿", exactIdentityRequired: true,
+        queryCore: { subject: "giraffe", action: "feeding", identity: "Giraffe Centre", identityEn: "Giraffe Centre" },
+        fidelityQuery: "Giraffe feeding in Nairobi", alternateQueries: ["游客喂长颈鹿"],
+      })],
+      visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture",
+      adapters: {
+        loadKnowledgeHierarchy: async () => hierarchy,
+        searchKnowledgeImages: async ({ queries }) => {
+          const fixture = knowledgeFixture(queries[0], {
+            queryId: `qry-original-web-${mode}`, prefix: `original-web-${mode}`,
+            count: mode === "audit-incomplete" ? 2 : 1, fragment: "visitor feeding giraffe",
+            sourcePaths: ["Kenya/Nairobi/Giraffe Centre/giraffe-centre.jpg"],
+          });
+          for (const candidate of fixture.candidates) candidate.knowledgeMatchedFile.sourceDisplayPath = "Kenya/Nairobi/Giraffe Centre/giraffe-centre.jpg";
+          return fixture;
+        },
+        searchWebBatch: async () => { webCalls += 1; return [{ pageUrl: "https://example.com/kenya/Giraffe-Centre-Nairobi/gallery", title: "Giraffe Centre Nairobi visitor feeding giraffe" }]; },
+        searchCommonsImages: async () => [],
+        extractPageImages: async (page) => [{ ...page, imageUrl: "https://example.com/kenya/Giraffe-Centre-Nairobi/feeding.jpg", alt: "Visitor feeding giraffe at Giraffe Centre Nairobi" }],
+        downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+          if (candidate.imageUrl.includes("/original/")) {
+            if (mode === "download") throw new Error("matched file unavailable");
+            throw Object.assign(new Error("图片分辨率不足：实际 521×377，至少需要 900×500"), {
+              code: "image_resolution_insufficient", actualWidth: 521, actualHeight: 377, minWidth: 900, minHeight: 500,
+            });
+          }
+          const filePath = path.join(directory, `original-web-${mode}-${++imageIndex}.jpg`);
+          await writeDistinctTestImage(filePath, imageIndex);
+          return { ...candidate, filePath, publicUrl: `${publicPrefix}/${path.basename(filePath)}`, sha256: `original-web-${mode}-${imageIndex}`, width: 1400, height: 900 };
+        },
+        judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate) => {
+          if (mode === "audit-incomplete" && candidate.imageUrl.includes("/preview/") && candidate.title.includes("-2.")) return { candidateId: candidate.candidateId, actualSubject: "visitor feeding giraffe" };
+          return completeAudit(candidate, { actualSubject: "visitor feeding giraffe", score: 95, relevance: 95 });
+        }),
+      },
+    });
+    const imageResult = result.results[0];
+    if (mode === "audit-incomplete") {
+      assert.equal(webCalls, 0);
+      assert.equal(imageResult.status, "needs_user_action");
+      assert.equal(imageResult.technicalStatus, "visual_judgment_inconclusive");
+      assert.equal(imageResult.pipelineEvidence.sourceFallback.reason, "audit_unavailable_or_incomplete");
+    } else {
+      assert.ok(webCalls > 0);
+      assert.equal(imageResult.status, "success");
+      assert.match(imageResult.selected.sourcePage, /example\.com/);
+      assert.ok(imageResult.selected.localUrl);
+      assert.equal(imageResult.pipelineEvidence.sourceFallback.reason, mode === "resolution" ? "knowledge_original_resolution_fallback" : "knowledge_original_download_fallback");
+      assert.equal(imageResult.candidates[0].originalDownloaded, false);
+    }
+  }
+});
+
+test("父级首条低清原件后第二条需要目录澄清时不得转 Web", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "knowledge-original-then-clarify-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const hierarchy = buildKnowledgeHierarchy([
+    { node_id: "root", formal_name: "根知识库" },
+    { node_id: "kenya", formal_name: "Kenya", parent_node_id: "root" },
+    { node_id: "nairobi", formal_name: "Nairobi", parent_node_id: "kenya" },
+  ]);
+  let knowledgeCalls = 0;
+  let webCalls = 0;
+  const result = await runImageSearchSkill({
+    root, sourceMode: "knowledge_first", knowledgeBaseUrl: "http://192.168.100.210:8020",
+    knowledgeQueriesPerSlot: 2, trustedKnowledgeOrigins: ["http://192.168.100.210:9000"],
+    slots: [slot("original-then-clarify", {
+      location: "Nairobi", country: "Kenya", subject: "游客与长颈鹿", activity: "喂长颈鹿",
+      primaryVisualSubject: "游客喂长颈鹿", exactIdentityRequired: true,
+      queryCore: { subject: "giraffe", action: "feeding", identity: "Giraffe Centre", identityEn: "Giraffe Centre" },
+      fidelityQuery: "Giraffe Centre Nairobi feeding giraffe", alternateQueries: ["Giraffe Centre giraffe feeding"],
+    })],
+    visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture",
+    adapters: {
+      loadKnowledgeHierarchy: async () => hierarchy,
+      searchKnowledgeImages: async ({ queries }) => {
+        knowledgeCalls += 1;
+        if (knowledgeCalls === 2) return { status: "needs_clarification", queryId: "qry-clarify", queryText: queries[0], clarificationNodeIds: ["nairobi-ambiguous"], records: [], candidates: [] };
+        const fixture = knowledgeFixture(queries[0], {
+          queryId: "qry-original-first", prefix: "original-first", count: 1,
+          fragment: "visitor feeding giraffe", sourcePaths: ["Kenya/Nairobi/Giraffe Centre/giraffe-centre.jpg"],
+        });
+        fixture.candidates[0].knowledgeMatchedFile.sourceDisplayPath = "Kenya/Nairobi/Giraffe Centre/giraffe-centre.jpg";
+        return fixture;
+      },
+      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+        if (candidate.imageUrl.includes("/original/")) throw Object.assign(new Error("图片分辨率不足：实际 521×377，至少需要 900×500"), {
+          code: "image_resolution_insufficient", actualWidth: 521, actualHeight: 377, minWidth: 900, minHeight: 500,
+        });
+        const filePath = path.join(directory, "original-first-preview.jpg");
+        await writeDistinctTestImage(filePath);
+        return { ...candidate, filePath, publicUrl: `${publicPrefix}/original-first-preview.jpg`, sha256: "original-first-preview", width: 960, height: 640 };
+      },
+      judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate) => completeAudit(candidate, { actualSubject: "visitor feeding giraffe", score: 95, relevance: 95 })),
+      searchWebBatch: async () => { webCalls += 1; return []; },
+      searchCommonsImages: async () => [],
+    },
+  });
+  const imageResult = result.results[0];
+  assert.equal(knowledgeCalls, 2);
+  assert.equal(webCalls, 0);
+  assert.equal(imageResult.status, "needs_user_action");
+  assert.equal(imageResult.technicalStatus, "knowledge_needs_clarification");
+  assert.equal(imageResult.pipelineEvidence.knowledgeSearch.status, "needs_clarification");
+  assert.equal(imageResult.pipelineEvidence.sourceFallback.entered, false);
+  assert.equal(imageResult.pipelineEvidence.sourceFallback.reason, "entity_parent_probe_needs_clarification");
+  assert.equal(imageResult.candidates[0].rejection, "resolution_failed");
+});
+
 test("视觉审核超时后已下载候选仍作为 Step4 人工候选保留", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-image-retain-timeout-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -2778,6 +2905,16 @@ test("Web fallback区分内容缺失、服务降级、目录缺失与审核故�
   for (const kind of ["visual_failed", "visual_unavailable"]) assert.equal(classifyWebFallback({ kind }, target).allowed, false);
   assert.equal(classifyWebFallback({ kind: "inconclusive", technicalStatus: "visual_judgment_inconclusive" }, target).allowed, false);
   assert.equal(classifyWebFallback({ kind: "no_candidate" }, { moduleType: "hotel" }).allowed, false);
+  const knownTarget = { moduleType: "day", exactIdentityRequired: true, queryCore: { subject: "giraffe", identity: "Giraffe Centre" } };
+  const knownRoute = explicitEntityRoute(knownTarget);
+  for (const status of ["knowledge_original_resolution_insufficient", "preview_found_original_download_failed"]) {
+    const failedOriginal = { kind: "inconclusive", technicalStatus: status, visualAuditComplete: true };
+    assert.equal(classifyWebFallback(failedOriginal, knownTarget, knownRoute, ["Giraffe Centre feeding giraffe"]).allowed, true);
+    assert.equal(classifyWebFallback({ ...failedOriginal, visualAuditComplete: false }, knownTarget, knownRoute, ["Giraffe Centre feeding giraffe"]).allowed, false);
+    assert.equal(classifyWebFallback(failedOriginal, knownTarget, knownRoute, []).allowed, false);
+    assert.equal(classifyWebFallback(failedOriginal, { ...knownTarget, queryCore: { subject: "giraffe" } }, knownRoute, ["giraffe"]).allowed, false);
+    assert.equal(classifyWebFallback(failedOriginal, { ...knownTarget, planningStatus: "unresolved" }, knownRoute, ["Giraffe Centre feeding giraffe"]).allowed, false);
+  }
 });
 
 test("Web同一审核波次先排序再采用，不采用模型数组第一张", async (t) => {

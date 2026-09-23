@@ -42,11 +42,16 @@ export function buildWebExecutionQueries(slot, queries, purpose = "", route = nu
   const identity = unique([slot.regionEn, slot.countryEn, slot.region, slot.country, locationEntity?.region, locationEntity?.country, slot.destinationEn, slot.destination].map(englishName)).find(english) || "";
   return ordered.slice(0, 2).map((query) => identity && !query.toLowerCase().includes(identity.toLowerCase()) ? `${identity} ${query}` : query);
 }
-export function classifyWebFallback(result, slot, route = null) {
+export function classifyWebFallback(result, slot, route = null, knowledgeQueries = null) {
   const status = result.technicalStatus || "";
   if (slot.planningStatus === "unresolved" || slot.needsUserAction || (String(slot.moduleType).toLowerCase().includes("hotel") && !name(slot.hotelOfficialName) && !name(slot.hotel))) return { allowed: false, reason: "target_identity_unresolved" };
   if (["visual_unavailable", "visual_failed"].includes(result.kind) || status.startsWith("visual_judgment")) return { allowed: false, reason: "audit_unavailable_or_incomplete" };
   if (route?.matched && !route.identityKnown) return { allowed: false, reason: "target_identity_unresolved" };
+  if (result.kind === "inconclusive" && ["knowledge_original_resolution_insufficient", "preview_found_original_download_failed"].includes(status)) {
+    if (result.visualAuditComplete !== true) return { allowed: false, reason: "audit_unavailable_or_incomplete" };
+    if (!Array.isArray(knowledgeQueries) || !knowledgeQueries.length || !buildWebExecutionQueries(slot, knowledgeQueries, "", route).length) return { allowed: false, reason: "web_query_unavailable" };
+    return { allowed: true, reason: status === "knowledge_original_resolution_insufficient" ? "knowledge_original_resolution_fallback" : "knowledge_original_download_fallback" };
+  }
   if (route?.matched && route.knowledgeStopReason && route.knowledgeStopReason !== "identity_unknown") return { allowed: true, reason: route.knowledgeStopReason };
   if (["knowledge_failed", "knowledge_timeout"].includes(status)) return { allowed: true, reason: "knowledge_service_degraded_fallback" };
   if (["knowledge_scope_unresolved", "knowledge_hotel_scope_unresolved", "knowledge_needs_clarification"].includes(status)) {
