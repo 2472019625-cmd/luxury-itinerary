@@ -881,6 +881,8 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   const [dayInfoOpen, setDayInfoOpen] = useState(false);
   const [daySettingsOpen, setDaySettingsOpen] = useState(false);
   const [finalIssuesOpen, setFinalIssuesOpen] = useState(false);
+  const [structureExpanded, setStructureExpanded] = useState(false);
+  const pendingIssueFocusRef = useRef(null);
   const [dragSpotId, setDragSpotId] = useState(null);
   const historyRef = useRef({ undo: [], redo: [], group: null, at: 0 });
   const visibility = project.visibility || {};
@@ -971,7 +973,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     setSelection(next);
     if (next.module !== "days" && nextTab) setTab(nextTab);
     requestAnimationFrame(() => {
-      centerInCanvas(previewNodeForSelection(next));
+      requestAnimationFrame(() => centerInCanvas(previewNodeForSelection(next)));
       inspectorNodeForSelection(next)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     });
   };
@@ -1010,6 +1012,18 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     previewRef.current?.querySelectorAll(".workspace-selected-node").forEach((node) => node.classList.remove("workspace-selected-node"));
     previewNodeForSelection()?.classList.add("workspace-selected-node");
   }, [selection, viewData]);
+  useEffect(() => {
+    if (finalIssuesOpen || !pendingIssueFocusRef.current) return;
+    const labelText = pendingIssueFocusRef.current;
+    const timer = requestAnimationFrame(() => {
+      const field = [...(inspectorRef.current?.querySelectorAll('.inspector-body label') || [])]
+        .find((label) => label.textContent?.startsWith(labelText));
+      field?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      field?.querySelector('textarea, input')?.focus({ preventScroll: true });
+      pendingIssueFocusRef.current = null;
+    });
+    return () => cancelAnimationFrame(timer);
+  }, [selection, finalIssuesOpen, dayInfoOpen]);
 
   const onPreviewClick = (event) => {
     const node = event.target.closest("[data-edit-path]");
@@ -1277,32 +1291,39 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   const title = selection.module === "days" ? `DAY ${String(selection.itemIndex + 1).padStart(2, "0")} · ${selectedDay?.theme || selectedDay?.city || "每日行程"}` : selectedModule.label;
   const blockingCopyItems = blockingItems.filter((item) => item.action === "retry_copy");
   const blockingImageItems = blockingItems.filter((item) => item.action === "handle_image");
-  return <main className="editor-page"><StepRail active={3} maxStep={canOpenVersions ? 4 : 3} onStep={(step) => step === 4 && canOpenVersions && onVersions()} /><div className={`editor-grid ${selection.module === "days" ? "editor-grid-day" : ""}`}>
-    <aside className="structure-panel"><header><span><UiIcon name="itinerary" />行程结构</span></header><nav>{MODULES.map((module) => module.id === "days" ? <div key={module.id} className="day-nav-group"><button className={selection.module === "days" ? "active" : ""} onClick={() => selectModule("days", selection.itemIndex)}><span className="nav-dot" />每日行程</button><div>{project.data.days.map((day, index) => <button key={index} className={selection.module === "days" && selection.itemIndex === index ? "active" : ""} onClick={() => selectModule("days", index)}><span>DAY {String(index + 1).padStart(2, "0")}</span><em>{day.city || day.theme}</em></button>)}</div></div> : <button key={module.id} className={selection.module === module.id ? "active" : ""} onClick={() => selectModule(module.id)}><span className="nav-dot" />{module.label}{visibility[module.id] === false && <small>已隐藏</small>}</button>)}</nav></aside>
+  const advisoryCopyTargets = copyIssueTargets.filter((target) => !blockingItems.some((item) => item.targetPath === target.targetPath));
+  const moduleIcons = { cover: "itinerary", highlights: "advantage", overview: "calendar", hotels: "hotel", dining: "meal", transport: "vehicle", days: "calendar", expenses: "payment", booking: "process", security: "security", notes: "warning", footer: "contact" };
+  const openBlockingItem = (item) => {
+    setFinalIssuesOpen(false);
+    if (item.kind === "image") return selectBlockingImage(item);
+    if (item.kind === "copy") {
+      if (/^days\.\d+/.test(item.targetPath || "")) setDayInfoOpen(true);
+      pendingIssueFocusRef.current = /^days\.\d+\.spots\./.test(item.targetPath || "") ? "图片下方文字" : /^days\.\d+/.test(item.targetPath || "") ? "当日行程" : null;
+      return selectIssueTarget(item.targetPath);
+    }
+    if (item.action === "retry_renderer") return onRetryRenderer?.().catch(() => {});
+    if (item.action === "review_facts") return onReviewFacts?.();
+  };
+  return <main className="editor-page"><StepRail active={3} maxStep={canOpenVersions ? 4 : 3} onStep={(step) => step === 4 && canOpenVersions && onVersions()} /><div className={`editor-grid ${selection.module === "days" ? "editor-grid-day" : ""} ${structureExpanded ? "structure-expanded" : "structure-compact"}`}>
+    <aside className="structure-panel"><header><span><UiIcon name="itinerary" /><b>行程结构</b></span><button type="button" className="structure-expand-toggle" onClick={() => setStructureExpanded((value) => !value)} aria-label={structureExpanded ? "收起行程结构" : "展开行程结构"} aria-expanded={structureExpanded}>{structureExpanded ? "‹" : "›"}</button></header><nav>{MODULES.map((module) => module.id === "days" ? <div key={module.id} className="day-nav-group"><button title="每日行程" className={selection.module === "days" ? "active" : ""} onClick={() => selectModule("days", selection.itemIndex)}><UiIcon name={moduleIcons.days} /><span className="structure-label">每日行程</span></button><div>{project.data.days.map((day, index) => <button key={index} title={`DAY ${String(index + 1).padStart(2, "0")} · ${day.city || day.theme || ""}`} className={selection.module === "days" && selection.itemIndex === index ? "active" : ""} onClick={() => selectModule("days", index)}><span>DAY {String(index + 1).padStart(2, "0")}</span><em>{day.city || day.theme}</em></button>)}</div></div> : <button key={module.id} title={module.label} className={selection.module === module.id ? "active" : ""} onClick={() => selectModule(module.id)}><UiIcon name={moduleIcons[module.id]} /><span className="structure-label">{module.label}</span>{visibility[module.id] === false && <small>已隐藏</small>}</button>)}</nav></aside>
     <section className="canvas-stage" ref={previewRef} onClick={onPreviewClick} tabIndex="0" aria-label="行程长图预览，使用滚轮、PageDown、Home 或 End 浏览"><div className="workspace-itinerary"><ItineraryComponent data={viewData} /></div></section>
-    <aside className="inspector-panel" ref={inspectorRef}><header><div><small>{project.revisionMode ? 'REVISION MODE' : 'EDIT CONTENT'}</small><h2>{title}</h2></div><div className="history-actions"><button disabled={!historyRef.current.undo.length} onClick={() => restore("undo")} title="撤销 Ctrl+Z"><UiIcon name="return" />撤销</button><button disabled={!historyRef.current.redo.length} onClick={() => restore("redo")} title="重做 Ctrl+Shift+Z"><UiIcon name="process" />重做</button>{selection.module === "days" && <button onClick={() => setDaySettingsOpen((value) => !value)} title="更多设置">更多</button>}</div></header>{statusNotice && <div className="copy-review-banner" role="status"><strong>{statusNotice.title || "当前可编辑，正式成品尚未开放"}</strong><span>{statusNotice.message || statusNotice}</span>{Array.isArray(statusNotice.items) && statusNotice.items.length > 0 && <ul>{statusNotice.items.map((item) => <li key={item}>{item}</li>)}</ul>}</div>}{(copyReview?.needsReview || copyReview?.blocked || project.revisionMode) && <div className="copy-review-banner" role="status"><strong>修订模式 · {copyIssueTargets.length} 个修改位置</strong><span>底层共发现 {copyReviewIssues.length} 条检查记录；图片和版面已保留。普通文案建议可继续修订，也可在正式版本页确认后按当前内容导出；事实、费用、安全或结构问题仍会阻止。</span><div className="copy-review-actions"><Button tone="primary" disabled={copyRepairState?.busy || !copyIssueTargets.some((target) => target.aiRepairable)} onClick={() => onRepairCopy?.('')}>{copyRepairState?.busy && !copyRepairState.targetPath ? 'AI正在修正…' : 'AI修正全部可修项'}</Button><Button disabled={copyRepairState?.busy} onClick={() => onRecheckCopy?.()}>重新检查全部</Button></div>{copyRepairState?.message && <span className="copy-repair-state">{copyRepairState.message}</span>}<div className="copy-review-details">{copyIssueTargets.map((target) => <section key={target.targetPath}><button className="copy-issue-target" onClick={() => selectIssueTarget(target.targetPath)}><b>{target.label}</b><small>{target.ruleIds.join('/') || 'COPY'} · {target.issues.length}条记录</small></button>{target.issues.map((issue, index) => <p key={`${target.targetPath}-${index}`}><em>{issue.ruleIds?.join('/') || issue.ruleId || 'COPY'}</em>{issue.message}</p>)}<div className="copy-target-actions"><Button disabled={copyRepairState?.busy} onClick={() => target.aiRepairable ? onRepairCopy?.(target.targetPath) : onReviewFacts?.()}>{copyRepairState?.busy && copyRepairState.targetPath === target.targetPath ? '正在修正…' : target.aiRepairable ? 'AI修正这项' : '返回确认原始事实'}</Button></div></section>)}</div></div>}{selection.module === "days" ? <div className="inspector-body day-inspector-body">{dayPanel}</div> : <><div className="inspector-tabs"><button className={tab === "copy" ? "active" : ""} onClick={() => setTab("copy")}>文案</button>{hasImages && <button className={tab === "image" ? "active" : ""} onClick={() => setTab("image")}>图片</button>}</div>
+    <aside className={`inspector-panel ${finalIssuesOpen ? "inspector-issues-open" : ""}`} ref={inspectorRef}>
+      <div className="editor-inspector-toolbar"><span>{selection.module === "days" ? `每日行程 / DAY ${String(selection.itemIndex + 1).padStart(2, "0")}` : selectedModule.label}</span>{onVersions && (canOpenVersions ? <Button tone="primary" onClick={onVersions}>查看并下载</Button> : <button type="button" className="editor-issues-trigger" aria-expanded={finalIssuesOpen} onClick={() => setFinalIssuesOpen((value) => !value)}>{finalIssuesOpen ? "返回编辑" : `待处理 ${blockingItems.length}`}</button>)}</div>
+      {finalIssuesOpen && <section className="editor-issues-view" aria-label="待处理事项">
+        <div className="editor-issues-heading"><h2>待处理事项</h2><p>完成以下内容后，即可检查并下载正式长图。</p></div>
+        <div className="editor-issues-scroll">
+          <h3>需要完成 · {blockingItems.length} 项</h3>
+          {blockingItems.length ? <div className="editor-issues-list">{blockingItems.map((item) => <article key={`${item.kind}:${item.id}`}><div><strong>{item.label}</strong><small>{item.message}</small></div><div className="editor-issues-row-actions"><button type="button" onClick={() => openBlockingItem(item)}>{item.kind === "copy" || item.kind === "image" ? "去处理" : item.action === "retry_renderer" ? "重新检查" : "查看"}</button>{item.action === "retry_copy" && <button type="button" disabled={issueActionState?.busy} onClick={() => onRetryCopy?.(item.id).catch(() => {})}>重新生成</button>}{item.action === "handle_image" && <button type="button" disabled={issueActionState?.busy || Boolean(imageOperations[item.id]?.searching)} onClick={() => retryBlockingImage(item)}>重新搜索</button>}</div></article>)}</div> : <p className="editor-issues-empty">当前没有需要处理的项目。</p>}
+          {(blockingCopyItems.length > 1 || blockingImageItems.length > 1) && <div className="editor-issues-batch"><h3>批量处理</h3>{blockingCopyItems.length > 1 && <button disabled={issueActionState?.busy} onClick={() => onRetryAllCopy?.(blockingCopyItems.map((item) => item.id)).catch(() => {})}>重新生成失败文案（{blockingCopyItems.length}）</button>}{blockingImageItems.length > 1 && <button disabled={issueActionState?.busy} onClick={() => onRetryAllImages?.(blockingImageItems.map((item) => item.id)).catch(() => {})}>重新搜索缺图（{blockingImageItems.length}）</button>}</div>}
+          {advisoryCopyTargets.length > 0 && <div className="editor-issues-advisory"><h3>文案建议 · {advisoryCopyTargets.length} 处</h3><p>这些建议与上方必须完成的事项分开，按需查看或修正。</p>{advisoryCopyTargets.map((target) => <article key={target.targetPath}><strong>{target.label}</strong><button onClick={() => { setFinalIssuesOpen(false); selectIssueTarget(target.targetPath); }}>去查看</button>{target.aiRepairable && <button disabled={copyRepairState?.busy} onClick={() => onRepairCopy?.(target.targetPath)}>AI修正</button>}</article>)}<button disabled={copyRepairState?.busy} onClick={() => onRecheckCopy?.()}>重新检查文案</button></div>}
+          {issueActionState?.message && <p className="editor-issues-feedback" role="status">{issueActionState.message}</p>}
+          {copyRepairState?.message && <p className="editor-issues-feedback" role="status">{copyRepairState.message}</p>}
+        </div>
+      </section>}
+      <header><div><small>编辑内容</small><h2>{title}</h2></div><div className="history-actions"><button disabled={!historyRef.current.undo.length} onClick={() => restore("undo")} title="撤销 Ctrl+Z"><UiIcon name="return" />撤销</button><button disabled={!historyRef.current.redo.length} onClick={() => restore("redo")} title="重做 Ctrl+Shift+Z"><UiIcon name="process" />重做</button>{selection.module === "days" && <button onClick={() => setDaySettingsOpen((value) => !value)} title="更多设置">更多</button>}</div></header>{selection.module === "days" ? <div className="inspector-body day-inspector-body">{dayPanel}</div> : <><div className="inspector-tabs"><button className={tab === "copy" ? "active" : ""} onClick={() => setTab("copy")}>文案</button>{hasImages && <button className={tab === "image" ? "active" : ""} onClick={() => setTab("image")}>图片</button>}</div>
       {tab === "copy" && <div className="inspector-body">{copyPanel}</div>}
       {tab === "image" && <div className="inspector-body">{imagePanel}</div>}
       <footer className="module-toggle"><div><UiIcon name="city" /><span><strong>模块显示</strong><small>{selectedModule.required ? "品牌固定模块" : "控制是否进入正式版本"}</small></span></div><label className="switch"><input type="checkbox" checked={selectedModule.required || visibility[selectedModule.id] !== false} disabled={selectedModule.required} onChange={(event) => updateVisibility(event.target.checked)} /><span /></label></footer></>}
-      {onVersions && <footer className={`editor-final-step${canOpenVersions ? " is-ready" : ` is-locked${finalIssuesOpen ? " is-expanded" : ""}`}`}>
-        {canOpenVersions ? <div className="editor-final-summary"><strong>本次行程已具备正式下载条件</strong><small>进入最后一步查看并下载2000px高清长图。</small></div> : <button type="button" className="editor-final-toggle" aria-expanded={finalIssuesOpen} onClick={() => setFinalIssuesOpen((value) => !value)}><span><strong>{`正式下载还差 ${blockingItems.length || "少量"} 项`}</strong><small>{finalIssuesOpen ? "处理完成后即可进入下载版本" : "收起时不占用编辑空间"}</small></span><em>{finalIssuesOpen ? "收起" : "展开处理"}</em></button>}
-        {!canOpenVersions && finalIssuesOpen && (blockingCopyItems.length > 1 || blockingImageItems.length > 1) && <div className="editor-batch-actions"><div><b>批量处理失败项</b><small>同类任务并发执行，整批完成后统一保存和检查版面。</small></div><div>
-          {blockingCopyItems.length > 1 && <button className="is-primary" disabled={issueActionState?.busy} onClick={() => onRetryAllCopy?.(blockingCopyItems.map((item) => item.id)).catch(() => {})}>{issueActionState?.busy && issueActionState.targetId === "copy:all" ? `正在生成 ${blockingCopyItems.length} 项…` : `重新生成全部失败文案（${blockingCopyItems.length}）`}</button>}
-          {blockingImageItems.length > 1 && <button disabled={issueActionState?.busy} onClick={() => onRetryAllImages?.(blockingImageItems.map((item) => item.id)).catch(() => {})}>{issueActionState?.busy && issueActionState.targetId === "image:all" ? `正在搜索 ${blockingImageItems.length} 张…` : `重搜全部缺图（${blockingImageItems.length}）`}</button>}
-        </div></div>}
-        {!canOpenVersions && finalIssuesOpen && blockingItems.length > 0 && <div className="editor-blocking-list">{blockingItems.map((item) => {
-          const busy = issueActionState?.busy && issueActionState.targetId === item.id;
-          return <article key={`${item.kind}:${item.id}`}><div><b>{item.label}</b><small>{item.message}</small></div><div className="editor-blocking-actions">
-            {(item.kind === "copy" || item.kind === "image") && <button onClick={() => { setFinalIssuesOpen(false); item.kind === "image" ? selectBlockingImage(item) : selectIssueTarget(item.targetPath); }}>查看位置</button>}
-            {item.action === "retry_copy" && <button className="is-primary" disabled={issueActionState?.busy} onClick={() => onRetryCopy?.(item.id).catch(() => {})}>{busy ? "正在生成…" : "重新生成这项"}</button>}
-            {item.action === "handle_image" && <><button disabled={issueActionState?.busy || Boolean(imageOperations[item.id]?.searching)} onClick={() => retryBlockingImage(item)}>{imageOperations[item.id]?.searching ? "正在搜索…" : "重新搜索这张"}</button><button className="is-primary" disabled={issueActionState?.busy} onClick={() => selectBlockingImage(item, true)}>选择或上传</button></>}
-            {item.action === "retry_renderer" && <button className="is-primary" disabled={issueActionState?.busy} onClick={() => onRetryRenderer?.().catch(() => {})}>{busy ? "正在检查…" : "重新检查成品"}</button>}
-            {item.action === "review_facts" && onReviewFacts && <button className="is-primary" onClick={onReviewFacts}>返回确认信息</button>}
-          </div></article>;
-        })}</div>}
-        {issueActionState?.message && !canOpenVersions && finalIssuesOpen && <p className="editor-final-feedback" role="status">{issueActionState.message}</p>}
-        {(canOpenVersions || finalIssuesOpen) && <Button tone={canOpenVersions ? "primary" : "secondary"} disabled={!canOpenVersions} onClick={onVersions}>{canOpenVersions ? "查看并下载" : "等待补齐"}</Button>}
-      </footer>}
     </aside>
   </div>{imageMessage && !pickerOpen && <div className="manual-image-feedback" role="status" aria-live="polite">{imageMessage}</div>}{pickerOpen && currentSlot && <ImagePickerModal key={currentSlot.slotId} operation={imageOperations[currentSlot.slotId]} data={project.data} targetSlot={currentSlot} onClose={() => setPickerOpen(false)} onChoose={chooseLibraryImage} onResearch={onResearchSlot ? researchCurrentSlot : undefined} onUpload={uploadLocalImage} />}</main>;
 }
