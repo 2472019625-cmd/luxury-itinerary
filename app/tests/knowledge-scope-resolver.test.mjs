@@ -7,8 +7,11 @@ import {
   buildKnowledgeScopePlan,
   classifyKnowledgeImagePurpose,
   confirmHotelDirectory,
+  createKnowledgeScopeResolver,
   explicitEntityRoute,
   knowledgeSourcePathMatches,
+  knowledgeTransportRootPathEvidence,
+  loadKnowledgeHierarchy,
   resolveKnowledgeChildScope,
   resolveKnowledgeClarification,
   resolveKnowledgeScope,
@@ -997,8 +1000,40 @@ test("Scope Plan 预先确定逐级范围和不同图片用途的停止边界", 
   assert.equal(knowledgeSourcePathMatches(dayPlan.scopes[1].evidenceResolution, ["肯尼亚/马赛马拉/某酒店/Wildlife/elephants.jpg"], { mode: dayPlan.scopes[1].sourcePathMode }).match, true);
 
   const transportPlan = buildKnowledgeScopePlan({ moduleType: "transport", location: "安博塞利", subject: "草原飞机" }, region, hierarchy);
-  assert.deepEqual(transportPlan.scopes.map((item) => item.resolution.nodeIds[0]), ["kenya"]);
-  assert.equal(transportPlan.stopBoundary, "country");
+  assert.deepEqual(transportPlan.scopes.map((item) => item.resolution.nodeIds[0]), ["amboseli", "kenya", "root"]);
+  assert.equal(transportPlan.stopBoundary, "root");
+  const transportRoot = transportPlan.scopes[2];
+  assert.equal(transportRoot.role, "transport_root");
+  assert.equal(transportRoot.sourcePathMode, "transport_root_context");
+  assert.deepEqual(transportRoot.evidenceResolution.nodeIds, ["kenya"]);
+  assert.equal(knowledgeSourcePathMatches(transportRoot.evidenceResolution, ["肯尼亚/内罗毕/车辆.jpg"], { mode: transportRoot.sourcePathMode }).match, true);
+  assert.equal(knowledgeSourcePathMatches(transportRoot.evidenceResolution, ["1-肯尼亚/7-内罗毕/车辆.jpg"], { mode: transportRoot.sourcePathMode }).match, true);
+  assert.equal(knowledgeSourcePathMatches(transportRoot.evidenceResolution, ["坦桑尼亚/内罗毕/车辆.jpg"], { mode: transportRoot.sourcePathMode }).match, false);
+  assert.equal(knowledgeSourcePathMatches(transportRoot.evidenceResolution, ["坦桑尼亚/Kenya Camp/车辆.jpg"], { mode: transportRoot.sourcePathMode }).match, false);
+  assert.equal(knowledgeSourcePathMatches(transportRoot.evidenceResolution, ["坦桑尼亚/内罗毕/Kenya-车辆.jpg"], { mode: transportRoot.sourcePathMode }).match, false);
+  assert.equal(knowledgeSourcePathMatches(transportRoot.evidenceResolution, ["肯尼亚/内罗毕/车辆.jpg", "坦桑尼亚/内罗毕/车辆.jpg"], { mode: transportRoot.sourcePathMode }).match, false);
+  assert.equal(knowledgeSourcePathMatches(transportRoot.evidenceResolution, [], { mode: transportRoot.sourcePathMode }).match, false);
+
+  const rootCandidate = {
+    knowledgeEvidenceResolution: transportRoot.evidenceResolution,
+    knowledgeMatchedFile: { filename: "vehicle.jpg" },
+    knowledgeSourcePaths: ["肯尼亚/内罗毕/other.jpg", "坦桑尼亚/阿鲁沙/vehicle.jpg"],
+  };
+  assert.equal(knowledgeTransportRootPathEvidence(rootCandidate).match, false);
+  assert.equal(knowledgeTransportRootPathEvidence({ ...rootCandidate,
+    knowledgeSourcePaths: ["肯尼亚/内罗毕/vehicle.jpg", "坦桑尼亚/阿鲁沙/other.jpg"],
+  }).match, true);
+  assert.equal(knowledgeTransportRootPathEvidence({ ...rootCandidate,
+    knowledgeSourcePaths: ["肯尼亚/内罗毕/vehicle.jpg", "坦桑尼亚/阿鲁沙/vehicle.jpg"],
+  }).match, false);
+  assert.equal(knowledgeTransportRootPathEvidence({ ...rootCandidate,
+    knowledgeMatchedFile: { filename: "vehicle.jpg", sourceDisplayPath: "坦桑尼亚/阿鲁沙/vehicle.jpg" },
+    knowledgeSourcePaths: ["肯尼亚/内罗毕/other.jpg"],
+  }).match, false);
+  assert.equal(knowledgeTransportRootPathEvidence({ ...rootCandidate,
+    knowledgeMatchedFile: { filename: "vehicle.jpg", sourceDisplayPath: "肯尼亚/内罗毕/vehicle.jpg" },
+    knowledgeSourcePaths: ["坦桑尼亚/阿鲁沙/vehicle.jpg"],
+  }).match, true);
 
   const entityRoot = resolveKnowledgeScope({ moduleType: "day", location: "安博塞利", subject: "Observation Hill" }, hierarchy);
   const entityPlan = buildKnowledgeScopePlan({ moduleType: "day", location: "安博塞利", subject: "Observation Hill",exactIdentityRequired:true,queryCore:{identity:"Observation Hill"} }, entityRoot, hierarchy);
@@ -1007,6 +1042,103 @@ test("Scope Plan 预先确定逐级范围和不同图片用途的停止边界", 
   assert.equal(entityPlan.scopes[0].evidenceResolution.nodeIds[0], "observation-hill");
   assert.equal(knowledgeSourcePathMatches(entityPlan.scopes[0].evidenceResolution, ["肯尼亚/安博塞利/普通风景.jpg"], { identityAnchors: entityPlan.scopes[0].identityAnchors }).match, false);
   assert.equal(knowledgeSourcePathMatches(entityPlan.scopes[0].evidenceResolution, ["肯尼亚/安博塞利/Observation Hill/view.jpg"], { identityAnchors: entityPlan.scopes[0].identityAnchors }).match, true);
+});
+
+test("交通没有可确认国家时不生成空范围或根目录查询", () => {
+  const plan = buildKnowledgeScopePlan({ moduleType: "transport", subject: "商务车" },
+    { status: "unresolved", nodeIds: [], reason: "no_deterministic_match" }, hierarchy);
+  assert.deepEqual(plan.scopes, []);
+  assert.equal(plan.blockedReason, "transport_country_unresolved");
+});
+
+test("调用方显式配置的交通 Scope 在无层级适配器时仍按节点 ID 查询", () => {
+  const configured = { status: "resolved", nodeIds: ["kenya"], node: null, fullPath: null, reason: "configured_scope" };
+  const plan = buildKnowledgeScopePlan({ moduleType: "transport", subject: "草原飞机", location: "Kenya" }, configured, null);
+  assert.deepEqual(plan.scopes.map((item) => item.resolution.nodeIds), [["kenya"]]);
+  assert.equal(plan.scopes[0].role, "configured_transport_scope");
+  assert.equal(plan.stopBoundary, "configured_scope");
+  assert.equal(plan.blockedReason, null);
+});
+
+test("层级瞬时失败只技术重试一次，并发图片位共用同一实时层级", async () => {
+  let calls = 0;
+  const resolver = createKnowledgeScopeResolver({
+    baseUrl: "https://knowledge.invalid",
+    hierarchyRetryDelayMs: 0,
+    hierarchyLoader: async () => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error("temporary"), { code: "knowledge_hierarchy_http_503" });
+      return hierarchy;
+    },
+  });
+  const slot = { moduleType: "hotel", hotel: "JW Marriott Hotel Nairobi", location: "Nairobi" };
+  const results = await Promise.all([resolver.resolve(slot), resolver.resolve(slot), resolver.resolve(slot)]);
+  assert.equal(calls, 2);
+  assert.ok(results.every((result) => result.nodeIds[0] === "jw"));
+  assert.equal((await resolver.resolve(slot)).reason, "unique_hierarchy_match");
+  assert.equal(calls, 2, "successful live hierarchy remains shared");
+  assert.deepEqual(resolver.hierarchyStats(), { status: "ready", attempts: 2, technicalRetries: 1, cycles: 1, failureCode: null });
+});
+
+test("两次层级请求均失败后，后续图片位复用终态故障而不超出批次预算", async () => {
+  let calls = 0;
+  const resolver = createKnowledgeScopeResolver({ hierarchyRetryDelayMs: 0,
+    hierarchyLoader: async () => {
+      calls += 1;
+      throw Object.assign(new Error("temporary"), { code: "knowledge_hierarchy_unavailable" });
+    } });
+  const slot = { moduleType: "hotel", hotel: "JW Marriott Hotel Nairobi", location: "Nairobi" };
+  const first = await Promise.allSettled([resolver.resolve(slot), resolver.resolve(slot), resolver.resolve(slot)]);
+  assert.ok(first.every((result) => result.status === "rejected" && result.reason.code === "knowledge_hierarchy_unavailable" && result.reason.attempts === 2));
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const later = await Promise.allSettled([resolver.resolve(slot), resolver.resolve(slot), resolver.resolve(slot)]);
+  assert.ok(later.every((result) => result.status === "rejected" && result.reason.code === "knowledge_hierarchy_unavailable"));
+  assert.equal(calls, 2, "no later slot can start a third hierarchy request");
+  assert.deepEqual(resolver.hierarchyStats(), { status: "failed", attempts: 2, technicalRetries: 1, cycles: 1, failureCode: "knowledge_hierarchy_unavailable" });
+});
+
+test("层级客户端错误及取消不盲目重试；超时重试共享总截止", async () => {
+  let clientCalls = 0;
+  const clientFailure = createKnowledgeScopeResolver({ hierarchyLoader: async () => {
+    clientCalls += 1;
+    throw Object.assign(new Error("not authorized"), { code: "knowledge_hierarchy_http_403" });
+  } });
+  await assert.rejects(() => clientFailure.resolve({ moduleType: "day", location: "安博塞利" }),
+    (error) => error.code === "knowledge_hierarchy_http_403" && error.attempts === 1);
+  assert.equal(clientCalls, 1);
+
+  const controller = new AbortController();
+  controller.abort();
+  let cancelledCalls = 0;
+  const cancelled = createKnowledgeScopeResolver({ signal: controller.signal, hierarchyLoader: async () => { cancelledCalls += 1; return hierarchy; } });
+  await assert.rejects(() => cancelled.resolve({ moduleType: "day", location: "安博塞利" }),
+    (error) => error.code === "knowledge_hierarchy_aborted");
+  assert.equal(cancelledCalls, 0);
+
+  const budgets = [];
+  const bounded = createKnowledgeScopeResolver({ hierarchyTimeoutMs: 120, hierarchyRetryDelayMs: 0,
+    hierarchyLoader: ({ timeoutMs }) => { budgets.push(timeoutMs); return new Promise(() => {}); } });
+  const started = Date.now();
+  await assert.rejects(() => bounded.resolve({ moduleType: "day", location: "安博塞利" }),
+    (error) => error.code === "knowledge_hierarchy_timeout" && error.attempts === 2);
+  assert.equal(budgets.length, 2);
+  assert.ok(budgets[0] <= 60 && budgets[1] <= 120);
+  assert.ok(Date.now() - started < 750, "both attempts share one bounded wall-clock budget");
+});
+
+test("层级服务响应与连接错误分开分类且不泄漏服务地址", async () => {
+  await assert.rejects(() => loadKnowledgeHierarchy({ baseUrl: "https://private.invalid",
+    fetchImpl: async () => { throw new Error("connect ECONNREFUSED https://private.invalid"); } }),
+  (error) => error.code === "knowledge_hierarchy_unavailable" && !error.message.includes("private.invalid"));
+  await assert.rejects(() => loadKnowledgeHierarchy({ baseUrl: "https://private.invalid",
+    fetchImpl: async () => new Response("broken json", { status: 200, headers: { "content-type": "application/json" } }) }),
+  (error) => error.code === "knowledge_hierarchy_invalid");
+  await assert.rejects(() => loadKnowledgeHierarchy({ baseUrl: "https://private.invalid",
+    fetchImpl: async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }) }),
+  (error) => error.code === "knowledge_hierarchy_invalid");
+  const genuinelyEmpty = await loadKnowledgeHierarchy({ baseUrl: "https://private.invalid",
+    fetchImpl: async () => new Response('{"nodes":[]}', { status: 200, headers: { "content-type": "application/json" } }) });
+  assert.deepEqual(genuinelyEmpty.records, []);
 });
 
 test("酒店精确目录不存在时只补查一个已确认地区，不扩大到国家", () => {

@@ -9,7 +9,7 @@ import { ImageDeduper } from "./image-dedupe.mjs";
 import { downloadCandidate, imageResolutionPolicyForSlot } from "./image-download.mjs";
 import { searchWebBatch } from "./image-search.mjs";
 import { normalizeImageSourceMode, searchKnowledgeImages } from "./knowledge-image-search.mjs";
-import { applyKnowledgeScopeToQueryPlan, buildKnowledgeQueryPlan, buildKnowledgeScopePlan, buildKnowledgeVisualTarget, classifyKnowledgeImagePurpose, explicitEntityRoute, createKnowledgeScopeResolver, knowledgeSourcePathMatches, knowledgeEntityProbeEvidence, knowledgeEntityProbeAuditCandidate } from "./knowledge-scope-resolver.mjs";
+import { applyKnowledgeScopeToQueryPlan, buildKnowledgeQueryPlan, buildKnowledgeScopePlan, buildKnowledgeVisualTarget, classifyKnowledgeImagePurpose, explicitEntityRoute, createKnowledgeScopeResolver, knowledgeSourcePathMatches, knowledgeEntityProbeEvidence, knowledgeEntityProbeAuditCandidate, knowledgeTransportRootPathEvidence } from "./knowledge-scope-resolver.mjs";
 import { IMAGE_AUDIT_EVIDENCE_VERSION, isHardRejectionCode, isIdentityEvidenceUnresolved, normalizeHardRejectCode } from "./image-candidate-eligibility.mjs";
 import { canonicalImageAssetKey, createImageRetrievalSession, extractPageImages, fetchImagePageContent } from "./page-images.mjs";
 import { searchCommonsImages } from "./commons-search.mjs";
@@ -33,6 +33,56 @@ class TaskQueue {
 const text = (value) => typeof value === "string" ? value.trim() : value?.name || value?.officialName || value?.title || "";
 const unique = (items) => [...new Set(items.map((item) => String(item || "").replace(/\s+/g, " ").trim()).filter(Boolean))];
 const contextText = (value) => typeof value === "string" ? value : value && typeof value === "object" ? Object.values(value).flat(2).filter((item) => typeof item === "string").join(" ") : "";
+const diagnosticCode = (value) => /^[a-z][a-z0-9_]{0,79}$/i.test(String(value || "")) ? String(value) : null;
+
+// Keep a compact, URL-free account of where each slot stopped. Detailed query
+// and source evidence stays in the existing server-side knowledge/Web records.
+export function buildImagePipelineStageTrace(slot = {}, result = {}, sourceMode = "web_only") {
+  const evidence = result.pipelineEvidence || {};
+  const knowledge = evidence.knowledgeSearch || {};
+  const web = evidence.webExecution || {};
+  const attempts = Array.isArray(knowledge.attempts) ? knowledge.attempts : [];
+  const failedAttempts = attempts.filter((attempt) => ["failed", "timeout"].includes(attempt.status)).length;
+  const webCandidates = (result.candidates || []).filter((candidate) => candidate?.sourceKind !== "knowledge_library");
+  const plannerIssues = (slot.plannerValidationIssues || []).map((issue) => diagnosticCode(issue?.code)).filter(Boolean);
+  const plannerStatus = slot.plannerSlotStatus === "unresolved" || slot.needsUserAction === true
+    ? "unresolved" : slot.plannerSlotStatus === "locally_repaired" ? "locally_repaired" : "ready";
+  const hierarchy = knowledge.hierarchyLookup || {};
+  const hierarchyStatus = sourceMode === "web_only" ? "not_requested"
+    : hierarchy.status || (knowledge.rootScopeResolution || attempts.length ? "loaded" : knowledge.status === "failed" ? "failed" : "not_requested");
+  const root = knowledge.rootScopeResolution || {};
+  const scopePlan = knowledge.scopePlan || {};
+  const directoryStatus = hierarchyStatus === "failed" || hierarchyStatus === "timeout" || hierarchyStatus === "cancelled"
+    ? "not_evaluated"
+    : root.status === "ambiguous" ? "ambiguous"
+      : scopePlan.scopes?.length ? "planned"
+        : root.status === "unresolved" || knowledge.status === "entity_directory_missing" || ["knowledge_hotel_scope_unresolved", "knowledge_scope_unresolved"].includes(result.technicalStatus)
+          ? "unresolved" : "not_evaluated";
+  const queryStatus = !attempts.length ? "not_executed"
+    : knowledge.previewReturned > 0 || knowledge.candidateCount > 0 ? "candidates_returned"
+      : knowledge.status === "needs_clarification" ? "needs_clarification"
+        : ["failed", "timeout"].includes(knowledge.status) || ["failed", "timeout"].includes(attempts.at(-1)?.status) ? "failed"
+          : "completed_empty";
+  const webEntered = evidence.sourceFallback?.entered === true || Boolean(web.executedQueries?.length);
+  const finalStatus = result.status === "success" ? "auto_adopted"
+    : result.technicalStatus === "planner_slot_unresolved" ? "planner_unresolved"
+      : result.status === "needs_user_action" ? "needs_user_action"
+        : result.status === "not_found" ? "not_found" : "failed";
+  return {
+    planner: { status: plannerStatus, issueCodes: plannerIssues },
+    hierarchy: { status: hierarchyStatus, failureCode: diagnosticCode(hierarchy.failureCode), attempts: Number(hierarchy.attempts || 0), technicalRetries: Number(hierarchy.technicalRetries || 0) },
+    directory: { status: directoryStatus, reasonCode: diagnosticCode(scopePlan.blockedReason || knowledge.failureReason), scopeCount: scopePlan.scopes?.length || 0 },
+    knowledgeQuery: { status: sourceMode === "web_only" ? "not_requested" : queryStatus, attempts: attempts.length, failedAttempts, returnedCandidates: Number(knowledge.previewReturned || 0), sourcePathRejected: Number(knowledge.sourcePathRejectedCount || 0), previewsAudited: Number(knowledge.previewAudited || 0), originalsSaved: Number(knowledge.originalDownloadSavedCount || 0) },
+    web: { entered: webEntered, fallbackReason: diagnosticCode(evidence.sourceFallback?.reason), queryCount: web.executedQueries?.length || 0, pagesAccessed: Number(web.pagesUsed || 0), candidates: webCandidates.length, rejectedCandidates: webCandidates.filter((candidate) => candidate.qualificationStatus === "rejected").length, eligibleCandidates: webCandidates.filter((candidate) => candidate.qualificationStatus === "eligible").length },
+    terminal: {
+      status: finalStatus,
+      reasonCode: diagnosticCode(result.technicalStatus),
+      selectedSource: result.selected
+        ? result.selected.sourceKind || (result.selected.knowledgeAssetKey ? "knowledge_library" : "web")
+        : null,
+    },
+  };
+}
 
 function positiveVisualContext(value) {
   if (typeof value === "string") return [value];
@@ -625,6 +675,27 @@ function finalizeAuditEligibility(audit, rejection = null) {
   };
 }
 
+const countryBoundKnowledgeMode = (mode) => mode === "country_context" || mode === "transport_root_context";
+
+function knowledgeCandidateContextLocation(candidate, fallback) {
+  const mode = candidate?.knowledgeSourcePathMode;
+  const resolution = mode === "transport_root_context" ? candidate?.knowledgeEvidenceResolution : candidate?.knowledgeScopeResolution;
+  return countryBoundKnowledgeMode(mode) ? resolution?.node?.formalName || fallback : fallback;
+}
+
+function knowledgeCandidateGateSlot(slot, candidate) {
+  if (!countryBoundKnowledgeMode(candidate?.knowledgeSourcePathMode)) return slot;
+  return {
+    ...slot,
+    // A root-scope transport result is still bound to the confirmed country.
+    // Never turn a required visible location into a softer country boundary.
+    location: slot.locationRole === "visual_identity" ? slot.location : knowledgeCandidateContextLocation(candidate, slot.location),
+    hotel: null,
+    knowledgeSourcePathMode: candidate.knowledgeSourcePathMode,
+    knowledgeImagePurpose: classifyKnowledgeImagePurpose(slot),
+  };
+}
+
 export function applyKnowledgeSourcePathEvidence(slot, audit, pathDecision = {}) {
   if (!audit) return audit;
   if (pathDecision.mode === "entity_probe") {
@@ -652,7 +723,7 @@ export function applyKnowledgeSourcePathEvidence(slot, audit, pathDecision = {})
   // overrule a fresh photo/caption conflict or an explicit identity rejection.
   if (audit.auditEvidenceVersion === IMAGE_AUDIT_EVIDENCE_VERSION
     && (audit.identityEvidence?.status === "conflict" || ["wrong_hotel", "wrong_location", "knowledge_source_path_mismatch"].includes(explicitHardCode))) return audit;
-  const countryContext = pathDecision.mode === "country_context";
+  const countryContext = countryBoundKnowledgeMode(pathDecision.mode);
   const next = {
     ...audit,
     locationMatch: pathDecision.mode === "entity_identity" && text(slot.location) && explicitHardCode !== "wrong_location" ? true : audit.locationMatch,
@@ -889,6 +960,7 @@ export async function runImageSearchSkill({
       let scopeResolution = null;
       let scopePlan = null;
       let childScopeDecision = null;
+      let hierarchyLookup = { status: "not_requested", failureCode: null, attempts: 0, technicalRetries: 0 };
       let queryPlan = null;
       let lastResult = null;
       let lastScopeFeedback = null;
@@ -910,7 +982,7 @@ export async function runImageSearchSkill({
         else if (kind === "failed") metrics.knowledgeFailed += 1;
       };
       const candidateRecord = (candidate) => recordMap.get(candidate?.knowledgeAssetKey);
-      const pathDecisionFor = (candidate) => candidate.knowledgeSourcePathMode === "entity_probe" ? knowledgeEntityProbeEvidence(layerSlot, candidate) : knowledgeSourcePathMatches(candidate.knowledgeEvidenceResolution, candidate.knowledgeSourcePaths, {
+      const pathDecisionFor = (candidate) => candidate.knowledgeSourcePathMode === "entity_probe" ? knowledgeEntityProbeEvidence(layerSlot, candidate) : candidate.knowledgeSourcePathMode === "transport_root_context" ? knowledgeTransportRootPathEvidence(candidate) : knowledgeSourcePathMatches(candidate.knowledgeEvidenceResolution, candidate.knowledgeSourcePaths, {
         mode: candidate.knowledgeSourcePathMode,
         identityAnchors: candidate.knowledgeIdentityAnchors,
       });
@@ -973,6 +1045,7 @@ export async function runImageSearchSkill({
           webQueries: layerQueries,
           queryText: lastResult?.queryText || attempts.at(-1)?.queryText || "",
           queryPlan: queryPlan || { queries: [], strategy: "single_business_batch_finite_expressions", sharedScopeNodeIds: [] },
+          hierarchyLookup,
           scope: lastResult?.scope ?? (scopeResolution?.nodeIds?.length ? { node_ids: scopeResolution.nodeIds } : null),
           rootScopeResolution: rootResolution ? { status: rootResolution.status, nodeIds: rootResolution.nodeIds || [], fullPath: rootResolution.fullPath || null, reason: rootResolution.reason || null } : null,
           clarificationScopeResolution: clarificationResolution ? { status: clarificationResolution.status, nodeIds: clarificationResolution.nodeIds || [], fullPath: clarificationResolution.fullPath || null, reason: clarificationResolution.reason || null } : null,
@@ -1064,8 +1137,7 @@ export async function runImageSearchSkill({
         let judgments;
         try {
           auditBatches += 1;
-          const representative = downloaded[0];
-          const representativeScope = representative.knowledgeScopeResolution;
+          const representative = downloaded.find((candidate) => candidate.knowledgeSourcePathMode === "transport_root_context") || downloaded[0];
           const representativeMode = representative.knowledgeSourcePathMode;
           const visualTarget = buildKnowledgeVisualTarget(layerSlot);
           const auditSlot = {
@@ -1074,7 +1146,7 @@ export async function runImageSearchSkill({
             ...visualTarget,
             subject: visualTarget.coreVisualTarget,
             visualGoal: `${visualTarget.visualDuty}；查询可放宽非核心载体或细节，但审核必须保留核心视觉结果${visualTarget.representativeAllowed ? "，可在不误导事实时判为 representative" : "，不得用代表性氛围替代身份或类型证据"}`,
-            location: representativeMode === "country_context" ? (representativeScope?.node?.formalName || layerSlot.location) : layerSlot.location,
+            location: layerSlot.locationRole === "visual_identity" ? layerSlot.location : knowledgeCandidateContextLocation(representative, layerSlot.location),
             originalLocation: layerSlot.location || null,
             knowledgeSourcePathMode: representativeMode,
             knowledgeImagePurpose: classifyKnowledgeImagePurpose(layerSlot),
@@ -1113,10 +1185,7 @@ export async function runImageSearchSkill({
             judged.push({ candidate, audit: effectiveAudit, rejection: "needs_user_judgment" });
             continue;
           }
-          const candidateScope = candidate.knowledgeScopeResolution;
-          const gateSlot = candidate.knowledgeSourcePathMode === "country_context"
-            ? { ...layerSlot, location: candidateScope?.node?.formalName || layerSlot.location, hotel: null, knowledgeSourcePathMode: "country_context", knowledgeImagePurpose: classifyKnowledgeImagePurpose(layerSlot) }
-            : layerSlot;
+          const gateSlot = knowledgeCandidateGateSlot(layerSlot, candidate);
           const rejection = failedHardRequirement(gateSlot, effectiveAudit) || (fallbackPlan ? controlledFallbackRejection(fallbackPlan, effectiveAudit) : null);
           const qualifiedAudit = finalizeAuditEligibility(effectiveAudit, rejection);
           if (rejection) {
@@ -1190,9 +1259,30 @@ export async function runImageSearchSkill({
       };
 
       try {
-        if (knowledgeScopeNodeIds.length) scopeResolution = { status: "resolved", nodeIds: knowledgeScopeNodeIds.map(String), node: null, fullPath: null, reason: "configured_scope" };
-        else if (adapters.searchKnowledgeImages && !adapters.loadKnowledgeHierarchy) scopeResolution = { status: "unresolved", nodeIds: [], node: null, fullPath: null, reason: "test_adapter_without_hierarchy" };
-        else scopeResolution = await knowledgeScopeResolver.resolve(layerSlot);
+        if (knowledgeScopeNodeIds.length) {
+          hierarchyLookup = { status: "bypassed_configured_scope", failureCode: null, attempts: 0, technicalRetries: 0 };
+          scopeResolution = { status: "resolved", nodeIds: knowledgeScopeNodeIds.map(String), node: null, fullPath: null, reason: "configured_scope" };
+        } else if (adapters.searchKnowledgeImages && !adapters.loadKnowledgeHierarchy) {
+          hierarchyLookup = { status: "bypassed_test_adapter", failureCode: null, attempts: 0, technicalRetries: 0 };
+          scopeResolution = { status: "unresolved", nodeIds: [], node: null, fullPath: null, reason: "test_adapter_without_hierarchy" };
+        } else {
+          try {
+            scopeResolution = await knowledgeScopeResolver.resolve(layerSlot);
+            const stats = knowledgeScopeResolver.hierarchyStats();
+            hierarchyLookup = { status: "loaded", failureCode: null, attempts: stats.attempts, technicalRetries: stats.technicalRetries };
+          } catch (error) {
+            const stats = knowledgeScopeResolver.hierarchyStats();
+            const cancelled = signal?.aborted === true;
+            const timeout = !cancelled && (error?.name === "AbortError" || /timeout/i.test(String(error?.code || "")));
+            hierarchyLookup = {
+              status: cancelled ? "cancelled" : timeout ? "timeout" : "failed",
+              failureCode: diagnosticCode(error?.code) || diagnosticCode(stats.failureCode) || (cancelled ? "cancelled" : timeout ? "knowledge_hierarchy_timeout" : "knowledge_hierarchy_failed"),
+              attempts: stats.attempts,
+              technicalRetries: stats.technicalRetries,
+            };
+            throw error;
+          }
+        }
         rootResolution = scopeResolution;
         if (scopeResolution.status === "resolved") metrics.knowledgeScopeResolved += 1;
         else metrics.knowledgeScopeUnresolved += 1;
@@ -1389,6 +1479,7 @@ export async function runImageSearchSkill({
       let scopeResolution = null;
       let scopePlan = null;
       let childScopeDecision = null;
+      let hierarchyLookup = { status: "not_requested", failureCode: null, attempts: 0, technicalRetries: 0 };
       let queryPlan = null;
       let lastResult = null;
       let lastScopeFeedback = null;
@@ -1405,7 +1496,7 @@ export async function runImageSearchSkill({
         else if (kind === "failed") metrics.knowledgeFailed += 1;
       };
       const candidateRecord = (candidate) => recordMap.get(candidate?.knowledgeAssetKey);
-      const pathDecisionFor = (candidate) => candidate.knowledgeSourcePathMode === "entity_probe" ? knowledgeEntityProbeEvidence(layerSlot, candidate) : knowledgeSourcePathMatches(candidate.knowledgeEvidenceResolution, candidate.knowledgeSourcePaths, {
+      const pathDecisionFor = (candidate) => candidate.knowledgeSourcePathMode === "entity_probe" ? knowledgeEntityProbeEvidence(layerSlot, candidate) : candidate.knowledgeSourcePathMode === "transport_root_context" ? knowledgeTransportRootPathEvidence(candidate) : knowledgeSourcePathMatches(candidate.knowledgeEvidenceResolution, candidate.knowledgeSourcePaths, {
         mode: candidate.knowledgeSourcePathMode,
         identityAnchors: candidate.knowledgeIdentityAnchors,
       });
@@ -1465,6 +1556,7 @@ export async function runImageSearchSkill({
           webQueries: layerQueries,
           queryText: lastResult?.queryText || attempts.at(-1)?.queryText || "",
           queryPlan: queryPlan || { queries: [], strategy: "single_business_batch_finite_expressions", sharedScopeNodeIds: [] },
+          hierarchyLookup,
           scope: lastResult?.scope ?? (scopeResolution?.nodeIds?.length ? { node_ids: scopeResolution.nodeIds } : null),
           rootScopeResolution: rootResolution ? { status: rootResolution.status, nodeIds: rootResolution.nodeIds || [], fullPath: rootResolution.fullPath || null, reason: rootResolution.reason || null } : null,
           clarificationScopeResolution: clarificationResolution ? { status: clarificationResolution.status, nodeIds: clarificationResolution.nodeIds || [], fullPath: clarificationResolution.fullPath || null, reason: clarificationResolution.reason || null } : null,
@@ -1473,6 +1565,7 @@ export async function runImageSearchSkill({
             purpose: scopePlan.purpose,
             strategy: scopePlan.strategy,
             stopBoundary: scopePlan.stopBoundary,
+            blockedReason: scopePlan.blockedReason || null,
             scopes: scopePlan.scopes.map((item) => ({ role: item.role, nodeIds: item.resolution?.nodeIds || [], fullPath: item.resolution?.fullPath || null, sourcePathMode: item.sourcePathMode || null, identityAnchors: item.identityAnchors || [] })),
           } : null,
           childScopeDecision,
@@ -1635,8 +1728,7 @@ export async function runImageSearchSkill({
             metrics.previewAudited += batch.length;
             let judgments;
             try {
-              const representative = batch[0];
-              const representativeScope = representative.knowledgeScopeResolution;
+              const representative = batch.find((candidate) => candidate.knowledgeSourcePathMode === "transport_root_context") || batch[0];
               const representativeMode = representative.knowledgeSourcePathMode;
               const visualTarget = buildKnowledgeVisualTarget(layerSlot);
               const auditSlot = {
@@ -1644,7 +1736,7 @@ export async function runImageSearchSkill({
                 ...visualTarget,
                 subject: visualTarget.coreVisualTarget,
                 visualGoal: `${visualTarget.visualDuty}；查询可放宽非核心载体或细节，但审核必须保留核心视觉结果${visualTarget.representativeAllowed ? "，可在不误导事实时判为 representative" : "，不得用代表性氛围替代身份或类型证据"}`,
-                location: representativeMode === "country_context" ? (representativeScope?.node?.formalName || layerSlot.location) : layerSlot.location,
+                location: layerSlot.locationRole === "visual_identity" ? layerSlot.location : knowledgeCandidateContextLocation(representative, layerSlot.location),
                 originalLocation: layerSlot.location || null,
                 knowledgeSourcePathMode: representativeMode,
                 knowledgeImagePurpose: classifyKnowledgeImagePurpose(layerSlot),
@@ -1679,8 +1771,7 @@ export async function runImageSearchSkill({
                 judgmentsByAsset.set(candidate.knowledgeAssetKey, { candidate, audit: effectiveAudit, rejection: "needs_user_judgment" });
                 continue;
               }
-              const candidateScope = candidate.knowledgeScopeResolution;
-              const gateSlot = candidate.knowledgeSourcePathMode === "country_context" ? { ...eligibilitySlot, location: candidateScope?.node?.formalName || eligibilitySlot.location, hotel: null, knowledgeSourcePathMode: "country_context", knowledgeImagePurpose: classifyKnowledgeImagePurpose(layerSlot) } : eligibilitySlot;
+              const gateSlot = knowledgeCandidateGateSlot(eligibilitySlot, candidate);
               const rejection = failedHardRequirement(gateSlot, effectiveAudit);
               const qualifiedAudit = finalizeAuditEligibility(effectiveAudit, rejection);
               if (record) {
@@ -1871,9 +1962,30 @@ export async function runImageSearchSkill({
       };
 
       try {
-        if (knowledgeScopeNodeIds.length) scopeResolution = { status: "resolved", nodeIds: knowledgeScopeNodeIds.map(String), node: null, fullPath: null, reason: "configured_scope" };
-        else if (adapters.searchKnowledgeImages && !adapters.loadKnowledgeHierarchy) scopeResolution = { status: "unresolved", nodeIds: [], node: null, fullPath: null, reason: "test_adapter_without_hierarchy" };
-        else scopeResolution = await knowledgeScopeResolver.resolve(layerSlot);
+        if (knowledgeScopeNodeIds.length) {
+          hierarchyLookup = { status: "bypassed_configured_scope", failureCode: null, attempts: 0, technicalRetries: 0 };
+          scopeResolution = { status: "resolved", nodeIds: knowledgeScopeNodeIds.map(String), node: null, fullPath: null, reason: "configured_scope" };
+        } else if (adapters.searchKnowledgeImages && !adapters.loadKnowledgeHierarchy) {
+          hierarchyLookup = { status: "bypassed_test_adapter", failureCode: null, attempts: 0, technicalRetries: 0 };
+          scopeResolution = { status: "unresolved", nodeIds: [], node: null, fullPath: null, reason: "test_adapter_without_hierarchy" };
+        } else {
+          try {
+            scopeResolution = await knowledgeScopeResolver.resolve(layerSlot);
+            const stats = knowledgeScopeResolver.hierarchyStats();
+            hierarchyLookup = { status: "loaded", failureCode: null, attempts: stats.attempts, technicalRetries: stats.technicalRetries };
+          } catch (error) {
+            const stats = knowledgeScopeResolver.hierarchyStats();
+            const cancelled = signal?.aborted === true;
+            const timeout = !cancelled && (error?.name === "AbortError" || /timeout/i.test(String(error?.code || "")));
+            hierarchyLookup = {
+              status: cancelled ? "cancelled" : timeout ? "timeout" : "failed",
+              failureCode: diagnosticCode(error?.code) || diagnosticCode(stats.failureCode) || (cancelled ? "cancelled" : timeout ? "knowledge_hierarchy_timeout" : "knowledge_hierarchy_failed"),
+              attempts: stats.attempts,
+              technicalRetries: stats.technicalRetries,
+            };
+            throw error;
+          }
+        }
         rootResolution = scopeResolution;
         if (scopeResolution.status === "resolved") metrics.knowledgeScopeResolved += 1;
         else metrics.knowledgeScopeUnresolved += 1;
@@ -2451,10 +2563,24 @@ export async function runImageSearchSkill({
   let completedSlots = 0;
   onCapabilityCall?.({ phase: "slot_progress", capabilityId: "image_slot_progress", completedSlots, totalSlots: slots.length });
   const results = await Promise.all([...slots].sort((a, b) => imageSlotPriority(a) - imageSlotPriority(b)).map((slot) => slotQueue.add(async () => {
-    try { const result = await processSlot(slot); return { ...result, searchDiagnostic: buildImageSearchDiagnostic(result) }; }
-    catch (error) { return { slotId: slot?.slotId || null, status: "failed", selected: null, candidates: [], queriesUsed: [], sourceEvidence: [], actualSubject: null, matchReason: error?.message || String(error), technicalStatus: "slot_failed", warnings: [], constraints: null, durationMs: 0 }; }
+    try {
+      const result = await processSlot(slot);
+      return { ...result, pipelineEvidence: { ...(result.pipelineEvidence || {}), searchTrace: buildImagePipelineStageTrace(slot, result, resolvedSourceMode) }, searchDiagnostic: buildImageSearchDiagnostic(result) };
+    } catch (error) {
+      const result = { slotId: slot?.slotId || null, status: "failed", selected: null, candidates: [], queriesUsed: [], sourceEvidence: [], actualSubject: null, matchReason: error?.message || String(error), technicalStatus: "slot_failed", warnings: [], constraints: null, durationMs: 0 };
+      return { ...result, pipelineEvidence: { searchTrace: buildImagePipelineStageTrace(slot, result, resolvedSourceMode) }, searchDiagnostic: buildImageSearchDiagnostic(result) };
+    }
     finally { completedSlots += 1; onCapabilityCall?.({ phase: "slot_progress", capabilityId: "image_slot_progress", completedSlots, totalSlots: slots.length, target: slot.slotId }); }
   })));
+  const stageOutcomes = {
+    plannerUnresolved: results.filter((item) => item.pipelineEvidence?.searchTrace?.planner.status === "unresolved").length,
+    hierarchyUnavailable: results.filter((item) => ["failed", "timeout"].includes(item.pipelineEvidence?.searchTrace?.hierarchy.status)).length,
+    directoryUnresolved: results.filter((item) => ["unresolved", "ambiguous"].includes(item.pipelineEvidence?.searchTrace?.directory.status)).length,
+    knowledgeQueried: results.filter((item) => item.pipelineEvidence?.searchTrace?.knowledgeQuery.attempts > 0).length,
+    knowledgeEmpty: results.filter((item) => item.pipelineEvidence?.searchTrace?.knowledgeQuery.status === "completed_empty").length,
+    webEntered: results.filter((item) => item.pipelineEvidence?.searchTrace?.web.entered).length,
+    autoAdopted: results.filter((item) => item.pipelineEvidence?.searchTrace?.terminal.status === "auto_adopted").length,
+  };
   const knowledgeSlotOutcomes = {
     selected: results.filter((item) => item.status === "success" && item.selected?.sourceKind === "knowledge_library").length,
     notFound: results.filter((item) => item.status === "not_found").length,
@@ -2465,7 +2591,7 @@ export async function runImageSearchSkill({
   metrics.originalDownloadTimeMs = timingsMs.originalDownload;
   if (ownsRetrievalSession) await retrievalSession.close();
   metrics.imageRetrieval = retrievalSession.getDiagnostics();
-  return { batchId, status: resultStatus(results), results, warnings: [], metrics: { ...metrics, knowledgeAverageSlotSearchMs: metrics.knowledgeCalls ? Math.round(timingsMs.knowledgeSearch / metrics.knowledgeCalls) : 0, knowledgeSlotOutcomes, knowledgeOnlyVerified: resolvedSourceMode === "knowledge_only" && metrics.searchCalls === 0 && metrics.commonsCalls === 0, concurrencyPeak: { slots: slotQueue.peak, search: searchQueue.peak, pages: pageQueue.peak, downloads: downloadQueue.peak, vision: visionQueue.peak }, durationMs: Date.now() - startedAt } };
+  return { batchId, status: resultStatus(results), results, warnings: [], metrics: { ...metrics, stageOutcomes, knowledgeHierarchy: knowledgeScopeResolver.hierarchyStats(), knowledgeAverageSlotSearchMs: metrics.knowledgeCalls ? Math.round(timingsMs.knowledgeSearch / metrics.knowledgeCalls) : 0, knowledgeSlotOutcomes, knowledgeOnlyVerified: resolvedSourceMode === "knowledge_only" && metrics.searchCalls === 0 && metrics.commonsCalls === 0, concurrencyPeak: { slots: slotQueue.peak, search: searchQueue.peak, pages: pageQueue.peak, downloads: downloadQueue.peak, vision: visionQueue.peak }, durationMs: Date.now() - startedAt } };
   } finally {
     if (ownsRetrievalSession) await retrievalSession.close();
   }

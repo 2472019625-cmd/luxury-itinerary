@@ -13,7 +13,7 @@ import { buildKnowledgeQueryPlan, cleanupPlannerQueryScope, validatePlannerSearc
 import { visualSubjectPolicyIssue } from "./visual-subject-policy.mjs";
 import { highlightToText } from "../src/lib/highlightDisplay.js";
 
-export const AGENT_PROMPT_VERSION = "agent-trip-planner-v8-core-visual-choice";
+export const AGENT_PROMPT_VERSION = "agent-trip-planner-v9-candidate-positions-landscape-identity-boundary";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const prompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-trip-planner-v1.md"), "utf8");
 const reviewDecisionPrompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-review-decision-v1.md"), "utf8");
@@ -68,6 +68,7 @@ export function validateSimpleHighlightSelection(raw = {}, factBasis = {}) {
 export function buildAgentFactBasis(data = {}, report = {}) {
   const days = Array.isArray(data.days) ? data.days : [];
   const hotels = (Array.isArray(data.hotels) ? data.hotels : []).map((hotel, index) => ({
+    sourceIndex: index,
     id: cleanText(hotel.id) || `hotel-${index + 1}`,
     name: cleanText(hotel.officialName || hotel.name || hotel.title),
     nights: Number(hotel.nights) || null,
@@ -86,8 +87,8 @@ export function buildAgentFactBasis(data = {}, report = {}) {
     endDate: cleanText(data.endDate) || null,
     travelerCount: Number(data.travelers || data.adults) || null,
     hotels,
-    transport: (Array.isArray(data.transportSummary) ? data.transportSummary : []).map((item, index) => ({ id: cleanText(item.id) || `transport-${index + 1}`, category: cleanText(item.category || item.title || item.label), serviceLevel: cleanText(item.serviceLevel), model: cleanText(item.model) || null, modelGuaranteed: item.modelGuaranteed === true, usageLabel: cleanText(item.usageLabel) || null, features: item.features || [], status: item.status || null, currentCopy: cleanText(item.editorialCopy || item.description) })).filter((item) => item.category).slice(0, 20),
-    diningExperiences: (Array.isArray(data.diningExperiences) ? data.diningExperiences : []).map((item, index) => ({ id: cleanText(item.id) || `dining-${index + 1}`, name: cleanText(item.title || item.officialName), officialName: cleanText(item.officialName) || null, location: cleanText(item.location) || null, status: item.status || item.feeBoundary || null, currentCopy: cleanText(item.editorialCopy) })).filter((item) => item.name).slice(0, 20),
+    transport: (Array.isArray(data.transportSummary) ? data.transportSummary : []).map((item, index) => ({ sourceIndex: index, id: cleanText(item.id) || `transport-${index + 1}`, category: cleanText(item.category || item.title || item.label), serviceLevel: cleanText(item.serviceLevel), model: cleanText(item.model) || null, modelGuaranteed: item.modelGuaranteed === true, usageLabel: cleanText(item.usageLabel) || null, features: item.features || [], status: item.status || null, currentCopy: cleanText(item.editorialCopy || item.description) })).filter((item) => item.category).slice(0, 20),
+    diningExperiences: (Array.isArray(data.diningExperiences) ? data.diningExperiences : []).map((item, index) => ({ sourceIndex: index, id: cleanText(item.id) || `dining-${index + 1}`, name: cleanText(item.title || item.officialName), officialName: cleanText(item.officialName) || null, location: cleanText(item.location) || null, status: item.status || item.feeBoundary || null, currentCopy: cleanText(item.editorialCopy) })).filter((item) => item.name).slice(0, 20),
     coreExperiences: unique([...(Array.isArray(data.highlights) ? data.highlights.map(highlightToText) : []), ...days.map((day) => cleanText(day.title || day.route))]).slice(0, 24),
     days: days.map((day, index) => ({
       day: index + 1,
@@ -187,15 +188,19 @@ export function validateSimpleDayVisuals(plan, factBasis = {}) {
     if (String(slot.role || "").includes("supporting") && (slot.required !== false || slot.removable !== true)) errors.push(slotError(roleLabel, "invalid_supporting_visual", `${slot.role} 辅助图必须可移除且非必需`));
   }
   for (const [day, count] of counts) if (count > 4) errors.push({ code: "day_visual_overflow", path: "imagePlan.slots", message: `DAY ${day} 最多4个视觉点，不得平均覆盖所有Spot` });
-  const requiredSearchRoles = Object.keys(factBasis || {}).length ? [
-    "cover",
-    ...(factBasis.hotels || []).map((_, index) => `hotel:${index + 1}`),
-    ...(factBasis.diningExperiences || []).map((_, index) => `dining:${index + 1}`),
-    ...(factBasis.transport || []).map((_, index) => `transport:${index + 1}`),
-    ...(factBasis.days || []).map((_, index) => `day:${index + 1}`),
-  ] : [];
-  for (const role of requiredSearchRoles) {
-    if (!slots.some((slot) => slot.role === role)) errors.push(slotError(role, "image_search_plan_missing", `缺少 ${role} 的Planner图片搜索计划、画面主体、locationRole和2—4条Query`));
+  if (Object.keys(factBasis || {}).length) {
+    const coverage = reconcilePlannerImageCandidates(plan, factBasis);
+    for (const position of coverage.positions) {
+      if (position.status === "missing_required") errors.push(slotError(position.role, "image_search_plan_missing", `必需位置 ${position.role} 缺少Planner图片搜索计划`));
+      if (position.status === "missing_optional") errors.push(slotError(position.role, "image_optional_plan_unaccounted", `可选位置 ${position.role} 未规划且未明确省略`));
+      if (position.status === "duplicate") errors.push(slotError(position.role, "image_slot_role_duplicate", `${position.role} 被重复规划`));
+      if (position.status === "conflict") errors.push(slotError(position.role, "image_optional_omission_conflict", `${position.role} 同时已规划且声明省略`));
+    }
+    for (const role of coverage.unexpectedRoles) errors.push(slotError(role, "image_slot_role_unknown", `Planner输出了不属于原始事实候选位置的role：${role || "(空)"}`));
+    for (const role of coverage.invalidOmissions) errors.push(slotError(role, "image_optional_omission_invalid", `仅可明确省略原始事实中的可选图片位置：${role}`));
+    if (plan.imagePlan?.omittedOptionalRoles !== undefined && !Array.isArray(plan.imagePlan.omittedOptionalRoles)) {
+      errors.push({ code: "image_optional_omission_invalid", path: "imagePlan.omittedOptionalRoles", message: "omittedOptionalRoles必须是role数组" });
+    }
   }
   return errors;
 }
@@ -236,8 +241,8 @@ export function fillPlannerImageDeterministicFields(raw = {}, factBasis = {}) {
       ...slot,
       slotId: cleanText(slot.slotId) || deterministic.slotId,
       label: cleanText(slot.label) || deterministic.label,
-      required: typeof slot.required === "boolean" ? slot.required : deterministic.required,
-      removable: typeof slot.removable === "boolean" ? slot.removable : deterministic.removable,
+      required: deterministic.required,
+      removable: deterministic.removable,
     };
   });
   return next;
@@ -322,6 +327,51 @@ function fallbackPlannerRaw(factBasis = {}, reason = "planner_system_failure") {
   };
 }
 
+// These positions come from parsed facts and layout obligations, before the
+// Planner chooses any visual. DAY supporting pictures remain Planner-selected
+// from actual day evidence rather than one mechanically assigned per Spot.
+export function buildPlannerImageCandidates(factBasis = {}) {
+  const candidates = [{ role: "cover", sourceKey: "destination", slotId: "image:cover:primary", required: true, removable: false }];
+  for (const [index, hotel] of (factBasis.hotels || []).entries()) candidates.push({
+    role: `hotel:${index + 1}`, sourceKey: `hotels.${Number.isInteger(hotel.sourceIndex) ? hotel.sourceIndex : index}`, slotId: `image:hotel:${hotel.id || index + 1}:primary`, required: true, removable: false,
+  });
+  for (const [index, dining] of (factBasis.diningExperiences || []).entries()) candidates.push({
+    role: `dining:${index + 1}`, sourceKey: `diningExperiences.${Number.isInteger(dining.sourceIndex) ? dining.sourceIndex : index}`, slotId: `image:dining:${dining.id || index + 1}:primary`, required: false, removable: true,
+  });
+  for (const [index, transport] of (factBasis.transport || []).entries()) candidates.push({
+    role: `transport:${index + 1}`, sourceKey: `transport.${Number.isInteger(transport.sourceIndex) ? transport.sourceIndex : index}`, slotId: `image:transport:${transport.id || index + 1}:primary`, required: false, removable: true,
+  });
+  for (const [index] of (factBasis.days || []).entries()) candidates.push({
+    role: `day:${index + 1}`, sourceKey: `days.${index}`, slotId: `image:day:${index + 1}:primary`, required: true, removable: false,
+  });
+  return candidates;
+}
+
+export function reconcilePlannerImageCandidates(plan = {}, factBasis = {}) {
+  const slots = Array.isArray(plan.imagePlan?.slots) ? plan.imagePlan.slots : [];
+  const omissions = Array.isArray(plan.imagePlan?.omittedOptionalRoles) ? plan.imagePlan.omittedOptionalRoles : [];
+  const candidates = buildPlannerImageCandidates(factBasis);
+  const positions = candidates.map((candidate) => {
+    const plannedCount = slots.filter((slot) => slot.role === candidate.role).length;
+    const omitted = omissions.includes(candidate.role);
+    const status = plannedCount > 1 ? "duplicate" : plannedCount && omitted ? "conflict"
+      : plannedCount ? "planned" : omitted && !candidate.required ? "omitted_optional"
+        : candidate.required ? "missing_required" : "missing_optional";
+    return { ...candidate, status };
+  });
+  const knownRoles = new Set(candidates.map((candidate) => candidate.role));
+  const dayCount = (factBasis.days || []).length;
+  const isAllowedSupporting = (role) => {
+    const match = /^day:(\d+):supporting:([1-3])$/.exec(cleanText(role));
+    return match && Number(match[1]) >= 1 && Number(match[1]) <= dayCount;
+  };
+  return {
+    positions,
+    unexpectedRoles: slots.map((slot) => cleanText(slot.role)).filter((role) => !knownRoles.has(role) && !isAllowedSupporting(role)),
+    invalidOmissions: omissions.filter((role) => !candidates.some((candidate) => candidate.role === role && !candidate.required)),
+  };
+}
+
 const visualChoicePattern = /或者|或|二选一|\bor\b|\//i;
 const visualWordSegmenter = new Intl.Segmenter("zh", { granularity: "word" });
 const visualWords = (value) => [...visualWordSegmenter.segment(cleanText(value).normalize("NFKC").toLowerCase())]
@@ -334,14 +384,26 @@ function includesWordSequence(words, expected) {
 // alias dictionary. Unknown qualifiers (room types, exclusive facilities, etc.)
 // deliberately do not match and remain specific-scene decisions.
 const hotelRepresentativeCategories = [
-  ["exterior", /^(?:(?:酒店|营地|度假村)?(?:建筑外观|建筑|外观)|(?:(?:hotel|camp|resort)\s+)?(?:building\s+exterior|building|exterior))$/i],
-  ["suite", /^(?:(?:酒店|营地|度假村)?(?:套房|客房)|(?:(?:hotel|camp|resort)\s+)?(?:suites?|guest\s*rooms?))$/i],
-  ["pool", /^(?:(?:酒店|营地|度假村)?(?:游泳池|泳池)|(?:(?:hotel|camp|resort)\s+)?(?:swimming\s+)?pools?)$/i],
-  ["main_areas", /^(?:(?:酒店|营地|度假村)?(?:公共空间|大堂)|(?:(?:hotel|camp|resort)\s+)?(?:public\s+(?:spaces?|areas?)|lobb(?:y|ies)))$/i],
+  ["exterior", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:建筑外观|建筑|外观)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:building\s+exterior|building|exterior))$/i],
+  ["suite", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:套房|客房)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:suites?|(?:guest\s*)?rooms?))$/i],
+  ["pool", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:游泳池|泳池)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:swimming\s+)?pools?)$/i],
+  ["main_areas", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:公共空间|大堂)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:public\s+(?:spaces?|areas?)|lobb(?:y|ies)))$/i],
 ];
 const splitVisualChoices = (value) => cleanText(value).split(/或者|或|二选一|\bor\b|\//i).map(cleanText);
 const visualKey = (value) => cleanText(value).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 const hotelCategory = (value) => hotelRepresentativeCategories.find(([, pattern]) => pattern.test(cleanText(value)))?.[0];
+const ordinaryViewPreference = /(?:城市|天际线|山脉?|海洋?|湖泊?|河流?|草原|花园|公园|自然)(?:景观|视野)$|\b(?:city|skyline|mountain|ocean|sea|lake|river|savanna|garden|park|landscape)\s+views?$/i;
+
+function hotelVisualCategory(value) {
+  const neutral = cleanText(value).replace(/(?:现代|真实|代表性|整体|画面)/g, "")
+    .replace(/\b(?:modern|real|representative)\b/gi, "").trim();
+  const direct = hotelCategory(neutral) || hotelCategory(neutral.replace(/空间$/, ""));
+  if (direct) return { category: direct, preference: "" };
+  const preference = ordinaryViewPreference.exec(neutral);
+  if (!preference) return null;
+  const category = hotelCategory(neutral.slice(0, preference.index).trim());
+  return category === "suite" ? { category, preference: preference[0] } : null;
+}
 
 function repairHotelRepresentativeChoice(slot, factBasis) {
   const hotelRole = /^hotel:(\d+)$/.exec(cleanText(slot.role));
@@ -353,29 +415,42 @@ function repairHotelRepresentativeChoice(slot, factBasis) {
   const identityNames = unique([core.identity, core.identityEn].map(cleanText));
   const factNames = [hotel.name, hotel.officialName, hotel.shortName].map(visualKey).filter(Boolean);
   if (!factNames.includes(visualKey(core.identity))) return null;
-  const subjects = [core.subject, core.subjectEn].map(cleanText).filter(Boolean);
+  const stripIdentity = (value) => {
+    let result = cleanText(value);
+    for (const identity of [...identityNames].sort((a, b) => b.length - a.length)) {
+      if (result.toLowerCase().startsWith(identity.toLowerCase())) return result.slice(identity.length).trim();
+    }
+    return result;
+  };
+  const subjects = [core.subject, core.subjectEn].map(stripIdentity).filter(Boolean);
   const categorySets = subjects.map((subject) => splitVisualChoices(subject).map(hotelCategory));
   const alreadyRepresentative = subjects.length > 0 && subjects.every((subject) => /^(?:酒店代表性空间|representative hotel space)$/i.test(subject));
-  if (!alreadyRepresentative && (!categorySets.length || categorySets.some((items) => items.length < 2 || items.length > 4 || items.some((item) => !item)))) return null;
+  if (!alreadyRepresentative && (!categorySets.length || categorySets.some((items) => items.length < 1 || items.length > 4 || items.some((item) => !item)))) return null;
   const sameCategories = (items) => unique(items).sort().join("|") === unique(categorySets[0]).sort().join("|");
   if (!alreadyRepresentative && !categorySets.every(sameCategories)) return null;
+  const singleCoreCategory = !alreadyRepresentative && categorySets[0].length === 1 ? categorySets[0][0] : "";
   let visual = cleanText(slot.primaryVisualSubject);
   for (const identity of identityNames.sort((a, b) => b.length - a.length)) {
     visual = visual.replaceAll(identity, "");
   }
   // Permit only neutral presentation wording around those category names.
   // An unbound second entity or a named/private facility is not neutral.
-  const visualCategories = splitVisualChoices(visual).map((part) => {
-    const neutral = part.replace(/(?:现代|真实|代表性|整体|画面)/g, "")
-      .replace(/\b(?:modern|real|representative)\b/gi, "").trim();
-    return hotelCategory(neutral) || hotelCategory(neutral.replace(/空间$/, ""));
-  });
-  if ((!alreadyRepresentative && !sameCategories(visualCategories)) || visualCategories.length < 2 || visualCategories.length > 4 || visualCategories.some((item) => !item)) return null;
+  const visualCategories = splitVisualChoices(visual).map(hotelVisualCategory);
+  if (visualCategories.length < 2 || visualCategories.length > 4 || visualCategories.some((item) => !item)) return null;
+  const categoryNames = visualCategories.map((item) => item.category);
+  if (!alreadyRepresentative && (singleCoreCategory
+    ? !categoryNames.includes(singleCoreCategory) || unique(categoryNames).length < 2
+    : !sameCategories(categoryNames))) return null;
+  if (cleanText(hotel.roomType) && categoryNames.includes("suite")) return null;
+  const preferences = visualCategories.map((item) => item.preference).filter(Boolean);
+  const sourceClaimsView = preferences.some((preference) => [hotel.currentCopy, hotel.selectionReason, hotel.signatureExperience]
+    .some((fact) => visualKey(fact).includes(visualKey(preference))));
+  if (sourceClaimsView) return null;
   const queryCore = { ...core, subject: "酒店代表性空间", ...(cleanText(core.subjectEn) ? { subjectEn: "representative hotel space" } : {}) };
   const primaryVisualSubject = `${cleanText(core.identity)} 酒店代表性空间`;
   const queries = buildKnowledgeQueryPlan({ ...slot, moduleType: "hotel", hotel: core.identity, queryCore, primaryVisualSubject }, null).queries;
   return { primaryVisualSubject, queryCore, fidelityQuery: queries[0], alternateQueries: queries.slice(1), searchIntent: queries,
-    repair: { code: "hotel_representative_choice_resolved", message: "已按同一酒店代表图的既有空间类别归一，完整身份与硬门槛不变", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: core, originalQueries: [slot.fidelityQuery, ...(slot.alternateQueries || [])], primaryVisualSubject, allowedCategories: unique(visualCategories) } };
+    repair: { code: "hotel_representative_choice_resolved", message: "已按同一酒店代表图的既有空间类别归一，完整身份与硬门槛不变", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: core, originalQueries: [slot.fidelityQuery, ...(slot.alternateQueries || [])], primaryVisualSubject, allowedCategories: unique(categoryNames), ...(preferences.length ? { softViewPreferences: preferences } : {}) } };
 }
 
 function repairBackgroundVisualChoice(slot) {
@@ -634,7 +709,9 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
   }
 
   for (const issue of validationErrors) {
-    if (issue.code === "image_search_plan_missing") for (const role of issue.slotRoles || []) unresolvedRoles.add(role);
+    if (["image_search_plan_missing", "image_optional_plan_unaccounted", "image_slot_role_duplicate", "image_optional_omission_conflict"].includes(issue.code)) {
+      for (const role of issue.slotRoles || []) unresolvedRoles.add(role);
+    }
   }
   return { plan: next, repairs, unresolvedSlotRoles: [...unresolvedRoles] };
 }
@@ -644,6 +721,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   const context = { projectId: project.projectId, inputFingerprint: project.inputFingerprint, factBasis, previousPlanVersion: project.planIds?.length || 0 };
   const sharedInput = {
     factBasis,
+    ...(simpleSkillContract ? { imageCandidateSlots: buildPlannerImageCandidates(factBasis) } : {}),
     preflightDecisions: project.confirmationDecisions || [],
     inputFingerprint: project.inputFingerprint,
     versions: { ruleProfileVersion: AGENT_RULE_PROFILE_VERSION, capabilityConfigVersion: AGENT_CAPABILITY_VERSION, promptVersion: AGENT_PROMPT_VERSION },
@@ -663,8 +741,9 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   const identityDecisionPrompt = "填写exactIdentityRequired前，先在本次规划内区分两个独立问题（不输出推理或新增字段）：①主体与必要动作必须正确，这要求同一种画面/体验，不要求唯一地点身份；②具体实体是否不可替代，这才决定该boolean。事件、自然现象、活动场面及其营销名称不是唯一实体身份；不得把行程主卖点的重要程度当成身份必需性。若主体动作仍正确，只是照片无法证明发生在那个命名地点，不能据此填true。独立酒店模块展示的就是预订的具体酒店，换成另一家会造成事实错误，因此必须true并填写该酒店正式identity。实体专属体验按是否必须属于该实体判断，不能仅因发生于酒店就设true。完成后逐图片位复核这两个问题，保持主体/动作、地点和身份分开；不按国家、动物、活动或品牌词表判断。";
   const identityOutputChecklist = '最终输出 JSON 前逐个遍历 imagePlan.slots，包含 cover、每个 hotel/dining/transport、每个 day:N 主图和每个 supporting：每一个 slot 对象都必须显式写出 "exactIdentityRequired": true 或 "exactIdentityRequired": false。不得省略、使用 null/字符串，也不得只在前几个 slot 输出该字段。先按上面的反事实判断决定每个值，不按 role、locationRole 或 identity 是否非空机械填充；输出完成后再次检查 imagePlan.slots.length 与此布尔字段出现次数完全相同。';
   const visualTargetPrompt = '视觉目标契约澄清：前文单一画面与禁止A或B约束的是Core主体、必要动作和不可替代身份，不能把理想描述的背景、光线、构图选择提升为硬条件。请在本次输出中直接保持queryCore明确，非核心背景只作表现偏好。独立hotel:N代表图已有外观、套房、泳池、公共空间候选池：若职责是展示这家酒店的真实代表空间，queryCore.subject写酒店代表性空间，action为空，identity是正式酒店身份且exactIdentityRequired=true；primaryVisualSubject可表达代表空间偏好，不能要求每种空间同框。只有客户文案明确承诺并需要图片证明某一特定房型、专属设施或体验时，Core才保留该具体主体与动作，不能归为代表图；DAY、餐饮和交通不得借酒店代表图规则放宽。真正不同Core主体、动作或身份的二选一仍不得输出，不能靠选第一个或删掉限定来解决。此澄清只使用现有字段，不新增输出字段、模型调用或备用画面。';
+  const candidateSlotPrompt = '图片位置契约：用户输入的imageCandidateSlots由原始事实和版面预先确定，每项有稳定role、sourceKey、slotId及required/removable。你只决定画面，不改编号、来源或必要性；每个required=true候选必须在imagePlan.slots中恰好规划一次。sourceRefs必须引用候选的原始sourceKey，不能在事实数组过滤空行后自行重编号。可选的dining:N、transport:N只有确实无独立展示价值时才可不规划，并把对应role明确写入imagePlan.omittedOptionalRoles；没有省略时也输出空数组。不能同时规划又省略同一role，不能省略必需位。未写在omittedOptionalRoles的可选候选也须规划，遗漏不能冒充主动取舍。DAY辅助视觉可从当天真实事实另外选择0—3个，不机械为每个Spot创建图片位。';
   const compactOutputPrompt = '只输出一个完整、紧凑的 JSON 对象，顶层先写 imagePlan，再写其他字段；不加 Markdown、解释、重复事实、冗长 rationale 或未定义字段。保留契约要求的所有字段和全部图片位；每个说明字段只写必要短句，sourceRefs只写可追溯路径。不要靠省略 slot、queryCore、Query 或 exactIdentityRequired 缩短输出。输出结束前确认整个对象闭合。';
-  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, visualTargetPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist] : []), compactOutputPrompt].join('\n\n') }];
+  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, visualTargetPrompt, candidateSlotPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist] : []), compactOutputPrompt].join('\n\n') }];
   const messages = [...systemMessages, { role: "user", content: JSON.stringify(sharedInput) }];
   const retryMessages = [...systemMessages, { role: "user", content: `${JSON.stringify(sharedInput)}\n\n技术补救：上次响应没有形成完整合法JSON。本次直接输出完整紧凑JSON对象，不写推理、前言或代码块；优先保证全部必需图片位及其完整字段，非图片说明简短。` }];
   const attemptStartedAt = new Date().toISOString();
@@ -710,6 +789,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
       technicalRetryUsed: plannerModelCalls > 1,
       errors: compactErrors,
       unresolvedSlotRoles: failOpen.unresolvedSlotRoles,
+      ...(simpleSkillContract ? { imagePositionCoverage: reconcilePlannerImageCandidates(failOpen.plan, factBasis) } : {}),
       localRepairs: failOpen.repairs,
       ...(plannerSystemError ? { plannerSystemError } : {}),
     },

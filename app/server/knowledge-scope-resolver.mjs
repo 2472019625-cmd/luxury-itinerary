@@ -36,6 +36,8 @@ const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const normalized = (value) => normalizeTravelEntityName(clean(value));
 const unique = (values) => [...new Set(values.map(clean).filter(Boolean))];
 const canUseEmbeddedName = (value) => value.length >= 6 || ((value.match(/[\u3400-\u9fff]/g) || []).length >= 4);
+const HIERARCHY_TOTAL_TIMEOUT_MS = 30_000;
+const HIERARCHY_RETRY_DELAY_MS = 200;
 
 function flattenStrings(value, output = []) {
   if (typeof value === "string") output.push(value);
@@ -149,10 +151,17 @@ export async function loadKnowledgeHierarchy({ baseUrl, fetchImpl = fetch, signa
     const combined = signal && typeof AbortSignal.any === "function" ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const response = await fetchImpl(`${String(baseUrl || "").replace(/\/$/, "")}/api/knowledge/hierarchy/nodes?status=active`, { signal: combined });
     if (!response.ok) throw Object.assign(new Error(`知识库层级读取失败（${response.status}）`), { code: `knowledge_hierarchy_http_${response.status}` });
-    const payload = await response.json();
-    const nodes = payload?.data?.nodes || payload?.nodes || [];
+    let payload;
+    try { payload = await response.json(); }
+    catch { throw Object.assign(new Error("知识库层级返回格式无效"), { code: "knowledge_hierarchy_invalid" }); }
+    const nodes = payload?.data?.nodes ?? payload?.nodes;
     if (!Array.isArray(nodes)) throw Object.assign(new Error("知识库层级返回格式无效"), { code: "knowledge_hierarchy_invalid" });
     return buildKnowledgeHierarchy(nodes);
+  } catch (error) {
+    if (signal?.aborted) throw Object.assign(new Error("知识库层级读取已取消"), { code: "knowledge_hierarchy_aborted" });
+    if (controller.signal.aborted) throw Object.assign(new Error("知识库层级读取超时"), { code: "knowledge_hierarchy_timeout" });
+    if (String(error?.code || "").startsWith("knowledge_hierarchy_")) throw error;
+    throw Object.assign(new Error("知识库层级连接失败"), { code: "knowledge_hierarchy_unavailable" });
   } finally {
     clearTimeout(timer);
   }
@@ -743,7 +752,33 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
       "entity_identity",
       identityAnchors,
     ));
-  } else if (["cover", "transport"].includes(purpose)) {
+  } else if (purpose === "transport") {
+    // Transport is a generic visual subject, but its country is still a hard
+    // fact. Widen only through concrete hierarchy nodes, never a null scope.
+    if (rootResolution?.reason === "configured_scope" && rootResolution.status === "resolved" && rootResolution.nodeIds?.length) {
+      // A caller-provided explicit node set is already the configured search
+      // boundary. A hierarchy-free adapter must not invent parent/root nodes.
+      addScope(scopes, rootResolution, "configured_transport_scope", rootResolution, "country_context");
+    } else {
+      const transportRegionNode = countryNode && meaningful.find((node) => {
+        if (node.nodeId === countryNode.nodeId) return false;
+        if (!ancestorChain(resolutionForNode(node), hierarchy).some((ancestor) => ancestor.nodeId === countryNode.nodeId)) return false;
+        const type = resolutionEntityType(resolutionForNode(node));
+        if (type && !["place", "park", "conservancy"].includes(type)) return false;
+        return regionFacts.some((fact) => identityMatches(node.formalName, fact))
+          || unique([slot.location, slot.region, slot.visualContext?.geographicLocation])
+            .some((fact) => identityMatches(node.formalName, fact));
+      });
+      const transportRootNode = countryResolution ? ancestorChain(countryResolution, hierarchy).at(-1) : null;
+      const transportRegionResolution = transportRegionNode ? resolutionForNode(transportRegionNode, "planned_transport_region_scope") : null;
+      addScope(scopes, transportRegionResolution, "transport_region", transportRegionResolution, "country_context");
+      addScope(scopes, countryResolution, "transport_country", countryResolution, "country_context");
+      if (transportRootNode && !transportRootNode.parentNodeId && transportRootNode.nodeId !== countryNode.nodeId) {
+        addScope(scopes, resolutionForNode(transportRootNode, "planned_transport_root_scope"),
+          "transport_root", countryResolution, "transport_root_context");
+      }
+    }
+  } else if (purpose === "cover") {
     addScope(scopes, countryResolution, "country", countryResolution, "country_context");
     if (!scopes.length) addScope(scopes, rootResolution, "country_scope_unresolved", rootResolution, "country_context");
   } else {
@@ -762,7 +797,7 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
     ));
     if (!scopes.length) addScope(scopes, rootResolution, "country_scope_unresolved", rootResolution, "country_context");
   }
-  if (!scopes.length && rootResolution && !["hotel_space", "hotel_experience"].includes(purpose)) scopes.push({ role: "configured_or_unresolved", resolution: rootResolution, evidenceResolution: rootResolution });
+  if (!scopes.length && rootResolution && !["hotel_space", "hotel_experience", "transport"].includes(purpose)) scopes.push({ role: "configured_or_unresolved", resolution: rootResolution, evidenceResolution: rootResolution });
   const fastPath = explicitEntityRoute(slot);
   if (fastPath.matched) {
     // Only a verified entity node may seed this route. A regional resolution
@@ -804,10 +839,12 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
     explicitEntityFastPath: fastPath,
     blockedReason: fastPath.matched && !scopes.length ? fastPath.knowledgeStopReason : hotelModule && ["hotel_space", "hotel_experience"].includes(purpose) && !scopes.length
       ? "hotel_directory_unresolved"
-      : ["hotel_space", "hotel_experience"].includes(purpose) && !scopes.length ? "hotel_scope_and_fallback_unresolved" : null,
+      : ["hotel_space", "hotel_experience"].includes(purpose) && !scopes.length ? "hotel_scope_and_fallback_unresolved"
+        : purpose === "transport" && !scopes.length ? "transport_country_unresolved" : null,
     stopBoundary: fastPath.parentProbeUsed ? "entity_parent_probe" : fastPath.matched ? (["hotel", "hotel_experience"].includes(fastPath.entityType) ? "hotel_root" : "entity_identity") : hotelModule && ["hotel_space", "hotel_experience"].includes(purpose) ? "hotel_root"
       : ["hotel_space", "hotel_experience"].includes(purpose) ? (resolvedSpecificHotel || hotelScopeBypass ? "hotel_root" : "country")
       : purpose === "explicit_entity" ? "entity_identity"
+        : purpose === "transport" ? (scopes[0]?.role === "configured_transport_scope" ? "configured_scope" : "root")
         : "country",
     strategy: fastPath.matched ? "explicit_entity_fast_path" : "preplanned_progressive_scope_single_batch",
     childScopeDecision: refined.decision,
@@ -1632,6 +1669,15 @@ export function knowledgeEntityProbeEvidence(slot = {}, candidate = {}) {
   return { ...decision, scopePath: candidate.knowledgeEvidenceResolution?.fullPath || null };
 }
 
+export function knowledgeTransportRootPathEvidence(candidate = {}) {
+  // Root results may carry source_paths for several images. Bind a path to
+  // this image through its own descriptor first, then a unique filename
+  // match only when the descriptor does not provide a path.
+  const directPaths = unique([candidate.knowledgeMatchedFile?.sourceDisplayPath, candidate.knowledgePreview?.sourceDisplayPath]);
+  const paths = directPaths.length ? directPaths : entityProbeImageEvidence(candidate).paths;
+  return knowledgeSourcePathMatches(candidate.knowledgeEvidenceResolution, paths, { mode: "transport_root_context" });
+}
+
 export function knowledgeEntityProbeAuditCandidate(candidate = {}) {
   if (candidate.knowledgeSourcePathMode !== "entity_probe") return candidate;
   const { paths, filenames } = entityProbeImageEvidence(candidate);
@@ -1653,6 +1699,17 @@ export function knowledgeSourcePathMatches(scopeResolution, sourcePaths = [], { 
     identityAnchors,
   ), scopePath: scopeResolution?.fullPath || null };
   if (!scopeResolution || scopeResolution.status !== "resolved" || !scopeResolution.node) return { match: null, reason: "scope_unresolved" };
+  if (mode === "transport_root_context") {
+    // Root queries can return assets from every country. A filename mention
+    // is insufficient: every image-bound path must have the target country
+    // in a directory segment. Conflicting paths cannot confirm this image.
+    const country = scopeResolution.node.formalName;
+    const match = Array.isArray(sourcePaths) && sourcePaths.length > 0 && sourcePaths.every((sourcePath) =>
+      sourcePathSegments(sourcePath).slice(0, -1).some((segment) =>
+        normalized(segment.replace(/^\d+[\s._\-、]+/u, "")) === normalized(country)));
+    return { match, reason: match ? "transport_root_country_path_confirmed" : "transport_root_country_unproven",
+      anchors: [normalized(country)], scopePath: scopeResolution.fullPath, mode };
+  }
   if (!Array.isArray(sourcePaths) || !sourcePaths.length) return { match: null, reason: "source_path_missing" };
   const meaningful = scopeResolution.node.pathSegments.filter((segment) => !GENERIC_NODE_NAMES.has(normalized(segment)) && normalized(segment).length >= 3);
   // The leaf proves the specific entity while its nearest meaningful parent
@@ -1677,12 +1734,127 @@ export function knowledgeSourcePathMatches(scopeResolution, sourcePaths = [], { 
   };
 }
 
-export function createKnowledgeScopeResolver({ baseUrl, root, fetchImpl = fetch, signal, hierarchyLoader = loadKnowledgeHierarchy } = {}) {
+function hierarchyFailure(code, message, attempts = 0) {
+  return Object.assign(new Error(message), { code, attempts });
+}
+
+function normalizedHierarchyFailure(error, attempts) {
+  const code = String(error?.code || "");
+  if (/^knowledge_hierarchy_(?:aborted|timeout|unavailable|invalid|http_\d{3})$/.test(code)) {
+    const status = code.match(/^knowledge_hierarchy_http_(\d{3})$/)?.[1];
+    const message = status ? `知识库层级读取失败（${status}）`
+      : code === "knowledge_hierarchy_aborted" ? "知识库层级读取已取消"
+        : code === "knowledge_hierarchy_timeout" ? "知识库层级读取超时"
+          : code === "knowledge_hierarchy_invalid" ? "知识库层级返回格式无效" : "知识库层级连接失败";
+    return hierarchyFailure(code, message, attempts);
+  }
+  return hierarchyFailure("knowledge_hierarchy_unavailable", "知识库层级连接失败", attempts);
+}
+
+function transientHierarchyFailure(error) {
+  if (["knowledge_hierarchy_unavailable", "knowledge_hierarchy_timeout"].includes(error?.code)) return true;
+  const status = Number(String(error?.code || "").match(/^knowledge_hierarchy_http_(\d{3})$/)?.[1]);
+  return status === 408 || status === 429 || status >= 500;
+}
+
+async function hierarchyAttempt(hierarchyLoader, options, timeoutMs, signal, attempts) {
+  if (signal?.aborted) throw hierarchyFailure("knowledge_hierarchy_aborted", "知识库层级读取已取消", attempts);
+  const controller = new AbortController();
+  let timer;
+  let onAbort;
+  let timedOut = false;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(hierarchyFailure("knowledge_hierarchy_timeout", "知识库层级读取超时", attempts));
+    }, timeoutMs);
+  });
+  const cancelled = signal ? new Promise((_, reject) => {
+    onAbort = () => {
+      controller.abort();
+      reject(hierarchyFailure("knowledge_hierarchy_aborted", "知识库层级读取已取消", attempts));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  }) : null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => hierarchyLoader({ ...options, signal: controller.signal, timeoutMs })),
+      timeout,
+      ...(cancelled ? [cancelled] : []),
+    ]);
+  } catch (error) {
+    if (signal?.aborted) throw hierarchyFailure("knowledge_hierarchy_aborted", "知识库层级读取已取消", attempts);
+    if (timedOut) throw hierarchyFailure("knowledge_hierarchy_timeout", "知识库层级读取超时", attempts);
+    throw normalizedHierarchyFailure(error, attempts);
+  } finally {
+    clearTimeout(timer);
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+async function hierarchyRetryDelay(delayMs, signal, attempts) {
+  if (signal?.aborted) throw hierarchyFailure("knowledge_hierarchy_aborted", "知识库层级读取已取消", attempts);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(hierarchyFailure("knowledge_hierarchy_aborted", "知识库层级读取已取消", attempts));
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+export function createKnowledgeScopeResolver({ baseUrl, root, fetchImpl = fetch, signal, hierarchyLoader = loadKnowledgeHierarchy,
+  hierarchyTimeoutMs = HIERARCHY_TOTAL_TIMEOUT_MS, hierarchyRetryDelayMs = HIERARCHY_RETRY_DELAY_MS } = {}) {
   const mappingPath = root ? path.join(root, "output", "knowledge-node-mappings.json") : "";
   let hierarchyPromise;
+  let hierarchyError;
+  let hierarchyCycles = 0;
+  let hierarchyAttempts = 0;
+  let hierarchyTechnicalRetries = 0;
+  let hierarchyStatus = "not_started";
   let mappingsPromise;
   let writeTail = Promise.resolve();
-  const hierarchy = () => hierarchyPromise ||= hierarchyLoader({ baseUrl, fetchImpl, signal });
+  const hierarchy = () => {
+    if (hierarchyPromise) return hierarchyPromise;
+    // A failed in-flight Promise is cleared, but the exhausted batch budget
+    // remains terminal. Later slots use the safe Web fallback, not a new cycle.
+    if (hierarchyError) return Promise.reject(hierarchyError);
+    hierarchyCycles += 1;
+    hierarchyStatus = "loading";
+    const deadline = Date.now() + Math.max(1, hierarchyTimeoutMs);
+    const pending = (async () => {
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw hierarchyFailure("knowledge_hierarchy_timeout", "知识库层级读取超时", attempt - 1);
+        const attemptBudget = attempt === 1 ? Math.max(1, Math.floor(remaining / 2)) : remaining;
+        hierarchyAttempts += 1;
+        if (attempt > 1) hierarchyTechnicalRetries += 1;
+        try {
+          const index = await hierarchyAttempt(hierarchyLoader, { baseUrl, fetchImpl }, attemptBudget, signal, attempt);
+          hierarchyStatus = "ready";
+          return index;
+        } catch (error) {
+          if (attempt === 2 || !transientHierarchyFailure(error) || signal?.aborted) throw error;
+          const delay = Math.min(Math.max(0, hierarchyRetryDelayMs), deadline - Date.now() - 1);
+          if (delay < 0 || deadline - Date.now() <= 1) throw error;
+          if (delay) await hierarchyRetryDelay(delay, signal, attempt);
+        }
+      }
+    })();
+    hierarchyPromise = pending;
+    pending.catch((error) => {
+      if (hierarchyPromise === pending) hierarchyPromise = undefined;
+      hierarchyError = normalizedHierarchyFailure(error, error?.attempts || 0);
+      hierarchyStatus = "failed";
+    });
+    return pending;
+  };
   const mappings = () => mappingsPromise ||= (mappingPath
     ? readFile(mappingPath, "utf8").then((value) => JSON.parse(value)).catch(() => ({}))
     : Promise.resolve({}));
@@ -1699,6 +1871,10 @@ export function createKnowledgeScopeResolver({ baseUrl, root, fetchImpl = fetch,
     await writeTail;
   };
   return {
+    hierarchyStats() {
+      return { status: hierarchyStatus, attempts: hierarchyAttempts, technicalRetries: hierarchyTechnicalRetries,
+        cycles: hierarchyCycles, failureCode: hierarchyStatus === "failed" ? hierarchyError?.code || null : null };
+    },
     async resolve(slot, options = {}) {
       const [index, saved] = await Promise.all([hierarchy(), mappings()]);
       const key = mappingKey(slot);

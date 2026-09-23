@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildAgentFactBasis, fillPlannerImageDeterministicFields, validateSimpleHighlightSelection, generateAgentPlan } from "../server/agent-trip-planner.mjs";
+import { buildAgentFactBasis, buildPlannerImageCandidates, fillPlannerImageDeterministicFields, validateSimpleHighlightSelection, generateAgentPlan } from "../server/agent-trip-planner.mjs";
 import { materializeSimpleSkillPlan, normalizeNonDayPlannerImageRoles } from "../server/simple-plan-adapter.mjs";
 import { STRUCTURED_HOTEL_FACT_FORMAT } from "../src/lib/hotelFactPresentation.js";
 import { plannerRequestJson } from './helpers/simple-pipeline-fixture.mjs';
@@ -73,6 +73,11 @@ test("Planner不写图片位确定性字段时程序按role补齐，视觉、Que
   assert.deepEqual(result.imagePlan.slots[0].queryCore, slot.queryCore);
   assert.deepEqual(result.imagePlan.slots[0].alternateQueries, slot.alternateQueries);
   assert.deepEqual(result.imagePlan.slots[0].sourceRefs, slot.sourceRefs);
+  const cannotDowngrade = fillPlannerImageDeterministicFields({ imagePlan: { slots: [
+    { role: "hotel:1", required: false, removable: true, primaryVisualSubject: "酒店外观" },
+    { role: "day:1:supporting:1", required: true, removable: false, primaryVisualSubject: "辅助画面" },
+  ] } }, { hotels: [{ name: "测试酒店" }], days: [{}] });
+  assert.deepEqual(cannotDowngrade.imagePlan.slots.map(({ required, removable }) => [required, removable]), [[true, false], [false, true]], "必要性和可移除性只由程序确定");
 });
 
 test("非DAY图片位只按sourceRefs归一化为一基role并保留稳定slotId与来源", () => {
@@ -132,6 +137,153 @@ test("非DAY图片位只按sourceRefs归一化为一基role并保留稳定slotId
     ["hotels[0]"], ["hotels[1]"], ["diningExperiences[0]"], ["diningExperiences[1]"], ["transport[0]"], ["transport[1]"],
   ]);
   assert.ok(moduleSlots.every((slot) => slot.fidelityQuery && slot.alternateQueries.length === 1));
+});
+
+test("图片候选位置先由事实确定，可选位只有明确省略才不进入Image", async () => {
+  const data = {
+    destination: "肯尼亚", hotels: [{ id: "hotel-jw", officialName: "JW Marriott Hotel Nairobi", region: "内罗毕" }],
+    diningExperiences: [{ id: "dinner", title: "特色晚宴", location: "内罗毕" }],
+    transportSummary: [{ id: "city-car", category: "城市商务用车" }],
+    days: [{ route: "内罗毕", description: "城市活动", spots: [{ id: "museum", name: "博物馆参观" }] }],
+  };
+  const factBasis = buildAgentFactBasis(data);
+  const candidates = buildPlannerImageCandidates(factBasis);
+  assert.deepEqual(candidates.map(({ role, sourceKey, slotId, required }) => [role, sourceKey, slotId, required]), [
+    ["cover", "destination", "image:cover:primary", true],
+    ["hotel:1", "hotels.0", "image:hotel:hotel-jw:primary", true],
+    ["dining:1", "diningExperiences.0", "image:dining:dinner:primary", false],
+    ["transport:1", "transport.0", "image:transport:city-car:primary", false],
+    ["day:1", "days.0", "image:day:1:primary", true],
+  ]);
+  let calls = 0;
+  const result = await generateAgentPlan({
+    project: { projectId: "optional-position-choice", inputFingerprint: "fixture", factBasis, planIds: [] },
+    simpleSkillContract: true,
+    requestJson: async (options) => {
+      calls += 1;
+      assert.deepEqual(JSON.parse(options.messages.at(-1).content).imageCandidateSlots, candidates);
+      const response = await plannerRequestJson({ delayMs: 0 })(options);
+      response.json.imagePlan.slots = response.json.imagePlan.slots.filter((slot) => slot.role !== "dining:1");
+      response.json.imagePlan.omittedOptionalRoles = ["dining:1"];
+      return response;
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.plan.validation.imagePositionCoverage.positions.find((position) => position.role === "dining:1").status, "omitted_optional");
+  assert.equal(result.plan.validation.imagePositionCoverage.positions.find((position) => position.role === "hotel:1").status, "planned");
+  const runtime = materializeSimpleSkillPlan({ data, agentPlan: result.plan });
+  assert.equal(runtime.imageSlots.some((slot) => slot.moduleType === "dining"), false);
+  assert.equal(runtime.imageSlots.some((slot) => slot.moduleType === "transport"), true);
+  assert.equal(runtime.preparedData.diningExperiences[0].imageDisplay, "copy_only");
+  assert.equal(runtime.preparedData.diningExperiences[0].title, "特色晚宴", "省略可选图片不删除业务内容");
+  assert.equal(runtime.preparedData.transportSummary[0].imageDisplay, undefined);
+  assert.equal(runtime.imageSlots.find((slot) => slot.moduleType === "hotel").slotId, "image:hotel:hotel-jw:primary");
+});
+
+test("必需位遗漏、可选位漏规划和规划后又省略分别留下问题，不凭事实编造画面", async () => {
+  const data = {
+    destination: "肯尼亚", hotels: [{ id: "hotel-jw", officialName: "JW Marriott Hotel Nairobi", region: "内罗毕" }],
+    diningExperiences: [{ id: "dinner", title: "特色晚宴", location: "内罗毕" }],
+    transportSummary: [{ id: "city-car", category: "城市商务用车" }],
+    days: [{ route: "内罗毕", description: "城市活动", spots: [{ id: "museum", name: "博物馆参观" }] }],
+  };
+  const factBasis = buildAgentFactBasis(data);
+  const result = await generateAgentPlan({
+    project: { projectId: "missing-position-choice", inputFingerprint: "fixture", factBasis, planIds: [] },
+    simpleSkillContract: true,
+    requestJson: async (options) => {
+      const response = await plannerRequestJson({ delayMs: 0 })(options);
+      response.json.imagePlan.slots = response.json.imagePlan.slots.filter((slot) => !["hotel:1", "transport:1"].includes(slot.role));
+      response.json.imagePlan.omittedOptionalRoles = ["dining:1"];
+      return response;
+    },
+  });
+  const positions = result.plan.validation.imagePositionCoverage.positions;
+  assert.equal(positions.find((position) => position.role === "hotel:1").status, "missing_required");
+  assert.equal(positions.find((position) => position.role === "transport:1").status, "missing_optional");
+  assert.equal(positions.find((position) => position.role === "dining:1").status, "conflict");
+  assert.ok(result.plan.validation.errors.some((issue) => issue.code === "image_search_plan_missing" && issue.slotRoles.includes("hotel:1")));
+  assert.ok(result.plan.validation.errors.some((issue) => issue.code === "image_optional_plan_unaccounted" && issue.slotRoles.includes("transport:1")));
+  assert.ok(result.plan.validation.errors.some((issue) => issue.code === "image_optional_omission_conflict" && issue.slotRoles.includes("dining:1")));
+  const runtime = materializeSimpleSkillPlan({ data, agentPlan: result.plan });
+  for (const moduleType of ["hotel", "dining", "transport"]) {
+    const slot = runtime.imageSlots.find((item) => item.moduleType === moduleType);
+    assert.equal(slot.needsUserAction, true, moduleType);
+  }
+  assert.equal(runtime.preparedData.diningExperiences[0].imageDisplay, undefined, "规划与省略冲突不能静默变成无图卡");
+  assert.equal(runtime.imageSlots.find((item) => item.moduleType === "hotel").queryCore.subject, "", "缺失必需位不能从酒店名称编造Core");
+});
+
+test("多酒店八日行程的候选编号与Adapter图片位逐一对应", async () => {
+  const data = {
+    destination: "肯尼亚",
+    hotels: Array.from({ length: 4 }, (_, index) => ({ id: `hotel-${index + 1}`, officialName: `Test Lodge ${index + 1}`, region: `地区 ${index + 1}` })),
+    diningExperiences: Array.from({ length: 2 }, (_, index) => ({ id: `dining-${index + 1}`, title: `特色晚宴 ${index + 1}` })),
+    transportSummary: Array.from({ length: 3 }, (_, index) => ({ id: `vehicle-${index + 1}`, category: `交通类别 ${index + 1}` })),
+    days: Array.from({ length: 8 }, (_, index) => ({ route: `地区 ${index + 1}`, description: `第 ${index + 1} 日真实景点与活动`, spots: [{ id: `spot-${index + 1}`, name: `体验 ${index + 1}` }] })),
+  };
+  const factBasis = buildAgentFactBasis(data);
+  const candidates = buildPlannerImageCandidates(factBasis);
+  let calls = 0;
+  const result = await generateAgentPlan({
+    project: { projectId: "eight-day-candidate-alignment", inputFingerprint: "fixture", factBasis, planIds: [] },
+    simpleSkillContract: true,
+    requestJson: async (options) => {
+      calls += 1;
+      assert.equal(JSON.parse(options.messages.at(-1).content).imageCandidateSlots.length, 18);
+      return plannerRequestJson({ delayMs: 0 })(options);
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.plan.imagePlan.slots.length, 18, "fixture返回完整八日图片位集合，无JSON截断");
+  const runtime = materializeSimpleSkillPlan({ data, agentPlan: result.plan });
+  assert.deepEqual(new Set(runtime.imageSlots.map((slot) => slot.slotId)), new Set(candidates.map((candidate) => candidate.slotId)));
+  assert.equal(runtime.imageSlots.length, 18);
+});
+
+test("原始数组有空行时按sourceKey绑定真实项目，来源行不符则停止该位自动搜索", async () => {
+  const data = {
+    destination: "肯尼亚",
+    hotels: [{ id: "empty-hotel", officialName: "" }, { id: "jw", officialName: "JW Marriott Hotel Nairobi", region: "内罗毕" }],
+    diningExperiences: [{ id: "empty-dining", title: "" }, { id: "sundowner", title: "Sundowner", location: "内罗毕" }],
+    transportSummary: [{ id: "empty-transport", category: "" }, { id: "city-car", category: "商务用车" }],
+    days: [{ route: "内罗毕", description: "城市活动", spots: [{ id: "museum", name: "博物馆参观" }] }],
+  };
+  const factBasis = buildAgentFactBasis(data);
+  const candidates = buildPlannerImageCandidates(factBasis);
+  assert.deepEqual(candidates.filter((position) => /^(hotel|dining|transport):/.test(position.role)).map(({ role, sourceKey }) => [role, sourceKey]), [
+    ["hotel:1", "hotels.1"], ["dining:1", "diningExperiences.1"], ["transport:1", "transport.1"],
+  ]);
+  let calls = 0;
+  const result = await generateAgentPlan({
+    project: { projectId: "blank-row-position-binding", inputFingerprint: "fixture", factBasis, planIds: [] },
+    simpleSkillContract: true,
+    requestJson: async (options) => {
+      calls += 1;
+      const response = await plannerRequestJson({ delayMs: 0 })(options);
+      for (const slot of response.json.imagePlan.slots) {
+        const position = candidates.find((candidate) => candidate.role === slot.role);
+        if (position && /^(hotel|dining|transport):/.test(slot.role)) slot.sourceRefs = [position.sourceKey];
+      }
+      return response;
+    },
+  });
+  assert.equal(calls, 1);
+  const runtime = materializeSimpleSkillPlan({ data, agentPlan: result.plan });
+  for (const [moduleType, realId] of [["hotel", "jw"], ["dining", "sundowner"], ["transport", "city-car"]]) {
+    const real = runtime.imageSlots.find((slot) => slot.moduleType === moduleType && slot.slotId.includes(`:${realId}:`));
+    const blank = runtime.imageSlots.find((slot) => slot.moduleType === moduleType && slot.slotId.includes(":empty-"));
+    assert.equal(real.needsUserAction, false, `${moduleType}真实来源项应取得自己的计划`);
+    assert.equal(blank.needsUserAction, true, `${moduleType}空来源行不能借用后续计划`);
+    assert.equal(blank.queryCore.subject, "");
+  }
+  assert.equal(runtime.preparedData.hotels.length, 2, "不删除原始数组项");
+  const mismatched = structuredClone(result.plan);
+  mismatched.imagePlan.slots.find((slot) => slot.role === "hotel:1").sourceRefs = ["hotels.0"];
+  const mismatchRuntime = materializeSimpleSkillPlan({ data, agentPlan: mismatched });
+  const hotel = mismatchRuntime.imageSlots.find((slot) => slot.slotId === "image:hotel:jw:primary");
+  assert.equal(hotel.needsUserAction, true);
+  assert.ok(hotel.plannerValidationIssues.some((issue) => issue.code === "image_source_binding_unproven"));
 });
 
 test("Planner 校验失败只调用一次，并对可确定修复的 Query 做局部修复", async () => {

@@ -19,9 +19,9 @@ function hotelVisual(overrides = {}) {
   };
 }
 
-async function generateWithVisual(visual, { duplicate = false, secondVisual = null, factHotelName = visual.queryCore.identity || "测试酒店" } = {}) {
+async function generateWithVisual(visual, { duplicate = false, secondVisual = null, factHotelName = visual.queryCore.identity || "测试酒店", factHotelDetails = {} } = {}) {
   const targetRole = visual.role || "hotel:1";
-  const data = { destination: "肯尼亚", hotels: [{ id: "hotel-1", officialName: factHotelName, region: "内罗毕" }, ...(secondVisual ? [{ id: "hotel-2", officialName: factHotelName, region: "内罗毕" }] : [])], transportSummary: targetRole === "transport:1" ? [{ id: "vehicle-1", category: visual.queryCore.subject }] : [], days: [{ route: "城市", description: "抵达酒店" }] };
+  const data = { destination: "肯尼亚", hotels: [{ id: "hotel-1", officialName: factHotelName, region: "内罗毕", ...factHotelDetails }, ...(secondVisual ? [{ id: "hotel-2", officialName: factHotelName, region: "内罗毕" }] : [])], transportSummary: targetRole === "transport:1" ? [{ id: "vehicle-1", category: visual.queryCore.subject }] : [], days: [{ route: "城市", description: "抵达酒店" }] };
   const factBasis = buildAgentFactBasis(data);
   let calls = 0;
   const result = await generateAgentPlan({
@@ -63,6 +63,45 @@ test("酒店代表图归一既定空间选择，保持完整身份并向Image传
     assert.deepEqual(imageSlot.queryCore, slot.queryCore);
     assert.equal(imageSlot.exactIdentityRequired, true);
   }
+});
+
+test("城市酒店是普通酒店类型修饰，不让同店外观或大堂阻断自动搜索", async () => {
+  const original = hotelVisual({
+    primaryVisualSubject: "JW Marriott Hotel Nairobi 城市酒店外观或大堂",
+    queryCore: { subject: "城市酒店外观或大堂", subjectEn: "city hotel exterior or lobby", action: "", actionEn: "", identity: "JW Marriott Hotel Nairobi", identityEn: "JW Marriott Hotel Nairobi" },
+    fidelityQuery: "JW Marriott Hotel Nairobi 城市酒店外观",
+    alternateQueries: ["JW Marriott Hotel Nairobi hotel lobby"],
+  });
+  const { slot, plan, data } = await generateWithVisual(original);
+  assert.equal(slot.plannerSlotStatus, "locally_repaired");
+  assert.equal(slot.queryCore.subject, "酒店代表性空间");
+  assert.equal(slot.queryCore.identity, original.queryCore.identity);
+  assert.equal(slot.plannerLocalRepairs[0].code, "hotel_representative_choice_resolved");
+  assert.equal(materializeSimpleSkillPlan({ data, agentPlan: plan }).imageSlots.find((item) => item.moduleType === "hotel").needsUserAction, false);
+  const specific = await generateWithVisual({ ...original, primaryVisualSubject: "JW Marriott Hotel Nairobi 城市酒店总统套房或大堂", queryCore: { ...original.queryCore, subject: "城市酒店总统套房或大堂" } });
+  assert.equal(specific.slot.plannerSlotStatus, "unresolved", "特定房型不属于普通代表空间归一");
+});
+
+test("同店普通客房视野或外观可归入代表空间，但已预订特定房型不能放宽", async () => {
+  const original = hotelVisual({
+    primaryVisualSubject: "JW Marriott Hotel Nairobi客房城市景观或酒店外观",
+    queryCore: { subject: "JW Marriott Hotel Nairobi酒店客房", subjectEn: "JW Marriott Hotel Nairobi room", action: "", actionEn: "", identity: "JW Marriott Hotel Nairobi", identityEn: "JW Marriott Hotel Nairobi" },
+    fidelityQuery: "内罗毕JW万豪酒店客房城市景观",
+    alternateQueries: ["JW Marriott Hotel Nairobi exterior", "JW Marriott内罗毕酒店房间"],
+  });
+  const { slot, plan, data } = await generateWithVisual(original);
+  assert.equal(slot.plannerSlotStatus, "locally_repaired");
+  assert.equal(slot.queryCore.subject, "酒店代表性空间");
+  assert.equal(slot.queryCore.identity, "JW Marriott Hotel Nairobi");
+  assert.deepEqual(slot.plannerLocalRepairs[0].allowedCategories.sort(), ["exterior", "suite"]);
+  assert.deepEqual(slot.plannerLocalRepairs[0].softViewPreferences, ["城市景观"]);
+  assert.equal(materializeSimpleSkillPlan({ data, agentPlan: plan }).imageSlots.find((item) => item.moduleType === "hotel").needsUserAction, false);
+  const booked = await generateWithVisual(original, { factHotelDetails: { roomType: "City View Room" } });
+  assert.equal(booked.slot.plannerSlotStatus, "unresolved", "明确预订的房型视野不得退化为普通酒店代表图");
+  const named = await generateWithVisual({ ...original, primaryVisualSubject: "JW Marriott Hotel Nairobi总统套房或酒店外观", queryCore: { ...original.queryCore, subject: "JW Marriott Hotel Nairobi总统套房", subjectEn: "JW Marriott Hotel Nairobi presidential suite" } });
+  assert.equal(named.slot.plannerSlotStatus, "unresolved", "专属或命名房型不属于普通类别池");
+  const otherOrdinarySpaces = await generateWithVisual(hotelVisual({ primaryVisualSubject: "酒店建筑外观或酒店泳池" }));
+  assert.equal(otherOrdinarySpaces.slot.plannerSlotStatus, "locally_repaired", "同店普通代表空间可按既有类别池择优");
 });
 
 test("酒店代表选择不放行具体设施、房型、动作、其他实体或跨模块目标", async () => {
@@ -138,6 +177,19 @@ test("非核心归一不选择真实主体动作、不去掉必要身份、不�
   }
 });
 
+test("交通背景二选一若Core动作与原查询仍不一致，清洗地点后也不得自动搜索", async () => {
+  const visual = transportVisual("商务用车在机场或城市道路接送", {
+    location: "内罗毕",
+    queryCore: { subject: "商务用车", action: "行驶", identity: "", subjectEn: "business car", actionEn: "driving", identityEn: "" },
+    fidelityQuery: "肯尼亚机场商务接送车",
+    alternateQueries: ["business car transfer in Nairobi", "内罗毕商务用车接送"],
+  });
+  const { slot } = await generateWithVisual(visual);
+  assert.equal(slot.plannerSlotStatus, "unresolved");
+  assert.ok(slot.plannerValidationIssues.some((issue) => issue.code === "ambiguous_visual_subject"));
+  assert.ok(slot.plannerLocalRepairs.some((repair) => repair.code === "queries_locally_repaired"));
+});
+
 test("JW同一建筑外观的两个描述由既定Core和原查询局部收敛，并可传入Image", async () => {
   const original = hotelVisual();
   const { plan, attempts, data, slot } = await generateWithVisual(original);
@@ -172,7 +224,6 @@ test("不同主体、不同空间、不同动作和缺少共同查询证据仍�
   const base = hotelVisual();
   const cases = [
     ["两个动物", { primaryVisualSubject: "狮子或豹子", queryCore: { subject: "狮子", action: "", identity: "" }, exactIdentityRequired: false, fidelityQuery: "狮子", alternateQueries: ["草原狮子"] }],
-    ["两个空间", { primaryVisualSubject: "酒店建筑外观或酒店泳池" }],
     ["室内室外", { primaryVisualSubject: "酒店建筑内饰或酒店建筑外观" }],
     ["单个泛主体", { primaryVisualSubject: "酒店外观或酒店泳池", queryCore: { subject: "酒店", action: "", identity: base.queryCore.identity }, fidelityQuery: "JW Marriott Hotel Nairobi 酒店", alternateQueries: ["JW Marriott Hotel Nairobi hotel"] }],
     ["多词泛主体未决定空间", { primaryVisualSubject: "酒店建筑外观或酒店建筑内饰", queryCore: { subject: "酒店建筑", action: "", identity: base.queryCore.identity, subjectEn: "hotel building" }, fidelityQuery: "JW Marriott Hotel Nairobi 酒店建筑", alternateQueries: ["JW Marriott Hotel Nairobi hotel building"] }],

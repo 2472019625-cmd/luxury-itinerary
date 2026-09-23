@@ -260,6 +260,8 @@ img { display: block; max-width: 100%; }
   flex-direction: column;
   justify-content: center;
 }
+.dining-card-wide.dining-card-no-image { display: block; }
+.dining-card-wide.dining-card-no-image .dining-copy { min-height: 0; }
 .transport-card-wide {
   display: grid;
   grid-template-columns: 1.18fr .82fr;
@@ -278,6 +280,8 @@ img { display: block; max-width: 100%; }
   flex-direction: column;
   justify-content: center;
 }
+.transport-card-wide.transport-card-no-image { display: block; }
+.transport-card-wide.transport-card-no-image .transport-copy { min-height: 0; }
 .transport-card-wide .transport-heading small {
   max-width: 600px;
 }

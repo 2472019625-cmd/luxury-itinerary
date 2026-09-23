@@ -128,18 +128,53 @@ const NON_DAY_ROLE_SOURCES = Object.freeze({
 });
 
 function sourceIndexesForRole(slot = {}, roleType) {
-  const sourceKey = NON_DAY_ROLE_SOURCES[roleType]?.sourceKey;
-  if (!sourceKey) return [];
-  const escaped = sourceKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`(?:^|\\.)${escaped}(?:\\[(\\d+)\\]|\\.(\\d+))(?:\\.|$)`);
+  const source = NON_DAY_ROLE_SOURCES[roleType];
+  if (!source) return [];
+  const prefixes = unique([source.sourceKey, source.dataKey]);
+  const patterns = prefixes.map((prefix) => new RegExp(`(?:^|\\.)${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\[(\\d+)\\]|\\.(\\d+))(?:\\.|$)`));
   return unique((Array.isArray(slot.sourceRefs) ? slot.sourceRefs : []).flatMap((ref) => {
-    const match = clean(ref).replace(/^factBasis\./, "").match(pattern);
+    const value = clean(ref).replace(/^factBasis\./, "");
+    const match = patterns.map((pattern) => value.match(pattern)).find(Boolean);
     return match ? [String(Number(match[1] ?? match[2]))] : [];
   })).map(Number).filter(Number.isInteger);
 }
 
+function candidatePositionForSource(agentPlan = {}, roleType, sourceIndex) {
+  const positions = agentPlan.validation?.imagePositionCoverage?.positions;
+  if (!Array.isArray(positions)) return null;
+  const sourceKey = `${NON_DAY_ROLE_SOURCES[roleType].sourceKey}.${sourceIndex}`;
+  return positions.find((position) => position.sourceKey === sourceKey) || null;
+}
+
+function roleForSourceItem(agentPlan = {}, roleType, sourceIndex) {
+  const positions = agentPlan.validation?.imagePositionCoverage?.positions;
+  if (!Array.isArray(positions)) return `${roleType}:${sourceIndex + 1}`;
+  return candidatePositionForSource(agentPlan, roleType, sourceIndex)?.role || `${roleType}:unplanned:${sourceIndex}`;
+}
+
 export function normalizeNonDayPlannerImageRoles(agentPlan = {}, data = {}) {
   const slots = Array.isArray(agentPlan.imagePlan?.slots) ? agentPlan.imagePlan.slots : [];
+  const candidatePositions = agentPlan.validation?.imagePositionCoverage?.positions;
+  if (Array.isArray(candidatePositions)) {
+    const normalizedSlots = slots.map((slot) => {
+      const roleMatch = /^(hotel|dining|transport):(\d+)$/.exec(clean(slot?.role));
+      if (!roleMatch) return slot;
+      const position = candidatePositions.find((item) => item.role === slot.role);
+      const sourceIndex = Number(position?.sourceKey?.match(/\.(\d+)$/)?.[1]);
+      const indexes = sourceIndexesForRole(slot, roleMatch[1]);
+      const requiresExplicitRef = sourceIndex !== Number(roleMatch[2]) - 1;
+      if (position && Number.isInteger(sourceIndex)
+        && (indexes.length === 1 && indexes[0] === sourceIndex || indexes.length === 0 && !requiresExplicitRef)) return slot;
+      return {
+        ...slot,
+        plannerSlotStatus: "unresolved",
+        needsUserAction: true,
+        plannerValidationIssues: [...(Array.isArray(slot.plannerValidationIssues) ? slot.plannerValidationIssues : []),
+          { code: "image_source_binding_unproven", message: "图片计划的role与原始资料位置不能唯一对应，已停止自动搜索" }],
+      };
+    });
+    return { ...agentPlan, imagePlan: { ...(agentPlan.imagePlan || {}), slots: normalizedSlots } };
+  }
   const proposedRoles = slots.map((slot) => {
     const roleMatch = /^(hotel|dining|transport):(\d+)$/.exec(clean(slot?.role));
     if (!roleMatch) return null;
@@ -541,6 +576,13 @@ function plannedImageSlot(agentPlan = {}, role) {
   };
 }
 
+function isExplicitlyOmittedOptionalImageSlot(agentPlan = {}, role) {
+  if (!/^(?:dining|transport):\d+$/.test(role)) return false;
+  if ((agentPlan.imagePlan?.slots || []).some((item) => item.role === role)) return false;
+  return Array.isArray(agentPlan.imagePlan?.omittedOptionalRoles)
+    && agentPlan.imagePlan.omittedOptionalRoles.includes(role);
+}
+
 function ensureDaySpot(data, index) {
   const day = data.days[index];
   if (Array.isArray(day.spots) && day.spots.length) return;
@@ -884,23 +926,35 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
   data.hotels.forEach((hotel, index) => {
     const slotId = `image:hotel:${hotel.id || index + 1}:primary`;
     const copyTargetId = `copy:hotel:${hotel.id || index + 1}`;
-    const hotelPlan = plannedImageSlot(effectiveAgentPlan, `hotel:${index + 1}`);
+    const hotelPlan = plannedImageSlot(effectiveAgentPlan, roleForSourceItem(effectiveAgentPlan, "hotel", index));
     const hotelSubject = clean(hotelPlan.primaryVisualSubject) || clean(hotel.officialName);
     const hotelDuty = clean(hotelPlan.visualDuty) || `确认并展示${hotel.officialName || hotel.shortName}最能体现真实住宿品质的代表性空间`;
     addSlot(slot({ slotId, moduleType: "hotel", required: true, location: plannedLocation(hotelPlan, hotel.region), hotel: clean(hotel.officialName), subject: hotelSubject, visualGoal: hotelDuty, visualContext: { region: hotel.region, hotelPositioning: hotel.selectionReason || "", signatureExperience: hotel.signatureExperience || "", avoid: [] }, copyTargetId, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "hotel", itemIndex: index, fieldPath: `hotels.${index}.images.0`, imageIndex: 0, required: true });
     Object.assign(imageSlots.at(-1), { primaryVisualSubject: hotelSubject, visualDuty: hotelDuty, displayLayout: hotel.layout === "wide" ? "wide" : "standard", ...plannedQueryFields(hotelPlan) });
   });
   data.diningExperiences.forEach((item, index) => {
+    const role = roleForSourceItem(effectiveAgentPlan, "dining", index);
+    if (isExplicitlyOmittedOptionalImageSlot(effectiveAgentPlan, role)) {
+      item.imageDisplay = "copy_only";
+      return;
+    }
+    delete item.imageDisplay;
     const slotId = `image:dining:${item.id || index + 1}:primary`;
-    const diningPlan = plannedImageSlot(effectiveAgentPlan, `dining:${index + 1}`);
+    const diningPlan = plannedImageSlot(effectiveAgentPlan, role);
     const diningSubject = clean(diningPlan.primaryVisualSubject) || clean(item.officialName || item.title);
     const diningDuty = clean(diningPlan.visualDuty) || `展示${item.title || "特色餐饮"}真实的用餐形态、环境与体验氛围`;
     addSlot(slot({ slotId, moduleType: "dining", required: false, location: plannedLocation(diningPlan, item.location), activity: clean(item.title), subject: diningSubject, visualGoal: diningDuty, visualContext: { location: item.location, experience: item.title, status: item.status || item.feeBoundary || "", avoid: [] }, copyTargetId: `copy:dining:${item.id || index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "dining", itemIndex: index, fieldPath: `diningExperiences.${index}.images.0`, imageIndex: 0, required: false });
     Object.assign(imageSlots.at(-1), { primaryVisualSubject: diningSubject, visualDuty: diningDuty, displayLayout: item.layout === "wide" ? "wide" : "standard", ...plannedQueryFields(diningPlan) });
   });
   data.transportSummary.forEach((item, index) => {
+    const role = roleForSourceItem(effectiveAgentPlan, "transport", index);
+    if (isExplicitlyOmittedOptionalImageSlot(effectiveAgentPlan, role)) {
+      item.imageDisplay = "copy_only";
+      return;
+    }
+    delete item.imageDisplay;
     const slotId = `image:transport:${item.id || index + 1}:primary`;
-    const transportPlan = plannedImageSlot(effectiveAgentPlan, `transport:${index + 1}`);
+    const transportPlan = plannedImageSlot(effectiveAgentPlan, role);
     const transportSubject = clean(transportPlan.primaryVisualSubject) || clean(item.modelGuaranteed ? item.model : item.category);
     const transportDuty = clean(transportPlan.visualDuty) || `准确展示${item.category || "本次主要交通方式"}及其真实移动体验，不形成未确认车型承诺`;
     addSlot(slot({ slotId, moduleType: "transport", required: false, location: plannedLocation(transportPlan, item.location || data.destination), activity: clean(item.category), subject: transportSubject, visualGoal: transportDuty, visualContext: { destination: data.destination, category: item.category, serviceLevel: item.serviceLevel, usageLabel: item.usageLabel, modelGuaranteed: item.modelGuaranteed === true ? "已确认车型" : "车型未保证", avoid: [] }, copyTargetId: `copy:transport:${item.id || index + 1}`, aspectRatio: "16:9", userLocked: Boolean(data.imageLocks?.[slotId]) }), { module: "transport", itemIndex: index, fieldPath: `transportSummary.${index}.images.0`, imageIndex: 0, required: false });

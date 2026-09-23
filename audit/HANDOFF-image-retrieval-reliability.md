@@ -212,3 +212,13 @@ Commons 实时 imageinfo 返回可用 JPEG/BITMAP 元数据（1798×1197、CC BY
 验证收口：知识库/Planner组83/83，编辑器与诊断33/33，最终网络/正式规则35/35通过。图片/知识库综合组173项中172通过，唯一新增消歧断言暴露上述误送 Web 路径；修正后重跑覆盖该变化及同asset复用、人工边界、普通fallback的9/9通过，其余不受最后守卫影响的通过结果复用。网络安全、图片管线与视觉证据的通过结果沿用跨模块回归；既有排序断言仍未通过，明确保留。最终 `npm run build`、`npm run test:sites` 4/4通过，仅有既有混合导入及大包提示。
 
 运行资源：`D:\CodexRuntime\agent-runtime\luxury-itinerary\2026-09-22-image-search-fallback`，记录合成回归、公共图片探针、非敏感知识库计数和UI证据，保留至2026-09-29交登记清理流程检查消费者后退休。无新增常驻服务。浏览器已关闭；本轮 `ui/chrome-profile` 的精确清理被自动审批拒绝，原因 `blocked by policy`，未换方法重试，已登记保留供清理流程处理。
+
+## 2026-09-23 图片位、层级服务与搜索漏斗实施交接
+
+问题 `IMG-REL-32`—`IMG-REL-34`，基线 `2d830be`，分支 `codex/image-retrieval-reliability`。代码涉及 `app/server/agent-trip-planner.mjs`、`simple-plan-adapter.mjs`、`knowledge-scope-resolver.mjs`、`simple-image-skill.mjs`、`app/src/App.jsx`、`app/src/styles.css`；专项测试分别位于 `planner-visual-choice-repair.test.mjs`、`simple-planner-contract.test.mjs`、`knowledge-scope-resolver.test.mjs`、`simple-image-skill.test.mjs`。正式规则正文没有改动；对应解释和验证结果在 `docs/产品设计/Simple-Pipeline生成链路可靠性改造方案.md` §13.4 及规则迁移对照表。
+
+本轮实现稳定图片位覆盖与有限局部修复、可选图显式省略的纯文案布局、层级读取的共享有界技术重试、交通地区→国家→根范围和逐图国家/交通资格门禁，以及内部逐位搜索漏斗。复核发现同一次知识库结果的多图共享路径可能让别国照片借用本国目录；已改为仅认当前图片直接路径或与当前文件名唯一绑定的路径，混合国家和同名歧义测试覆盖。专项图片技能175/175、Agent Planner45/45、图片安全38/38、规则80/80、构建与Sites4/4通过；Simple Pipeline19/20，唯一失败为本机批准二维码资产仍缺失，未改其测试或用假素材绕过。新项目真实回归只调用一次 Planner，离线重放该结果供一次图片批次和 Copy/渲染使用；没有第二次 Planner 或图片业务批次。隔离测试服务运行后已退出，用户4180/5173未重启。
+
+新项目 31 位中 3 位规划仍有真实动作/主体冲突，28 位走 Web 降级，15 位自动采用，2000px 草稿和编辑器成功，尚未达到蓝图完成门槛。知识库层级两次超时，实际图片查询0；不能核对实时目录节点、索引覆盖和原件，也不能把共享盘有文件推断成已索引。总耗时约17分08秒，图片阶段约16分56秒。上一轮26/31与本轮15/31的差额中，两张交通图本轮规划表达不唯一，数个图片位画面目标变化；丽思等酒店站点访问出现403/404、提取0候选，其余位置存在下载/尺寸/视觉失败。旧轮被采用的图没有进入本轮这些缺图位的候选池；不能通过排序或放宽审核找回。当前风险是知识库服务不可用和官网拒绝后缺少稳定的独立合格来源，独立复核必须在线验证范围、索引及最终采用。
+
+本轮受限运行证据登记在 `D:\CodexRuntime\agent-runtime\luxury-itinerary\2026-09-23-kb-chain-implementation`，其中 `live-regression/result.json`、`summary.json` 与 `editor.png` 供授权复核；目录已限制为当前账号、系统和管理员，保留至独立复核或2026-10-23，由登记清理流程核对消费者后退休。项目源码仓库不存原始 Excel、完整模型响应或私有图片下载；本轮不宣布独立验收通过。

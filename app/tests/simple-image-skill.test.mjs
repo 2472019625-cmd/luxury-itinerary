@@ -5,12 +5,188 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { applyKnowledgeSourcePathEvidence, buildImageConstraints, buildImageQueries, buildKnowledgeQueryCacheKey, classifyTransportType, completeVisualJudgment, failedHardRequirement, runImageSearchSkill } from "../server/simple-image-skill.mjs";
+import { applyKnowledgeSourcePathEvidence, buildImageConstraints, buildImagePipelineStageTrace, buildImageQueries, buildKnowledgeQueryCacheKey, classifyTransportType, completeVisualJudgment, failedHardRequirement, runImageSearchSkill } from "../server/simple-image-skill.mjs";
 import { judgeCandidatesBatch } from "../server/image-audit.mjs";
 import { searchKnowledgeImages } from "../server/knowledge-image-search.mjs";
 import { buildKnowledgeHierarchy, explicitEntityRoute } from "../server/knowledge-scope-resolver.mjs";
 
 const slot = (id, overrides = {}) => ({ slotId: id, moduleType: "day", required: true, location: "塞伦盖蒂", activity: "全天游猎", subject: "草原环境与游猎行动", searchIntent: ["草原游猎", "野生动物观察"], visualGoal: "表现进入草原后的环境建立", visualContext: { dayRole: "环境建立", avoid: ["与相邻 DAY 相同机位"] }, copyTargetId: `copy-${id}`, aspectRatio: "16:9", userLocked: false, ...overrides });
+
+test("图片位诊断区分规划、目录、查询、Web 与采用，不包含地址或图片名", () => {
+  const unresolved = buildImagePipelineStageTrace(
+    slot("unresolved", { plannerSlotStatus: "unresolved", needsUserAction: true, plannerValidationIssues: [{ code: "ambiguous_visual_subject" }] }),
+    { status: "needs_user_action", technicalStatus: "planner_slot_unresolved" }, "knowledge_first",
+  );
+  assert.equal(unresolved.planner.status, "unresolved");
+  assert.deepEqual(unresolved.planner.issueCodes, ["ambiguous_visual_subject"]);
+  assert.equal(unresolved.knowledgeQuery.status, "not_executed");
+  assert.equal(unresolved.web.entered, false);
+  assert.equal(unresolved.terminal.status, "planner_unresolved");
+
+  const selected = buildImagePipelineStageTrace(slot("selected"), {
+    status: "success", technicalStatus: "downloaded_decoded_and_judged", selected: { sourceKind: "knowledge_library" },
+    pipelineEvidence: { knowledgeSearch: {
+      hierarchyLookup: { status: "loaded", attempts: 2, technicalRetries: 1 }, rootScopeResolution: { status: "resolved" },
+      scopePlan: { scopes: [{ role: "hotel_root" }] }, attempts: [{ status: "failed" }, { status: "completed" }], previewReturned: 3,
+      previewAudited: 2, originalDownloadSavedCount: 1,
+    } },
+  }, "knowledge_first");
+  assert.equal(selected.directory.status, "planned");
+  assert.equal(selected.hierarchy.attempts, 2);
+  assert.equal(selected.hierarchy.technicalRetries, 1);
+  assert.equal(selected.knowledgeQuery.status, "candidates_returned");
+  assert.equal(selected.knowledgeQuery.failedAttempts, 1);
+  assert.equal(selected.terminal.status, "auto_adopted");
+  assert.equal(selected.terminal.selectedSource, "knowledge_library");
+  const webSelected = buildImagePipelineStageTrace(slot("web-selected"), {
+    status: "success", selected: { candidateId: "candidate-1", sourceKind: "" },
+  }, "web_only");
+  assert.equal(webSelected.terminal.selectedSource, "web");
+  assert.doesNotMatch(JSON.stringify(selected), /https?:|selected\.jpg|node_[a-z0-9]+/i);
+});
+
+test("规划未解决不搜图；层级故障零知识库查询但同批安全进入 Web", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "image-stage-diagnostic-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let hierarchyCalls = 0;
+  let knowledgeCalls = 0;
+  let webCalls = 0;
+  const result = await runImageSearchSkill({
+    root, sourceMode: "knowledge_first", knowledgeBaseUrl: "http://knowledge.invalid",
+    slots: [
+      slot("plan-blocked", { plannerSlotStatus: "unresolved", needsUserAction: true, plannerValidationIssues: [{ code: "ambiguous_visual_subject" }] }),
+      slot("safe-web", { plannerSlotStatus: "ready", queryCore: { subject: "草原游猎" }, exactIdentityRequired: false }),
+    ],
+    adapters: {
+      loadKnowledgeHierarchy: async () => { hierarchyCalls += 1; throw Object.assign(new Error("service unavailable"), { code: "knowledge_hierarchy_http_503" }); },
+      searchKnowledgeImages: async () => { knowledgeCalls += 1; return { status: "completed", candidates: [], records: [] }; },
+      searchWebBatch: async () => { webCalls += 1; return []; },
+      searchCommonsImages: async () => [],
+    },
+  });
+  const blocked = result.results.find((item) => item.slotId === "plan-blocked");
+  const searched = result.results.find((item) => item.slotId === "safe-web");
+  assert.equal(blocked.pipelineEvidence.searchTrace.terminal.status, "planner_unresolved");
+  assert.equal(blocked.pipelineEvidence.searchTrace.web.entered, false);
+  assert.ok(hierarchyCalls >= 1);
+  assert.equal(knowledgeCalls, 0);
+  assert.ok(webCalls > 0);
+  assert.equal(searched.pipelineEvidence.searchTrace.hierarchy.status, "failed");
+  assert.equal(searched.pipelineEvidence.searchTrace.hierarchy.failureCode, "knowledge_hierarchy_http_503");
+  assert.equal(searched.pipelineEvidence.searchTrace.directory.status, "not_evaluated");
+  assert.equal(searched.pipelineEvidence.searchTrace.knowledgeQuery.status, "not_executed");
+  assert.equal(searched.pipelineEvidence.searchTrace.web.fallbackReason, "knowledge_service_degraded_fallback");
+  assert.equal(result.metrics.knowledgeActualRequests, 0);
+  assert.equal(result.metrics.knowledgeHierarchy.attempts, hierarchyCalls);
+  assert.equal(result.metrics.knowledgeHierarchy.technicalRetries, Math.max(0, hierarchyCalls - 1));
+  assert.equal(searched.pipelineEvidence.searchTrace.hierarchy.attempts, hierarchyCalls);
+  assert.equal(result.metrics.stageOutcomes.plannerUnresolved, 1);
+  assert.equal(result.metrics.stageOutcomes.hierarchyUnavailable, 1);
+});
+
+test("固定 Core 的两种 Web 召回结果分别记录无页面与硬拒绝，不改变搜索意图", async (t) => {
+  const target = slot("fixed-core-replay", {
+    moduleType: "transport", location: "Kenya", country: "Kenya", activity: "草原飞机", subject: "草原飞机",
+    primaryVisualSubject: "草原飞机", exactIdentityRequired: false, plannerSlotStatus: "ready",
+    queryCore: { subject: "草原飞机", subjectEn: "bush plane" }, fidelityQuery: "草原飞机", alternateQueries: ["bush plane"],
+  });
+  const runs = [];
+  for (const mode of ["no_pages", "wrong_subject"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "image-fixed-core-replay-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const providerQueries = [];
+    const result = await runImageSearchSkill({
+      root, sourceMode: "web_only", slots: [target], sourcePagesPerSlot: 1, downloadsPerSlot: 2,
+      visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture",
+      adapters: {
+        searchWebBatch: async ({ queries }) => {
+          providerQueries.push(queries[0]);
+          return mode === "no_pages" ? [] : [{ pageUrl: "https://example.com/bush-plane", title: "bush plane gallery" }];
+        },
+        searchCommonsImages: async () => [],
+        extractPageImages: async (page) => [{ ...page, imageUrl: `${page.pageUrl}/candidate.jpg`, alt: "bush plane" }],
+        downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+          const filePath = path.join(directory, "candidate.jpg");
+          await writeDistinctTestImage(filePath);
+          return { ...candidate, filePath, publicUrl: `${publicPrefix}/candidate.jpg`, sha256: "fixture-wrong-subject", width: 1400, height: 900 };
+        },
+        judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate) => completeAudit(candidate, {
+          actualSubject: "hotel room", subjectMatch: false, coreSubjectMatch: false,
+          transportTypeMatch: false, eligible: false, hardRejectCode: "wrong_subject", matchLevel: "mismatch",
+        })),
+      },
+    });
+    assert.equal(result.metrics.businessBatches, 1);
+    assert.equal(result.results[0].selected, null);
+    runs.push({ mode, providerQueries, plannedQueries: result.results[0].pipelineEvidence.webExecution.plannedQueries, trace: result.results[0].pipelineEvidence.searchTrace });
+  }
+  assert.deepEqual(runs[0].plannedQueries, runs[1].plannedQueries);
+  assert.equal(runs[0].providerQueries[0], runs[1].providerQueries[0]);
+  assert.match(runs[0].providerQueries[0], /bush plane/i);
+  assert.equal(runs[0].trace.web.candidates, 0);
+  assert.equal(runs[0].trace.web.rejectedCandidates, 0);
+  assert.equal(runs[1].trace.web.candidates, 1);
+  assert.equal(runs[1].trace.web.rejectedCandidates, 1);
+  assert.equal(runs[1].trace.terminal.status, "not_found");
+});
+
+test("交通根范围候选以逐图国家路径为边界，视觉审查仍核对交通类别", async (t) => {
+  const hierarchy = buildKnowledgeHierarchy([
+    { node_id: "root", formal_name: "根知识库" },
+    { node_id: "kenya", formal_name: "Kenya", parent_node_id: "root" },
+    { node_id: "nairobi", formal_name: "Nairobi", parent_node_id: "kenya" },
+  ]);
+  const cases = [
+    { id: "kenya", sourcePaths: (filename) => [`根知识库/Kenya/Masai Mara/${filename}`], shouldSelect: true },
+    { id: "tanzania", sourcePaths: (filename) => [`根知识库/Tanzania/Serengeti/${filename}`], shouldSelect: false },
+    { id: "mixed-wrong", sourcePaths: (filename) => ["根知识库/Kenya/Masai Mara/other.jpg", `根知识库/Tanzania/Serengeti/${filename}`], shouldSelect: false },
+    { id: "mixed-right", sourcePaths: (filename) => [`根知识库/Kenya/Masai Mara/${filename}`, "根知识库/Tanzania/Serengeti/other.jpg"], shouldSelect: true },
+    { id: "mixed-ambiguous", sourcePaths: (filename) => [`根知识库/Kenya/Masai Mara/${filename}`, `根知识库/Tanzania/Serengeti/${filename}`], shouldSelect: false },
+  ];
+  for (const { id, sourcePaths, shouldSelect } of cases) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "transport-root-country-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const scopes = [];
+    const auditLocations = [];
+    const target = slot(`transport-root-${id}`, {
+      moduleType: "transport", location: "Nairobi", region: "Nairobi", country: "Kenya", locationRole: "scope_only",
+      activity: "草原飞机", subject: "草原飞机", primaryVisualSubject: "草原飞机", exactIdentityRequired: false,
+      queryCore: { subject: "草原飞机", subjectEn: "bush plane" }, fidelityQuery: "草原飞机", alternateQueries: ["bush plane"],
+    });
+    const result = await runImageSearchSkill({
+      root, sourceMode: "knowledge_only", knowledgeBaseUrl: "http://knowledge.invalid", slots: [target],
+      visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture",
+      adapters: {
+        loadKnowledgeHierarchy: async () => hierarchy,
+        searchKnowledgeImages: async ({ queries, scopeNodeIds }) => {
+          scopes.push(scopeNodeIds.join("/"));
+          const prefix = `transport-root-${id}`;
+          return scopeNodeIds[0] === "root"
+            ? knowledgeFixture(queries[0], { count: 1, prefix, sourcePaths: sourcePaths(`${prefix}-1.jpg`) })
+            : { status: "completed", queryText: queries[0], scopeState: "empty", candidates: [], records: [] };
+        },
+        downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+          const filePath = path.join(directory, "plane.jpg");
+          await writeDistinctTestImage(filePath);
+          return { ...candidate, filePath, publicUrl: `${publicPrefix}/plane.jpg`, sha256: `root-${shouldSelect}`, width: 1400, height: 900 };
+        },
+        judgeCandidatesBatch: async ({ slot: auditSlot, candidates }) => {
+          auditLocations.push(auditSlot.location);
+          return candidates.map((candidate) => completeAudit(candidate, { actualSubject: "bush plane", transportType: "bush_plane", transportTypeMatch: true }));
+        },
+      },
+    });
+    assert.deepEqual([...new Set(scopes)], ["nairobi", "kenya", "root"]);
+    assert.equal(Boolean(result.results[0].selected), shouldSelect);
+    if (shouldSelect) {
+      assert.deepEqual(auditLocations, ["Kenya"]);
+      assert.equal(result.results[0].pipelineEvidence.searchTrace.terminal.status, "auto_adopted");
+    } else {
+      assert.deepEqual(auditLocations, []);
+      assert.ok(result.results[0].pipelineEvidence.searchTrace.knowledgeQuery.sourcePathRejected > 0);
+    }
+  }
+});
 
 test("明确实体目录缺失时仅补查确认地区；专属体验no_match最多两词且不扩Scope", async (t) => {
   const hierarchy = buildKnowledgeHierarchy([
