@@ -86,6 +86,26 @@ test("全部必需单元满足时进入 Renderer，并只在真实渲染成功�
   assert.ok(result.plannerResult.warnings.some((item) => item.code === "product_highlight_material_insufficient"));
 });
 
+test("取消信号在内容制作后阻止写回、渲染和完成态持久化", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-pipeline-cancel-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const controller = new AbortController();
+  let rendererCalls = 0;
+  await assert.rejects(runSimplePipeline({
+    sourceFile: createWorkbookFile(),
+    root: appRoot,
+    storeRoot: path.join(root, "projects"),
+    signal: controller.signal,
+    plannerOptions: { apiKey: "fixture", baseUrl: "https://planner.invalid", model: "fixture", requestJson: plannerRequestJson() },
+    adapters: {
+      runCopy: async () => { controller.abort(); throw Object.assign(new Error("aborted"), { name: "AbortError" }); },
+      runImage: async () => ({ status: "success", results: [], metrics: { businessBatches: 0, durationMs: 0 } }),
+      render: async () => { rendererCalls += 1; return { status: "success", outputPath: "must-not-render.png", rendererCalls: 1 }; },
+    },
+  }), (error) => error?.name === "AbortError" && error?.code === "pipeline_cancelled");
+  assert.equal(rendererCalls, 0);
+});
+
 test("正式版面检查未通过时自动保留可编辑草稿而不是卡住", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-pipeline-render-fallback-"));
   t.after(() => rm(root, { recursive: true, force: true }));

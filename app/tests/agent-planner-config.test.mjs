@@ -5,10 +5,10 @@ import { AGENT_CAPABILITIES, PROFESSIONAL_CAPABILITIES } from "../config/agent-c
 import { AGENT_RULE_IDS, CHECKPOINT_IDS, RULE_GROUP_COUNTS } from "../config/agent-rule-profile.mjs";
 import { AGENT_TASK_ROUTES } from "../config/agent-task-routing.mjs";
 
-test("正式规则配置覆盖92条规则且分组数量正确", () => {
-  assert.equal(AGENT_RULE_IDS.length, 92);
-  assert.deepEqual(RULE_GROUP_COUNTS, { FLOW: 10, DATA: 16, COPY: 17, IMG: 20, VIS: 16, OPS: 13 });
-  assert.equal(new Set(AGENT_RULE_IDS).size, 92);
+test("正式规则配置覆盖95条规则且分组数量正确", () => {
+  assert.equal(AGENT_RULE_IDS.length, 95);
+  assert.deepEqual(RULE_GROUP_COUNTS, { FLOW: 11, DATA: 16, COPY: 17, IMG: 20, VIS: 18, OPS: 13 });
+  assert.equal(new Set(AGENT_RULE_IDS).size, 95);
 });
 
 test("新版能力目录只有六项专业能力且不再含独立图片蓝图和目标修复模型", () => {

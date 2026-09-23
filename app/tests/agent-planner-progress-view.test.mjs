@@ -17,6 +17,7 @@ test("Simple Pipeline 将并发文案与图片归纳为五个定制师可理解�
     "排版并检查客户版长图",
   ]);
   assert.deepEqual(SIMPLE_DESIGNER_STAGES.map((stage) => stage.shortLabel), ["资料", "规划", "内容制作", "检查", "长图"]);
+  assert.deepEqual(SIMPLE_DESIGNER_STAGES.map((stage) => stage.routePosition), [0, 8, 18, 82, 94]);
   assert.deepEqual(SIMPLE_DESIGNER_STAGES[2].sourceKeys, ["copy_skill", "image_skill"]);
 });
 

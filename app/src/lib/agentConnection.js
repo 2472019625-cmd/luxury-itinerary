@@ -28,7 +28,7 @@ export function displayAgentStages(stages, state) {
     return stages.map((stage, index) => stage.state === 'complete' ? stage : { ...stage, state: stage.state === 'failed' || index === failureIndex ? 'failed' : 'pending' });
   }
   if (state.completed) return stages.map(stage => ({ ...stage, state: 'complete' }));
-  return stages.map(stage => stage.state !== 'active' ? stage : { ...stage, state: state.cancelled ? 'cancelled' : state.disconnected ? 'unknown' : stage.state });
+  return stages.map(stage => stage.state !== 'active' ? stage : { ...stage, state: state.cancelled ? 'cancelled' : stage.state });
 }
 
 export function agentElapsed(snapshot, now = Date.now()) {

@@ -4,11 +4,12 @@ import { applyImageToSlot, canManuallyChooseImageCandidate, IMAGE_REVIEW_STATE, 
 import { buildLayoutImageSlots, getSlotImage, listImagePlacements, moveImageToSlot, setSlotImage } from "./lib/imageSlots.js";
 import { deriveProjectThumbnail } from "./lib/projectThumbnail.js";
 import { safeWriteStorage } from './lib/storageSafety.js';
+import { agentProjectHeaders, agentProjectsApi } from './lib/agentProjectsApi.js';
 import { recordImageDecision } from './lib/imageDecisions.js';
 import { humanReviewReady, recordHumanReview } from './lib/humanReview.js';
 import { collectCopyIssues, copyExportEligibility, generationStateLabel, groupCopyIssueTargets, groupCopyIssues } from './lib/copyIssuePresentation.js';
 import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
-import { AGENT_DESIGNER_STAGES, SIMPLE_DESIGNER_STAGES, getDesignerCurrentAction, getDesignerHighlights, getDesignerSummary, getDesignerTripTitle } from './lib/agentProgressView.js';
+import { AGENT_DESIGNER_STAGES, SIMPLE_DESIGNER_STAGES, getDesignerCurrentAction } from './lib/agentProgressView.js';
 import { readAgentSnapshot, agentDisplayState, displayAgentStages, agentElapsed, agentFailurePresentation } from './lib/agentConnection.js';
 import { buildCustomerTravelEntityData } from './lib/travelEntityDisplay.js';
 import { normalizeHighlightForDisplay } from './lib/highlightDisplay.js';
@@ -99,12 +100,12 @@ export function Button({ children, tone = "secondary", icon, className = "", ...
   return <button className={`ws-button ws-button-${tone} ${className}`} {...props}>{icon && <UiIcon name={icon} />}{children}</button>;
 }
 
-export function StepRail({ active, onStep, maxStep = active }) {
+export function StepRail({ active, onStep, maxStep = active, stopped = false }) {
   return <div className="step-rail" aria-label="行程制作进度">{STEPS.map(([title, copy], index) => {
-    const state = index < active ? "complete" : index === active ? "active" : "future";
+    const state = index < active ? "complete" : index === active ? stopped ? "stopped" : "active" : "future";
     return <button key={title} className={`step-item step-${state}`} onClick={() => onStep?.(index)} disabled={!onStep || index > maxStep}>
       <span className="step-index">{state === "complete" ? <UiIcon name="included" size={19} /> : index + 1}</span>
-      <span><strong>{title}</strong><small>{copy}</small></span>
+      <span><strong>{title}</strong><small>{state === "stopped" ? "本次制作已停止" : copy}</small></span>
     </button>;
   })}</div>;
 }
@@ -113,6 +114,7 @@ export function AuthScreen({ onAuth, storageKeys = FIXED_STORAGE, serverLogin, s
   const [mode, setMode] = useState("login");
   const [form, setForm] = useState({ invite: "", name: "", login: "", pin: "" });
   const [error, setError] = useState("");
+  const [showPin, setShowPin] = useState(false);
   const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
   const submit = async (event) => {
     event.preventDefault();
@@ -149,12 +151,13 @@ export function AuthScreen({ onAuth, storageKeys = FIXED_STORAGE, serverLogin, s
       <p>资料识别、品牌文案、旅行影像与高清交付，在一个工作台里完成。</p>
     </section>
     <section className="auth-panel">
-      <div className="auth-tabs"><button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>登录</button>{(!serverLogin || registrationEnabled) && <button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>创建账号</button>}</div>
+      <div className="auth-tabs"><button className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setShowPin(false); }}>登录</button>{(!serverLogin || registrationEnabled) && <button className={mode === "register" ? "active" : ""} onClick={() => { setMode("register"); setShowPin(false); }}>创建账号</button>}</div>
       <form onSubmit={submit}>
         <header><small>WELCOME</small><h2>{mode === "login" ? "回到我的项目" : "创建个人工作区"}</h2><p>{mode === "login" ? (serverLogin ? "使用你的定制师账号和密码登录" : "使用内部账号和6位PIN登录") : "使用公司邀请码创建独立的定制师工作台"}</p></header>
         {mode === "register" && <><label>公司邀请码<input value={form.invite} onChange={update("invite")} placeholder="请输入公司邀请码" /></label><label>姓名<input value={form.name} onChange={update("name")} placeholder="定制师姓名" /></label></>}
         <label>登录账号<input value={form.login} onChange={update("login")} placeholder="至少3个字符" autoComplete="username" /></label>
-        <label>{serverLogin ? "密码" : "6位PIN"}<input type="password" inputMode={serverLogin ? undefined : "numeric"} maxLength={serverLogin ? 256 : 6} value={form.pin} onChange={update("pin")} placeholder="••••••" autoComplete="current-password" /></label>
+        <label className="auth-secret-label" htmlFor="auth-credential">{serverLogin ? "密码" : "6位PIN"}</label>
+        <div className="auth-secret-field"><input id="auth-credential" type={showPin ? "text" : "password"} inputMode={serverLogin ? undefined : "numeric"} maxLength={serverLogin ? 256 : 6} value={form.pin} onChange={update("pin")} placeholder="••••••" autoComplete={mode === "register" ? "new-password" : "current-password"} /><button className="auth-secret-toggle" type="button" aria-label={showPin ? "隐藏密码" : "显示密码"} aria-pressed={showPin} title={showPin ? "隐藏密码" : "显示密码"} onClick={() => setShowPin((visible) => !visible)}><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" /><circle cx="12" cy="12" r="2.5" />{showPin && <path d="M3 21 21 3" />}</svg></button></div>
         {error && <p className="form-error"><UiIcon name="warning" />{error}</p>}
         <Button tone="primary" type="submit">{mode === "login" ? "进入工作台" : "创建并进入"}</Button>
       </form>
@@ -162,10 +165,10 @@ export function AuthScreen({ onAuth, storageKeys = FIXED_STORAGE, serverLogin, s
   </main>;
 }
 
-export function AppHeader({ user, project, saved, canGenerate, onHome, onLogout, onGenerate, onProfile }) {
+export function AppHeader({ user, project, saved, canGenerate, onHome, onLogout, onGenerate, onProfile, onRename }) {
   return <header className="workspace-header">
     <button className="header-brand" onClick={onHome}><img src="/assets/logos/logo-gold.png" alt="奢游国际" /><span>行程创建工作台</span></button>
-    {project && <div className="header-project"><strong>{project.title}</strong><button aria-label="修改项目名称"><UiIcon name="itinerary" size={16} /></button></div>}
+    {project && <div className="header-project"><strong>{projectDisplayName(project)}</strong>{onRename && <button onClick={() => onRename(project)} aria-label="修改项目名称"><UiIcon name="itinerary" size={16} /></button>}</div>}
     <div className="header-actions">
       {project && <span className={`save-state save-${saved}`}><UiIcon name={saved === "saved" ? "included" : "warning"} />{saved === "saving" ? "正在保存" : saved === "error" ? "保存失败" : "已保存"}</span>}
       {project && canGenerate && <Button tone="primary" onClick={onGenerate}>生成版本</Button>}
@@ -174,14 +177,43 @@ export function AppHeader({ user, project, saved, canGenerate, onHome, onLogout,
   </header>;
 }
 
+export function AgentModeStrip({ showHome = false, onHome }) {
+  return <div className="agent-mode-strip">
+    {showHome
+      ? <button className="agent-home-return" onClick={onHome}><UiIcon name="return" size={15} />返回首页</button>
+      : <span>定制师智能工作台 · 独立项目数据</span>}
+    <strong>确认信息优先 · 完成后可继续调整</strong>
+  </div>;
+}
+
 function projectStatusLabel(project) {
+  const runtime = project.runtimeStatus;
+  const remaining = Number(project.unresolvedCount) || 0;
+  if (runtime === "cancelled" || (!runtime && project.workflowStage === "cancelled")) return { label: "已停止", tone: "stopped" };
+  if (["failed", "interrupted"].includes(runtime)) return { label: "制作中断", tone: "attention" };
+  if (["partial", "awaiting_user_action", "ready_to_render"].includes(runtime) || project.workflowStage === "partial") return { label: remaining ? `待完善 · ${remaining}项` : "待完善", tone: "attention" };
+  if (["complete", "ready_for_editor"].includes(runtime) || (project.flowKind === "simple_skill_v1" && project.workflowStage === "generated")) return { label: "制作完成", tone: "formal" };
+  if (["running", "planning", "preparing"].includes(runtime)) return { label: "制作中", tone: "working" };
   const versionCount = project.versions?.length || 0;
   if (versionCount) return { label: `正式版 v${versionCount}.0`, tone: "formal" };
   const stage = project.workflowStage;
+  if (stage === "cancelled") return { label: "已停止", tone: "stopped" };
   if (["simple-running", "generating"].includes(stage)) return { label: "制作中", tone: "working" };
   if (["uploaded", "confirmed"].includes(stage)) return { label: "待继续", tone: "waiting" };
   if (["needs-copy-revision", "blocked"].includes(stage)) return { label: "待调整", tone: "attention" };
   return { label: "草稿编辑中", tone: "draft" };
+}
+
+function projectDisplayName(project) {
+  if (String(project.customName || "").trim()) return project.customName.trim();
+  if (project.flowKind === "simple_skill_v1" && project.files?.length) {
+    const destination = String(project.data?.destination || "").trim();
+    const days = project.data?.days?.length || 0;
+    const customer = String(project.customerName || project.data?.customerName || "").trim();
+    const parts = [destination, days ? `${days}天` : "", customer].filter(Boolean);
+    if (parts.length) return parts.join(" · ");
+  }
+  return project.title || "新的定制行程";
 }
 
 function readSessionProjects(storageKeys, user) {
@@ -232,7 +264,7 @@ function ProjectThumbnail({ project, inactive = false }) {
   return <div className={`project-thumb${inactive ? " project-thumb-inactive" : ""}`} data-thumbnail-source={thumbnail.thumbnailSource}><span className="project-thumb-placeholder"><UiIcon name="itinerary" size={22} /><b>{initial}</b></span>{thumbnail.thumbnailUrl && <img key={thumbnail.thumbnailUrl} src={thumbnail.thumbnailUrl} alt={`${project.title}封面`} loading="lazy" decoding="async" onLoad={(event) => { event.currentTarget.hidden = false; }} onError={(event) => { event.currentTarget.hidden = true; }} />}</div>;
 }
 
-function WorkspaceHome({ projects, onCreate, onProjects, onOpen, onTrash }) {
+function WorkspaceHome({ projects, onCreate, onProjects, onOpen, onTrash, onRename }) {
   const recentProjects = [...projects]
     .sort((left, right) => new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime())
     .slice(0, 3);
@@ -262,32 +294,32 @@ function WorkspaceHome({ projects, onCreate, onProjects, onOpen, onTrash }) {
         const status = projectStatusLabel(project);
         const meta = projectTripMeta(project);
         return <article key={project.id} className="workspace-recent-card">
-          <button className="workspace-recent-open" onClick={() => onOpen(project)} aria-label={`打开项目：${project.title}`}>
+          <button className="workspace-recent-open" onClick={() => onOpen(project)} aria-label={`打开项目：${projectDisplayName(project)}`}>
           <div className="workspace-recent-cover"><ProjectThumbnail project={project} /></div>
           <div className="workspace-recent-copy">
             {project.data?.destination && <small>{project.data.destination}</small>}
-            <h3>{project.title}</h3>
+            <h3>{projectDisplayName(project)}</h3>
             <div className="workspace-recent-meta"><span>最后编辑 · {formatTime(project.updatedAt)}</span>{meta.daysText && <span>{meta.daysText}</span>}{meta.travelerText && <span>{meta.travelerText}</span>}</div>
           </div>
           </button>
-          <div className="workspace-recent-badges"><span className={`project-status-tag project-status-${status.tone}`}>{status.label}</span><button className="workspace-recent-trash" title="移入回收站" aria-label={`将${project.title}移入回收站`} onClick={(event) => { event.stopPropagation(); onTrash(project); }}><UiIcon name="trash" size={15} /></button></div>
+          <div className="workspace-recent-badges"><span className={`project-status-tag project-status-${status.tone}`}>{status.label}</span><button className="workspace-recent-rename" title="重命名" aria-label={`重命名${projectDisplayName(project)}`} onClick={(event) => { event.stopPropagation(); onRename(project); }}><UiIcon name="itinerary" size={15} /></button><button className="workspace-recent-trash" title="移入回收站" aria-label={`将${projectDisplayName(project)}移入回收站`} onClick={(event) => { event.stopPropagation(); onTrash(project); }}><UiIcon name="trash" size={15} /></button></div>
         </article>;
       })}</div> : <div className="workspace-recent-empty"><UiIcon name="itinerary" size={28} /><div><strong>还没有最近项目</strong><p>创建第一份客户行程后，会显示在这里。</p></div></div>}
     </section>
   </main>;
 }
 
-function ProjectList({ user, projects, exitingProjectIds = [], onCreate, onOpen, onDelete, onTrash, onRestore, onPermanentDelete, onClearTrash }) {
+function ProjectList({ user, projects, exitingProjectIds = [], onCreate, onOpen, onDelete, onTrash, onRestore, onPermanentDelete, onClearTrash, onRename }) {
   const [query, setQuery] = useState("");
   const [view, setView] = useState("active");
   const [displayMode, setDisplayMode] = useState("list");
   const trashEnabled = Boolean(onTrash && onRestore);
-  const ownedProjects = projects.filter((project) => project.ownerId === user.id);
+  const ownedProjects = projects.filter((project) => project.ownerId === user.id && !project.isEphemeral);
   const trashCount = ownedProjects.filter((project) => Boolean(project.trashedAt)).length;
   const activeCount = ownedProjects.length - trashCount;
   const visible = ownedProjects.filter((project) => {
     const inSelectedView = trashEnabled ? (view === "trash" ? Boolean(project.trashedAt) : !project.trashedAt) : true;
-    return inSelectedView && `${project.title}${project.data?.destination || ""}${project.customerName || ""}`.toLowerCase().includes(query.toLowerCase());
+    return inSelectedView && `${projectDisplayName(project)}${project.title}${project.data?.destination || ""}${project.customerName || ""}`.toLowerCase().includes(query.toLowerCase());
   });
   const exiting = new Set(exitingProjectIds);
   const emptyBecauseOfSearch = Boolean(query.trim());
@@ -296,14 +328,14 @@ function ProjectList({ user, projects, exitingProjectIds = [], onCreate, onOpen,
     <div className="projects-toolbar"><div className="project-search"><UiIcon name="itinerary" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={view === "trash" ? "搜索已删除的项目名称或目的地" : "搜索项目名称、目的地或客户"} /></div>{view === "active" && <div className="project-view-toggle" aria-label="项目展示方式"><button className={displayMode === "list" ? "active" : ""} aria-pressed={displayMode === "list"} onClick={() => setDisplayMode("list")}>列表</button><button className={displayMode === "card" ? "active" : ""} aria-pressed={displayMode === "card"} onClick={() => setDisplayMode("card")}>卡片</button></div>}</div>
     {visible.length ? view === "trash" ? <div className="trash-project-grid">{visible.map((project) => <article key={project.id} className={`trash-project-card${exiting.has(project.id) ? " project-item-exiting" : ""}`}>
       <ProjectThumbnail project={project} inactive />
-      <div className="trash-project-copy">{project.data?.destination && <small>{project.data.destination}</small>}<h2>{project.title}</h2><span>删除时间 · {formatTime(project.trashedAt)}</span></div>
+      <div className="trash-project-copy">{project.data?.destination && <small>{project.data.destination}</small>}<h2>{projectDisplayName(project)}</h2><span>删除时间 · {formatTime(project.trashedAt)}</span>{project.purgeAt && <span>到期清理 · {new Date(project.purgeAt).toLocaleDateString("zh-CN")}</span>}</div>
       <div className="trash-card-actions"><button className="row-project-action row-restore" onClick={() => onRestore(project)} aria-label={`恢复${project.title}`}>恢复</button><button className="row-project-action row-permanent-delete" onClick={() => onPermanentDelete(project)} aria-label={`永久删除${project.title}`}>永久删除</button></div>
     </article>)}</div> : <div className={`project-list project-list-${displayMode}`}>{visible.map((project) => {
       const status = projectStatusLabel(project);
       const meta = projectTripMeta(project);
       return <article key={project.id} className={`project-row project-row-${displayMode}${exiting.has(project.id) ? " project-item-exiting" : ""}`} onClick={() => onOpen(project)}>
         <ProjectThumbnail project={project} />
-        <div className="project-copy">{project.data?.destination && <small>{project.data.destination}</small>}<div className="project-name-line"><h2>{project.title}</h2></div><div className="project-meta"><span>最后编辑 · {formatTime(project.updatedAt)}</span>{meta.daysText && <span>{meta.daysText}</span>}{meta.travelerText && <span>{meta.travelerText}</span>}</div></div>
+        <div className="project-copy">{project.data?.destination && <small>{project.data.destination}</small>}<div className="project-name-line"><h2>{projectDisplayName(project)}</h2>{onRename && <button className="project-rename-action" title="重命名" onClick={(event) => { event.stopPropagation(); onRename(project); }}>重命名</button>}</div><div className="project-meta"><span>最后编辑 · {formatTime(project.updatedAt)}</span>{meta.daysText && <span>{meta.daysText}</span>}{meta.travelerText && <span>{meta.travelerText}</span>}</div></div>
         {onDelete && <button className="row-delete" onClick={(event) => { event.stopPropagation(); onDelete(project); }} aria-label="删除项目">删除</button>}
         <div className="project-row-actions"><span className={`project-status-tag project-status-${status.tone}`}>{status.label}</span><button className="row-open" onClick={(event) => { event.stopPropagation(); onOpen(project); }}>打开 <span aria-hidden="true">›</span></button>{trashEnabled && <button className="row-trash-action" title="移入回收站" onClick={(event) => { event.stopPropagation(); onTrash(project); }} aria-label={`将${project.title}移入回收站`}><UiIcon name="trash" size={17} /></button>}</div>
       </article>;
@@ -397,6 +429,7 @@ function ConfirmStep({ project, onChange, onContinue, onBack, agentMode = false,
   const [modalOpen, setModalOpen] = useState(false);
   const [modalStep, setModalStep] = useState("form");
   const [modalMessage, setModalMessage] = useState("");
+  const [startingGeneration, setStartingGeneration] = useState(false);
   const offers = listPriceOffers(data);
   const selection = currentPriceSelection(project);
   const applyChange = (nextData, metadata) => {
@@ -446,8 +479,7 @@ function ConfirmStep({ project, onChange, onContinue, onBack, agentMode = false,
       <section className="confirmation-customer-section"><header><h3>旅行日期</h3></header><div className="confirmation-modal-fields">{(requiredPaths.has("startDate") || data.startDate) && <label>出发日期 *<input type="date" value={data.startDate || ""} onChange={(event) => update("startDate", event.target.value)} /></label>}{(requiredPaths.has("endDate") || data.endDate) && <label>返程日期 *<input type="date" value={data.endDate || ""} onChange={(event) => update("endDate", event.target.value)} /></label>}</div></section>
       <PriceOfferConfirmation project={project} onChange={applyChange} />
       {agentMode && confirmations.some((item) => item.status === "pending") && <AgentConfirmationPanel confirmations={confirmations} decisions={agentDecisions} onDecision={onAgentDecision} />}
-      {modalMessage && <p className="confirmation-modal-message" role="alert">{modalMessage}</p>}
-    </> : <ConfirmationPreview project={project} />}</div><footer><Button onClick={() => modalStep === "preview" ? setModalStep("form") : setModalOpen(false)}>{modalStep === "preview" ? "返回修改" : "取消"}</Button><Button tone="primary" onClick={() => { if (modalStep === "form") { const pending = buildConfirmationActionItems({ project, data, validation: validateItineraryFacts(data), confirmations, decisions: agentDecisions }); if (pending.length) return setModalMessage(pending.length === 1 ? pending[0].description : `请先完成：${pending.map((item) => item.title).join("、")}`); setModalMessage(""); return setModalStep("preview"); } return onContinue(); }}>{modalStep === "form" ? "下一步：确认预览" : "确认并开始生成"}</Button></footer></section></div>}
+    </> : <><ConfirmationPreview project={project} />{modalMessage && <p className="confirmation-modal-message" role="alert">{modalMessage}</p>}</>}</div><footer><Button disabled={startingGeneration} onClick={() => modalStep === "preview" ? setModalStep("form") : setModalOpen(false)}>{modalStep === "preview" ? "返回修改" : "取消"}</Button><Button tone="primary" disabled={startingGeneration} onClick={async () => { if (modalStep === "form") { const pending = buildConfirmationActionItems({ project, data, validation: validateItineraryFacts(data), confirmations, decisions: agentDecisions }); if (pending.length) return setModalMessage(pending.length === 1 ? pending[0].description : `请先完成：${pending.map((item) => item.title).join("、")}`); setModalMessage(""); return setModalStep("preview"); } setStartingGeneration(true); setModalMessage(""); try { await onContinue(); } catch (error) { setModalMessage(error?.status === 409 ? "项目已在其他页面更新，请重新打开项目后再试。" : "保存或启动失败，请稍后重试。你填写的信息仍在当前页面。"); } finally { setStartingGeneration(false); } }}>{modalStep === "form" ? "下一步：确认预览" : startingGeneration ? "正在开始制作…" : "确认并开始生成"}</Button></footer></section></div>}
   </section></main>;
 }
 
@@ -587,15 +619,15 @@ function agentRouteProgress(stages, completed = false) {
   return Math.round(start + (end - start) * ratio);
 }
 
-function AgentProgressOverview({ snapshot, elapsed }) {
+function AgentProgressOverview({ snapshot, elapsed, action }) {
   const progress = buildAgentProgress(snapshot);
   const display = agentDisplayState(snapshot);
   progress.stages = displayAgentStages(progress.stages, display);
   const safeProgress = Math.max(0, Math.min(100, Number(progress.percent) || 0));
-  const animatedProgress = useAnimatedProgress(safeProgress, !display.failed && !display.disconnected);
+  const animatedProgress = useAnimatedProgress(safeProgress, !display.failed && !display.cancelled && !display.disconnected);
   const routeTarget = agentRouteProgress(progress.stages, display.completed);
-  const animatedRouteProgress = useAnimatedProgress(routeTarget, !display.failed && !display.disconnected);
-  const labels = { complete: "已完成", active: "进行中", waiting: "等待确认", failed: "失败", cancelled: "已取消", pending: display.failed ? "未执行" : "等待处理", unknown: "状态待确认" };
+  const animatedRouteProgress = useAnimatedProgress(routeTarget, !display.failed && !display.cancelled && !display.disconnected);
+  const labels = { complete: "已完成", active: display.disconnected ? "上次状态" : "进行中", waiting: "等待确认", failed: "失败", cancelled: "已停止", pending: display.failed || display.cancelled ? "未执行" : "等待处理", unknown: "状态待确认" };
   const latestEvent = snapshot?.executionRun?.events?.at(-1);
   const waitingReason = latestEvent?.waitingReason ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_confirmation" ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_user_action" ? "部分内容需要在编辑页补充或确认，不影响你先查看和调整草稿。" : "";
   const imageSlots = snapshot?.activeJob?.imageSlotProgress;
@@ -618,18 +650,22 @@ function AgentProgressOverview({ snapshot, elapsed }) {
   const mascotProgress = animatedRouteProgress;
   const failure = agentFailurePresentation(snapshot, failedStage?.label);
   const contentHeadline = imageActive && !copyActive ? "正在为这份客户行程挑选合适的视觉素材" : imageActive && copyActive ? "正在完善客户文案与视觉素材" : copyActive ? "正在把确认资料整理成客户可读的行程内容" : "";
-  const primaryStatus = display.disconnected ? "正在重新获取制作状态" : display.failed ? "本次生成已停止" : display.completed ? "生成完成" : contentHeadline || (actionStage ? `${actionStage.state === "waiting" ? "等待确认：" : "正在"}${actionStage.label}` : detailedAction);
-  const auxiliaryParts = display.disconnected ? ["以下为最后已知进度，后台任务可能仍在继续"] : display.failed ? [`停止于「${failure.stageLabel}」；${failure.userMessage}，后续步骤未继续执行`] : display.completed ? ["客户版行程已制作完成，可以继续调整文案、图片和版式"] : [
+  const primaryStatus = display.cancelled ? "制作已停止" : display.failed ? "本次生成已停止" : display.completed ? "生成完成" : contentHeadline || (actionStage ? `${actionStage.state === "waiting" ? "等待确认：" : "正在"}${actionStage.label}` : detailedAction);
+  const runningDetails = [
     copyTasks?.total > 0 ? copyComplete ? "客户文案已整理完成" : `正在完善客户文案 ${copyTasks.completed} / ${copyTasks.total}` : "",
     imageSlots?.total > 0 ? imageComplete ? `图片位已完成匹配 ${imageSlots.completed} / ${imageSlots.total}` : `已完成 ${imageSlots.completed} / ${imageSlots.total} 个图片位` : "",
     detailedAction !== primaryStatus ? detailedAction : "",
   ].filter(Boolean);
-  const progressNote = !display.failed && !display.completed && imageActive ? "图片会逐张核对地点、主体和清晰度，因此通常比文案整理需要更长时间。" : "";
-  const displayMode = display.failed ? "failed" : display.completed ? "completed" : display.disconnected ? "disconnected" : "running";
+  const auxiliaryParts = display.cancelled ? ["未完成内容不会进入编辑页；已确认的资料仍会保留"] : display.failed ? [`停止于「${failure.stageLabel}」；${failure.userMessage}，后续步骤未继续执行`] : display.completed ? ["客户版行程已制作完成，可以继续调整文案、图片和版式"] : display.disconnected ? [...runningDetails, "当前显示最近一次同步进度"] : runningDetails;
+  const progressNote = !display.failed && !display.cancelled && !display.completed && imageActive ? "图片会逐张核对地点、主体和清晰度，因此通常比文案整理需要更长时间。" : "";
+  const displayMode = display.cancelled ? "cancelled" : display.failed ? "failed" : display.completed ? "completed" : display.disconnected ? "disconnected" : "running";
+  const lastSyncAge = Math.max(0, Math.floor((Date.now() - Number(snapshot?._observedAt || Date.now())) / 1000));
+  const lastSyncLabel = lastSyncAge < 10 ? "刚刚" : lastSyncAge < 60 ? `${lastSyncAge}秒前` : `${Math.floor(lastSyncAge / 60)}分${lastSyncAge % 60}秒前`;
+  const connectionStale = display.disconnected && lastSyncAge >= 30;
   return <section className={`agent-progress-overview agent-progress-card-${displayMode}`} aria-labelledby="designer-progress-title">
-    <header><h2 id="designer-progress-title">客户行程制作进度</h2><span>{display.disconnected ? "最后同步" : "已用时"} {Math.floor(elapsed / 60)}分{elapsed % 60}秒</span></header>
-    <div className="agent-progress-total" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={safeProgress} aria-label="客户行程制作进度">
-      <div className="agent-progress-headline"><strong><span>{animatedProgress}</span><sup>%</sup></strong><div><div className="agent-progress-status-line"><h3 aria-live="polite">{primaryStatus}</h3>{display.failed && <span className="agent-progress-stop-tag">已终止</span>}</div>{auxiliaryParts.length > 0 && <div className="agent-progress-details" aria-live="polite">{[...new Set(auxiliaryParts)].map((item) => <span key={item}>{item}</span>)}</div>}{progressNote && <p className="agent-progress-note">{progressNote}</p>}</div></div>
+    <header><h2 id="designer-progress-title">客户行程制作进度</h2><div className="agent-progress-header-meta">{display.disconnected && <span className="agent-connection-status" role="status"><UiIcon name="process" size={13} />正在重新连接</span>}<span>{display.disconnected ? `最后同步 ${lastSyncLabel}` : `已用时 ${Math.floor(elapsed / 60)}分${elapsed % 60}秒`}</span></div></header>
+    <div className="agent-progress-total">
+      <div className="agent-progress-headline"><strong role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={safeProgress} aria-label="客户行程制作进度"><span>{animatedProgress}</span><sup>%</sup></strong><div><div className="agent-progress-status-line"><h3 aria-live="polite">{primaryStatus}</h3>{display.failed && <span className="agent-progress-stop-tag">已终止</span>}{display.cancelled && <span className="agent-progress-stop-tag agent-progress-stop-tag-cancelled">已停止</span>}</div>{auxiliaryParts.length > 0 && <div className="agent-progress-details" aria-live="polite">{[...new Set(auxiliaryParts)].map((item) => <span key={item}>{item}</span>)}</div>}{progressNote && <p className="agent-progress-note">{progressNote}</p>}</div>{action && <div className="agent-progress-primary-action">{action}</div>}</div>
       <div className={`agent-progress-route agent-progress-route-${displayMode}`}>
         <div className="agent-progress-route-inner">
           <div className="agent-progress-mascot" style={{ left: `${mascotProgress}%` }} aria-hidden="true">
@@ -643,11 +679,12 @@ function AgentProgressOverview({ snapshot, elapsed }) {
       </div>
     </div>
     <ol>{progress.stages.map((stage) => <li className={`agent-progress-${stage.state}`} key={stage.key}><i aria-hidden="true">{stage.state === "complete" && <UiIcon name="included" size={13} />}</i><span>{stage.label}</span><em>{labels[stage.state]}</em></li>)}</ol>
+    {connectionStale && <p className="agent-progress-connection-note" role="status">进度暂时未更新，我们会自动继续尝试。</p>}
     {waitingReason && <p className="agent-progress-wait">{waitingReason}</p>}
   </section>;
 }
 
-function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, onEdit, decisions, onDecision, onConfirm, onRetryImage }) {
+function AgentGenerationStep({ project, snapshot, error, onCancel, onEdit, onRestart, decisions, onDecision, onConfirm, onRetryImage }) {
   const agentProject = snapshot?.project;
   const run = snapshot?.executionRun;
   const display = agentDisplayState(snapshot);
@@ -655,24 +692,15 @@ function AgentGenerationStep({ project, snapshot, error, onReview, onCancel, onE
   const waiting = ["awaiting_confirmation", "awaiting_user_action"].includes(agentProject?.status);
   const draft = agentProject?.status === "partial";
   const failed = display.failed;
-  const cancelled = agentProject?.status === "cancelled";
+  const cancelled = agentProject?.status === "cancelled" || project.workflowStage === "cancelled";
   const ready = ["ready_for_editor", "complete"].includes(agentProject?.status);
-  const tripTitle = getDesignerTripTitle(snapshot, project);
-  const highlights = getDesignerHighlights(snapshot, project);
-  const progress = buildAgentProgress(snapshot);
-  const displayedStages = displayAgentStages(progress.stages, display);
-  const failure = agentFailurePresentation(snapshot, displayedStages.find((stage) => stage.state === "failed")?.label);
-  const summary = display.disconnected ? "暂时无法获取最新制作状态，后台可能仍在运行。正在重新获取状态，请不要重复开始生成。" : failed ? `「${tripTitle}」本次生成在「${failure.stageLabel}」遇到问题，已停止继续处理。${failure.userMessage}。` : getDesignerSummary(snapshot);
-  return <main className="flow-page"><StepRail active={2} /><section className="generation-page agent-workspace-generation">
-    <div className="generation-main agent-designer-summary"><header><small>本次定制摘要</small><h1>{display.disconnected ? `「${tripTitle}」连接异常，正在确认制作状态` : failed ? "生成已终止" : ready ? "生成完成" : draft ? `「${tripTitle}」可编辑草稿已生成` : waiting ? `「${tripTitle}」需要你的确认` : cancelled ? `「${tripTitle}」已取消` : `正在制作「${tripTitle}」`}</h1><p>{summary}</p></header>
-      <section className="agent-fact-assurance" aria-label="已保护的重要信息"><div><small>已按你的确认制作</small><strong>日期、酒店、路线和费用不会被擅自改动</strong></div><span>确认信息优先</span></section>
-      {highlights.length > 0 && <section className="agent-custom-priorities" aria-labelledby="custom-priorities-title"><header><small>本次定制重点</small><p id="custom-priorities-title">系统会围绕这些体验重点组织客户版表达和配图。</p></header><ul>{highlights.map((highlight) => <li key={highlight}>{highlight}</li>)}</ul></section>}
-      <p className="agent-editable-note">完成后可进入编辑页继续调整文案、图片和版式，系统不会把生成结果锁死。</p>
-      {waiting && <div className="agent-runtime-confirm"><AgentConfirmationPanel confirmations={snapshot?.confirmations || []} decisions={decisions} onDecision={onDecision} onRetryImage={onRetryImage} /><Button tone="primary" onClick={onConfirm}>保存选择并从当前任务继续</Button></div>}
-      {(error || display.disconnected) && <p className="generation-error" role="alert"><UiIcon name="warning" />{display.disconnected ? "暂时无法获取最新状态，正在重新连接，请勿重复生成。" : failed ? "本次生成未完成，请稍后重新尝试。" : "本次操作没有完成，请稍后重试。"}</p>}
-    </div>
-    <AgentProgressOverview snapshot={snapshot} elapsed={elapsed} />
-    <footer className="generation-footer">{!waiting && !ready && !draft && <Button onClick={onReview}>查看确认信息</Button>}{(ready || draft) && <Button tone="primary" onClick={onEdit}>进入编辑页</Button>}{!waiting && !ready && !draft && !cancelled && !failed && <Button onClick={onCancel}>取消任务</Button>}</footer>
+  const canEdit = ready || draft;
+  const canCancel = !waiting && !canEdit && !cancelled && !failed;
+  return <main className="flow-page"><StepRail active={2} stopped={cancelled} /><section className="generation-page agent-workspace-generation">
+    <AgentProgressOverview snapshot={snapshot} elapsed={elapsed} action={(cancelled || failed) ? <Button tone="primary" onClick={() => onRestart(failed ? "failed" : "cancelled")}>{failed ? "重新尝试" : "重新制作"}</Button> : null} />
+    {waiting && <section className="agent-generation-support"><div className="agent-runtime-confirm"><AgentConfirmationPanel confirmations={snapshot?.confirmations || []} decisions={decisions} onDecision={onDecision} onRetryImage={onRetryImage} /><Button tone="primary" onClick={onConfirm}>保存选择并从当前任务继续</Button></div></section>}
+    {error && !display.disconnected && <section className="agent-generation-support"><p className="generation-error" role="alert"><UiIcon name="warning" />{failed ? "本次生成未完成，请稍后重新尝试。" : "本次操作没有完成，请稍后重试。"}</p></section>}
+    {(canEdit || canCancel) && <footer className="generation-footer">{canEdit && <Button tone="primary" onClick={onEdit}>进入编辑页</Button>}{canCancel && <Button onClick={onCancel}>取消任务</Button>}</footer>}
   </section></main>;
 }
 
@@ -1343,13 +1371,23 @@ function DeleteDialog({ project, onCancel, onConfirm }) {
 }
 
 function TrashDialog({ project, onCancel, onConfirm }) {
-  return <div className="modal-backdrop"><section className="confirm-dialog"><UiIcon name="warning" size={34} /><h2>将“{project.title}”移入回收站？</h2><p>项目、原始资料、运行记录和成品都会完整保留，可随时从回收站恢复。正在执行的生成任务不会因此取消。</p><div><Button onClick={onCancel}>取消</Button><Button tone="primary" onClick={onConfirm}>移入回收站</Button></div></section></div>;
+  const running = ["running", "planning", "preparing"].includes(project.runtimeStatus) || (!project.runtimeStatus && project.workflowStage === "simple-running");
+  return <div className="modal-backdrop"><section className="confirm-dialog"><UiIcon name="warning" size={34} /><h2>将“{projectDisplayName(project)}”移入回收站？</h2><p>{running ? "这会停止本次制作。项目资料与已保存内容可在30天内恢复，但本次制作不能继续；已发生的调用无法撤销。" : "项目将在回收站保留30天，期间可恢复；到期后将自动清理。"}</p><div><Button onClick={onCancel}>取消</Button><Button tone="primary" onClick={onConfirm}>移入回收站</Button></div></section></div>;
+}
+
+function RenameProjectDialog({ project, onCancel, onConfirm }) {
+  const [name, setName] = useState(projectDisplayName(project));
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="rename-project-title"><section className="confirm-dialog rename-project-dialog"><h2 id="rename-project-title">修改项目名称</h2><p>只改变工作台中显示的名称，不改动客户行程正文。</p><input autoFocus maxLength={80} value={name} onChange={(event) => setName(event.target.value)} aria-label="项目名称" /><div><Button onClick={onCancel}>取消</Button><Button tone="primary" disabled={!name.trim()} onClick={() => onConfirm(name.trim())}>保存名称</Button></div></section></div>;
 }
 
 function PermanentDeleteDialog({ project, projects, busy, onCancel, onConfirm }) {
   const clearing = Array.isArray(projects);
   const count = projects?.length || 0;
-  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="permanent-delete-title"><section className="confirm-dialog permanent-delete-dialog"><UiIcon name="warning" size={30} /><h2 id="permanent-delete-title">{clearing ? "清空回收站？" : "永久删除项目？"}</h2><p>{clearing ? `回收站中的 ${count} 个项目删除后将无法恢复，包括生成结果和项目内保存的数据。` : `「${project.title}」删除后将无法恢复，包括该项目的生成结果和项目内保存的数据。`}</p><div><Button disabled={busy} onClick={onCancel}>取消</Button><Button tone="danger" disabled={busy} onClick={onConfirm}>{busy ? "正在删除…" : "永久删除"}</Button></div></section></div>;
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="permanent-delete-title"><section className="confirm-dialog permanent-delete-dialog"><UiIcon name="warning" size={30} /><h2 id="permanent-delete-title">{clearing ? "清空回收站？" : "永久删除项目？"}</h2><p>{clearing ? `回收站中的 ${count} 个项目删除后将无法恢复，包括生成结果和项目内保存的数据。` : `「${projectDisplayName(project)}」删除后将无法恢复，包括该项目的生成结果和项目内保存的数据。`}</p><div><Button disabled={busy} onClick={onCancel}>取消</Button><Button tone="danger" disabled={busy} onClick={onConfirm}>{busy ? "正在删除…" : "永久删除"}</Button></div></section></div>;
+}
+
+function RestartGenerationDialog({ project, busy, onCancel, onConfirm }) {
+  return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="restart-generation-title"><section className="confirm-dialog restart-generation-dialog"><UiIcon name="process" size={30} /><h2 id="restart-generation-title">重新制作这份行程？</h2><p>系统会按当前确认的信息重新开始制作。之前的制作记录会保留，已经完成的处理不会撤销。</p><div><Button disabled={busy} onClick={onCancel}>取消</Button><Button tone="primary" disabled={busy} onClick={onConfirm}>{busy ? "正在开始…" : "开始重新制作"}</Button></div></section></div>;
 }
 
 function ProjectToast({ feedback }) {
@@ -1361,7 +1399,10 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   const storageKeys = agentMode ? AGENT_STORAGE : FIXED_STORAGE;
   const [users, setUsers] = useState(() => window.__sheyouServerUser ? [window.__sheyouServerUser] : readStorage(storageKeys.users, []));
   const [user, setUser] = useState(() => { if(window.__sheyouServerUser) return window.__sheyouServerUser; const session = readStorage(storageKeys.session, null); return readStorage(storageKeys.users, []).find((item) => item.id === session?.userId) || null; });
-  const [projects, setProjects] = useState(() => readSessionProjects(storageKeys, window.__sheyouServerUser));
+  const [projects, setProjects] = useState(() => agentMode ? [] : readSessionProjects(storageKeys, window.__sheyouServerUser));
+  const [catalogReady, setCatalogReady] = useState(!agentMode);
+  const [catalogError, setCatalogError] = useState("");
+  const [legacyProjects, setLegacyProjects] = useState([]);
   const [projectId, setProjectId] = useState(null);
   const [screen, setScreen] = useState(() => agentMode ? "home" : "list");
   const [saveState, setSaveState] = useState("saved");
@@ -1374,14 +1415,50 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   const [profileOpen, setProfileOpen] = useState(false);
   const [deleteProject, setDeleteProject] = useState(null);
   const [trashProject, setTrashProject] = useState(null);
+  const [renameProject, setRenameProject] = useState(null);
   const [permanentDelete, setPermanentDelete] = useState(null);
+  const [restartGenerationStatus, setRestartGenerationStatus] = useState(null);
+  const [restartGenerationBusy, setRestartGenerationBusy] = useState(false);
   const [projectActionBusy, setProjectActionBusy] = useState(false);
   const [projectFeedback, setProjectFeedback] = useState(null);
   const [exitingProjectIds, setExitingProjectIds] = useState([]);
   const [agentSnapshot, setAgentSnapshot] = useState(null);
   const [agentDecisions, setAgentDecisions] = useState({});
   const saveTimer = useRef(null);
+  const serverRevisions = useRef(new Map());
+  const serverSaves = useRef(new Map());
   const generationInFlightRef = useRef(false);
+  const cancelledAgentIdsRef = useRef(new Set());
+  useEffect(() => {
+    if (!agentMode || !user?.id) return undefined;
+    let alive = true;
+    setCatalogReady(false);
+    agentProjectsApi.list(user).then(({ projects: stored }) => {
+      if (!alive) return;
+      serverRevisions.current = new Map(stored.map((item) => [item.id, item.revision]));
+      setProjects(stored);
+      const old = readSessionProjects(storageKeys, user).filter((item) => item.ownerId === user.id && !stored.some((saved) => saved.id === item.id) && (item.files?.length || item.customerName));
+      setLegacyProjects(old);
+      setCatalogError("");
+      setCatalogReady(true);
+    }).catch((error) => { if (alive) { setCatalogError(error.message || "无法读取云端项目"); setCatalogReady(true); } });
+    return () => { alive = false; };
+  }, [agentMode, user?.id]);
+  useEffect(() => {
+    if (!agentMode || !catalogReady || !user?.id || !["home", "list"].includes(screen) || saveState === "saving") return undefined;
+    let alive = true;
+    const refresh = async () => {
+      try {
+        const { projects: stored } = await agentProjectsApi.list(user);
+        if (!alive) return;
+        serverRevisions.current = new Map(stored.map((item) => [item.id, item.revision]));
+        setProjects((current) => [...current.filter((item) => item.isEphemeral), ...stored]);
+      } catch (error) { if (alive) setSaveState("error"); }
+    };
+    const first = setTimeout(refresh, 1200);
+    const timer = setInterval(refresh, 15000);
+    return () => { alive = false; clearTimeout(first); clearInterval(timer); };
+  }, [agentMode, catalogReady, user?.id, screen, saveState]);
   const currentProject = projects.find((project) => project.id === projectId && project.ownerId === user?.id);
   useEffect(() => {
     if (!projectFeedback) return undefined;
@@ -1390,7 +1467,14 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   }, [projectFeedback]);
   useEffect(() => { window.scrollTo({ top: 0, left: 0, behavior: "instant" }); }, [screen]);
   useEffect(() => {
+    if (!agentMode || !["saving", "error"].includes(saveState)) return undefined;
+    const warn = (event) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [agentMode, saveState]);
+  useEffect(() => {
     if (!agentMode || !currentProject?.agentProjectId || !["confirm", "generate"].includes(screen)) return undefined;
+    const cancellationLocked = currentProject.workflowStage === "cancelled" || cancelledAgentIdsRef.current.has(currentProject.agentProjectId);
     let stopped = false; let timer;
     const refresh = async () => {
       try {
@@ -1398,27 +1482,28 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
         const response = await fetch(`${apiBase}/${currentProject.agentProjectId}`, { signal: AbortSignal.timeout(15000), cache: "no-store" });
         const value = await readAgentSnapshot(response);
         if (stopped) return;
-        setAgentSnapshot(value);
+        const observedValue = cancellationLocked ? {
+          ...value,
+          project: { ...(value.project || {}), status: "cancelled", currentStage: "制作已停止" },
+          activeJob: value.activeJob ? { ...value.activeJob, status: "cancelled", currentAction: "制作已停止" } : value.activeJob,
+          executionRun: value.executionRun ? { ...value.executionRun, status: "cancelled", executionEnabled: false, currentStage: "制作已停止" } : value.executionRun,
+        } : value;
+        setAgentSnapshot(observedValue);
         setAgentDecisions((existing) => ({ ...Object.fromEntries((value.confirmations || []).filter((item) => item.status === "pending").map((item) => [item.confirmationId, item.choices.find((choice) => choice.recommended)?.choiceId || item.choices[0]?.choiceId])), ...existing }));
+        if (cancellationLocked) return;
         if (["ready_for_editor", "complete"].includes(value.project.status) && value.result?.data) {
           const executionRunId = value.executionRun?.executionRunId;
-          setProjects((existing) => {
-            const collection = existing.map((item) => {
-              if (item.id !== currentProject.id) return item;
-              const versionId = `${item.flowKind === "simple_skill_v1" ? "simple" : "agent"}-${executionRunId}`;
-              const downloadBase = item.flowKind === "simple_skill_v1" ? "/api/simple/projects" : "/api/agent/projects";
-              const versions = item.versions?.some((version) => version.id === versionId) ? item.versions : [...(item.versions || []), { id: versionId, name: `${item.title} · 智能体完整生成版`, createdAt: Date.now(), snapshot: versionSnapshot(value.result.data), downloadUrl: `${downloadBase}/${item.agentProjectId}/output` }];
-              const visibility = value.result.data.showExpenseSection === false ? { ...(item.visibility || {}), expenses: false } : item.visibility;
-              return { ...item, workflowStage: "generated", revisionMode: false, data: { ...value.result.data, designer: item.data.designer }, visibility, aiGeneration: { executionRunId, finalQa: value.result.finalQa, imageGate: value.result.imageGate }, versions, updatedAt: Date.now() };
-            });
-            try { writeStorage(storageKeys.projects, collection); setSaveState("saved"); } catch (error) { setSaveState("error"); setGenerationError(error?.message || "成品已生成，但本地项目保存失败"); }
-            return collection;
-          });
+          const versionId = `${currentProject.flowKind === "simple_skill_v1" ? "simple" : "agent"}-${executionRunId}`;
+          const downloadBase = currentProject.flowKind === "simple_skill_v1" ? "/api/simple/projects" : "/api/agent/projects";
+          const versions = currentProject.versions?.some((version) => version.id === versionId) ? currentProject.versions : [...(currentProject.versions || []), { id: versionId, name: `${currentProject.title} · 智能体完整生成版`, createdAt: Date.now(), snapshot: versionSnapshot(value.result.data), downloadUrl: `${downloadBase}/${currentProject.agentProjectId}/output` }];
+          const visibility = value.result.data.showExpenseSection === false ? { ...(currentProject.visibility || {}), expenses: false } : currentProject.visibility;
+          await updateProject({ ...currentProject, workflowStage: "generated", runtimeStatus: "complete", revisionMode: false, data: { ...value.result.data, designer: currentProject.data.designer }, visibility, aiGeneration: { executionRunId, finalQa: value.result.finalQa, imageGate: value.result.imageGate }, versions }, true);
           setProgress(100);
           timer = setTimeout(() => { if (!stopped) { if (currentProject.flowKind === "simple_skill_v1") window.location.assign(`/simple/projects/${currentProject.agentProjectId}`); else setScreen("editor"); } }, 900);
           return;
         }
         if (["awaiting_user_action", "partial", "ready_to_render"].includes(value.project.status) && value.result?.data && currentProject.flowKind === "simple_skill_v1") {
+          await updateProject({ ...currentProject, workflowStage: "partial", runtimeStatus: value.project.status, unresolvedCount: value.result.unresolvedItems?.length || 0 }, true);
           window.location.assign(`/simple/projects/${currentProject.agentProjectId}`);
           return;
         }
@@ -1432,12 +1517,43 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     };
     refresh();
     return () => { stopped = true; clearTimeout(timer); };
-  }, [agentMode, currentProject?.agentProjectId, screen, agentSnapshot?.project?.activeJobId]);
-  const commitProjects = (next) => { setProjects(next); try { writeStorage(storageKeys.projects, next); setSaveState('saved'); } catch (error) { setSaveState('error'); alert(error.message); } };
+  }, [agentMode, currentProject?.agentProjectId, currentProject?.workflowStage, screen, agentSnapshot?.project?.activeJobId]);
+  const persistAgentProject = (project) => {
+    const previous = serverSaves.current.get(project.id) || Promise.resolve();
+    const pending = previous.catch(() => {}).then(async () => {
+      const revision = serverRevisions.current.get(project.id);
+      if (!revision) throw new Error("项目尚未保存到服务端，请先上传资料");
+      const { project: saved } = await agentProjectsApi.update(user, project, revision);
+      serverRevisions.current.set(project.id, saved.revision);
+      setProjects((current) => current.map((item) => item.id === saved.id ? { ...item, revision: saved.revision, runtimeStatus: saved.runtimeStatus, unresolvedCount: saved.unresolvedCount } : item));
+      setSaveState("saved");
+      return saved;
+    }).catch((error) => {
+      setSaveState("error");
+      setGenerationError(error.message || "项目尚未保存，请重试");
+      throw error;
+    });
+    serverSaves.current.set(project.id, pending);
+    return pending;
+  };
+  const commitProjects = (next) => {
+    setProjects(next);
+    if (agentMode) {
+      next.filter((item) => serverRevisions.current.has(item.id) && item !== projects.find((old) => old.id === item.id))
+        .forEach((item) => persistAgentProject(item).catch(() => {}));
+      return;
+    }
+    try { writeStorage(storageKeys.projects, next); setSaveState('saved'); } catch (error) { setSaveState('error'); alert(error.message); }
+  };
   const showProjectFeedback = (message, tone = "success") => setProjectFeedback({ message, tone, id: Date.now() });
-  const commitProjectLifecycle = (next, successMessage) => {
-    try { writeStorage(storageKeys.projects, next); setProjects(next); setSaveState("saved"); return true; }
-    catch { setSaveState("error"); showProjectFeedback("操作失败，请重试", "error"); return false; }
+  const renameAgentProject = async (name) => {
+    if (!renameProject) return;
+    const project = { ...renameProject, customName: name };
+    try {
+      await updateProject(project, true);
+      setRenameProject(null);
+      showProjectFeedback("项目名称已更新");
+    } catch (error) { showProjectFeedback(error.message || "重命名失败", "error"); }
   };
   const beginProjectExit = async (ids) => {
     setExitingProjectIds(ids);
@@ -1446,39 +1562,46 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   const finishProjectExit = (ids) => setExitingProjectIds((current) => current.filter((id) => !ids.includes(id)));
   const moveProjectToTrash = async (project) => {
     setTrashProject(null);
-    await beginProjectExit([project.id]);
-    const saved = commitProjectLifecycle(projects.map((item) => item.id === project.id ? { ...item, trashedAt: Date.now() } : item));
-    finishProjectExit([project.id]);
-    if (saved) showProjectFeedback("已移入回收站");
+    try {
+      const latest = projects.find((item) => item.id === project.id) || project;
+      if (project.id === projectId) await flushAgentSave(latest);
+      else await serverSaves.current.get(project.id);
+      const { project: saved } = await agentProjectsApi.trash(user, project.id);
+      serverRevisions.current.set(saved.id, saved.revision);
+      await beginProjectExit([project.id]);
+      setProjects((current) => current.map((item) => item.id === saved.id ? saved : item));
+      finishProjectExit([project.id]);
+      showProjectFeedback("已移入回收站，30天内可恢复");
+    } catch (error) { finishProjectExit([project.id]); showProjectFeedback(error.message || "移入回收站失败", "error"); }
   };
   const restoreProject = async (project) => {
-    await beginProjectExit([project.id]);
-    const saved = commitProjectLifecycle(projects.map((item) => item.id === project.id ? { ...item, trashedAt: null, restoredAt: Date.now() } : item));
-    finishProjectExit([project.id]);
-    if (saved) showProjectFeedback("项目已恢复");
+    try {
+      const { project: saved } = await agentProjectsApi.restore(user, project.id);
+      serverRevisions.current.set(saved.id, saved.revision);
+      await beginProjectExit([project.id]);
+      setProjects((current) => current.map((item) => item.id === saved.id ? saved : item));
+      finishProjectExit([project.id]);
+      showProjectFeedback("项目已恢复");
+    } catch (error) { finishProjectExit([project.id]); showProjectFeedback(error.message || "恢复失败", "error"); }
   };
   const permanentlyDeleteProjects = async (targets) => {
     setProjectActionBusy(true);
     const deletedIds = [];
     try {
       for (const project of targets) {
-        if (project.agentProjectId) {
-          const apiBase = project.flowKind === "simple_skill_v1" ? "/api/simple/projects" : "/api/agent/projects";
-          const response = await fetch(`${apiBase}/${project.agentProjectId}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
-          if (!response.ok) throw new Error("project_delete_failed");
-        }
+        await agentProjectsApi.remove(user, project.id);
         deletedIds.push(project.id);
       }
       setPermanentDelete(null);
       await beginProjectExit(deletedIds);
       const deleted = new Set(deletedIds);
-      if (!commitProjectLifecycle(projects.filter((item) => !deleted.has(item.id)))) throw new Error("local_delete_failed");
+      setProjects((current) => current.filter((item) => !deleted.has(item.id)));
       finishProjectExit(deletedIds);
       showProjectFeedback(targets.length > 1 ? "回收站已清空" : "项目已永久删除");
     } catch {
       if (deletedIds.length) {
         const deleted = new Set(deletedIds);
-        commitProjectLifecycle(projects.filter((item) => !deleted.has(item.id)));
+        setProjects((current) => current.filter((item) => !deleted.has(item.id)));
       }
       finishProjectExit(deletedIds);
       showProjectFeedback("操作失败，请重试", "error");
@@ -1490,17 +1613,44 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     setProjects(collection);
     setSaveState("saving");
     clearTimeout(saveTimer.current);
+    if (agentMode) {
+      if (immediate) return persistAgentProject(next);
+      saveTimer.current = setTimeout(() => persistAgentProject(next).catch(() => {}), 700);
+      return Promise.resolve(next);
+    }
     saveTimer.current = setTimeout(() => { try { writeStorage(storageKeys.projects, collection); setSaveState("saved"); } catch (error) { setSaveState("error"); setGenerationError(error?.message || '保存失败，当前编辑尚未持久化'); } }, immediate ? 0 : 2000);
+    return Promise.resolve(next);
+  };
+  const flushAgentSave = async (project) => {
+    if (!agentMode || !project || !serverRevisions.current.has(project.id)) return;
+    clearTimeout(saveTimer.current);
+    if (saveState === "saving" || saveState === "error") await persistAgentProject(project);
+    else await serverSaves.current.get(project.id);
+  };
+  const goHome = async () => {
+    try {
+      await flushAgentSave(currentProject);
+      setScreen(agentMode ? "home" : "list");
+    } catch (error) { showProjectFeedback(error.message || "项目尚未保存，无法返回首页", "error"); }
   };
   const attachAgentProject = async (project, files, recognition, sourceSha256) => {
     const workbook = files[0];
-    const next = { ...project, flowKind: "simple_skill_v1", agentProjectId: null, workflowStage: "uploaded", title: recognition.data.title || project.title, data: { ...recognition.data, designer: project.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type, sha256: sourceSha256 })) };
-    updateProject(next, true);
+    const { isEphemeral, ...existing } = project;
+    const next = { ...existing, flowKind: "simple_skill_v1", agentProjectId: null, workflowStage: "uploaded", title: recognition.data.title || project.title, data: { ...recognition.data, designer: project.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type, sha256: sourceSha256 })) };
+    const { project: saved } = serverRevisions.current.has(next.id)
+      ? { project: await persistAgentProject(next) }
+      : await agentProjectsApi.create(user, next);
+    serverRevisions.current.set(saved.id, saved.revision);
+    setProjects((current) => current.map((item) => item.id === saved.id ? saved : item));
+    try { await agentProjectsApi.uploadSource(user, saved.id, workbook); }
+    catch (error) { setSaveState("error"); setGenerationError("项目已保存，但原始 Excel 上传失败，请重新上传资料"); throw error; }
+    setSaveState("saved");
     setAgentSnapshot(null);
-    return next;
+    return saved;
   };
   const continueAgent = async () => {
     if (!currentProject) return;
+    await flushAgentSave(currentProject);
     const confirmationValidation = validateItineraryFacts(currentProject.data);
     const actionItems = buildConfirmationActionItems({
       project: currentProject,
@@ -1515,10 +1665,11 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     }
     if (currentProject.flowKind === "simple_skill_v1" && !currentProject.agentProjectId) {
       const source = currentProject.files?.[0] || {};
-      const response = await fetch("/api/simple/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ facts: currentProject.data, report: currentProject.recognition || {}, sourceName: source.name, sourceSha256: source.sha256 }) });
+      const response = await fetch("/api/simple/projects", { method: "POST", headers: agentProjectHeaders(user, true), body: JSON.stringify({ facts: currentProject.data, report: currentProject.recognition || {}, sourceName: source.name, sourceSha256: source.sha256 }) });
       const created = await response.json();
       if (!response.ok) throw new Error(created.error || "无法开始制作，请重试");
-      updateProject({ ...currentProject, agentProjectId: created.projectId, workflowStage: "simple-running" }, true);
+      try { await updateProject({ ...currentProject, agentProjectId: created.projectId, workflowStage: "simple-running", generationAttemptNumber: currentProject.generationAttemptNumber || 1, generationAttempts: currentProject.generationAttempts || [] }, true); }
+      catch (error) { await fetch(`/api/simple/projects/${created.projectId}/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) }).catch(() => {}); throw error; }
       setAgentSnapshot({ project: { projectId: created.projectId, flowKind: "simple_skill_v1", status: "planning", progress: created.progress || 1 }, plan: null, executionRun: null, activeJob: created });
       setProgress(created.progress || 1); setGenerationError(""); setScreen("generate");
       return;
@@ -1547,11 +1698,78 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
   };
   const cancelAgent = async () => {
     if (!currentProject?.agentProjectId || !window.confirm("确认取消当前智能体任务？项目、确认和计划记录会保留，已发生的调用无法撤销。")) return;
+    const agentProjectId = currentProject.agentProjectId;
+    cancelledAgentIdsRef.current.add(agentProjectId);
     const apiBase = currentProject.flowKind === "simple_skill_v1" ? "/api/simple/projects" : "/api/agent/projects";
-    const response = await fetch(`${apiBase}/${currentProject.agentProjectId}/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
-    const value = await response.json(); if (!response.ok) throw new Error(value.error || "无法取消任务"); setAgentSnapshot(value);
+    try {
+      const response = await fetch(`${apiBase}/${agentProjectId}/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error || "无法取消任务");
+      const stoppedAt = new Date().toISOString();
+      setAgentSnapshot({
+        ...value,
+        project: { ...(value.project || {}), projectId: agentProjectId, status: "cancelled", currentStage: "制作已停止", updatedAt: stoppedAt },
+        activeJob: value.activeJob ? { ...value.activeJob, status: "cancelled", currentAction: "制作已停止", updatedAt: stoppedAt } : value.activeJob,
+        executionRun: value.executionRun ? { ...value.executionRun, status: "cancelled", executionEnabled: false, currentStage: "制作已停止", updatedAt: stoppedAt } : value.executionRun,
+      });
+      await updateProject({ ...currentProject, workflowStage: "cancelled", runtimeStatus: "cancelled" }, true);
+      setScreen("generate");
+    } catch (error) {
+      cancelledAgentIdsRef.current.delete(agentProjectId);
+      throw error;
+    }
   };
-  const createProject = () => { const data = clone(initialData); data.designer = designerProfile(user); const project = { id: uid("project"), flowKind: agentMode ? "simple_skill_v1" : "fixed_v1", ownerId: user.id, title: "新的定制行程", customerName: "", requirements: "", data, files: [], workflowStage: "draft", visibility: {}, versions: [], updatedAt: Date.now() }; commitProjects([project, ...projects]); setAgentSnapshot(null); setProjectId(project.id); setScreen("upload"); };
+  const restartAgent = async (requestedStatus) => {
+    if (!currentProject?.agentProjectId || currentProject.flowKind !== "simple_skill_v1" || restartGenerationBusy) return;
+    const display = agentDisplayState(agentSnapshot);
+    const previousStatus = display.failed ? "failed" : (agentSnapshot?.project?.status === "cancelled" || currentProject.workflowStage === "cancelled") ? "cancelled" : requestedStatus;
+    if (!["cancelled", "failed"].includes(previousStatus)) return;
+    setRestartGenerationBusy(true);
+    setGenerationError("");
+    try {
+      const source = currentProject.files?.[0] || {};
+      const response = await fetch("/api/simple/projects", { method: "POST", headers: agentProjectHeaders(user, true), body: JSON.stringify({ facts: currentProject.data, report: currentProject.recognition || {}, sourceName: source.name, sourceSha256: source.sha256 }) });
+      const created = await response.json();
+      if (!response.ok) throw new Error(created.error || "无法开始新的制作，请重试");
+      const previousAttempt = {
+        agentProjectId: currentProject.agentProjectId,
+        status: previousStatus,
+        progress: Number(agentSnapshot?.project?.progress ?? agentSnapshot?.activeJob?.progress ?? 0),
+        executionRunId: agentSnapshot?.executionRun?.executionRunId || null,
+        startedAt: agentSnapshot?.project?.createdAt || agentSnapshot?.activeJob?.createdAt || null,
+        endedAt: agentSnapshot?.project?.updatedAt || agentSnapshot?.activeJob?.updatedAt || new Date().toISOString(),
+      };
+      const history = [...(currentProject.generationAttempts || [])];
+      const existingIndex = history.findIndex((attempt) => attempt.agentProjectId === previousAttempt.agentProjectId);
+      if (existingIndex >= 0) history[existingIndex] = { ...history[existingIndex], ...previousAttempt };
+      else history.push(previousAttempt);
+      const nextAttemptNumber = Math.max(Number(currentProject.generationAttemptNumber || 1) + 1, history.length + 1);
+      try { await updateProject({ ...currentProject, agentProjectId: created.projectId, workflowStage: "simple-running", runtimeStatus: "running", generationAttemptNumber: nextAttemptNumber, generationAttempts: history }, true); }
+      catch (error) { await fetch(`/api/simple/projects/${created.projectId}/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) }).catch(() => {}); throw error; }
+      setAgentDecisions({});
+      setAgentSnapshot({ project: { projectId: created.projectId, flowKind: "simple_skill_v1", status: "planning", progress: created.progress || 1, createdAt: created.createdAt || new Date().toISOString() }, plan: null, executionRun: null, activeJob: created });
+      setProgress(created.progress || 1);
+      setRestartGenerationStatus(null);
+      setScreen("generate");
+    } catch (error) {
+      setGenerationError(error?.message || "无法开始新的制作，请重试");
+    } finally {
+      setRestartGenerationBusy(false);
+    }
+  };
+  const createProject = () => { const data = clone(initialData); data.designer = designerProfile(user); const project = { id: uid("project"), flowKind: agentMode ? "simple_skill_v1" : "fixed_v1", ownerId: user.id, title: "新的定制行程", customerName: "", requirements: "", data, files: [], workflowStage: "draft", visibility: {}, versions: [], updatedAt: Date.now(), ...(agentMode ? { isEphemeral: true } : {}) }; if (agentMode) setProjects((current) => [project, ...current.filter((item) => !item.isEphemeral)]); else commitProjects([project, ...projects]); setAgentSnapshot(null); setProjectId(project.id); setScreen("upload"); };
+  const importLegacyProjects = async () => {
+    const failed = [];
+    for (const project of legacyProjects) {
+      try {
+        const { project: saved } = await agentProjectsApi.create(user, { ...project, ownerId: user.id, sourceFileAvailability: "legacy_unverified" });
+        serverRevisions.current.set(saved.id, saved.revision);
+        setProjects((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      } catch { failed.push(project); }
+    }
+    setLegacyProjects(failed);
+    showProjectFeedback(failed.length ? `${failed.length} 个旧项目未能导入，请检查后重试` : "旧项目已导入服务端；原始 Excel 请按需重新核对", failed.length ? "error" : "success");
+  };
   const openProject = (project) => {
     if (agentMode) {
       setProjectId(project.id);
@@ -1741,22 +1959,27 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
       setExportError(message);
     }
   };
-  const logout = () => { if(window.__sheyouServerUser){window.dispatchEvent(new Event('sheyou-logout'));return;} localStorage.removeItem(storageKeys.session); setUser(null); setProjectId(null); setScreen(agentMode ? "home" : "list"); };
+  const logout = async () => { try { await flushAgentSave(currentProject); } catch (error) { showProjectFeedback(error.message || "项目尚未保存，暂不能退出", "error"); return; } if(window.__sheyouServerUser){window.dispatchEvent(new Event('sheyou-logout'));return;} localStorage.removeItem(storageKeys.session); setUser(null); setProjectId(null); setScreen(agentMode ? "home" : "list"); };
   if (!user) return <AuthScreen storageKeys={storageKeys} onAuth={(nextUser) => { setUsers(readStorage(storageKeys.users, [])); setUser(nextUser); }} />;
-  const activeProjects = projects.filter((project) => project.ownerId === user.id && !project.trashedAt);
-  return <div className={`workspace-shell${agentMode ? " workspace-agent-mode" : ""}`}><AppHeader user={user} project={currentProject && !["home", "list"].includes(screen) ? currentProject : null} saved={saveState} canGenerate={agentMode ? false : copyExportEligibility(currentProject || {}).allowed} onHome={() => setScreen(agentMode ? "home" : "list")} onLogout={logout} onProfile={() => setProfileOpen(true)} onGenerate={() => setScreen('versions')} />
-    {agentMode && <div className="agent-mode-strip"><span>定制师智能工作台 · 独立项目数据</span><strong>确认信息优先 · 完成后可继续调整</strong></div>}
-    {agentMode && screen === "home" && <WorkspaceHome projects={activeProjects} onCreate={createProject} onProjects={() => setScreen("list")} onOpen={openProject} onTrash={setTrashProject} />}
-    {screen === "list" && <ProjectList user={user} projects={projects} exitingProjectIds={exitingProjectIds} onCreate={createProject} onOpen={openProject} onDelete={agentMode ? undefined : setDeleteProject} onTrash={agentMode ? setTrashProject : undefined} onRestore={agentMode ? restoreProject : undefined} onPermanentDelete={agentMode ? (project) => setPermanentDelete({ project }) : undefined} onClearTrash={agentMode ? (items) => setPermanentDelete({ projects: items }) : undefined} />}
+  if (agentMode && !catalogReady) return <main className="auth-screen">正在读取服务端项目…</main>;
+  if (agentMode && catalogError) return <main className="auth-screen"><p role="alert">{catalogError}。本地缓存不会替代服务端数据。</p><Button onClick={() => window.location.reload()}>重新连接</Button></main>;
+  const activeProjects = projects.filter((project) => project.ownerId === user.id && !project.trashedAt && !project.isEphemeral);
+  return <div className={`workspace-shell${agentMode ? " workspace-agent-mode" : ""}`}><AppHeader user={user} project={currentProject && !["home", "list"].includes(screen) ? currentProject : null} saved={saveState} canGenerate={agentMode ? false : copyExportEligibility(currentProject || {}).allowed} onHome={goHome} onLogout={logout} onProfile={() => setProfileOpen(true)} onGenerate={() => setScreen('versions')} onRename={agentMode ? setRenameProject : undefined} />
+    {agentMode && <AgentModeStrip showHome={screen !== "home"} onHome={goHome} />}
+    {agentMode && legacyProjects.length > 0 && ["home", "list"].includes(screen) && <div className="legacy-project-import" role="status"><span>发现 {legacyProjects.length} 个仅保存在此浏览器的旧项目。导入后以服务端为准；旧版原始 Excel 是否留存需另行核对。</span><Button onClick={importLegacyProjects}>导入旧项目</Button></div>}
+    {agentMode && screen === "home" && <WorkspaceHome projects={activeProjects} onCreate={createProject} onProjects={() => setScreen("list")} onOpen={openProject} onTrash={setTrashProject} onRename={setRenameProject} />}
+    {screen === "list" && <ProjectList user={user} projects={projects} exitingProjectIds={exitingProjectIds} onCreate={createProject} onOpen={openProject} onDelete={agentMode ? undefined : setDeleteProject} onTrash={agentMode ? setTrashProject : undefined} onRestore={agentMode ? restoreProject : undefined} onPermanentDelete={agentMode ? (project) => setPermanentDelete({ project }) : undefined} onClearTrash={agentMode ? (items) => setPermanentDelete({ projects: items }) : undefined} onRename={agentMode ? setRenameProject : undefined} />}
     {screen === "upload" && currentProject && <UploadStep project={currentProject} onFiles={async (files, recognition, sourceSha256) => agentMode ? attachAgentProject(currentProject, files, recognition, sourceSha256) : updateProject({ ...currentProject, workflowStage: "uploaded", title: recognition.data.title || currentProject.title, data: { ...recognition.data, designer: currentProject.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type })) }, true)} onContinue={() => setScreen("confirm")} />}
-    {screen === "confirm" && currentProject && <ConfirmStep project={currentProject} agentMode={agentMode} agentSnapshot={agentSnapshot} agentDecisions={agentDecisions} onAgentDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onChange={(data, metadata = {}) => updateProject({ ...currentProject, ...metadata, data })} onBack={() => setScreen("upload")} onContinue={() => agentMode ? continueAgent().catch((error) => setGenerationError(error?.message || "无法继续")) : (() => { setProgress(0); setGenerationError(""); setGenerationStatus({ phase: "queued", status: "idle", currentAction: "尚未开始", stats: {}, elapsedMs: 0 }); setScreen("generate"); })()} />}
-    {screen === "generate" && currentProject && (agentMode ? <AgentGenerationStep project={currentProject} snapshot={agentSnapshot} error={generationError} decisions={agentDecisions} onDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onConfirm={() => continueAgent().catch((error) => setGenerationError(error?.message || "无法保存确认"))} onRetryImage={(slotId) => retryAgentImage(slotId).catch((error) => setGenerationError(error?.message || "无法重新搜索图片"))} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onCancel={() => cancelAgent().catch((error) => setGenerationError(error?.message || "无法取消任务"))} /> : <GenerationStep project={currentProject} progress={progress} status={generationStatus} error={generationError} onStart={generateProject} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onRevision={() => { updateProject({ ...currentProject, revisionMode: true }, true); setScreen('editor'); }} />)}
+    {screen === "confirm" && currentProject && <ConfirmStep project={currentProject} agentMode={agentMode} agentSnapshot={agentSnapshot} agentDecisions={agentDecisions} onAgentDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onChange={(data, metadata = {}) => updateProject({ ...currentProject, ...metadata, data })} onBack={() => setScreen("upload")} onContinue={() => agentMode ? continueAgent() : (() => { setProgress(0); setGenerationError(""); setGenerationStatus({ phase: "queued", status: "idle", currentAction: "尚未开始", stats: {}, elapsedMs: 0 }); setScreen("generate"); })()} />}
+    {screen === "generate" && currentProject && (agentMode ? <AgentGenerationStep project={currentProject} snapshot={agentSnapshot} error={generationError} decisions={agentDecisions} onDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onConfirm={() => continueAgent().catch((error) => setGenerationError(error?.message || "无法保存确认"))} onRetryImage={(slotId) => retryAgentImage(slotId).catch((error) => setGenerationError(error?.message || "无法重新搜索图片"))} onEdit={() => setScreen("editor")} onRestart={setRestartGenerationStatus} onCancel={() => cancelAgent().catch((error) => setGenerationError(error?.message || "无法取消任务"))} /> : <GenerationStep project={currentProject} progress={progress} status={generationStatus} error={generationError} onStart={generateProject} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onRevision={() => { updateProject({ ...currentProject, revisionMode: true }, true); setScreen('editor'); }} />)}
     {screen === "editor" && currentProject && <Editor project={currentProject} ItineraryComponent={ItineraryComponent} onProject={updateProject} onResearchSlot={agentMode ? undefined : async (slotId) => { try { await researchImageSlot(slotId); } catch (error) { setGenerationError(error?.message || "当前位置搜索失败"); alert(error?.message || "当前位置搜索失败"); } }} onRepairCopy={agentMode ? undefined : repairCopy} onRecheckCopy={agentMode ? undefined : () => recheckCopy()} onReviewFacts={() => setScreen('confirm')} copyRepairState={copyRepairState} onVersions={() => setScreen('versions')} defaultDesigner={designerProfile(user)} />}
     {screen === "versions" && currentProject && <VersionsStep project={currentProject} exporting={exporting} exportError={exportError} existingOnly={agentMode} onExport={exportProject} onBack={() => setScreen("editor")} onReviewDecision={(key, checked) => updateProject({ ...currentProject, data: { ...currentProject.data, humanReview: recordHumanReview(currentProject.data.humanReview, key, checked, user.id) } }, true)} />}
     {profileOpen && <ProfilePanel user={user} onClose={() => setProfileOpen(false)} onSave={(profile, syncProjects) => { const nextUsers = users.map((item) => item.id === user.id ? { ...item, name: profile.name || item.name, profile } : item); const nextUser = nextUsers.find((item) => item.id === user.id); setUsers(nextUsers); setUser(nextUser); writeStorage(storageKeys.users, nextUsers); if (syncProjects) { const nextProjects = projects.map((item) => item.ownerId === user.id ? { ...item, data: { ...item.data, designer: clone(profile) }, updatedAt: Date.now() } : item); commitProjects(nextProjects); } setProfileOpen(false); }} />}
     {!agentMode && deleteProject && <DeleteDialog project={deleteProject} onCancel={() => setDeleteProject(null)} onConfirm={() => { commitProjects(projects.filter((item) => item.id !== deleteProject.id)); setDeleteProject(null); }} />}
     {agentMode && trashProject && <TrashDialog project={trashProject} onCancel={() => setTrashProject(null)} onConfirm={() => moveProjectToTrash(trashProject)} />}
+    {agentMode && renameProject && <RenameProjectDialog project={renameProject} onCancel={() => setRenameProject(null)} onConfirm={renameAgentProject} />}
     {agentMode && permanentDelete && <PermanentDeleteDialog project={permanentDelete.project} projects={permanentDelete.projects} busy={projectActionBusy} onCancel={() => !projectActionBusy && setPermanentDelete(null)} onConfirm={() => permanentlyDeleteProjects(permanentDelete.projects || [permanentDelete.project])} />}
+    {agentMode && restartGenerationStatus && currentProject && <RestartGenerationDialog project={currentProject} busy={restartGenerationBusy} onCancel={() => !restartGenerationBusy && setRestartGenerationStatus(null)} onConfirm={() => restartAgent(restartGenerationStatus)} />}
     <ProjectToast feedback={projectFeedback} />
   </div>;
 }
