@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeTravelEntityName, resolveTravelEntity } from "../src/lib/travelEntityDisplay.js";
 import { TRAVEL_ENTITY_REGISTRY } from "../src/data/travelEntityRegistry.js";
 import { normalizeHighlightForDisplay } from "../src/lib/highlightDisplay.js";
+import { STRUCTURED_HOTEL_FACT_FORMAT } from "../src/lib/hotelFactPresentation.js";
 import { publicSheyouProductValues } from "../config/sheyou-product-values.mjs";
 
 const stringSchema = Object.freeze({ type: "string", minLength: 1 });
@@ -19,6 +20,7 @@ const hotelFactRowsSchema = Object.freeze({
       label: { enum: ["位置", "客房", "设计", "设施"] },
       text: { type: "string" },
       status: { enum: ["success", "not_found", "source_unavailable"] },
+      reason: { enum: ["verified", "not_executed", "model_omitted", "no_evidence", "reported_access_failed", "source_access_failed", "evidence_rejected", "verification_budget_exhausted", "research_failed", "research_truncated", "research_interrupted"] },
       sourceUrl: { type: "string" },
       sourceClass: { type: "string" },
       checkedAt: { type: "string" },
@@ -211,6 +213,7 @@ function hotelResearchRequest(hotel = {}) {
     entityName,
     entityKind: "hotel",
     categories: ["位置", "客房", "设计", "设施"],
+    ...(clean(hotel.region || hotel.location || hotel.city || hotel.country) ? { location: clean(hotel.region || hotel.location || hotel.city || hotel.country) } : {}),
     ...(officialDomains.length ? { officialDomains } : {}),
   };
 }
@@ -714,6 +717,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
   data.hotels.forEach((hotel, index) => {
     const researchRequest = hotelResearchRequest(hotel);
     const facts = hotelCopyFacts(hotel);
+    hotel.hotelFactFormat = STRUCTURED_HOTEL_FACT_FORMAT;
     if (!Array.isArray(hotel.factRows)) hotel.factRows = [];
     copyTasks.push(copyTask({
       targetId: `copy:hotel:${hotel.id || index + 1}`, targetPath: `hotels.${index}.editorialCopy`, moduleType: "hotel",

@@ -25,6 +25,21 @@ test('酒店网页只凭专属页面或图片自身证据确认身份，别家�
   assert.equal(webHotelIdentityEvidence({ imageUrl: 'https://example.com/ritz-carlton.jpg', pageUrl: 'https://example.com/brands/ritz-carlton/' }, ritz), null);
 });
 
+test('Wetu 专属图库用页面与图片共享的图库编号逐图证明酒店身份', () => {
+  const slot = { moduleType: 'hotel', hotel: 'Angama Amboseli', exactIdentityRequired: true };
+  const candidate = { pageUrl: 'https://wetu.com/iBrochure/en/Photos/298083/Angama_Amboseli', imageUrl: 'https://wetu.com/ImageHandler/1344x756/298083/1753087730453_057_Suite_AA_TCunniffe.jpg', kind: 'lazy-data-src', pagePosition: 'other', resourceRole: 'media', alt: '' };
+  const proof = webHotelIdentityEvidence(candidate, slot);
+  assert.equal(proof?.basis, 'property_page');
+  assert.deepEqual(proof?.evidenceIds, ['entityPagePath', 'resourcePath']);
+  assert.equal(webHotelIdentityEvidence({ ...candidate, imageUrl: candidate.imageUrl.replace('/298083/', '/298084/') }, slot), null);
+  assert.equal(webHotelIdentityEvidence({ ...candidate, pageUrl: candidate.pageUrl.replace('wetu.com', 'example.com'), imageUrl: candidate.imageUrl.replace('wetu.com', 'example.com') }, slot), null);
+  assert.equal(webHotelIdentityEvidence({ ...candidate, pageUrl: candidate.pageUrl.replace('Angama_Amboseli', 'Another_Hotel') }, slot), null);
+  assert.equal(webHotelIdentityEvidence({ ...candidate, pagePosition: 'chrome' }, slot), null);
+  assert.equal(webHotelIdentityEvidence({ ...candidate, resourceRole: 'ui' }, slot), null);
+  assert.equal(webHotelIdentityEvidence({ ...candidate, kind: 'og:image' }, slot), null);
+  assert.equal(webHotelIdentityEvidence({ ...candidate, depictedIdentity: 'Another Riverside Lodge' }, slot), null);
+});
+
 test('图片身份字段矛盾时，确定性图片证据可自动纠正；真实冲突仍拒绝', () => {
   const slot = { moduleType: 'hotel', hotel: 'The Ritz-Carlton, Masai Mara Safari Camp', queryCore: { identity: 'The Ritz-Carlton, Masai Mara Safari Camp', subject: '酒店套房' }, exactIdentityRequired: true };
   const candidate = { imageUrl: 'https://secure.s.forbestravelguide.com/img/properties/the-ritz-carlton-masai-mara-safari-camp/extra-large/the-ritz-carlton-masai-mara-safari-camp-two-bedroom-suite.jpg' };

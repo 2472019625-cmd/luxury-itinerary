@@ -17,6 +17,8 @@ import { applyRuntimeImageConfirmations, enrichPendingImageConfirmations, imageC
 import { evaluateAgentImageCompletion } from "./agent-image-plan.mjs";
 import { runImageSearchSkill } from "./simple-image-skill.mjs";
 import { runSimplePipeline } from "./simple-pipeline-executor.mjs";
+import { runSimpleRenderer } from "./simple-renderer.mjs";
+import { assertSimpleRendererOrigin } from "./simple-renderer-runtime.mjs";
 import { calculateSimplePipelineProgress } from "./simple-pipeline-progress.mjs";
 import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, uploadSimpleImage } from "./simple-manual-images.mjs";
 import { retrySimpleCopyTarget, retrySimpleCopyTargets, retrySimpleRenderer } from "./simple-targeted-repair.mjs";
@@ -79,6 +81,8 @@ export function createAgentPlannerServer(options = {}) {
   const simpleControllers = new Map();
   const planner = options.planner || generateAgentPlan;
   const simplePipelineRunner = options.simplePipelineRunner || runSimplePipeline;
+  const simpleOrigin = `http://127.0.0.1:${port}`;
+  const simpleRenderer = options.simpleRenderer || ((input) => runSimpleRenderer({ ...input, origin: simpleOrigin }));
   const modelConfig = options.modelConfig || { apiKey: process.env.TEXT_MODEL_API_KEY, baseUrl: (process.env.TEXT_MODEL_BASE_URL || "https://api.deepseek.com").replace(/\/$/, ""), model: process.env.TEXT_MODEL_NAME || "deepseek-v4-flash" };
   const searchModelConfig = options.searchModelConfig || { apiKey: process.env.IMAGE_SEARCH_API_KEY, baseUrl: (process.env.IMAGE_SEARCH_BASE_URL || "https://api.vveai.com/v1").replace(/\/$/, ""), model: "gemini-3.7-flash-search", imageSearchModel: process.env.IMAGE_SEARCH_MODEL || "gemini-3.6-flash-search" };
   const visionModelConfig = options.visionModelConfig || { apiKey: process.env.BIGMODEL_API_KEY, baseUrl: (process.env.BIGMODEL_BASE_URL || "https://open.bigmodel.cn/api/paas/v4").replace(/\/$/, ""), model: process.env.BIGMODEL_MODEL || "glm-5.3-flash" };
@@ -217,11 +221,13 @@ export function createAgentPlannerServer(options = {}) {
     const sourceData = { data: payload.facts, report: payload.report || {}, fileName: payload.sourceName || payload.report?.workbookName || "行程资料.xlsx" };
     setImmediate(async () => {
       try {
+        if (!options.simplePipelineRunner) await assertSimpleRendererOrigin(simpleOrigin);
         const result = await simplePipelineRunner({
           projectId,
           ownerId,
           sourceData,
           root,
+          origin: simpleOrigin,
           adapters: { store: simpleStore },
           plannerOptions: modelConfig,
           copyOptions: {
@@ -423,7 +429,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "PUT" && simpleDayEditorMatch) {
       try {
         const payload = await requestBody(request);
-        const result = await saveSimpleDayEditor({ store: simpleStore, root, deferRender: true, projectId: decodeURIComponent(simpleDayEditorMatch[1]), dayIndex: Number(simpleDayEditorMatch[2]), ...payload });
+        const result = await saveSimpleDayEditor({ store: simpleStore, root, render: simpleRenderer, deferRender: true, projectId: decodeURIComponent(simpleDayEditorMatch[1]), dayIndex: Number(simpleDayEditorMatch[2]), ...payload });
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "day_editor_save_failed" }); }
     }
@@ -431,7 +437,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "POST" && simpleCandidateMatch) {
       try {
         const payload = await requestBody(request);
-        const input = { store: simpleStore, root, projectId: decodeURIComponent(simpleCandidateMatch[1]), slotId: decodeURIComponent(simpleCandidateMatch[2]), candidateId: String(payload.candidateId || ""), manualConfirmed: payload.manualConfirmed === true };
+        const input = { store: simpleStore, root, render: simpleRenderer, projectId: decodeURIComponent(simpleCandidateMatch[1]), slotId: decodeURIComponent(simpleCandidateMatch[2]), candidateId: String(payload.candidateId || ""), manualConfirmed: payload.manualConfirmed === true };
         const result = simpleCandidateMatch[3] === "select" ? await chooseSimpleImageCandidate({ ...input, deferRender: true, knowledgeImageConfig }) : await rejectSimpleImageCandidate(input);
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_decision_failed" }); }
@@ -442,7 +448,7 @@ export function createAgentPlannerServer(options = {}) {
         const contentType = String(request.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
         const buffer = await requestBuffer(request);
         const dataUrl = `data:${contentType};base64,${buffer.toString("base64")}`;
-        const result = await uploadSimpleImage({ store: simpleStore, root, deferRender: true, projectId: decodeURIComponent(simpleUploadMatch[1]), slotId: decodeURIComponent(simpleUploadMatch[2]), dataUrl, fileName: decodeURIComponent(String(request.headers["x-file-name"] || "用户上传图片")) });
+        const result = await uploadSimpleImage({ store: simpleStore, root, render: simpleRenderer, deferRender: true, projectId: decodeURIComponent(simpleUploadMatch[1]), slotId: decodeURIComponent(simpleUploadMatch[2]), dataUrl, fileName: decodeURIComponent(String(request.headers["x-file-name"] || "用户上传图片")) });
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_upload_failed" }); }
     }
@@ -453,6 +459,7 @@ export function createAgentPlannerServer(options = {}) {
           deferRender: true,
           store: simpleStore,
           root,
+          render: simpleRenderer,
           projectId: decodeURIComponent(simpleResearchMatch[1]),
           slotId: decodeURIComponent(simpleResearchMatch[2]),
           runImage: runImageSearchSkill,
@@ -482,6 +489,7 @@ export function createAgentPlannerServer(options = {}) {
           deferRender: true,
           store: simpleStore,
           root,
+          render: simpleRenderer,
           projectId: decodeURIComponent(simpleImageBatchRetryMatch[1]),
           slotIds: Array.isArray(payload.slotIds) ? payload.slotIds : undefined,
           runImage: runImageSearchSkill,
@@ -510,6 +518,7 @@ export function createAgentPlannerServer(options = {}) {
         const result = await retrySimpleCopyTargets({
           store: simpleStore,
           root,
+          render: simpleRenderer,
           projectId: decodeURIComponent(simpleCopyBatchRetryMatch[1]),
           targetIds: Array.isArray(payload.targetIds) ? payload.targetIds : undefined,
           copyOptions: {
@@ -528,6 +537,7 @@ export function createAgentPlannerServer(options = {}) {
         const result = await retrySimpleCopyTarget({
           store: simpleStore,
           root,
+          render: simpleRenderer,
           projectId: decodeURIComponent(simpleCopyRetryMatch[1]),
           targetId: decodeURIComponent(simpleCopyRetryMatch[2]),
           copyOptions: {
@@ -543,7 +553,7 @@ export function createAgentPlannerServer(options = {}) {
     const simpleRendererRetryMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/repair\/renderer$/);
     if (request.method === "POST" && simpleRendererRetryMatch) {
       try {
-        const result = await retrySimpleRenderer({ store: simpleStore, root, projectId: decodeURIComponent(simpleRendererRetryMatch[1]) });
+        const result = await retrySimpleRenderer({ store: simpleStore, root, render: simpleRenderer, projectId: decodeURIComponent(simpleRendererRetryMatch[1]) });
         return json(response, 200, result);
       } catch (failure) { return json(response, failure.code === "repair_in_progress" ? 409 : 400, { error: failure.message, code: failure.code || "targeted_renderer_retry_failed" }); }
     }

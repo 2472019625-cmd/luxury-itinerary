@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canonicalImageAssetKey, extractImageCandidatesFromHtml } from "../server/page-images.mjs";
+import { canonicalImageAssetKey, extractImageCandidatesFromHtml, extractPageImages } from "../server/page-images.mjs";
+import { prepareWebCandidates } from "../server/web-image-candidates.mjs";
 
 test("网页提图覆盖 og、srcset、lazy、CSS、gallery、JSON-LD 并恢复高清 URL", () => {
   const html = `<!doctype html><html><head>
@@ -58,4 +59,74 @@ test("Contentful 同一原图的尺寸和格式变体只占一个候选名额", 
   assert.equal(new Set(results.map((item) => canonicalImageAssetKey(item.imageUrl))).size, 2);
   assert.ok(results.some((item) => item.imageUrl.includes("sabora-suite.jpg")));
   assert.ok(results.some((item) => item.imageUrl.includes("sabora-lounge.jpg")));
+});
+
+test("File说明页即使以jpg结尾也不作为图片，保留同页真实图片", () => {
+  const filePage = 'https://en.wikipedia.org/wiki/File:Example_aircraft.jpg';
+  const html = `<meta property="og:image" content="${filePage}">
+    <a href="${filePage}"><img src="https://upload.wikimedia.org/wikipedia/commons/8/88/Example_aircraft.jpg" alt="Aircraft on runway"></a>
+    <a href="https://commons.wikimedia.org/w/index.php?title=File:Example_aircraft.jpg">File description</a>
+    <script type="application/ld+json">{"image":"${filePage}"}</script>
+    <img src="/gallery/photo-description.html?image=photo.jpg"><img src="/gallery/unknown-photo-resource">`;
+  const candidates = extractImageCandidatesFromHtml(html, { pageUrl: 'https://en.wikipedia.org/wiki/Aircraft' });
+  assert.equal(candidates.length, 2);
+  assert.ok(candidates.some(candidate => candidate.imageUrl.endsWith('/Example_aircraft.jpg')));
+  assert.ok(candidates.some(candidate => candidate.imageUrl.endsWith('/unknown-photo-resource')));
+  assert.ok(candidates.every(candidate => !candidate.imageUrl.includes('File:') && !candidate.imageUrl.includes('photo-description.html')));
+});
+
+test("Wikimedia缩略图按已知路径归一到原图并保留原发布URL回退", () => {
+  const thumb = 'https://thumb.wikimedia.org/wikipedia/commons/thumb/8/88/KQ_B707_in_NBO_77.jpg/500px-KQ_B707_in_NBO_77.jpg?utm_source=en.wikipedia.org&utm_campaign=parser&utm_content=thumbnail';
+  const larger = 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/KQ_B707_in_NBO_77.jpg/1280px-KQ_B707_in_NBO_77.jpg';
+  const original = 'https://upload.wikimedia.org/wikipedia/commons/8/88/KQ_B707_in_NBO_77.jpg';
+  const candidates = extractImageCandidatesFromHtml(`<img src="${thumb}"><img src="${larger}"><a href="${original}">Original photograph</a>`, { pageUrl: 'https://en.wikipedia.org/wiki/Aircraft' });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].imageUrl, original);
+  assert.deepEqual(candidates[0].imageVariants, [original, thumb, larger]);
+  assert.equal(canonicalImageAssetKey(thumb), canonicalImageAssetKey(original));
+});
+
+test("直接图片响应也归一已知Wikimedia缩略图，保留来源及发布URL", async () => {
+  const thumb = 'https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/Aircraft.jpg/500px-Aircraft.jpg';
+  const original = 'https://upload.wikimedia.org/wikipedia/commons/a/ab/Aircraft.jpg';
+  const candidates = await extractPageImages({ pageUrl: thumb, title: 'Aircraft' }, {
+    loadPage: async () => ({ responseUrl: thumb, directImage: true, acquisitionMethod: 'http' }),
+  });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].imageUrl, original);
+  assert.equal(candidates[0].pageUrl, thumb);
+  assert.equal(candidates[0].kind, 'direct-search-result');
+  assert.deepEqual(candidates[0].imageVariants, [original, thumb]);
+});
+
+test("未知、伪造及非位图的缩略图路径不猜造Wikimedia原图", () => {
+  const unknown = [
+    'https://thumb.wikimedia.org.evil.test/wikipedia/commons/thumb/a/ab/photo.jpg/500px-photo.jpg',
+    'https://user@thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/photo.jpg/500px-photo.jpg',
+    'https://thumb.wikimedia.org:8080/wikipedia/commons/thumb/a/ab/photo.jpg/500px-photo.jpg',
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/document.pdf/page1-500px-document.pdf.jpg',
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/photo.jpg/500px-other.jpg',
+    'https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/path%2Fphoto.jpg/500px-path%2Fphoto.jpg',
+  ];
+  for (const url of unknown) {
+    const candidates = extractImageCandidatesFromHtml(`<img src="${url}">`, { pageUrl: 'https://example.com/gallery' });
+    assert.equal(candidates.length, 1);
+    assert.deepEqual(candidates[0].imageVariants, [url]);
+    assert.equal(canonicalImageAssetKey(url), url);
+  }
+});
+
+test("明确装饰分隔线在下载前过滤，未知图片和排队主体照片不因line词误拒", () => {
+  const html = `<meta property="og:image" content="/assets/ornament.png">
+    <img src="/assets/ornament.png" class="section-divider">
+    <img src="/assets/horizontal-line.png"><img src="/assets/line.png" width="900" height="2">
+    <img src="/photos/line-of-elephants.jpg" alt="A line of elephants walking">
+    <img src="/photos/room-divider.jpg" alt="Room divider beside a bed">
+    <img src="/photos/line.jpg" width="1400" height="900"><img src="/photos/unknown.jpg">
+    <script>window.gallery={image:"https://example.com/assets/decorative-line.webp"}</script>`;
+  const extracted = extractImageCandidatesFromHtml(html, { pageUrl: 'https://example.com/gallery' });
+  const prepared = prepareWebCandidates(extracted);
+  assert.deepEqual(prepared.candidates.map(candidate => new URL(candidate.imageUrl).pathname).sort(), ['/photos/line-of-elephants.jpg', '/photos/line.jpg', '/photos/room-divider.jpg', '/photos/unknown.jpg']);
+  assert.equal(prepared.filtered.length, 4);
+  assert.ok(prepared.filtered.every(candidate => candidate.reason === 'ui_resource'));
 });

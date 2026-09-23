@@ -686,7 +686,7 @@ export function applyWebImageIdentityEvidence(slot, candidate, audit) {
     ...audit,
     hotelIdentityMatch: true,
     identityMatch: true,
-    identityEvidence: { status: "supported", basis: proof.basis, evidenceIds: [proof.basis === "image_metadata" ? "resourcePath" : "entityPagePath"], quote: proof.quote, explanation: "酒店专属来源与图片级证据经程序核验，且画面审核未发现冲突", visibleIdentifier: audit.identityEvidence?.visibleIdentifier || "" },
+    identityEvidence: { status: "supported", basis: proof.basis, evidenceIds: proof.evidenceIds, quote: proof.quote, explanation: "酒店专属来源与图片级证据经程序核验，且画面审核未发现冲突", visibleIdentifier: audit.identityEvidence?.visibleIdentifier || "" },
     reason: [audit.reason, "酒店专属来源已核验；原身份字段不一致已纠正"].filter(Boolean).join("；"),
   };
 }

@@ -23,13 +23,38 @@ function srcsetUrls(value, baseUrl) {
 
 function imageLike(value) {
   const text = String(value || "");
+  try {
+    const parsed = new URL(text, 'https://image-candidate.invalid');
+    const pathname = decodeURIComponent(parsed.pathname);
+    // A media-looking filename in a document route is still an HTML page.
+    if (/^\/wiki\/(?:File|Image):/i.test(pathname)
+      || /\/index\.php$/i.test(pathname) && /^(?:File|Image):/i.test(parsed.searchParams.get('title') || '')
+      || /\.(?:html?|pdf|css|js|woff2?|ttf|otf|eot)$/i.test(pathname)) return false;
+  } catch { /* Unknown resource types remain candidates for download validation. */ }
   if (/\.(?:svg|gif|ico|bmp|tiff?)(?:[?#]|$)/i.test(text)) return false;
   return /\.(?:avif|jpe?g|png|webp)(?:[?#]|$)/i.test(text) || /(?:image|photo|media|gallery|cdn|asset)/i.test(text);
 }
 
+function wikimediaOriginalImageUrl(value) {
+  try {
+    const parsed = new URL(value);
+    if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.port
+      || !['upload.wikimedia.org', 'thumb.wikimedia.org'].includes(parsed.hostname)) return null;
+    const match = parsed.pathname.match(/^\/wikipedia\/([a-z-]+)\/thumb\/([a-f0-9])\/([a-f0-9]{2})\/([^/]+)\/([^/]+)$/i);
+    if (!match || !match[3].startsWith(match[2])) return null;
+    const filename = decodeURIComponent(match[4]);
+    const thumbnail = decodeURIComponent(match[5]);
+    if (!/\.(?:jpe?g|png|webp)$/i.test(filename) || /[\\/\x00-\x1f]/.test(filename)
+      || thumbnail.replace(/^\d+px-/, '') !== filename || !/^\d+px-/.test(thumbnail)) return null;
+    const original = new URL('https://upload.wikimedia.org');
+    original.pathname = `/wikipedia/${match[1]}/${match[2]}/${match[3]}/${match[4]}`;
+    return original.href;
+  } catch { return null; }
+}
+
 export function canonicalImageAssetKey(value) {
   try {
-    const parsed = new URL(String(value || ""));
+    const parsed = new URL(wikimediaOriginalImageUrl(value) || String(value || ""));
     for (const key of ["w", "width", "imwidth", "wid", "h", "height", "imheight", "hei", "q", "quality", "fm", "format", "fl", "fit", "crop", "dpr"]) parsed.searchParams.delete(key);
     parsed.hash = "";
     return parsed.href;
@@ -50,6 +75,7 @@ function highResolutionVariants(value, baseUrl) {
   const push = (url) => { if (url && !variants.includes(url)) variants.push(url); };
   try {
     const parsed = new URL(resolved);
+    push(wikimediaOriginalImageUrl(resolved));
     const widthKeys = ["w", "width", "imwidth", "wid"];
     const heightKeys = ["h", "height", "imheight", "hei"];
     const wordpressOriginal = parsed.pathname.replace(/-\d{2,5}x\d{2,5}(?=\.(?:jpe?g|png|webp)$)/i, "");
@@ -148,8 +174,25 @@ function imageLocalAttributes($, element) {
   return { imageTitle: node.attr('title') || '', caption: figure.find('figcaption').first().text() || node.attr('data-caption') || '',
     localContext, entitySectionText: node.closest('figure,.gallery,[data-entity]').attr('data-entity') || '',
     htmlSignature: `${node.attr('alt') || ''} ${node.attr('class') || ''} ${node.attr('id') || ''}`,
+    decorationSignature: `${node.attr('class') || ''} ${node.attr('id') || ''}`,
+    declaredWidth: Number(node.attr('width')) || null, declaredHeight: Number(node.attr('height')) || null,
     pagePosition: chrome ? 'chrome' : node.closest('main,article,figure,.gallery').length ? 'content' : 'other',
     resourceRole: ['presentation','none'].includes(role) || (chrome && node.closest('a,button,[role="button"]').length && !figure.length) ? 'ui' : 'media' };
+}
+
+function decorativeLineResource(imageUrl, attributes) {
+  let filename = '';
+  try { filename = decodeURIComponent(new URL(imageUrl).pathname.split('/').pop() || ''); } catch {}
+  const signature = attributes.decorationSignature || '';
+  if (/(?:^|[\s/_.-])(?:divider|separator|spacer)(?:$|[\s/_.-])/i.test(signature)
+    || /(?:^|[\s/_.-])(?:decorative|horizontal|vertical|ornamental|border)[\s_-]+line(?:$|[\s/_.-])/i.test(signature)
+    || /^(?:(?:section|decorative|horizontal|vertical|ornamental|border)[_-]+)?(?:divider|separator|spacer)(?:[-_]\d+x\d+)?\.(?:png|jpe?g|webp)$/i.test(filename)
+    || /^(?:decorative|horizontal|vertical|ornamental|border)[_-]+line(?:[-_]\d+x\d+)?\.(?:png|jpe?g|webp)$/i.test(filename)) return true;
+  // A bare "line" name alone could describe a photograph. Require the DOM
+  // to independently identify an extremely thin decorative strip.
+  const width = attributes.declaredWidth, height = attributes.declaredHeight;
+  return /^line\.(?:png|jpe?g|webp)$/i.test(filename) && width > 0 && height > 0
+    && Math.min(width, height) <= 12 && Math.max(width, height) / Math.min(width, height) >= 20;
 }
 
 export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.pageUrl, maxImages = 36, semanticTerms = [] } = {}) {
@@ -161,11 +204,12 @@ export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.
       const semanticText = compactText([alt, imageUrlSemanticText(imageUrl), semanticContext].filter(Boolean).join(" | "));
       const semantic = semanticAssessment(semanticText, lexicon);
       if (!imageLike(imageUrl)) continue;
+      const resourceAttributes = decorativeLineResource(imageUrl, attributes) ? { ...attributes, resourceRole: 'ui' } : attributes;
       const existing = candidates.find(item => item.imageUrl === imageUrl);
-      if (existing) { for (const [key,value] of Object.entries(attributes)) if (value) existing[key]=value; if(alt)existing.alt=String(alt).trim().slice(0,240); continue; }
+      if (existing) { for (const [key,value] of Object.entries(resourceAttributes)) if (value) existing[key]=value; if(alt)existing.alt=String(alt).trim().slice(0,240); continue; }
       let entityPagePath = '';
       try { entityPagePath = decodeURIComponent(new URL(responseUrl).pathname); } catch {}
-      candidates.push({ ...page, ...attributes, entityPagePath, imageUrl, kind, alt: String(alt).trim().slice(0, 240), highResHint, semanticText, semanticScore: semantic.score, semanticMatches: semantic.matches, genericActivityPenalty: semantic.genericPenalty });
+      candidates.push({ ...page, ...resourceAttributes, entityPagePath, imageUrl, kind, alt: String(alt).trim().slice(0, 240), highResHint, semanticText, semanticScore: semantic.score, semanticMatches: semantic.matches, genericActivityPenalty: semantic.genericPenalty });
     }
   };
   [
@@ -284,7 +328,12 @@ export async function fetchImagePageContent(pageUrl, { signal, onRequest, retrie
 export async function extractPageImages(page, { signal, maxImages = 36, semanticTerms = [], loadPage = fetchImagePageContent, retrievalSession, onRequest, fetchImpl, timeoutMs } = {}) {
   const content = await loadPage(page.pageUrl, { signal, retrievalSession, onRequest, fetchImpl, timeoutMs });
   if (content.imageCandidates) return content.imageCandidates.map(candidate => ({ ...page, ...candidate })).slice(0, maxImages);
-  if (content.directImage) return [{ ...page, imageUrl: content.responseUrl, kind: "direct-search-result", alt: '', highResHint: true, acquisitionMethod: content.acquisitionMethod || 'http' }];
+  if (content.directImage) {
+    const originalUrl = wikimediaOriginalImageUrl(content.responseUrl);
+    return [{ ...page, imageUrl: originalUrl || content.responseUrl,
+      ...(originalUrl && { imageVariants: [originalUrl, content.responseUrl] }),
+      kind: "direct-search-result", alt: '', highResHint: true, acquisitionMethod: content.acquisitionMethod || 'http' }];
+  }
   if (content.empty) return [];
   const extract = (result) => extractImageCandidatesFromHtml(result.html, { ...page, requestedPageUrl: page.pageUrl, pageUrl: result.responseUrl, acquisitionMethod: result.acquisitionMethod || 'http', ...(content.commonsApiFailure && { commonsApiFailure: content.commonsApiFailure }) }, { responseUrl: result.responseUrl, maxImages, semanticTerms });
   const candidates = extract(content);

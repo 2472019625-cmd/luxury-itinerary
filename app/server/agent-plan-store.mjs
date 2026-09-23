@@ -158,6 +158,22 @@ export class AgentPlanStore {
     writeJson(this.evidenceFile(projectId, executionRunId, evidenceId), evidence);
     return path.relative(this.projectDir(projectId), this.evidenceFile(projectId, executionRunId, evidenceId)).replaceAll("\\", "/");
   }
+  getEvidence(projectId, executionRunId, evidenceId) {
+    const file = this.evidenceFile(projectId, executionRunId, evidenceId);
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+  }
+  claimEvidence(projectId, executionRunId, evidenceId, evidence) {
+    this.assertWritableProject(projectId);
+    const file = this.evidenceFile(projectId, executionRunId, evidenceId);
+    mkdirSync(path.dirname(file), { recursive: true });
+    try {
+      writeFileSync(file, `${JSON.stringify(evidence, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      return true;
+    } catch (error) {
+      if (error?.code === "EEXIST") return false;
+      throw error;
+    }
+  }
   saveFinalResult(projectId, executionRunId, result) {
     this.assertWritableProject(projectId);
     writeJson(this.finalResultFile(projectId, executionRunId), result);

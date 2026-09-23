@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runCopyWriterSkill } from "./simple-copy-skill.mjs";
+import { createCopyResearchStateStore } from "./simple-copy-research-state.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
 import { buildSimpleManualImagePayload } from "./simple-manual-images.mjs";
 
@@ -118,7 +119,8 @@ async function retryCopyTargets({ store, root, projectId, targetIds, copyOptions
     const tasks = retryIds.map((id) => taskById.get(id));
     if (tasks.some((task) => !task)) throw Object.assign(new Error("当前计划中找不到对应的文案任务"), { code: "copy_target_not_planned" });
     const expectedVersion = repairVersion(initial.result);
-    const execution = await runCopy({ itineraryContext: initial.plan.itineraryContext, tasks, ...copyOptions });
+    const researchStateStore = createCopyResearchStateStore({ store, projectId, executionRunId: initial.run.executionRunId });
+    const execution = await runCopy({ itineraryContext: initial.plan.itineraryContext, tasks, ...copyOptions, researchStateStore });
     const current = contextFor(store, projectId);
     if (repairVersion(current.result) !== expectedVersion) throw Object.assign(new Error("处理期间项目内容已经更新，请重新发起处理"), { code: "repair_result_stale" });
 

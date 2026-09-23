@@ -10,6 +10,7 @@ import { candidateQualification, isHardRejectedCandidate } from "./image-candida
 import { getSlotImage, setSlotImage } from "../src/lib/imageSlots.js";
 import { imageSearchPresentation } from "../src/lib/imageSearchPresentation.js";
 import { buildImageSearchDiagnostic } from "./image-search-diagnostics.mjs";
+import { imageTargetFingerprint } from "./simple-image-allocation.mjs";
 
 const MIME_EXTENSIONS = Object.freeze({ "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" });
 const manualRenders = new Map();
@@ -161,14 +162,12 @@ function localCandidatePreviewUrl(candidate) {
 }
 
 function visibleCandidatePool(imageResult = {}) {
-  // Preserve every provider result in the run ledger, but the editor should
-  // show only images actually acquired for review. Deferred search hits have
-  // neither a local preview nor an image-level audit.
-  return candidatePool(imageResult).filter((candidate) =>
-    candidate.webDownloadAdmission !== "deferred" || Boolean(localCandidatePreviewUrl(candidate)));
+  // Provider hits stay in the run ledger. The editor only advertises images
+  // that it can actually preview through the local asset route.
+  return candidatePool(imageResult).filter((candidate) => Boolean(localCandidatePreviewUrl(candidate)));
 }
 
-function frontendCandidate(candidate, slotId, binding, canSelect) {
+function frontendCandidate(candidate, slotId, binding, canSelect, targetFingerprint = "") {
   const hard = candidate.hardJudgment || {};
   const qualificationStatus = candidateQualification(candidate);
   const hardRejected = qualificationStatus === "rejected";
@@ -178,6 +177,7 @@ function frontendCandidate(candidate, slotId, binding, canSelect) {
     slotId,
     pipelineSlotId: slotId,
     fieldPath: binding?.fieldPath || "",
+    targetFingerprint,
     localPreviewUrl: localCandidatePreviewUrl(candidate),
     status: hardRejected ? "hard_rejected" : qualificationStatus === "eligible" ? "eligible_not_selected" : "manual_review",
     autoReviewStatus: hardRejected ? "auto_rejected" : reviewTimeout ? "review_timeout" : candidate.autoReviewStatus || (canSelect ? "not_auto_selected" : "manual_only"),
@@ -190,6 +190,8 @@ function frontendCandidate(candidate, slotId, binding, canSelect) {
     adoptable: canSelect && !hardRejected,
     libraryEligible: canSelect && !hardRejected,
     manualSelectable: canSelect && !hardRejected,
+    canPreview: true,
+    canConfirm: !hardRejected,
     reason: candidate.rejectionReason || candidate.matchReason || candidate.reason || "暂无审核说明",
     terminalAudit: {
       relevance: hard.subjectMatch === true && hard.activityMatch !== false ? "主体相符" : "主体不符",
@@ -218,8 +220,9 @@ function slotReviewStatus(imageResult = {}, candidates = []) {
   const reviewTimeout = candidates.some((candidate) => candidate.reviewTimeout || candidate.autoReviewStatus === "review_timeout") || /review.*timeout|audit.*timeout/i.test(`${imageResult.status || ""} ${imageResult.technicalStatus || ""}`);
   if (auditPending) return "audit_pending";
   if (candidates.length && hardRejected.length === candidates.length) return "auto_rejected";
-  if (candidates.length) return reviewTimeout ? "review_timeout" : "candidate_waiting";
   if (reviewTimeout) return "review_timeout";
+  if (candidates.some((candidate) => candidate.canConfirm)) return "candidate_waiting";
+  if (candidates.length) return "auto_rejected";
   if (imageResult.status === "processing") return "processing";
   return "not_found";
 }
@@ -248,8 +251,9 @@ export function buildSimpleManualImagePayload(store, projectId) {
     const imageResult = resultById.get(slotId) || { slotId, status: "needs_user_action", candidates: [] };
     const selectables = selectableIds(result, imageResult);
     const binding = result.data?.simpleImageSlotBindings?.[slotId] || plan.slotBindings?.[slotId];
-    const candidates = visibleCandidatePool(imageResult).map((candidate) => frontendCandidate(candidate, slotId, binding, selectables.has(candidate.candidateId)));
     const planned = plan.imageSlots.find((item) => item.slotId === slotId);
+    const targetFingerprint = imageTargetFingerprint(planned);
+    const candidates = visibleCandidatePool(imageResult).map((candidate) => frontendCandidate(candidate, slotId, binding, candidateCanBeSelected(result, imageResult, candidate), targetFingerprint));
     const currentSearch = imageResult.manualAction?.currentSearchFallbackResult || imageResult;
     const searchDiagnostic = currentSearch.searchDiagnostic || buildImageSearchDiagnostic(currentSearch);
     return {
@@ -257,12 +261,14 @@ export function buildSimpleManualImagePayload(store, projectId) {
       module: moduleName(slotId),
       label: binding?.cardTitle || planned?.primaryVisualSubject || planned?.subject || SLOT_LABELS[slotId] || slotId,
       primaryVisualSubject: planned?.primaryVisualSubject || planned?.subject || planned?.activity || "",
+      targetFingerprint,
       status: slotReviewStatus(imageResult, candidates),
       required: planned ? planned.required !== false : binding?.required === true,
       originalVisualTarget: imageResult.manualAction?.originalVisualTarget || (planned ? { location: planned.location, hotel: planned.hotel, activity: planned.activity, subject: planned.subject, visualGoal: planned.visualGoal } : null),
       currentResult: { previousStatus: currentSearch.previousStatus, status: currentSearch.status, technicalStatus: currentSearch.technicalStatus, matchReason: currentSearch.matchReason },
       searchDiagnostic,
       candidateCount: candidates.length,
+      confirmableCandidateCount: candidates.filter((candidate) => candidate.canConfirm).length,
       selectableCandidateIds: [...selectables],
       userRequiredActions: imageResult.manualAction?.userRequiredActions || (binding?.manualEditorCard ? ["upload_real_image"] : ["upload_real_image", "explicit_single_slot_search"]),
       candidates,
@@ -270,7 +276,8 @@ export function buildSimpleManualImagePayload(store, projectId) {
   });
   const imageCandidates = uniqueCandidates((result.imageExecution?.results || []).flatMap((imageResult) => {
     const binding = result.data?.simpleImageSlotBindings?.[imageResult.slotId] || plan.slotBindings?.[imageResult.slotId];
-    return visibleCandidatePool(imageResult).map((candidate) => frontendCandidate(candidate, imageResult.slotId, binding, candidateCanBeSelected(result, imageResult, candidate)));
+    const targetFingerprint = imageTargetFingerprint(plan.imageSlots.find((slot) => slot.slotId === imageResult.slotId));
+    return visibleCandidatePool(imageResult).map((candidate) => frontendCandidate(candidate, imageResult.slotId, binding, candidateCanBeSelected(result, imageResult, candidate), targetFingerprint));
   }));
   const unresolvedRequired = (result.unresolvedItems || []).filter((item) => item.required);
   const canEnterFinal = unresolvedRequired.length === 0 && Boolean(result.outputPath);
@@ -281,9 +288,10 @@ export function buildSimpleManualImagePayload(store, projectId) {
   const reviewBySlotId = new Map(slots.map((slot) => [slot.slotId, slot]));
   const editorBindings = Object.fromEntries(Object.entries(result.data?.simpleImageSlotBindings || plan.slotBindings || {}).map(([slotId, binding]) => {
     const review = reviewBySlotId.get(slotId);
-    if (!review || binding.module !== "day") return [slotId, binding];
+    const withTarget = { ...binding, targetFingerprint: review?.targetFingerprint || "" };
+    if (!review || binding.module !== "day") return [slotId, withTarget];
     return [slotId, {
-      ...binding,
+      ...withTarget,
       editorImageStatus: SLOT_STATUS_LABELS[review.status] || "等待处理",
       editorImageRequired: review.required,
       editorPrimaryVisualSubject: review.primaryVisualSubject,

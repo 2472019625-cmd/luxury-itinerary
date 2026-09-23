@@ -13,7 +13,7 @@ import { buildKnowledgeQueryPlan, cleanupPlannerQueryScope, validatePlannerSearc
 import { visualSubjectPolicyIssue } from "./visual-subject-policy.mjs";
 import { highlightToText } from "../src/lib/highlightDisplay.js";
 
-export const AGENT_PROMPT_VERSION = "agent-trip-planner-v7-landscape-identity-boundary";
+export const AGENT_PROMPT_VERSION = "agent-trip-planner-v8-core-visual-choice";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const prompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-trip-planner-v1.md"), "utf8");
 const reviewDecisionPrompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-review-decision-v1.md"), "utf8");
@@ -142,6 +142,7 @@ export function validateSimpleDayVisuals(plan, factBasis = {}) {
     const hotelRole = /^hotel:(\d+)$/.exec(String(slot.role || ""));
     if (hotelRole) {
       const hotel = (factBasis.hotels || [])[Number(hotelRole[1]) - 1] || {};
+      if (slot.exactIdentityRequired === false) errors.push(slotError(roleLabel, "hotel_identity_required", `${slot.role}展示具体预订酒店，不能省略不可替代身份约束`));
       const hotelNames = [slot.label, hotel.officialName, hotel.shortName, hotel.name].map(cleanText).filter(Boolean);
       const subjectKey = primaryVisualSubject.toLocaleLowerCase("en").replace(/[\s\-–—_,，.。·:：'’\"“”()（）/\\]+/g, "");
       if (subjectKey && hotelNames.some((name) => name.toLocaleLowerCase("en").replace(/[\s\-–—_,，.。·:：'’\"“”()（）/\\]+/g, "") === subjectKey)) {
@@ -169,7 +170,7 @@ export function validateSimpleDayVisuals(plan, factBasis = {}) {
     // choice. Keep the original text and facts; only exclude that unit slash
     // from the visual-alternative check.
     const visualChoiceText = primaryVisualSubject.replace(/\d[\d,.]*\s*(?:美金|美元|人民币|元|USD|CNY)?\s*\/\s*(?:人|位|晚|天|间|车)/gi, "");
-    if (/或|或者|二选一|\bor\b|\//i.test(visualChoiceText)) errors.push(slotError(roleLabel, "ambiguous_visual_subject", `${roleLabel}.primaryVisualSubject 当前值“${primaryVisualSubject}”仍然是A或B；必须选定一个具体画面`));
+    if ([visualChoiceText, ...Object.values(slot.queryCore || {})].some((value) => /或|或者|二选一|\bor\b|\//i.test(cleanText(value)))) errors.push(slotError(roleLabel, "ambiguous_visual_subject", `${roleLabel}的视觉描述或Core包含替代项；必须明确核心目标，只有可证明的代表空间或非核心背景选择可局部归一`));
     const subjectIssue = visualSubjectPolicyIssue(primaryVisualSubject, slot.queryCore);
     if (subjectIssue) errors.push(slotError(roleLabel, "composite_visual_subject", `${roleLabel}.primaryVisualSubject 当前值“${primaryVisualSubject}”合并了多个可独立找图的画面；必须保留一个或拆成独立图片位`));
     const coreFingerprint = [slot.queryCore?.identity, slot.queryCore?.subject, slot.queryCore?.action].map(normalizedVisual).filter(Boolean).join("|");
@@ -329,6 +330,108 @@ function includesWordSequence(words, expected) {
   return expected.length > 0 && words.some((_, index) => expected.every((word, offset) => words[index + offset] === word));
 }
 
+// These are the four existing hotel representative categories, not an entity
+// alias dictionary. Unknown qualifiers (room types, exclusive facilities, etc.)
+// deliberately do not match and remain specific-scene decisions.
+const hotelRepresentativeCategories = [
+  ["exterior", /^(?:(?:酒店|营地|度假村)?(?:建筑外观|建筑|外观)|(?:(?:hotel|camp|resort)\s+)?(?:building\s+exterior|building|exterior))$/i],
+  ["suite", /^(?:(?:酒店|营地|度假村)?(?:套房|客房)|(?:(?:hotel|camp|resort)\s+)?(?:suites?|guest\s*rooms?))$/i],
+  ["pool", /^(?:(?:酒店|营地|度假村)?(?:游泳池|泳池)|(?:(?:hotel|camp|resort)\s+)?(?:swimming\s+)?pools?)$/i],
+  ["main_areas", /^(?:(?:酒店|营地|度假村)?(?:公共空间|大堂)|(?:(?:hotel|camp|resort)\s+)?(?:public\s+(?:spaces?|areas?)|lobb(?:y|ies)))$/i],
+];
+const splitVisualChoices = (value) => cleanText(value).split(/或者|或|二选一|\bor\b|\//i).map(cleanText);
+const visualKey = (value) => cleanText(value).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+const hotelCategory = (value) => hotelRepresentativeCategories.find(([, pattern]) => pattern.test(cleanText(value)))?.[0];
+
+function repairHotelRepresentativeChoice(slot, factBasis) {
+  const hotelRole = /^hotel:(\d+)$/.exec(cleanText(slot.role));
+  const hotel = hotelRole && (factBasis.hotels || [])[Number(hotelRole[1]) - 1];
+  const core = slot.queryCore || {};
+  if (!hotel || slot.exactIdentityRequired !== true || !cleanText(core.identity)
+    || [core.identity, core.identityEn, core.action, core.actionEn].some((value) => visualChoicePattern.test(cleanText(value)))
+    || cleanText(core.action) || cleanText(core.actionEn)) return null;
+  const identityNames = unique([core.identity, core.identityEn].map(cleanText));
+  const factNames = [hotel.name, hotel.officialName, hotel.shortName].map(visualKey).filter(Boolean);
+  if (!factNames.includes(visualKey(core.identity))) return null;
+  const subjects = [core.subject, core.subjectEn].map(cleanText).filter(Boolean);
+  const categorySets = subjects.map((subject) => splitVisualChoices(subject).map(hotelCategory));
+  const alreadyRepresentative = subjects.length > 0 && subjects.every((subject) => /^(?:酒店代表性空间|representative hotel space)$/i.test(subject));
+  if (!alreadyRepresentative && (!categorySets.length || categorySets.some((items) => items.length < 2 || items.length > 4 || items.some((item) => !item)))) return null;
+  const sameCategories = (items) => unique(items).sort().join("|") === unique(categorySets[0]).sort().join("|");
+  if (!alreadyRepresentative && !categorySets.every(sameCategories)) return null;
+  let visual = cleanText(slot.primaryVisualSubject);
+  for (const identity of identityNames.sort((a, b) => b.length - a.length)) {
+    visual = visual.replaceAll(identity, "");
+  }
+  // Permit only neutral presentation wording around those category names.
+  // An unbound second entity or a named/private facility is not neutral.
+  const visualCategories = splitVisualChoices(visual).map((part) => {
+    const neutral = part.replace(/(?:现代|真实|代表性|整体|画面)/g, "")
+      .replace(/\b(?:modern|real|representative)\b/gi, "").trim();
+    return hotelCategory(neutral) || hotelCategory(neutral.replace(/空间$/, ""));
+  });
+  if ((!alreadyRepresentative && !sameCategories(visualCategories)) || visualCategories.length < 2 || visualCategories.length > 4 || visualCategories.some((item) => !item)) return null;
+  const queryCore = { ...core, subject: "酒店代表性空间", ...(cleanText(core.subjectEn) ? { subjectEn: "representative hotel space" } : {}) };
+  const primaryVisualSubject = `${cleanText(core.identity)} 酒店代表性空间`;
+  const queries = buildKnowledgeQueryPlan({ ...slot, moduleType: "hotel", hotel: core.identity, queryCore, primaryVisualSubject }, null).queries;
+  return { primaryVisualSubject, queryCore, fidelityQuery: queries[0], alternateQueries: queries.slice(1), searchIntent: queries,
+    repair: { code: "hotel_representative_choice_resolved", message: "已按同一酒店代表图的既有空间类别归一，完整身份与硬门槛不变", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: core, originalQueries: [slot.fidelityQuery, ...(slot.alternateQueries || [])], primaryVisualSubject, allowedCategories: unique(visualCategories) } };
+}
+
+function repairBackgroundVisualChoice(slot) {
+  const core = slot.queryCore || {};
+  const values = [core.subject, core.action, core.identity, core.subjectEn, core.actionEn, core.identityEn].map(cleanText);
+  if (slot.exactIdentityRequired !== false || !values[0] || values.some((value) => visualChoicePattern.test(value))) return null;
+  const queries = [cleanText(slot.fidelityQuery), ...(slot.alternateQueries || []).map(cleanText)];
+  if (!validatePlannerSearchIntent(queries).valid || queries.some((query) => visualChoicePattern.test(query))) return null;
+  const languages = [{ subject: values[0], action: values[1] }, ...(values[3] && (!values[1] || values[4]) ? [{ subject: values[3], action: values[4] }] : [])];
+  const supportsCore = (value, language) => [language.subject, language.action].filter(Boolean)
+    .every((part) => includesWordSequence(visualWords(value), visualWords(part)));
+  const supportsSubject = (value, { subject }) => {
+    const words = visualWords(value);
+    const expected = visualWords(subject);
+    if (includesWordSequence(words, expected)) return true;
+    // Chinese noun compounds may include an extra function word (商务用车 /
+    // 商务车). Require ordered multiword coverage and the same head noun;
+    // this does not translate synonyms or infer a missing action.
+    let cursor = -1;
+    const matched = expected.filter((word) => {
+      const at = words.indexOf(word, cursor + 1);
+      if (at < 0) return false;
+      cursor = at;
+      return true;
+    });
+    return expected.length >= 2 && matched.length >= 2 && matched.length * 3 >= expected.length * 2
+      && matched.at(-1) === expected.at(-1);
+  };
+  if (!queries.some((query) => languages.some((language) => supportsCore(query, language)))
+    || !queries.every((query) => languages.some((language) => supportsSubject(query, language)))) return null;
+  const visual = cleanText(slot.primaryVisualSubject);
+  // Only a syntactically marked background/location phrase may be discarded.
+  // The entire subject and necessary action must remain outside the phrase.
+  const starts = [...visual.matchAll(/(?:背景(?:为|是|可为)|(?:位于|在))|\b(?:against|in|on|at)\s+/gi)];
+  for (const marker of starts.reverse()) {
+    const from = marker.index;
+    const bodyStart = from + marker[0].length;
+    const tail = visual.slice(bodyStart);
+    const boundaries = [visual.length, ...[...tail.matchAll(/[，,；;。]/g)].map((match) => bodyStart + match.index),
+      ...languages.flatMap(({ subject, action }) => [subject, action].filter(Boolean)).flatMap((part) => {
+        const at = visual.toLowerCase().indexOf(part.toLowerCase(), bodyStart);
+        return at >= 0 ? [at] : [];
+      })].sort((a, b) => a - b);
+    const end = boundaries.find((at) => visualChoicePattern.test(visual.slice(bodyStart, at)));
+    if (end === undefined) continue;
+    const background = visual.slice(bodyStart, end).trim();
+    const alternatives = splitVisualChoices(background);
+    if (alternatives.length < 2 || alternatives.length > 3 || alternatives.some((part) => !part || part.length > 30 || /[，,；;。!?！？]/.test(part))) continue;
+    const remaining = `${visual.slice(0, from)} ${visual.slice(end)}`.trim();
+    if (visualChoicePattern.test(remaining) || !languages.some((language) => supportsCore(remaining, language)) || visualSubjectPolicyIssue(remaining, core)) continue;
+    const primaryVisualSubject = unique([values[0], values[1]]).join(" ");
+    return { primaryVisualSubject, repair: { code: "background_visual_choice_resolved", message: "已保留由结构化Core与原查询共同证明的主体动作，仅移除非核心背景选择", originalPrimaryVisualSubject: slot.primaryVisualSubject, primaryVisualSubject, backgroundPreference: background } };
+  }
+  return null;
+}
+
 function repairEquivalentVisualChoice(slot) {
   const core = slot.queryCore || {};
   const fields = [core.subject, core.action, core.identity, core.subjectEn, core.actionEn, core.identityEn].map(cleanText);
@@ -438,7 +541,7 @@ export function recoverCompletePlannerImageSlots(attemptContents = []) {
   return best;
 }
 
-function applyPlannerFailOpen(plan, validationErrors = []) {
+function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
   const next = structuredClone(plan);
   const repairs = [];
   const unresolvedRoles = new Set();
@@ -473,10 +576,12 @@ function applyPlannerFailOpen(plan, validationErrors = []) {
     const issues = issuesByRole.get(role) || [];
     const localRepairs = [];
     let repaired = { ...slot };
-    const visualRepair = issues.some((issue) => issue.code === "ambiguous_visual_subject") ? repairEquivalentVisualChoice(slot) : null;
+    const visualRepair = issues.some((issue) => issue.code === "ambiguous_visual_subject")
+      ? repairHotelRepresentativeChoice(slot, factBasis) || repairBackgroundVisualChoice(slot) || repairEquivalentVisualChoice(slot) : null;
     if (visualRepair) {
-      repaired.primaryVisualSubject = visualRepair.primaryVisualSubject;
-      localRepairs.push(visualRepair.repair);
+      const { repair, ...fields } = visualRepair;
+      Object.assign(repaired, fields);
+      localRepairs.push(repair);
     }
     let unresolved = issues.some((issue) => !QUERY_REPAIRABLE_CODES.has(issue.code) && issue.code !== "invalid_supporting_visual"
       && !(issue.code === "ambiguous_visual_subject" && visualRepair));
@@ -488,7 +593,9 @@ function applyPlannerFailOpen(plan, validationErrors = []) {
     }
 
     if (issues.some((issue) => QUERY_REPAIRABLE_CODES.has(issue.code))) {
-      const queryPlan = buildKnowledgeQueryPlan(repaired, null);
+      const querySlot = visualRepair?.repair.code === "hotel_representative_choice_resolved"
+        ? { ...repaired, moduleType: "hotel", hotel: repaired.queryCore.identity } : repaired;
+      const queryPlan = buildKnowledgeQueryPlan(querySlot, null);
       if (queryPlan.queries.length >= 2 && !queryPlan.validationError) {
         repaired.fidelityQuery = queryPlan.queries[0];
         repaired.alternateQueries = queryPlan.queries.slice(1, 4);
@@ -509,6 +616,22 @@ function applyPlannerFailOpen(plan, validationErrors = []) {
       plannerLocalRepairs: localRepairs,
     };
   });
+
+  // Local repairs may make two formerly different strings the same target.
+  // Recheck only that invariant; never trigger a second planning request.
+  const repairedTargets = new Map();
+  for (const slot of next.imagePlan.slots) {
+    const key = [slot.queryCore?.identity, slot.queryCore?.subject, slot.queryCore?.action].map(visualKey).filter(Boolean).join("|");
+    if (!key) continue;
+    const first = repairedTargets.get(key);
+    if (first && (slot.plannerLocalRepairs.length || first.plannerLocalRepairs.length)
+      && !slot.plannerValidationIssues.some((issue) => issue.code === "duplicate_visual_responsibility")) {
+      slot.plannerSlotStatus = "unresolved";
+      slot.needsUserAction = true;
+      slot.plannerValidationIssues.push({ code: "duplicate_visual_responsibility", message: "局部归一后与已有图片位承担相同核心视觉职责", conflictingRole: first.role });
+      unresolvedRoles.add(slot.role);
+    } else if (!first) repairedTargets.set(key, slot);
+  }
 
   for (const issue of validationErrors) {
     if (issue.code === "image_search_plan_missing") for (const role of issue.slotRoles || []) unresolvedRoles.add(role);
@@ -539,8 +662,9 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   const identityPrompt = "每个imagePlan.slots图片位保留boolean字段exactIdentityRequired。唯一含义：true只在如果不是queryCore.identity指向的这个具体实体，即使画面主体和动作都对，也会造成事实错误时成立；图片必须证明该具体身份。反事实检查：去掉这个具体身份以后，主体和必要动作仍然正确的图片能否完成当前图片位的主要展示任务？能则必须false；只有换成别的实体会把明确承诺的唯一地点、建筑、机构本体或实体专属体验错误展示为目标实体时才true。原始行程地点必须准确，不等于照片必须证明唯一地点身份；地点只是体验发生背景、Scope或搜索context，主要展示的是主体+动作时必须false。主体正确、动作正确、交通类别正确均不等于具体实体身份必需；identity非空、地点明确、locationRole=visual_identity也都不是true的依据。不得靠固定关键词、实体类型或地点名称判断。true时queryCore.identity必须明确目标身份，已有identityEn尽量保留正式英文名称。此字段只判断图片身份是否不可替代，不改变原始地点、画面、Query或来源；不要新增解释字段、第二次调用或其他输出结构。";
   const identityDecisionPrompt = "填写exactIdentityRequired前，先在本次规划内区分两个独立问题（不输出推理或新增字段）：①主体与必要动作必须正确，这要求同一种画面/体验，不要求唯一地点身份；②具体实体是否不可替代，这才决定该boolean。事件、自然现象、活动场面及其营销名称不是唯一实体身份；不得把行程主卖点的重要程度当成身份必需性。若主体动作仍正确，只是照片无法证明发生在那个命名地点，不能据此填true。独立酒店模块展示的就是预订的具体酒店，换成另一家会造成事实错误，因此必须true并填写该酒店正式identity。实体专属体验按是否必须属于该实体判断，不能仅因发生于酒店就设true。完成后逐图片位复核这两个问题，保持主体/动作、地点和身份分开；不按国家、动物、活动或品牌词表判断。";
   const identityOutputChecklist = '最终输出 JSON 前逐个遍历 imagePlan.slots，包含 cover、每个 hotel/dining/transport、每个 day:N 主图和每个 supporting：每一个 slot 对象都必须显式写出 "exactIdentityRequired": true 或 "exactIdentityRequired": false。不得省略、使用 null/字符串，也不得只在前几个 slot 输出该字段。先按上面的反事实判断决定每个值，不按 role、locationRole 或 identity 是否非空机械填充；输出完成后再次检查 imagePlan.slots.length 与此布尔字段出现次数完全相同。';
+  const visualTargetPrompt = '视觉目标契约澄清：前文单一画面与禁止A或B约束的是Core主体、必要动作和不可替代身份，不能把理想描述的背景、光线、构图选择提升为硬条件。请在本次输出中直接保持queryCore明确，非核心背景只作表现偏好。独立hotel:N代表图已有外观、套房、泳池、公共空间候选池：若职责是展示这家酒店的真实代表空间，queryCore.subject写酒店代表性空间，action为空，identity是正式酒店身份且exactIdentityRequired=true；primaryVisualSubject可表达代表空间偏好，不能要求每种空间同框。只有客户文案明确承诺并需要图片证明某一特定房型、专属设施或体验时，Core才保留该具体主体与动作，不能归为代表图；DAY、餐饮和交通不得借酒店代表图规则放宽。真正不同Core主体、动作或身份的二选一仍不得输出，不能靠选第一个或删掉限定来解决。此澄清只使用现有字段，不新增输出字段、模型调用或备用画面。';
   const compactOutputPrompt = '只输出一个完整、紧凑的 JSON 对象，顶层先写 imagePlan，再写其他字段；不加 Markdown、解释、重复事实、冗长 rationale 或未定义字段。保留契约要求的所有字段和全部图片位；每个说明字段只写必要短句，sourceRefs只写可追溯路径。不要靠省略 slot、queryCore、Query 或 exactIdentityRequired 缩短输出。输出结束前确认整个对象闭合。';
-  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist] : []), compactOutputPrompt].join('\n\n') }];
+  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, visualTargetPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist] : []), compactOutputPrompt].join('\n\n') }];
   const messages = [...systemMessages, { role: "user", content: JSON.stringify(sharedInput) }];
   const retryMessages = [...systemMessages, { role: "user", content: `${JSON.stringify(sharedInput)}\n\n技术补救：上次响应没有形成完整合法JSON。本次直接输出完整紧凑JSON对象，不写推理、前言或代码块；优先保证全部必需图片位及其完整字段，非图片说明简短。` }];
   const attemptStartedAt = new Date().toISOString();
@@ -572,7 +696,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   }
   if (plannerSystemError) validation.errors.unshift({ code: plannerSystemError.code, path: "$", message: plannerSystemError.message });
   validation.valid = validation.errors.length === 0;
-  const failOpen = applyPlannerFailOpen(plan, validation.errors);
+  const failOpen = applyPlannerFailOpen(plan, validation.errors, factBasis);
   const compactErrors = compactPlannerErrors(validation.errors);
   const completed = {
     ...failOpen.plan,

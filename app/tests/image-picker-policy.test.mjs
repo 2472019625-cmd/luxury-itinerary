@@ -38,3 +38,10 @@ test('推荐按当前字段绑定匹配，缺字段时使用明确的图片位�
   assert.equal(canRecommendImageCandidateForSlot(candidate('no-target'), {}), false);
   assert.equal(canRecommendImageCandidateForSlot({ localPreviewUrl: '/image-assets/unbound.jpg' }, {}), false);
 });
+
+test('跨位只在相同完整目标指纹时推荐，身份不同或硬拒绝不会进入', () => {
+  const targetWithCore = { ...target, targetFingerprint: 'hotel|same-identity|same-core' };
+  assert.equal(canRecommendImageCandidateForSlot(candidate('same-core', { pipelineSlotId: 'image:hotel:other', fieldPath: 'hotels.1.images.0', targetFingerprint: targetWithCore.targetFingerprint }), targetWithCore), true);
+  assert.equal(canRecommendImageCandidateForSlot(candidate('other-hotel', { pipelineSlotId: 'image:hotel:other', fieldPath: 'hotels.1.images.0', targetFingerprint: 'hotel|other-identity|same-core' }), targetWithCore), false);
+  assert.equal(canRecommendImageCandidateForSlot(candidate('rejected', { pipelineSlotId: 'image:hotel:other', fieldPath: 'hotels.1.images.0', targetFingerprint: targetWithCore.targetFingerprint, qualificationStatus: 'rejected' }), targetWithCore), false);
+});

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildAgentFactBasis, fillPlannerImageDeterministicFields, validateSimpleHighlightSelection, generateAgentPlan } from "../server/agent-trip-planner.mjs";
 import { materializeSimpleSkillPlan, normalizeNonDayPlannerImageRoles } from "../server/simple-plan-adapter.mjs";
+import { STRUCTURED_HOTEL_FACT_FORMAT } from "../src/lib/hotelFactPresentation.js";
 import { plannerRequestJson } from './helpers/simple-pipeline-fixture.mjs';
 
 test('Planner请求统一视觉覆盖规则和一基DAY编号，保留丰富日辅助槽', async () => {
@@ -115,6 +116,9 @@ test("非DAY图片位只按sourceRefs归一化为一基role并保留稳定slotId
   const normalized = normalizeNonDayPlannerImageRoles(agentPlan, data);
   assert.deepEqual(normalized.imagePlan.slots.map((slot) => slot.role), ["hotel:1", "hotel:2", "dining:1", "dining:2", "transport:1", "transport:2"]);
   const runtime = materializeSimpleSkillPlan({ data, report: {}, agentPlan });
+  assert.ok(runtime.preparedData.hotels.every((hotel) => hotel.hotelFactFormat === STRUCTURED_HOTEL_FACT_FORMAT));
+  assert.equal(runtime.copyTasks.find((task) => task.targetPath === "hotels.0.factRows")?.researchRequest?.location, "安博塞利");
+  assert.equal(runtime.copyTasks.find((task) => task.targetPath === "hotels.1.factRows")?.researchRequest?.location, "马赛马拉");
   const moduleSlots = runtime.imageSlots.filter((slot) => ["hotel", "dining", "transport"].includes(slot.moduleType));
   assert.deepEqual(moduleSlots.map((slot) => slot.slotId), [
     "image:hotel:angama:primary", "image:hotel:ritz:primary",

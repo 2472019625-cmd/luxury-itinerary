@@ -36,6 +36,57 @@ test('resized candidates retain publisher URL and fall back when the unsigned re
   assert.equal(result.width, 1400);
 });
 
+test('Wikipedia File HTML is parsed to a real resource and normalized originals retain all download gates', async t => {
+  const directory = await temporaryDirectory(t);
+  t.mock.method(dns, 'lookup', async () => [{ address: '93.184.216.34', family: 4 }]);
+  const filePage = 'https://en.wikipedia.org/wiki/File:Example_aircraft.jpg';
+  const thumb = 'https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/Example_aircraft.jpg/500px-Example_aircraft.jpg';
+  const original = 'https://upload.wikimedia.org/wikipedia/commons/a/ab/Example_aircraft.jpg';
+  let pageRequests = 0;
+  const candidates = await extractPageImages({ pageUrl: filePage }, { fetchImpl: async url => {
+    assert.equal(String(url), filePage); pageRequests += 1;
+    return new Response(`<a href="${filePage}"><img src="${thumb}"></a>`, { headers: { 'content-type': 'text/html' } });
+  } });
+  assert.equal(pageRequests, 1);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].imageUrl, original);
+  const tinyPhoto = await sharp({ create: { width: 500, height: 300, channels: 3, background: '#887766' } }).jpeg().toBuffer();
+  const avifPhoto = await sharp({ create: { width: 1000, height: 600, channels: 3, background: '#887766' } }).avif().toBuffer();
+  for (const [response, rejection] of [
+    [() => new Response('<h1>File description</h1>', { headers: { 'content-type': 'text/html' } }), /unsupported image format/i],
+    [() => new Response(avifPhoto, { headers: { 'content-type': 'image/jpeg' } }), /不支持的图片格式/],
+    [() => new Response('too large', { headers: { 'content-type': 'image/jpeg', 'content-length': String(14 * 1024 * 1024 + 1) } }), error => error.code === 'image_body_too_large'],
+    [() => new Response(tinyPhoto, { headers: { 'content-type': 'image/jpeg' } }), error => error.code === 'image_resolution_insufficient'],
+  ]) {
+    const attempts = [];
+    await assert.rejects(downloadCandidate(candidates[0], { directory, publicPrefix: '/fixture', fetchImpl: async url => { attempts.push(String(url)); return response(); } }), rejection);
+    assert.deepEqual(attempts, [original, thumb]);
+  }
+  const unsafeRequests = [];
+  await assert.rejects(downloadCandidate(candidates[0], { directory, publicPrefix: '/fixture', fetchImpl: async url => {
+    unsafeRequests.push(String(url));
+    return new Response(null, { status: 302, headers: { location: 'http://127.0.0.1/private.jpg' } });
+  } }), error => error.code === 'public_url_blocked');
+  assert.deepEqual(unsafeRequests, [original]);
+  assert.deepEqual(await readdir(directory), []);
+});
+
+test('Wikimedia inferred original failure can use the validated publisher thumbnail without another search', async t => {
+  const directory = await temporaryDirectory(t);
+  t.mock.method(dns, 'lookup', async () => [{ address: '93.184.216.34', family: 4 }]);
+  const thumb = 'https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/Example_photo.jpg/1600px-Example_photo.jpg';
+  const [candidate] = extractImageCandidatesFromHtml(`<img src="${thumb}">`, { pageUrl: 'https://en.wikipedia.org/wiki/Example' });
+  const photo = await sharp({ create: { width: 1600, height: 1000, channels: 3, background: '#887766' } }).jpeg().toBuffer();
+  const requests = [];
+  const result = await downloadCandidate(candidate, { directory, publicPrefix: '/fixture', fetchImpl: async url => {
+    requests.push(String(url));
+    return String(url) === thumb ? new Response(photo, { headers: { 'content-type': 'image/jpeg' } }) : new Response('not found', { status: 404 });
+  } });
+  assert.deepEqual(requests, [candidate.imageUrl, thumb]);
+  assert.equal(result.downloadedImageUrl, thumb);
+  assert.equal(result.downloadVariantAttempts, 2);
+});
+
 test('AVIF is never advertised and remains outside supported image formats', async (t) => {
   const directory = await temporaryDirectory(t);
   const buffer = await sharp({ create: { width: 1000, height: 600, channels: 3, background: '#887766' } }).avif().toBuffer();

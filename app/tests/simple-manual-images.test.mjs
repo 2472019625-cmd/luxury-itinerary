@@ -145,15 +145,29 @@ test("候选预览只发布本地素材路径，未下载与过滤候选保留�
   const payload = buildSimpleManualImagePayload(value.store, value.projectId);
   for (const collection of [payload.project.data.imageCandidates, payload.imageReview.slots[0].candidates]) {
     for (const original of remoteCandidates) {
-      const candidate = collection.find(item => item.candidateId === original.candidateId);
-      assert.equal(candidate.localPreviewUrl, "");
-      assert.equal(candidate.imageUrl, original.imageUrl);
-      assert.equal(candidate.originalDownloadStatus, original.originalDownloadStatus);
+      assert.equal(collection.some(item => item.candidateId === original.candidateId), false);
     }
     for (const original of localCandidates) assert.equal(collection.find(item => item.candidateId === original.candidateId).localPreviewUrl, "/image-assets/test/selectable.jpg");
   }
   const saved = value.store.getFinalResult(value.projectId, value.executionRunId).imageExecution.results[0].candidates;
   for (const original of [...remoteCandidates, ...localCandidates]) assert.deepEqual(saved.find(item => item.candidateId === original.candidateId), original);
+});
+
+test('未下载的命中和硬拒绝图都不冒充可供确认的候选', async (t) => {
+  const value = await fixture({ oneSlot: true }); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  const cover = result.imageExecution.results[0];
+  cover.candidates = [value.hardCandidate, { candidateId: 'remote-only', imageUrl: 'https://example.org/image.jpg', originalDownloadStatus: 'not_requested' }];
+  cover.manualAction.selectableCandidates = [];
+  const unresolved = result.unresolvedItems.find(item => item.id === cover.slotId);
+  unresolved.selectableCandidateIds = [];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const payload = buildSimpleManualImagePayload(value.store, value.projectId);
+  const review = payload.imageReview.slots[0];
+  assert.equal(review.status, 'auto_rejected');
+  assert.equal(review.candidateCount, 1);
+  assert.equal(review.confirmableCandidateCount, 0);
+  assert.equal(payload.project.data.imageCandidates.some(item => item.candidateId === 'remote-only'), false);
 });
 
 test('换图界面不列出未下载的延后网页命中，运行记录仍保留来源证据', async (t) => {

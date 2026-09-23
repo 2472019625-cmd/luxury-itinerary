@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { copyTaskQueue } from "./copy-task-queue.mjs";
 import { requestDeepSeekJson } from "./deepseek-client.mjs";
-import { COPY_FACTS_RESEARCH_MODEL, runCopyFactsResearch, validateCopyResearchRequest } from "./simple-copy-facts-research.mjs";
+import { COPY_FACTS_RESEARCH_MODEL, buildResearchCategoryOutcomes, copyResearchStateKey, runCopyFactsResearch, validateCopyResearchRequest } from "./simple-copy-facts-research.mjs";
 import { highlightToText } from "../src/lib/highlightDisplay.js";
 
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -128,6 +128,7 @@ function researchFallbackPolicy(task = {}) {
 export function buildHotelFactRows(research = {}) {
   const verifiedByCategory = new Map((research.verifiedFacts || []).map((item) => [clean(item?.category), item]));
   const statusByCategory = new Map((research.categoryOutcomes || []).map((item) => [clean(item?.category), clean(item?.status)]));
+  const reasonByCategory = new Map((research.categoryOutcomes || []).map((item) => [clean(item?.category), clean(item?.reason)]));
   return HOTEL_FACT_ROW_DEFINITIONS.map(({ key, label, category }) => {
     const fact = verifiedByCategory.get(category);
     const fallbackStatus = research.status === "failed" ? "source_unavailable" : "not_found";
@@ -138,6 +139,7 @@ export function buildHotelFactRows(research = {}) {
       label,
       text: clean(fact?.fact),
       status,
+      ...(reasonByCategory.get(category) ? { reason: reasonByCategory.get(category) } : {}),
       ...(clean(fact?.sourceUrl) ? { sourceUrl: clean(fact.sourceUrl) } : {}),
       ...(clean(fact?.sourceClass) ? { sourceClass: clean(fact.sourceClass) } : {}),
       ...(clean(fact?.checkedAt) ? { checkedAt: clean(fact.checkedAt) } : {}),
@@ -299,6 +301,7 @@ export async function runCopyWriterSkill({
   researchFacts = runCopyFactsResearch,
   requestResearch,
   fetchResearchSource,
+  researchStateStore,
   signal,
   onStatus,
   onCapabilityCall,
@@ -333,6 +336,7 @@ export async function runCopyWriterSkill({
   let transportAttempts = 0;
   let modelMs = 0;
   let researchCalls = 0;
+  let researchSupplementCalls = 0;
   let researchTransportAttempts = 0;
   let researchMs = 0;
   const warnings = [];
@@ -343,14 +347,13 @@ export async function runCopyWriterSkill({
   await Promise.all(validTasks.map(async (task) => {
     if (!task.researchRequest) {
       if (task.moduleType === "hotel_fact_rows") {
-        resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: buildHotelFactRows(), warnings: ["酒店缺少可执行的事实研究请求，结构化字段已保留为空并标记未找到。"] });
+        resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: buildHotelFactRows({ categoryOutcomes: buildResearchCategoryOutcomes({ researchRequest: { categories: HOTEL_FACT_ROW_DEFINITIONS.map((item) => item.category) }, failureReason: "not_executed" }) }), warnings: ["酒店缺少可执行的事实研究请求，结构化字段已保留为空并标记尚未检索。"] });
       } else writerTaskById.set(task.targetId, task);
       return;
     }
-    const cacheKey = JSON.stringify(task.researchRequest);
+    const cacheKey = copyResearchStateKey(task.researchRequest);
     let researchPromise = researchCache.get(cacheKey);
     if (!researchPromise) {
-      researchCalls += 1;
       researchPromise = (async () => {
         const callId = randomUUID();
         const callStartedAt = Date.now();
@@ -363,13 +366,17 @@ export async function runCopyWriterSkill({
             model: researchModel,
             requestResearch,
             fetchSource: fetchResearchSource,
+            researchStateStore,
             signal,
           });
-          researchTransportAttempts += result.attemptUsages?.length || 1;
+          researchCalls += result.invocationBusinessCalls ?? 1;
+          researchSupplementCalls += result.supplementAttempted && !result.reused && !result.supplementPending ? 1 : 0;
+          researchTransportAttempts += result.invocationTransportAttempts ?? (result.attemptUsages?.length || 1);
           researchMs += Date.now() - callStartedAt;
           onCapabilityCall?.({ phase: "finished", capabilityId: "copy_facts_research", callId, batchId, researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, status: result.status, verifiedFactCount: result.verifiedFacts?.length || 0, durationMs: Date.now() - callStartedAt, usage: result.usage || null });
           return result;
         } catch (error) {
+          researchCalls += 1;
           researchTransportAttempts += error?.attemptUsages?.length || 1;
           researchMs += Date.now() - callStartedAt;
           onCapabilityCall?.({ phase: "finished", capabilityId: "copy_facts_research", callId, batchId, researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, failed: true, reason: error?.message || String(error), durationMs: Date.now() - callStartedAt });
@@ -415,8 +422,9 @@ export async function runCopyWriterSkill({
     } catch (error) {
       const researchPolicy = researchFallbackPolicy(task);
       const researchError = { code: error?.code || "copy_facts_research_failed", message: error?.message || String(error) };
+      const categoryOutcomes = buildResearchCategoryOutcomes({ researchRequest: task.researchRequest, failureReason: error?.code === "copy_facts_research_truncated" ? "research_truncated" : "research_failed" });
       const fallbackMessage = `${task.researchRequest.entityName} ${researchPolicy.label}发生技术故障；${researchPolicy.failed}`;
-      researchResultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, status: "failed", verifiedFacts: [], error: researchError });
+      researchResultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, status: "failed", verifiedFacts: [], categoryOutcomes, error: researchError });
       const writerTask = {
         ...task,
         facts: {
@@ -425,6 +433,7 @@ export async function runCopyWriterSkill({
           factsResearchOutcome: {
             status: "failed",
             verifiedFactCount: 0,
+            categoryOutcomes,
             error: researchError,
             zeroFactBoundary: researchPolicy.zeroFactBoundary,
           },
@@ -433,7 +442,7 @@ export async function runCopyWriterSkill({
         verifiedFacts: { researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, verifiedFacts: [] },
       };
       if (task.moduleType === "hotel_fact_rows") {
-        resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: buildHotelFactRows({ status: "failed" }), warnings: [fallbackMessage] });
+        resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: buildHotelFactRows({ status: "failed", categoryOutcomes }), warnings: [fallbackMessage] });
       } else writerTaskById.set(task.targetId, writerTask);
       researchWarningById.set(task.targetId, fallbackMessage);
       warnings.push({ code: "copy_facts_research_failed_fallback", targetId: task.targetId, message: fallbackMessage });
@@ -511,5 +520,5 @@ export async function runCopyWriterSkill({
   emitTaskProgress();
   const results = tasks.map((task, index) => resultById.get(task?.targetId || `invalid-${index}`)).filter(Boolean);
   const researchResults = tasks.map((task) => researchResultById.get(task?.targetId)).filter(Boolean);
-  return { batchId, status: batchStatus(results), results, researchResults, warnings, metrics: { businessBatches: physicalBatches.length, physicalBatches: physicalBatches.length, modelCalls, transportAttempts, researchCalls, researchTransportAttempts, automaticBusinessRetryRounds: 0, reasoningEffort, modelMs, researchMs, durationMs: Date.now() - startedAt } };
+  return { batchId, status: batchStatus(results), results, researchResults, warnings, metrics: { businessBatches: physicalBatches.length, physicalBatches: physicalBatches.length, modelCalls, transportAttempts, researchCalls, researchSupplementCalls, researchTransportAttempts, automaticBusinessRetryRounds: 0, reasoningEffort, modelMs, researchMs, durationMs: Date.now() - startedAt } };
 }

@@ -19,8 +19,9 @@ function hotelVisual(overrides = {}) {
   };
 }
 
-async function generateWithVisual(visual, { duplicate = false } = {}) {
-  const data = { destination: "肯尼亚", hotels: [{ id: "hotel-1", officialName: visual.queryCore.identity || "测试酒店", region: "内罗毕" }], days: [{ route: "城市", description: "抵达酒店" }] };
+async function generateWithVisual(visual, { duplicate = false, secondVisual = null, factHotelName = visual.queryCore.identity || "测试酒店" } = {}) {
+  const targetRole = visual.role || "hotel:1";
+  const data = { destination: "肯尼亚", hotels: [{ id: "hotel-1", officialName: factHotelName, region: "内罗毕" }, ...(secondVisual ? [{ id: "hotel-2", officialName: factHotelName, region: "内罗毕" }] : [])], transportSummary: targetRole === "transport:1" ? [{ id: "vehicle-1", category: visual.queryCore.subject }] : [], days: [{ route: "城市", description: "抵达酒店" }] };
   const factBasis = buildAgentFactBasis(data);
   let calls = 0;
   const result = await generateAgentPlan({
@@ -29,16 +30,113 @@ async function generateWithVisual(visual, { duplicate = false } = {}) {
     requestJson: async (options) => {
       calls += 1;
       const response = await plannerRequestJson({ delayMs: 0 })(options);
-      const hotel = response.json.imagePlan.slots.find((slot) => slot.role === "hotel:1");
+      const hotel = response.json.imagePlan.slots.find((slot) => slot.role === targetRole);
       Object.assign(hotel, structuredClone(visual));
+      if (secondVisual) Object.assign(response.json.imagePlan.slots.find((slot) => slot.role === "hotel:2"), structuredClone(secondVisual));
       if (duplicate) Object.assign(response.json.imagePlan.slots.find((slot) => slot.role === "cover"), structuredClone(visual), { role: "cover" });
       return response;
     },
   });
   assert.equal(calls, 1, "局部语义问题不得触发第二次业务规划");
   assert.equal(result.plan.validation.plannerBusinessRuns, 1);
-  return { ...result, data, slot: result.plan.imagePlan.slots.find((slot) => slot.role === "hotel:1") };
+  return { ...result, data, slot: result.plan.imagePlan.slots.find((slot) => slot.role === targetRole) };
 }
+
+test("酒店代表图归一既定空间选择，保持完整身份并向Image传递同一Core", async () => {
+  for (const [identity, subject, subjectEn, visual] of [
+    ["Harbour Azure Hotel", "酒店建筑或大堂", "hotel exterior or lobby", "外观或大堂现代空间"],
+    ["山岚居", "大堂或酒店建筑", "lobby or hotel exterior", "大堂或外观"],
+    ["Lodge Étoile", "泳池或套房或公共空间", "pool or suite or public space", "泳池或套房或公共空间"],
+    ["Dune House", "酒店代表性空间", "representative hotel space", "套房或公共空间"],
+  ]) {
+    const original = hotelVisual({ location: identity, locationRole: "scope_only", primaryVisualSubject: `${identity} ${visual}`, queryCore: { subject, subjectEn, action: "", actionEn: "", identity, identityEn: identity }, fidelityQuery: `${identity} 酒店外观`, alternateQueries: [`${identity} hotel lobby`] });
+    const { slot, plan, data, attempts } = await generateWithVisual(original);
+    assert.equal(slot.plannerSlotStatus, "locally_repaired", identity);
+    assert.equal(slot.queryCore.subject, "酒店代表性空间");
+    assert.equal(slot.queryCore.identity, identity);
+    assert.equal(slot.exactIdentityRequired, true);
+    assert.deepEqual(slot.searchIntent, ["酒店外观", "酒店套房", "酒店泳池", "酒店公共空间"]);
+    assert.equal(slot.plannerLocalRepairs[0].code, "hotel_representative_choice_resolved");
+    assert.deepEqual(attempts[0].rawModelPlan.imagePlan.slots.find((item) => item.role === "hotel:1").queryCore, original.queryCore);
+    const imageSlot = materializeSimpleSkillPlan({ data, agentPlan: plan }).imageSlots.find((item) => item.moduleType === "hotel");
+    assert.equal(imageSlot.needsUserAction, false);
+    assert.deepEqual(imageSlot.queryCore, slot.queryCore);
+    assert.equal(imageSlot.exactIdentityRequired, true);
+  }
+});
+
+test("酒店代表选择不放行具体设施、房型、动作、其他实体或跨模块目标", async () => {
+  const identity = "Harbour Azure Hotel";
+  const base = hotelVisual({ primaryVisualSubject: `${identity} 外观或大堂`, queryCore: { subject: "酒店外观或大堂", action: "", identity }, fidelityQuery: "酒店外观", alternateQueries: ["酒店大堂"] });
+  for (const patch of [
+    { queryCore: { ...base.queryCore, subject: "私人泳池或套房" }, primaryVisualSubject: `${identity} 私人泳池或套房` },
+    { queryCore: { ...base.queryCore, subject: "总统套房或客房" }, primaryVisualSubject: `${identity} 总统套房或客房` },
+    { queryCore: { ...base.queryCore, action: "游泳" } },
+    { queryCore: { ...base.queryCore, identity: `${identity}或Other Hotel` } },
+    { primaryVisualSubject: `${identity} 外观或Other Hotel大堂` },
+    { queryCore: { ...base.queryCore, subjectEn: "spa or restaurant" } },
+    { exactIdentityRequired: false },
+    { role: "transport:1" },
+  ]) {
+    const { slot } = await generateWithVisual({ ...base, ...patch });
+    assert.equal(slot.plannerSlotStatus, "unresolved", JSON.stringify(patch));
+    assert.equal(slot.needsUserAction, true);
+  }
+  const conflicting = await generateWithVisual(base, { factHotelName: "Another Harbour Hotel" });
+  assert.equal(conflicting.slot.plannerSlotStatus, "unresolved", "酒店代表图仍绑定原始酒店事实");
+});
+
+test("酒店代表空间归一后重复职责仍挂起，不能用不同类别措辞掩盖重复", async () => {
+  const identity = "Harbour Azure Hotel";
+  const visual = (role, subject) => hotelVisual({ role, primaryVisualSubject: `${identity} ${subject}`, queryCore: { subject, action: "", identity }, fidelityQuery: "酒店外观", alternateQueries: ["酒店大堂"], sourceRefs: [role === "hotel:1" ? "hotels.0" : "hotels.1"] });
+  const { plan } = await generateWithVisual(visual("hotel:1", "外观或大堂"), { secondVisual: visual("hotel:2", "泳池或套房") });
+  const second = plan.imagePlan.slots.find((slot) => slot.role === "hotel:2");
+  assert.equal(second.plannerSlotStatus, "unresolved");
+  assert.ok(second.plannerValidationIssues.some((issue) => issue.code === "duplicate_visual_responsibility"));
+});
+
+function transportVisual(visual, overrides = {}) {
+  return { role: "transport:1", primaryVisualSubject: visual, location: "测试地区", locationRole: "scope_only", exactIdentityRequired: false,
+    queryCore: { subject: "商务车", action: "停靠", identity: "", subjectEn: "business vehicle", actionEn: "parked", identityEn: "" },
+    fidelityQuery: "商务车停靠", alternateQueries: ["business vehicle parked"], sourceRefs: ["transport.0"], ...overrides };
+}
+
+test("非核心环境选择不阻断明确主体动作，位置和语言顺序不改变结果", async () => {
+  for (const visual of ["商务车在城市道路或机场停靠", "在机场或城市道路，商务车停靠", "商务车停靠，背景为城市道路或机场", "business vehicle parked at an airport or a city road"]) {
+    const original = transportVisual(visual);
+    const { slot, plan, data } = await generateWithVisual(original);
+    assert.equal(slot.plannerSlotStatus, "locally_repaired", visual);
+    assert.equal(slot.primaryVisualSubject, "商务车 停靠");
+    assert.deepEqual(slot.queryCore, original.queryCore);
+    assert.deepEqual(slot.alternateQueries, original.alternateQueries);
+    assert.equal(slot.plannerLocalRepairs[0].code, "background_visual_choice_resolved");
+    assert.equal(materializeSimpleSkillPlan({ data, agentPlan: plan }).imageSlots.find((item) => item.moduleType === "transport").needsUserAction, false);
+  }
+  const original = transportVisual("商务用车在城市道路或机场接送行驶", {
+    queryCore: { subject: "商务用车", action: "行驶", identity: "", subjectEn: "business car", actionEn: "driving", identityEn: "" },
+    fidelityQuery: "商务用车接送行驶", alternateQueries: ["business car transfer", "城市商务车接送"],
+  });
+  const { slot } = await generateWithVisual(original);
+  assert.equal(slot.plannerSlotStatus, "locally_repaired");
+  assert.equal(slot.primaryVisualSubject, "商务用车 行驶");
+  assert.deepEqual(slot.queryCore, original.queryCore);
+  assert.deepEqual(slot.alternateQueries, original.alternateQueries);
+});
+
+test("非核心归一不选择真实主体动作、不去掉必要身份、不接受矛盾查询", async () => {
+  for (const [visual, overrides] of [
+    ["商务车停靠或游客骑行", {}],
+    ["商务车在城市道路停靠或机场行驶", {}],
+    ["商务车在城市道路或机场停靠", { queryCore: { subject: "商务车或游猎车", action: "停靠", identity: "" } }],
+    ["商务车在城市道路或机场停靠", { queryCore: { subject: "商务车", action: "停靠或行驶", identity: "" } }],
+    ["商务车在城市道路或机场停靠", { alternateQueries: ["bicycle riding"] }],
+    ["商务车在城市道路或机场停靠", { exactIdentityRequired: true, queryCore: { subject: "商务车", action: "停靠", identity: "指定机场建筑" } }],
+    ["商务车停靠", { queryCore: { subject: "商务车或游猎车", action: "停靠", identity: "" } }],
+  ]) {
+    const { slot } = await generateWithVisual(transportVisual(visual, overrides));
+    assert.equal(slot.plannerSlotStatus, "unresolved", visual);
+  }
+});
 
 test("JW同一建筑外观的两个描述由既定Core和原查询局部收敛，并可传入Image", async () => {
   const original = hotelVisual();

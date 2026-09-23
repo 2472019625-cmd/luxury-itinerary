@@ -24,10 +24,12 @@ export function canManuallyChooseImageCandidate(candidate = {}) {
 
 export function canRecommendImageCandidateForSlot(candidate = {}, targetSlot = {}) {
   if (!canManuallyChooseImageCandidate(candidate)) return false;
-  if (candidate.fieldPath) return candidate.fieldPath === targetSlot.fieldPath;
+  const sameTarget = candidate.targetFingerprint && targetSlot.targetFingerprint && candidate.targetFingerprint === targetSlot.targetFingerprint;
+  if (candidate.fieldPath) return candidate.fieldPath === targetSlot.fieldPath || Boolean(sameTarget);
   const candidateSlotId = candidate.pipelineSlotId || candidate.slotId;
   const targetSlotId = targetSlot.pipelineSlotId || targetSlot.slotId;
-  return Boolean(candidateSlotId && targetSlotId && candidateSlotId === targetSlotId);
+  if (candidateSlotId && targetSlotId && candidateSlotId === targetSlotId) return true;
+  return Boolean(sameTarget);
 }
 
 const HARD_CODES = new Set(["watermark", "subject_mismatch", "place_mismatch", "broken", "low_resolution", "low_quality", "duplicate", "forbid"]);

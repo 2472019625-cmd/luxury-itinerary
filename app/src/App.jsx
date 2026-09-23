@@ -13,6 +13,7 @@ import { dayVisualCards } from './lib/dayVisualCards.js';
 import { coverLayout } from './lib/coverLayout.js';
 import { buildCustomerTravelEntityData, sameTravelEntityName } from './lib/travelEntityDisplay.js';
 import { normalizeHighlightsForDisplay } from './lib/highlightDisplay.js';
+import { hotelFactPresentation } from './lib/hotelFactPresentation.js';
 import { deriveFeaturedCardLayout } from './lib/featuredCardLayout.js';
 const VisualBindingsContext = React.createContext(undefined);
 
@@ -210,11 +211,12 @@ function HotelsOverview({ hotels = [], policy, title = "臻选酒店", introTitl
   const isOdd = hotels.length % 2 === 1;
   const { entries, hasFeatured } = deriveFeaturedCardLayout(hotels, "hotel");
   return <section className="journey-feature-section hotels-section" data-edit-path="hotels"><SectionTitle en="SIGNATURE STAYS" zh={displayTitle} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`hotel-grid${isOdd ? " hotel-grid-odd" : ""}${hasFeatured ? " hotel-grid-featured" : ""}`}>{entries.map(({ item: hotel, originalIndex: hotelIndex, isFeatured }) => {
-    const factRows = Array.isArray(hotel.factRows) ? hotel.factRows.filter((row) => String(row?.text || "").trim()) : [];
+    const { rows: factRows, showLegacy } = hotelFactPresentation(hotel);
     return <article className={`hotel-card${isFeatured ? " hotel-card-wide" : ""}${hotel.images?.[0] ? "" : " hotel-card-no-image"}`} key={hotel.id || hotel.officialName} data-edit-path={`hotels.${hotelIndex}`}>
     {hotel.images?.[0] ? <div className="hotel-image"><SafeImage src={hotel.images[0].src || hotel.images[0]} alt={hotel.shortName || hotel.officialName} fallbackLabel="酒店图片待补充" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" style={{ objectPosition: hotel.images[0].focus || "50% 50%" }} /></div> : <MissingImageState label="酒店图片待补充" compact className="card-missing-image" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" />}
     <div className="hotel-copy"><div className="hotel-kicker"><span>{hotel.region}</span><em>{hotel.nights}晚</em></div><h3>{hotel.shortName || hotel.officialName}</h3>{hotel.shortName && hotel.officialName && !sameTravelEntityName(hotel.shortName, hotel.officialName) && <p className="hotel-official-name">{hotel.officialName}</p>}
-      {factRows.length > 0 ? <ul className="hotel-fact-rows">{factRows.map((row) => <li key={row.key || row.label}><span className="hotel-fact-label">{row.label}</span><span className="hotel-fact-text">{row.text}</span></li>)}</ul> : <>
+      {factRows.length > 0 && <ul className="hotel-fact-rows">{factRows.map((row) => <li key={row.key || row.label}><span className="hotel-fact-label">{row.label}</span><span className="hotel-fact-text">{row.text}</span></li>)}</ul>}
+      {showLegacy && <>
         {hotel.editorialCopy && <p className="hotel-editorial">{hotel.editorialCopy}</p>}
         {hotel.proofPoints?.length > 0 && <div className="hotel-proof-points">{hotel.proofPoints.map((point) => <span key={point}>{point}</span>)}</div>}
       </>}

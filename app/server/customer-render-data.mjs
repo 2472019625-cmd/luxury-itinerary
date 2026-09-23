@@ -24,7 +24,7 @@ export function selectCustomerRenderData(data = {}, { locale = data?.locale || '
   const result = Object.fromEntries(Object.entries(displayData).filter(([key]) => ROOT_FIELDS.has(key)).map(([key, value]) => [key, clean(value)]));
   result.hotels = (result.hotels || []).map((hotel) => ({
     ...hotel,
-    ...(Array.isArray(hotel.factRows) ? { factRows: hotel.factRows.filter((row) => String(row?.text || '').trim()) } : {}),
+    ...(Array.isArray(hotel.factRows) ? { factRows: hotel.factRows.filter((row) => String(row?.text || '').trim()).map(({ key, label, text }) => ({ key, label, text })) } : {}),
   }));
   result.highlights = normalizeHighlightsForDisplay(result.highlights);
   if (displayData.simpleImageSlotBindings) result.days = (displayData.days || []).map((day, index) => ({ ...result.days[index], spots: dayVisualCards(day, index, displayData.simpleImageSlotBindings).map(({ spot }) => clean(spot)) }));

@@ -37,6 +37,13 @@ test("候选内容被拒绝与审核没有结论不混为一谈", () => {
   assert.match(inconclusive.detail, /不代表图片内容一定不符/);
 });
 
+test("只有当前位真有可预览且可确认的图片才提示候选待选", () => {
+  const remoteOnly = imageSearchPresentation({ status: 'candidate_waiting', candidates: [{ candidateId: 'remote', imageUrl: 'https://example.org/a.jpg' }], confirmableCandidateCount: 0 });
+  assert.notEqual(remoteOnly.title, '已有候选图片可供确认');
+  const preview = imageSearchPresentation({ status: 'candidate_waiting', candidates: [{ candidateId: 'local', localPreviewUrl: '/image-assets/a.jpg' }], confirmableCandidateCount: 1 });
+  assert.equal(preview.title, '已有候选图片可供确认');
+});
+
 test("正在搜索优先于历史失败，审核中不显示已失败", () => {
   const old = { status: "auto_rejected", searchDiagnostic: diagnostic({ queryExecuted: false, directoryStatus: "not_found" }, { entered: true, pageFailures: 5 }), candidates: [{ status: "hard_rejected" }] };
   for (const value of [imageSearchPresentation(old, { searching: true }), imageSearchPresentation({ ...old, status: "processing" }), imageSearchPresentation({ ...old, status: "processing", currentResult: { previousStatus: "not_found" } })]) {

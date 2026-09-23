@@ -198,6 +198,28 @@ test("hotel factRows 研究技术失败时保留四行状态且不调用 Copy Wr
   assert.equal(result.metrics.modelCalls, 0);
   assert.equal(result.results[0].status, "success");
   assert.deepEqual(result.results[0].value.map((row) => row.status), ["source_unavailable", "source_unavailable", "source_unavailable", "source_unavailable"]);
+  assert.ok(result.results[0].value.every((row) => row.reason === "research_failed"));
+  assert.equal(result.researchResults[0].categoryOutcomes.length, 4);
+});
+
+test("同酒店不同消费者共享实体缓存和持久接口，业务补证与物理请求单独计数", async () => {
+  const request = { researchType: "official_entity_facts", entityKind: "hotel", entityName: "Shared Lodge", categories: ["位置", "客房", "设计", "设施"] };
+  const journal = { load() {}, claim() {}, save() {} };
+  const targets = [0, 1].map((index) => ({ ...task(`shared-${index}`, `hotels.${index}.factRows`, "hotel_fact_rows"), researchRequest: { ...request, location: "Nairobi", categories: index ? [...request.categories].reverse() : request.categories, officialDomains: index ? ["https://www.sharedlodge.example/hotel", "BRAND.example"] : ["brand.example", "sharedlodge.example"] }, outputSchema: { type: "array", items: { type: "object" } } }));
+  let calls = 0;
+  const result = await runCopyWriterSkill({ tasks: targets, researchStateStore: journal,
+    researchFacts: async (options) => {
+      calls += 1;
+      assert.equal(options.researchStateStore, journal);
+      return { status: "not_found", verifiedFacts: [], categoryOutcomes: request.categories.map((category) => ({ category, status: "not_found", reason: "no_evidence" })), invocationBusinessCalls: 2, invocationTransportAttempts: 4, supplementAttempted: true };
+    },
+    requestJson: async () => { throw new Error("factRows 不调用 Writer"); },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.metrics.researchCalls, 2);
+  assert.equal(result.metrics.researchSupplementCalls, 1);
+  assert.equal(result.metrics.researchTransportAttempts, 4);
+  assert.ok(result.results.every((item) => item.value.every((row) => row.reason === "no_evidence")));
 });
 
 test("buildHotelFactRows 固定顺序保存核验事实与缺失状态", () => {

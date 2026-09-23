@@ -32,7 +32,10 @@ export function imageSearchPresentation(review = {}, { searching = false } = {})
   const allRejected = candidates.length > 0 && candidates.every(candidate => candidate.autoRejected || candidate.status === "hard_rejected" || candidate.qualificationStatus === "rejected");
   const rejected = status === "auto_rejected" || allRejected || technicalStatus === "all_candidates_rejected";
   const unfinishedReview = status === "review_timeout" || ["visual_unavailable", "visual_failed", "inconclusive"].includes(web.stopReason) || /visual_judgment_(?:inconclusive|failed|unavailable)|review.*timeout|audit.*timeout/.test(technicalStatus);
-  const waiting = status === "candidate_waiting" || status === "needs_user_action" && candidates.length > 0;
+  const confirmableCount = Number.isFinite(Number(review.confirmableCandidateCount))
+    ? Number(review.confirmableCandidateCount)
+    : candidates.filter(candidate => candidate.localPreviewUrl && !(candidate.autoRejected || candidate.status === "hard_rejected" || candidate.qualificationStatus === "rejected")).length;
+  const waiting = confirmableCount > 0 && (status === "candidate_waiting" || status === "needs_user_action");
   const selected = ["success", "auto_selected", "human_selected", "uploaded"].includes(status);
   let title = "这个位置尚未配图";
   if (technicalStatus === "planner_slot_unresolved") {

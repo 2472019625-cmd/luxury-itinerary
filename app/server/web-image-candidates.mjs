@@ -45,6 +45,21 @@ export function webHotelPropertyPage(pageUrl, slot) {
   const pageTokens = new Set(terms(pathOf(pageUrl)));
   return required.length >= 2 && required.every(token => pageTokens.has(token));
 }
+function imageBoundToPropertyGallery(candidate) {
+  try {
+    const page = new URL(candidate.pageUrl);
+    const image = new URL(resourceUrl(candidate.downloadedImageUrl || candidate.imageUrl));
+    if (page.hostname !== 'wetu.com' || image.hostname !== page.hostname || page.protocol !== 'https:' || image.protocol !== 'https:') return false;
+    if (candidate.pagePosition === 'chrome' || candidate.resourceRole !== 'media') return false;
+    if (!['page-image', 'image-srcset', 'picture-srcset', 'gallery-link', 'media-link'].includes(candidate.kind)
+      && !/^lazy-data-/.test(candidate.kind || '')) return false;
+    // Wetu's property Photos page and ImageHandler resource carry the same
+    // album id. A shared incidental number on another site proves nothing.
+    const pageId = decodeURIComponent(page.pathname).match(/^\/iBrochure\/[^/]+\/Photos\/(\d{5,12})\/[^/]+\/?$/i)?.[1];
+    const imageId = decodeURIComponent(image.pathname).match(/^\/ImageHandler\/\d+x\d+\/(\d{5,12})\/[^/]+\.(?:jpe?g|png|webp)$/i)?.[1];
+    return Boolean(pageId && pageId === imageId);
+  } catch { return false; }
+}
 // Provenance from an image file or a hotel-specific page is independent of
 // the search result's title. Site homepages and brand galleries prove nothing.
 export function webHotelIdentityEvidence(candidate, slot) {
@@ -56,13 +71,14 @@ export function webHotelIdentityEvidence(candidate, slot) {
   const imageTokens = new Set(terms(imageText));
   const pagePath = pathOf(candidate.pageUrl);
   const imageNamed = required.every(token => imageTokens.has(token));
+  const galleryBound = imageBoundToPropertyGallery(candidate);
   const propertyPage = webHotelPropertyPage(candidate.pageUrl, slot)
-    && required.some(token => imageTokens.has(token))
-    && candidate.pagePosition === 'content' && candidate.resourceRole !== 'ui';
+    && ((required.some(token => imageTokens.has(token)) && candidate.pagePosition === 'content') || galleryBound)
+    && candidate.resourceRole !== 'ui';
   if (!imageNamed && !propertyPage) return null;
   const declared = candidate.depictedIdentity && terms(candidate.depictedIdentity).filter(token => !genericHotelTerms.has(token));
   if (declared?.length >= 2 && !declared.every(token => required.includes(token))) return null;
-  return { basis: imageNamed ? 'image_metadata' : 'property_page', quote: imageNamed ? imageText.slice(0, 500) : pagePath.slice(0, 500) };
+  return { basis: imageNamed ? 'image_metadata' : 'property_page', quote: imageNamed ? imageText.slice(0, 500) : galleryBound ? `${pagePath} | ${resourcePath}`.slice(0, 500) : pagePath.slice(0, 500), evidenceIds: imageNamed ? ['resourcePath'] : galleryBound ? ['entityPagePath', 'resourcePath'] : ['entityPagePath'] };
 }
 function matchTerms(values, evidence) {
   const words = terms(evidence);

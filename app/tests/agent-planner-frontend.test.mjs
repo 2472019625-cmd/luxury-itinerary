@@ -105,9 +105,9 @@ test("编辑器将预订流程与资金安全提醒拆为独立显示模块", ()
 });
 
 test("酒店结构化事实同时进入最终展示和Step4编辑，并兼容旧项目文案", () => {
-  assert.match(app, /hotel\.factRows/);
+  assert.match(app, /hotelFactPresentation\(hotel\)/);
   assert.match(app, /className="hotel-fact-rows"/);
-  assert.match(app, /factRows\.length > 0[\s\S]{0,700}hotel\.editorialCopy/);
+  assert.match(app, /showLegacy &&[\s\S]{0,150}hotel\.editorialCopy/);
   assert.match(workspace, /HOTEL_FACT_ROW_DEFINITIONS[\s\S]{0,220}location[\s\S]{0,220}rooms[\s\S]{0,220}design[\s\S]{0,220}facilities/);
   assert.match(workspace, /酒店展示信息/);
   assert.match(workspace, /updateHotelFactRow\(next\.hotels\[selection\.itemIndex\]/);
