@@ -619,6 +619,131 @@ test("知识库异步查询保留 query_id、来源路径与实际下载 origin"
   assert.ok(requests[0].options.headers["Idempotency-Key"]);
 });
 
+test("知识库 POST 传输失败记录提交阶段，错误信息不泄漏查询文字或网络细节", async () => {
+  const privateQuery = "private client itinerary query";
+  const secretUrl = "https://knowledge.example/private?token=top-secret";
+  let requests = 0;
+  await assert.rejects(() => searchKnowledgeImages({
+    queries: [privateQuery], baseUrl: "https://knowledge.example",
+    fetchImpl: async () => { requests += 1; throw new Error(`fetch failed ${secretUrl} ${privateQuery}`); },
+  }), (error) => {
+    assert.equal(error.code, "knowledge_transport_error");
+    assert.equal(error.knowledgeStage, "submit");
+    assert.equal(error.knowledgeFailureKind, "transport");
+    assert.equal(error.queryId, null);
+    assert.match(error.diagnosticId, /^[a-f0-9-]{36}$/);
+    assert.doesNotMatch(error.message, /private|token|https?:|fetch failed/i);
+    assert.doesNotMatch(JSON.stringify({ message: error.message, diagnosticId: error.diagnosticId, requestId: error.requestId, errorId: error.errorId }), /private|token|https?:/i);
+    return true;
+  });
+  assert.equal(requests, 1);
+});
+
+test("知识库 HTTP 错误保留状态和安全 request_id，不记录服务端 detail", async () => {
+  await assert.rejects(() => searchKnowledgeImages({
+    queries: ["private client itinerary query"], baseUrl: "https://knowledge.example",
+    fetchImpl: async () => new Response(JSON.stringify({
+      request_id: "req-safe-12", error_id: "https://example.test/?token=secret",
+      detail: "private client itinerary query https://example.test/?token=secret",
+    }), { status: 503 }),
+  }), (error) => {
+    assert.equal(error.code, "knowledge_http_503");
+    assert.equal(error.knowledgeStage, "submit");
+    assert.equal(error.knowledgeFailureKind, "http");
+    assert.equal(error.status, 503);
+    assert.equal(error.requestId, "req-safe-12");
+    assert.equal(error.errorId, null);
+    assert.doesNotMatch(error.message, /private|token|https?:/i);
+    return true;
+  });
+});
+
+test("知识库 GET 轮询传输失败和超时保留已接受的 query_id 及阶段", async () => {
+  for (const mode of ["transport", "timeout"]) {
+    let requests = 0;
+    await assert.rejects(() => searchKnowledgeImages({
+      queries: ["private trip query"], baseUrl: "https://knowledge.example", requestTimeoutMs: 10, timeoutMs: 30,
+      fetchImpl: async (_url, options) => {
+        requests += 1;
+        if (requests === 1) return new Response(JSON.stringify({ data: { query_id: "qry-poll-42" } }), { status: 202 });
+        if (mode === "transport") throw new Error("fetch failed https://knowledge.example/?token=private");
+        return new Promise((_resolve, reject) => {
+          const abort = () => reject(new Error("private trip query https://knowledge.example/?token=private"));
+          if (options.signal.aborted) abort(); else options.signal.addEventListener("abort", abort, { once: true });
+        });
+      },
+    }), (error) => {
+      assert.equal(error.code, mode === "timeout" ? "knowledge_timeout" : "knowledge_transport_error");
+      assert.equal(error.knowledgeStage, "poll");
+      assert.equal(error.knowledgeFailureKind, mode);
+      assert.equal(error.queryId, "qry-poll-42");
+      assert.match(error.diagnosticId, /^[a-f0-9-]{36}$/);
+      assert.doesNotMatch(error.message, /private|token|https?:|fetch failed/i);
+      return true;
+    });
+    assert.equal(requests, 2, mode);
+  }
+});
+
+test("知识库终态失败保留安全错误标识并过滤不可信标识和错误正文", async () => {
+  for (const [errorId, requestId, expectedErrorId, expectedRequestId] of [
+    ["err-7", "req-8", "err-7", "req-8"],
+    ["https://example.test/?token=secret", "private query", null, null],
+  ]) {
+    const responses = [
+      new Response(JSON.stringify({ data: { query_id: "qry-terminal-9" } }), { status: 202 }),
+      new Response(JSON.stringify({ request_id: requestId, data: { status: "failed", error_id: errorId, detail: "private client query token=secret" } }), { status: 200 }),
+    ];
+    const result = await searchKnowledgeImages({ queries: ["private client query"], baseUrl: "https://knowledge.example", fetchImpl: async () => responses.shift() });
+    assert.equal(result.status, "failed");
+    assert.equal(result.knowledgeStage, "terminal");
+    assert.equal(result.knowledgeFailureKind, "terminal_failure");
+    assert.equal(result.queryId, "qry-terminal-9");
+    assert.equal(result.errorId, expectedErrorId);
+    assert.equal(result.requestId, expectedRequestId);
+    assert.match(result.diagnosticId, /^[a-f0-9-]{36}$/);
+    assert.doesNotMatch(JSON.stringify({ diagnosticId: result.diagnosticId, knowledgeStage: result.knowledgeStage, knowledgeFailureKind: result.knowledgeFailureKind, errorId: result.errorId, requestId: result.requestId }), /private|token|https?:/i);
+  }
+});
+
+test("知识库轮询的无效响应不冒充终态 failed", async () => {
+  const responses = [
+    new Response(JSON.stringify({ data: { query_id: "qry-invalid-1" } }), { status: 202 }),
+    new Response(JSON.stringify({ request_id: "req-invalid-2", data: { message: "private query token=secret" } }), { status: 200 }),
+  ];
+  await assert.rejects(() => searchKnowledgeImages({
+    queries: ["private query"], baseUrl: "https://knowledge.example", fetchImpl: async () => responses.shift(),
+  }), (error) => {
+    assert.equal(error.code, "knowledge_invalid_output");
+    assert.equal(error.knowledgeStage, "poll");
+    assert.equal(error.knowledgeFailureKind, "invalid_response");
+    assert.equal(error.queryId, "qry-invalid-1");
+    assert.equal(error.requestId, "req-invalid-2");
+    assert.doesNotMatch(error.message, /private|token|https?:/i);
+    return true;
+  });
+});
+
+test("图片任务内部账本透传知识库失败阶段和安全关联标识", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "knowledge-stage-evidence-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const result = await runImageSearchSkill({
+    root, sourceMode: "knowledge_only", knowledgeBaseUrl: "https://knowledge.example", slots: [slot("diagnostic")],
+    adapters: {
+      searchKnowledgeImages: async ({ queries }) => ({ status: "failed", queryId: "qry-terminal-9", queryText: queries[0], diagnosticId: "safe-run-id", knowledgeStage: "terminal", knowledgeFailureKind: "terminal_failure", requestId: "req-8", errorId: "err-7", candidates: [], records: [] }),
+      searchWebBatch: async () => { throw new Error("不得调用公网"); },
+      searchCommonsImages: async () => { throw new Error("不得调用 Commons"); },
+    },
+  });
+  const attempt = result.results[0].pipelineEvidence.knowledgeSearch.attempts[0];
+  assert.equal(attempt.knowledgeStage, "terminal");
+  assert.equal(attempt.knowledgeFailureKind, "terminal_failure");
+  assert.equal(attempt.diagnosticId, "safe-run-id");
+  assert.equal(attempt.queryId, "qry-terminal-9");
+  assert.equal(attempt.requestId, "req-8");
+  assert.equal(attempt.errorId, "err-7");
+});
+
 test("知识库 completed 空结果区分目录为空、暂无可检索内容与未命中", async () => {
   const cases = [
     ["empty", "内容为空"],
@@ -2959,6 +3084,46 @@ test("Web必要身份证据不足不硬拒绝、不采用且不触发后续Query
   assert.equal(output.candidates[0].rejection, "needs_user_judgment");
   assert.equal(output.candidates[0].hardJudgment.auditEvidenceVersion, 2);
   assert.equal(output.candidates[0].hardJudgment.identityEvidence.status, "insufficient");
+});
+
+test("实体自有页面声明的og:image通用文件名经完整视觉审核后可自动采用", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "web-owned-entity-evidence-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const target = slot("web-owned-entity", {
+    moduleType: "day", location: "Giraffe Centre", region: "Nairobi", country: "Kenya",
+    locationRole: "visual_identity", subject: "游客与长颈鹿", activity: "近距离喂食",
+    exactIdentityRequired: true,
+    queryCore: { subject: "游客与长颈鹿", action: "近距离喂食", identity: "长颈鹿中心", identityEn: "Giraffe Centre",
+      subjectEn: "visitor and giraffe", actionEn: "feeding" },
+    fidelityQuery: "游客喂食长颈鹿", alternateQueries: ["visitor feeding giraffe"],
+  });
+  const pageUrl = "https://giraffecentre.org/our-sanctuary/";
+  const imageUrl = "https://giraffecentre.org/uploads/Activities-hero-image.jpg";
+  const result = await runImageSearchSkill({
+    root, sourceMode: "web_only", slots: [target], sourcePagesPerSlot: 1, downloadsPerSlot: 1,
+    visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture",
+    adapters: {
+      searchWebBatch: async () => [{ pageUrl, title: "Our Sanctuary" }],
+      searchCommonsImages: async () => [],
+      extractPageImages: async page => [{ ...page, imageUrl, entityPagePath: "/our-sanctuary/",
+        kind: "og:image", pagePosition: "other", resourceRole: "media" }],
+      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+        const filePath = path.join(directory, "activities.jpg");
+        await writeDistinctTestImage(filePath);
+        return { ...candidate, filePath, publicUrl: `${publicPrefix}/activities.jpg`, sha256: "entity-owned-fixture", width: 1400, height: 900 };
+      },
+      judgeCandidatesBatch: async ({ candidates }) => candidates.map(candidate => completeAudit(candidate, {
+        auditEvidenceVersion: 2, actualSubject: "A visitor feeding a giraffe", matchLevel: "representative",
+        identityMatch: false, hotelIdentityMatch: false, eligible: false,
+        identityEvidence: { status: "insufficient", basis: "entity_page", evidenceIds: ["resourcePath"],
+          quote: "/uploads/Activities-hero-image.jpg", explanation: "Generic filename does not itself name the venue" },
+      })),
+    },
+  });
+  assert.equal(result.results[0].status, "success");
+  assert.equal(result.results[0].selected.imageUrl, imageUrl);
+  assert.equal(result.results[0].selected.hardJudgment.identityEvidence.status, "supported");
+  assert.equal(result.results[0].selected.hardJudgment.identityEvidence.basis, "entity_page");
 });
 
 test("Web累计预算不随Query重置，下载失败和超预算候选都保留", async (t) => {

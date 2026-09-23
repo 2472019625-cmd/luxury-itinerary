@@ -19,9 +19,9 @@ function hotelVisual(overrides = {}) {
   };
 }
 
-async function generateWithVisual(visual, { duplicate = false, secondVisual = null, factHotelName = visual.queryCore.identity || "测试酒店", factHotelDetails = {} } = {}) {
+async function generateWithVisual(visual, { duplicate = false, secondVisual = null, factHotelName = visual.queryCore.identity || "测试酒店", factHotelDetails = {}, dayDescription = "抵达酒店", dayHotel = "", daySpots = [] } = {}) {
   const targetRole = visual.role || "hotel:1";
-  const data = { destination: "肯尼亚", hotels: [{ id: "hotel-1", officialName: factHotelName, region: "内罗毕", ...factHotelDetails }, ...(secondVisual ? [{ id: "hotel-2", officialName: factHotelName, region: "内罗毕" }] : [])], transportSummary: targetRole === "transport:1" ? [{ id: "vehicle-1", category: visual.queryCore.subject }] : [], days: [{ route: "城市", description: "抵达酒店" }] };
+  const data = { destination: "肯尼亚", hotels: [{ id: "hotel-1", officialName: factHotelName, region: "内罗毕", ...factHotelDetails }, ...(secondVisual ? [{ id: "hotel-2", officialName: factHotelName, region: "内罗毕" }] : [])], transportSummary: targetRole === "transport:1" ? [{ id: "vehicle-1", category: visual.queryCore.subject }] : [], days: [{ route: "城市", description: dayDescription, hotel: dayHotel, spots: daySpots }] };
   const factBasis = buildAgentFactBasis(data);
   let calls = 0;
   const result = await generateAgentPlan({
@@ -102,6 +102,51 @@ test("同店普通客房视野或外观可归入代表空间，但已预订特�
   assert.equal(named.slot.plannerSlotStatus, "unresolved", "专属或命名房型不属于普通类别池");
   const otherOrdinarySpaces = await generateWithVisual(hotelVisual({ primaryVisualSubject: "酒店建筑外观或酒店泳池" }));
   assert.equal(otherOrdinarySpaces.slot.plannerSlotStatus, "locally_repaired", "同店普通代表空间可按既有类别池择优");
+});
+
+test("同店普通代表空间允许枚举的现代/都市/城市修饰且不改变酒店身份", async () => {
+  for (const [identity, visual, subject, subjectEn] of [
+    ["Harbour Azure Hotel", "的现代都市酒店外观或大堂", "现代都市酒店外观或大堂", "modern urban hotel exterior or lobby"],
+    ["Lodge Borealis", "的当代城市酒店外观或酒店大堂", "当代城市酒店外观或酒店大堂", "contemporary city hotel exterior or hotel lobby"],
+    ["Casa Vale", " modern urban hotel exterior or lobby", "modern urban hotel exterior or lobby", "modern urban hotel exterior or lobby"],
+  ]) {
+    const original = hotelVisual({
+      primaryVisualSubject: `${identity}${visual}`,
+      locationRole: "scope_only",
+      queryCore: { subject, action: "", identity, subjectEn, actionEn: "", identityEn: identity },
+      fidelityQuery: `${identity} 酒店外观大堂`, alternateQueries: [`${identity} hotel exterior`, `${identity} hotel lobby`],
+    });
+    const { slot, plan, data } = await generateWithVisual(original);
+    assert.equal(slot.plannerSlotStatus, "locally_repaired", identity);
+    assert.equal(slot.plannerLocalRepairs[0].code, "hotel_representative_choice_resolved");
+    assert.deepEqual(slot.plannerLocalRepairs[0].allowedCategories.sort(), ["exterior", "main_areas"]);
+    assert.equal(slot.queryCore.subject, "酒店代表性空间");
+    assert.equal(slot.queryCore.identity, identity);
+    assert.equal(slot.exactIdentityRequired, true);
+    assert.equal(materializeSimpleSkillPlan({ data, agentPlan: plan }).imageSlots.find((item) => item.moduleType === "hotel").needsUserAction, false);
+  }
+});
+
+test("中性修饰不得吞掉指定房型、私人设施、承诺视野、动作或其他酒店", async () => {
+  const identity = "Harbour Azure Hotel";
+  const base = hotelVisual({
+    primaryVisualSubject: `${identity}的现代都市酒店外观或大堂`,
+    queryCore: { subject: "现代都市酒店外观或大堂", action: "", identity, subjectEn: "modern urban hotel exterior or lobby", actionEn: "", identityEn: identity },
+    fidelityQuery: `${identity} 酒店外观`, alternateQueries: [`${identity} hotel lobby`],
+  });
+  for (const [label, patch, details] of [
+    ["指定房型", { primaryVisualSubject: `${identity}的现代总统套房或大堂`, queryCore: { ...base.queryCore, subject: "现代总统套房或大堂" } }, {}],
+    ["私人设施", { primaryVisualSubject: `${identity}的现代私人泳池或大堂`, queryCore: { ...base.queryCore, subject: "现代私人泳池或大堂" } }, {}],
+    ["已订视野", { primaryVisualSubject: `${identity}的现代酒店客房城市景观或酒店外观`, queryCore: { ...base.queryCore, subject: "现代酒店客房或酒店外观", subjectEn: "modern hotel room or hotel exterior" } }, { roomType: "City View Room" }],
+    ["其他酒店", { primaryVisualSubject: `${identity}的现代酒店外观或Other Hotel大堂` }, {}],
+    ["动作", { queryCore: { ...base.queryCore, action: "住客在大堂办理入住" } }, {}],
+    ["身份冲突", { queryCore: { ...base.queryCore, identity: "Other Hotel" } }, {}],
+    ["未知修饰", { primaryVisualSubject: `${identity}的私人都市酒店外观或大堂`, queryCore: { ...base.queryCore, subject: "私人都市酒店外观或大堂" } }, {}],
+  ]) {
+    const { slot } = await generateWithVisual({ ...base, ...patch }, { factHotelName: identity, factHotelDetails: details });
+    assert.equal(slot.plannerSlotStatus, "unresolved", label);
+    assert.equal(slot.needsUserAction, true, label);
+  }
 });
 
 test("酒店代表选择不放行具体设施、房型、动作、其他实体或跨模块目标", async () => {
@@ -261,7 +306,121 @@ test("原本单一的画面保持原文，不重写核心、查询或费用状�
   assert.deepEqual(slot.plannerLocalRepairs, []);
 });
 
+test("酒店主图无专属来源时将模型具体房型动作收敛为同店代表空间，DAY事实不变", async () => {
+  const hotelName = "Harbour Azure Hotel";
+  const original = hotelVisual({
+    primaryVisualSubject: `${hotelName}玻璃穹顶房型开启屋顶的观星场景`,
+    queryCore: { subject: "玻璃穹顶房型", action: "开启屋顶观星", identity: `${hotelName} 玻璃穹顶房型`, subjectEn: "glass dome room", actionEn: "retracting roof", identityEn: hotelName },
+    location: hotelName, fidelityQuery: `${hotelName} 玻璃穹顶房型 观星`,
+    alternateQueries: [`${hotelName} glass dome room retractable roof`],
+  });
+  const dayDescription = "晚间安排观星；资料介绍玻璃穹顶可以开启。";
+  const { slot, plan, data, attempts } = await generateWithVisual(original, { factHotelName: hotelName, dayDescription, dayHotel: hotelName });
+  assert.equal(slot.plannerSlotStatus, "locally_repaired");
+  assert.equal(slot.primaryVisualSubject, `${hotelName} 酒店代表性空间`);
+  assert.equal(slot.queryCore.subject, "酒店代表性空间");
+  assert.equal(slot.queryCore.action, "");
+  assert.equal(slot.queryCore.identity, hotelName);
+  assert.equal(slot.exactIdentityRequired, true);
+  assert.deepEqual(slot.searchIntent, ["酒店外观", "酒店套房", "酒店泳池", "酒店公共空间"]);
+  assert.ok(slot.plannerLocalRepairs.some((repair) => repair.code === "hotel_unbound_specific_visual_normalized"));
+  assert.deepEqual(attempts[0].rawModelPlan.imagePlan.slots.find((item) => item.role === "hotel:1").queryCore, original.queryCore);
+  assert.equal(plan.factBasis.days[0].experience, dayDescription);
+  const imageSlot = materializeSimpleSkillPlan({ data, agentPlan: plan }).imageSlots.find((item) => item.moduleType === "hotel");
+  assert.equal(imageSlot.needsUserAction, false);
+  assert.equal(imageSlot.queryCore.identity, hotelName);
+});
+
+test("酒店来源明确的特定房型或体验及跨店身份冲突不得被代表空间覆盖", async () => {
+  const hotelName = "Harbour Azure Hotel";
+  const original = hotelVisual({
+    primaryVisualSubject: `${hotelName}玻璃穹顶房型开启屋顶的观星场景`,
+    queryCore: { subject: "玻璃穹顶房型", action: "开启屋顶观星", identity: `${hotelName} 玻璃穹顶房型`, subjectEn: "glass dome room", actionEn: "retracting roof", identityEn: hotelName },
+    location: hotelName, fidelityQuery: `${hotelName} 玻璃穹顶房型 观星`,
+    alternateQueries: [`${hotelName} glass dome room retractable roof`],
+  });
+  for (const [label, options] of [
+    ["已订房型", { factHotelDetails: { roomType: "玻璃穹顶房型" } }],
+    ["酒店专属体验", { factHotelDetails: { signatureExperience: "玻璃穹顶房型观星" } }],
+    ["酒店选择理由", { factHotelDetails: { selectionReason: "屋顶开启后的观星体验" } }],
+    ["酒店绑定DAY事实", { dayDescription: `${hotelName}的玻璃穹顶房型可以开启屋顶观星。` }],
+    ["酒店绑定Spot事实", { daySpots: [{ name: `${hotelName}玻璃穹顶房型`, description: "屋顶可以开启观星。" }] }],
+  ]) {
+    const { slot } = await generateWithVisual(original, { factHotelName: hotelName, ...options });
+    assert.equal(slot.plannerSlotStatus, "unresolved", label);
+    assert.equal(slot.primaryVisualSubject, original.primaryVisualSubject, label);
+    assert.deepEqual(slot.queryCore, original.queryCore, label);
+    assert.ok(slot.plannerValidationIssues.some((issue) => issue.code === "hotel_specific_visual_source_unconfirmed"), label);
+    assert.ok(!slot.plannerLocalRepairs.some((repair) => repair.code === "hotel_unbound_specific_visual_normalized"), label);
+  }
+  const other = await generateWithVisual({ ...original, primaryVisualSubject: `${hotelName}和Other Hotel的玻璃穹顶房型` }, { factHotelName: hotelName });
+  assert.equal(other.slot.plannerSlotStatus, "unresolved");
+  assert.equal(other.slot.primaryVisualSubject, `${hotelName}和Other Hotel的玻璃穹顶房型`);
+});
+
+test("普通单一酒店空间无需专属来源也不会降级为泛代表图", async () => {
+  for (const [hotelName, subject, visual] of [
+    ["Open Savanna Camp", "帐篷营地开放式休息区", "Open Savanna Camp营地的开放式公共休息区"],
+    ["The Meridian Lodge", "奢华帐篷套房内部", "The Meridian Lodge的奢华帐篷套房内部"],
+    ["Harbour Azure Hotel", "酒店建筑外观", "酒店建筑外观"],
+  ]) {
+    const original = hotelVisual({ primaryVisualSubject: visual, queryCore: { subject, action: "", identity: hotelName },
+      location: hotelName, fidelityQuery: `${hotelName} ${subject}`, alternateQueries: [`${hotelName} hotel exterior`] });
+    const { slot } = await generateWithVisual(original, { factHotelName: hotelName });
+    assert.ok(["ready", "locally_repaired"].includes(slot.plannerSlotStatus), hotelName);
+    assert.equal(slot.primaryVisualSubject, original.primaryVisualSubject);
+    assert.deepEqual(slot.queryCore, original.queryCore);
+    assert.ok(!slot.plannerValidationIssues.some((issue) => issue.code.startsWith("hotel_specific_visual_")));
+  }
+});
+
 test("Planner事实基座把对象亮点转换为显示文本", () => {
   const facts = buildAgentFactBasis({ highlights: [{ title: "私家行程", description: "按专属节奏深入" }, "自然观察"], days: [] });
   assert.deepEqual(facts.coreExperiences, ["私家行程：按专属节奏深入", "自然观察"]);
+});
+
+async function planDaySubject(visual, queries) {
+  const data = { destination: "测试保护区", days: [{ route: "测试保护区", description: "在草原观察羚羊与斑马", spots: [{ name: "草原观察", description: "观察羚羊与斑马", status: "included" }] }] };
+  const factBasis = buildAgentFactBasis(data);
+  let calls = 0;
+  let systemPrompt = "";
+  const result = await generateAgentPlan({
+    project: { projectId: "single-subject-contract", inputFingerprint: "fixture", factBasis, planIds: [] },
+    simpleSkillContract: true,
+    requestJson: async (options) => {
+      calls += 1;
+      systemPrompt = options.messages[0].content;
+      const response = await plannerRequestJson({ delayMs: 0 })(options);
+      const day = response.json.imagePlan.slots.find((item) => item.role === "day:1");
+      Object.assign(day, { primaryVisualSubject: visual, queryCore: { subject: "羚羊", action: "行走", identity: "", subjectEn: "antelope", actionEn: "walking", identityEn: "" }, fidelityQuery: queries[0], alternateQueries: queries.slice(1), location: "测试保护区", locationRole: "scope_only", exactIdentityRequired: false, sourceRefs: ["days.0.spots.0"] });
+      response.json.dayRoles[0].primaryVisualSubject = "草原羚羊行走";
+      return response;
+    },
+  });
+  assert.equal(calls, 1, "业务规划仍只调用一次");
+  return { ...result, data, systemPrompt, slot: result.plan.imagePlan.slots.find((item) => item.role === "day:1") };
+}
+
+test("DAY主图在单次规划中选定主体并使全部Query保持同一画面", async () => {
+  const { slot, systemPrompt, plan, data } = await planDaySubject("草原羚羊行走", ["羚羊行走", "antelope walking"]);
+  assert.match(systemPrompt, /唯一一个Core主体/);
+  assert.match(systemPrompt, /alternateQueries只能改用同一目标/);
+  assert.match(systemPrompt, /dayRoles的主视觉与对应day:N主图必须一致/);
+  assert.match(systemPrompt, /设备、光源、特定设施或动物必须能由sourceRefs指向的原始事实支持/);
+  assert.equal(slot.plannerSlotStatus, "ready");
+  assert.equal(slot.needsUserAction, false);
+  assert.equal(materializeSimpleSkillPlan({ data, agentPlan: plan }).imageSlots.find((item) => item.slotId === "image:day:1:primary").needsUserAction, false);
+});
+
+test("DAY不同主体二选一与跨分支Query保留未解决并记录冲突", async () => {
+  const { slot, plan, data } = await planDaySubject("草原上羚羊或斑马的游猎画面", ["羚羊行走", "antelope walking", "斑马奔跑"]);
+  assert.equal(slot.plannerSlotStatus, "unresolved");
+  assert.equal(slot.needsUserAction, true);
+  assert.ok(slot.plannerValidationIssues.some((issue) => issue.code === "ambiguous_visual_subject"));
+  assert.ok(slot.plannerValidationIssues.some((issue) => issue.code === "visual_query_branch_conflict" && /斑马奔跑/.test(issue.message)));
+  assert.ok(!slot.plannerLocalRepairs.some((repair) => repair.code === "equivalent_visual_choice_resolved"));
+  assert.equal(materializeSimpleSkillPlan({ data, agentPlan: plan }).imageSlots.find((item) => item.slotId === "image:day:1:primary").needsUserAction, true);
+  const sameQueries = await planDaySubject("草原上羚羊或斑马的游猎画面", ["羚羊行走", "antelope walking"]);
+  assert.equal(sameQueries.slot.plannerSlotStatus, "unresolved", "没有跨分支Query也不能由程序替Planner选羚羊");
+  assert.ok(!sameQueries.slot.plannerValidationIssues.some((issue) => issue.code === "visual_query_branch_conflict"));
 });

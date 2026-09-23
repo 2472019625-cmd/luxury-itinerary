@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { judgeCandidatesBatch } from "../server/image-audit.mjs";
+import { applyWebImageIdentityEvidence, buildImageConstraints, failedHardRequirement } from "../server/simple-image-skill.mjs";
+import { webEntityOwnedPageImageEvidence } from "../server/web-image-candidates.mjs";
 import { completeVisualJudgment } from "../server/image-audit-contract.mjs";
 import { candidateQualification, IMAGE_AUDIT_EVIDENCE_VERSION, isIdentityEvidenceUnresolved } from "../server/image-candidate-eligibility.mjs";
 
@@ -273,6 +275,118 @@ test("explicit per-photo identity citations and entity page bindings can support
   }
 });
 
+test("a generic-named image on an entity-owned substantive content page can resolve citation-only identity uncertainty", async (t) => {
+  const { candidate } = await fixtures(t);
+  const target = {
+    module: "day", moduleType: "day", label: "Sanctuary encounter", locationRole: "visual_identity",
+    exactIdentityRequired: true,
+    queryCore: { subject: "visitor and giraffe", action: "feeding", identity: "长颈鹿中心", identityEn: "Giraffe Centre" },
+    minimumVisualProof: { subject: "visitor and giraffe", action: "feeding", identityRequirement: "长颈鹿中心" },
+  };
+  const image = {
+    ...candidate, pageUrl: "https://www.giraffecentre.org/our-sanctuary/",
+    entityPagePath: "/our-sanctuary/", imageUrl: "https://www.giraffecentre.org/uploads/Activities-hero-image.jpg",
+    kind: "page-image", pagePosition: "content", resourceRole: "media", officialHint: false,
+  };
+  const proof = webEntityOwnedPageImageEvidence(image, target);
+  assert.equal(proof?.basis, "entity_page");
+  const { results: [judged] } = await audit([image], [judgment(image.candidateId, {
+    actualSubject: "Visitors feeding giraffes at a sanctuary", matchLevel: "representative",
+    identityMatch: false, hotelIdentityMatch: false, eligible: false,
+    identityEvidence: { status: "insufficient", basis: "entity_page", evidenceIds: ["resourcePath"],
+      quote: "/uploads/Activities-hero-image.jpg", explanation: "The cited filename does not itself name the venue" },
+  })], target);
+  assert.ok(isIdentityEvidenceUnresolved(judged));
+  const corrected = applyWebImageIdentityEvidence(target, image, judged);
+  assert.equal(corrected.identityEvidence.status, "supported");
+  assert.equal(corrected.identityEvidence.basis, "entity_page");
+  assert.equal(corrected.identityMatch, true);
+  assert.equal(failedHardRequirement(target, corrected), null);
+});
+
+test("an entity-owned page's og:image is page-bound despite living in metadata; weak metadata is not", () => {
+  const target = { module: "day", moduleType: "day", locationRole: "visual_identity", exactIdentityRequired: true,
+    queryCore: { identity: "长颈鹿中心", identityEn: "Giraffe Centre" } };
+  const ogImage = { pageUrl: "https://giraffecentre.org/our-sanctuary/", entityPagePath: "/our-sanctuary/",
+    imageUrl: "https://giraffecentre.org/uploads/Activities-hero-image.jpg",
+    kind: "og:image", pagePosition: "other", resourceRole: "media" };
+  assert.equal(webEntityOwnedPageImageEvidence(ogImage, target)?.basis, "entity_page");
+  const audit = judgment("og-1", { auditEvidenceVersion: IMAGE_AUDIT_EVIDENCE_VERSION,
+    actualSubject: "A visitor feeding a giraffe", identityMatch: false, hotelIdentityMatch: false, eligible: false,
+    identityEvidence: { status: "insufficient", basis: "entity_page", evidenceIds: ["resourcePath"],
+      quote: "/uploads/Activities-hero-image.jpg", explanation: "Generic filename alone is inconclusive" } });
+  assert.equal(applyWebImageIdentityEvidence(target, ogImage, audit).identityEvidence.status, "supported");
+  for (const [index, image] of [
+    { ...ogImage, pageUrl: "https://shared-brand.org/giraffe-centre/", entityPagePath: "/giraffe-centre/", imageUrl: "https://shared-brand.org/hero.jpg" },
+    { ...ogImage, pageUrl: "https://giraffecentre.org/", entityPagePath: "/" },
+    { ...ogImage, pageUrl: "https://giraffecentre.org/partners/", entityPagePath: "/partners/" },
+    { ...ogImage, pageUrl: "https://giraffecentre.org/our-partners/", entityPagePath: "/our-partners/" },
+    { ...ogImage, pageUrl: "https://giraffecentre.org/destinations/other-place/", entityPagePath: "/destinations/other-place/" },
+    { ...ogImage, imageUrl: "https://another-site.org/hero.jpg" },
+    { ...ogImage, kind: "twitter:image" },
+    { ...ogImage, kind: "image-preload" },
+    { ...ogImage, kind: "embedded-media" },
+  ].entries()) {
+    assert.equal(webEntityOwnedPageImageEvidence(image, target), null, `metadata negative ${index}`);
+    assert.equal(applyWebImageIdentityEvidence(target, image, audit), audit, `metadata negative ${index}`);
+  }
+  const incomplete = { ...audit, auditContract: { complete: false } };
+  assert.equal(applyWebImageIdentityEvidence(target, ogImage, incomplete), incomplete);
+});
+
+test("shared-brand pages, unbound/chrome resources and another depicted entity never resolve identity", async (t) => {
+  const { candidate } = await fixtures(t);
+  const target = { module: "day", moduleType: "day", exactIdentityRequired: true,
+    queryCore: { identity: "长颈鹿中心", identityEn: "Giraffe Centre" },
+    minimumVisualProof: { subject: "giraffe", identityRequirement: "长颈鹿中心" } };
+  const image = { ...candidate, pageUrl: "https://giraffecentre.org/our-sanctuary/", entityPagePath: "/our-sanctuary/",
+    imageUrl: "https://giraffecentre.org/uploads/Activities-hero-image.jpg", kind: "page-image",
+    pagePosition: "content", resourceRole: "media" };
+  const negatives = [
+    { ...image, pageUrl: "https://shared-brand.org/giraffe-centre/", entityPagePath: "/giraffe-centre/", imageUrl: "https://shared-brand.org/giraffe-centre/hero.jpg", title: "Giraffe Centre" },
+    { ...image, pageUrl: "https://giraffecentre.org/", entityPagePath: "/" },
+    { ...image, pageUrl: "https://giraffecentre.org/properties/giraffe-centre/", entityPagePath: "/properties/giraffe-centre/" },
+    { ...image, pageUrl: "https://giraffecentre.org/partner-venues/", entityPagePath: "/partner-venues/" },
+    { ...image, pagePosition: "chrome" },
+    { ...image, pagePosition: "other" },
+    { ...image, entityPagePath: "" },
+    { ...image, entityPagePath: "/another-page/" },
+    { ...image, resourceRole: "ui" },
+    { ...image, kind: "embedded-media" },
+    { ...image, imageUrl: "https://media.other-site.org/Activities-hero-image.jpg" },
+    { ...image, depictedIdentity: "Another Wildlife Centre" },
+  ];
+  for (const [index, negative] of negatives.entries()) {
+    assert.equal(webEntityOwnedPageImageEvidence(negative, target), null, `negative ${index}`);
+    const judged = judgment(candidate.candidateId, { identityMatch: false, hotelIdentityMatch: false, eligible: false,
+      identityEvidence: { status: "insufficient", basis: "none", evidenceIds: [], explanation: "No image-level identity" } });
+    judged.auditEvidenceVersion = IMAGE_AUDIT_EVIDENCE_VERSION;
+    assert.equal(applyWebImageIdentityEvidence(target, negative, judged), judged, `negative ${index}`);
+  }
+  const base = judgment(candidate.candidateId, { identityMatch: false, hotelIdentityMatch: false, eligible: false,
+    identityEvidence: { status: "insufficient", basis: "none", evidenceIds: [], explanation: "No image-level identity" },
+    auditEvidenceVersion: IMAGE_AUDIT_EVIDENCE_VERSION });
+  for (const conflict of [
+    { visibleIdentityConflict: true }, { hardRejectCode: "wrong_activity" }, { coreSubjectMatch: false },
+    { auditContract: { complete: false } }, { locationMatch: false },
+  ]) assert.equal(applyWebImageIdentityEvidence({ ...target, locationRole: "visual_identity" }, image, { ...base, ...conflict }).identityEvidence.status, "insufficient");
+});
+
+test("the new non-hotel location gate does not change the hotel property-page proof", () => {
+  const target = { moduleType: "hotel", module: "hotel", hotel: "Azure Pavilion", locationRole: "visual_identity",
+    exactIdentityRequired: true, queryCore: { identity: "Azure Pavilion" } };
+  const candidate = { pageUrl: "https://brand.example/properties/azure-pavilion/gallery",
+    imageUrl: "https://brand.example/properties/azure-pavilion/suite.jpg", kind: "page-image",
+    pagePosition: "content", resourceRole: "media" };
+  const audit = judgment("hotel-1", { auditEvidenceVersion: IMAGE_AUDIT_EVIDENCE_VERSION,
+    identityMatch: false, hotelIdentityMatch: false, locationMatch: false, eligible: false,
+    identityEvidence: { status: "insufficient", basis: "none", evidenceIds: [] } });
+  const corrected = applyWebImageIdentityEvidence(target, candidate, audit);
+  assert.equal(corrected.identityEvidence.status, "supported");
+  assert.equal(corrected.identityMatch, true);
+  assert.equal(corrected.locationMatch, false, "source proof must not silently overwrite an independent location verdict");
+});
+
 test("unsupported or cross-photo citations and a navigation image stay unreviewed", async (t) => {
   const { candidate } = await fixtures(t);
   const candidates = [{ ...candidate, caption: "Suite at Azure Pavilion" }, { ...candidate, candidateId: "photo-2", entityPagePath: "/azure-pavilion", pagePosition: "chrome" }, { ...candidate, candidateId: "photo-3" }];
@@ -385,4 +499,97 @@ test("a visible unique identifier can support identity; ordinary scenes and lega
   assert.equal(ordinary.identityEvidence.status, "not_required");
   assert.equal(ordinary.eligible, true);
   assert.equal(candidateQualification({ qualificationStatus: "eligible", hardJudgment: judgment("legacy") }), "eligible");
+});
+
+test("optional experience venue stays a preference when another hotel's image shows the right experience", async (t) => {
+  const { candidate } = await fixtures(t);
+  const target = {
+    moduleType: "day", location: "Nairobi", locationRole: "visual_identity", exactIdentityRequired: false,
+    queryCore: { subject: "visitor and giraffe", action: "feeding", identity: "Giraffe Centre" },
+    visualGoal: "Visitors feeding giraffes at Giraffe Centre",
+  };
+  const constraints = buildImageConstraints(target);
+  assert.equal(constraints.core.identityRequirement, "");
+  assert.equal(constraints.core.visualLocation, "Nairobi", "the separate visible-location gate remains");
+  const image = { ...candidate, sourceKind: "knowledge_library",
+    knowledgeMatchedFile: { filename: "experience.jpg", sourceDisplayPath: "Kenya/Nairobi/Other Hotel/experience.jpg" },
+    knowledgeSourcePaths: ["Kenya/Nairobi/Other Hotel/experience.jpg"] };
+  const { results: [result] } = await audit([image], [judgment(image.candidateId, {
+    actualSubject: "Visitor feeding a giraffe", reason: "The source path points to Giraffe Centre",
+    identityEvidence: { status: "supported", basis: "knowledge_path", evidenceIds: ["knowledgePath1"],
+      quote: "Giraffe Centre", visibleIdentifier: "Typical Giraffe Centre feeding platform", explanation: "Venue proven" },
+  })], { ...target, minimumVisualProof: constraints.minimumVisualProof });
+  assert.equal(result.identityEvidence.status, "not_required");
+  assert.equal(result.identityEvidence.basis, "none");
+  assert.equal(result.identityEvidence.quote, "");
+  assert.equal(result.identityEvidence.visibleIdentifier, "");
+  assert.equal(result.matchLevel, "representative");
+  assert.doesNotMatch(result.reason, /source path points to Giraffe Centre/);
+  assert.equal(failedHardRequirement(target, result), null);
+  const { results: [identityOnlyRejection] } = await audit([image], [judgment(image.candidateId, {
+    actualSubject: "Visitor feeding a giraffe", coreSubjectMatch: true, coreActionMatch: true,
+    identityMatch: false, eligible: false, hardRejectCode: "wrong_subject", matchLevel: "mismatch",
+    reason: "Wrong subject because this is not the named venue",
+  })], { ...target, minimumVisualProof: constraints.minimumVisualProof });
+  assert.equal(identityOnlyRejection.hardRejectCode, "none");
+  assert.equal(identityOnlyRejection.matchLevel, "representative");
+  assert.equal(failedHardRequirement(target, identityOnlyRejection), null);
+});
+
+test("only image-bound venue evidence preserves exact; hard identity and visible conflicts remain gated", async (t) => {
+  const { candidate } = await fixtures(t);
+  const target = { moduleType: "day", exactIdentityRequired: false,
+    queryCore: { subject: "visitor and giraffe", action: "feeding", identity: "Giraffe Centre" } };
+  const image = { ...candidate, sourceKind: "knowledge_library",
+    knowledgeMatchedFile: { filename: "feeding.jpg", sourceDisplayPath: "Kenya/Nairobi/Giraffe Centre/feeding.jpg" },
+    knowledgeSourcePaths: ["Kenya/Nairobi/Giraffe Centre/feeding.jpg"] };
+  const { results: [supported] } = await audit([image], [judgment(image.candidateId, {
+    actualSubject: "Visitor feeding a giraffe", reason: "The image shows the exact venue",
+  })], target);
+  assert.equal(supported.matchLevel, "exact");
+  assert.equal(supported.identityEvidence.basis, "knowledge_path");
+  assert.match(supported.identityEvidence.quote, /Giraffe Centre/);
+
+  const mixedPaths = { ...image,
+    knowledgeMatchedFile: { filename: "feeding.jpg", sourceDisplayPath: "Kenya/Nairobi/Other Hotel/feeding.jpg" },
+    knowledgeSourcePaths: ["Kenya/Nairobi/Giraffe Centre/feeding.jpg"] };
+  const { results: [mixed] } = await audit([mixedPaths], [judgment(image.candidateId)], target);
+  assert.equal(mixed.matchLevel, "representative", "a result-level path cannot override the matched file's own path");
+
+  const unbound = { ...image, knowledgeMatchedFile: { filename: "feeding.jpg", sourceDisplayPath: "Kenya/Nairobi/Other Hotel/feeding.jpg" },
+    knowledgeSourcePaths: ["Kenya/Nairobi/Other Hotel/feeding.jpg"] };
+  const { results: [required] } = await audit([unbound], [judgment(image.candidateId)], { ...target, exactIdentityRequired: true });
+  assert.equal(required.identityEvidence.status, "insufficient");
+  assert.equal(required.eligible, false);
+  assert.equal(failedHardRequirement({ ...target, exactIdentityRequired: true }, required), "needs_user_judgment");
+
+  const { results: [conflict] } = await audit([unbound], [judgment(image.candidateId, {
+    visibleIdentityConflict: true, hardRejectCode: "wrong_subject", eligible: false,
+  })], target);
+  assert.equal(conflict.identityEvidence.status, "conflict");
+  assert.equal(failedHardRequirement(target, conflict), "wrong_subject");
+  assert.match(buildImageConstraints({ moduleType: "hotel", hotel: "Azure Pavilion", exactIdentityRequired: false,
+    queryCore: { subject: "suite", identity: "Azure Pavilion" } }).core.identityRequirement, /Azure Pavilion/);
+  assert.match(buildImageConstraints({ moduleType: "transport", exactIdentityRequired: false,
+    queryCore: { subject: "safari vehicle", identity: "Nairobi Airport" } }).core.identityRequirement, /safari_vehicle/);
+});
+
+test("optional venue on an owned Web page may be exact, but a shared-brand page stays representative", async (t) => {
+  const { candidate } = await fixtures(t);
+  const target = { moduleType: "day", exactIdentityRequired: false,
+    queryCore: { subject: "visitor and giraffe", action: "feeding", identity: "Giraffe Centre" } };
+  const owned = { ...candidate, sourceKind: "web", pageUrl: "https://giraffecentre.org/our-sanctuary/",
+    entityPagePath: "/our-sanctuary/", imageUrl: "https://giraffecentre.org/uploads/feeding.jpg",
+    kind: "page-image", pagePosition: "content", resourceRole: "media" };
+  const shared = { ...owned, pageUrl: "https://travel.example/giraffe-centre/",
+    entityPagePath: "/giraffe-centre/", imageUrl: "https://travel.example/images/feeding.jpg" };
+  for (const [image, expected] of [[owned, "exact"], [shared, "representative"]]) {
+    const { results: [result] } = await audit([image], [judgment(image.candidateId, {
+      actualSubject: "Visitor feeding a giraffe", reason: "The source page belongs to Giraffe Centre",
+    })], target);
+    assert.equal(result.matchLevel, expected);
+    assert.equal(result.identityEvidence.status, "not_required");
+    assert.equal(result.identityEvidence.basis, expected === "exact" ? "entity_page" : "none");
+    assert.equal(failedHardRequirement(target, result), null);
+  }
 });

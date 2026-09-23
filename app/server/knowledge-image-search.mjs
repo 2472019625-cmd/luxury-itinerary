@@ -2,6 +2,28 @@ import { randomUUID } from "node:crypto";
 
 const modes = new Set(["knowledge_only", "knowledge_first", "web_only"]);
 
+function safeDiagnosticId(value) {
+  const id = String(value || "").trim();
+  return /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(id) ? id : null;
+}
+
+function knowledgeRequestError({ stage, kind, code, diagnosticId, queryId, requestId, errorId, status, startedAt }) {
+  const action = stage === "submit" ? "提交" : stage === "refresh" ? "刷新原件" : "轮询";
+  const suffix = kind === "timeout" ? "超时" : kind === "cancelled" ? "已取消" : kind === "invalid_response" ? "响应无效" : "失败";
+  const error = new Error(`知识库${action}请求${suffix}`);
+  error.code = code;
+  if (kind === "cancelled") error.name = "AbortError";
+  error.knowledgeStage = stage;
+  error.knowledgeFailureKind = kind;
+  error.diagnosticId = diagnosticId;
+  error.queryId = safeDiagnosticId(queryId);
+  error.requestId = safeDiagnosticId(requestId);
+  error.errorId = safeDiagnosticId(errorId);
+  error.status = Number.isInteger(status) ? status : null;
+  error.durationMs = Date.now() - startedAt;
+  return error;
+}
+
 export function normalizeImageSourceMode(value) {
   const normalized = String(value || "web_only").trim().toLowerCase();
   return modes.has(normalized) ? normalized : "web_only";
@@ -22,26 +44,27 @@ function abortSignal(signal, timeoutMs) {
   return { signal: combined, stop: () => clearTimeout(timer) };
 }
 
-async function fetchJson(url, options, { fetchImpl, signal, timeoutMs }) {
+async function fetchJson(url, options, { fetchImpl, signal, timeoutMs, stage = "poll", diagnosticId = null, queryId = null, startedAt = Date.now() }) {
   const timeout = abortSignal(signal, timeoutMs);
   try {
     const response = await fetchImpl(url, { ...options, signal: timeout.signal });
     let payload = null;
     try { payload = await response.json(); } catch { /* Preserve the HTTP status below. */ }
     if (!response.ok) {
-      const error = new Error(payload?.detail || payload?.error || `知识库请求失败（${response.status}）`);
-      error.code = `knowledge_http_${response.status}`;
-      error.status = response.status;
-      throw error;
+      throw knowledgeRequestError({
+        stage, kind: "http", code: `knowledge_http_${response.status}`, diagnosticId, queryId,
+        requestId: payload?.request_id, errorId: payload?.error_id || payload?.data?.error_id,
+        status: response.status, startedAt,
+      });
     }
     return { response, payload };
   } catch (error) {
     if (timeout.signal.aborted && !signal?.aborted) {
-      const timeoutError = new Error("知识库查询超时");
-      timeoutError.code = "knowledge_timeout";
-      throw timeoutError;
+      throw knowledgeRequestError({ stage, kind: "timeout", code: "knowledge_timeout", diagnosticId, queryId, startedAt });
     }
-    throw error;
+    if (signal?.aborted) throw knowledgeRequestError({ stage, kind: "cancelled", code: "knowledge_cancelled", diagnosticId, queryId, startedAt });
+    if (error?.knowledgeStage) throw error;
+    throw knowledgeRequestError({ stage, kind: "transport", code: "knowledge_transport_error", diagnosticId, queryId, startedAt });
   } finally { timeout.stop(); }
 }
 
@@ -208,7 +231,7 @@ function sameKnowledgeAsset(candidate = {}, other = {}) {
 export async function refreshKnowledgeMatchedFile({ baseUrl, queryIds = [], candidate, requestTimeoutMs = 30_000, signal, fetchImpl = fetch } = {}) {
   const normalizedBaseUrl = cleanBaseUrl(baseUrl);
   for (const queryId of [...new Set((queryIds || []).map(String).filter(Boolean))]) {
-    const current = await fetchJson(`${normalizedBaseUrl}/api/knowledge/output?query_id=${encodeURIComponent(queryId)}`, { method: "GET" }, { fetchImpl, signal, timeoutMs: requestTimeoutMs });
+    const current = await fetchJson(`${normalizedBaseUrl}/api/knowledge/output?query_id=${encodeURIComponent(queryId)}`, { method: "GET" }, { fetchImpl, signal, timeoutMs: requestTimeoutMs, stage: "refresh", queryId, diagnosticId: randomUUID() });
     if (current.response.status !== 200 || current.payload?.data?.status !== "completed") continue;
     const parsed = knowledgeOutputToCandidates(current.payload.data, { baseUrl: normalizedBaseUrl, queryId, queryText: "" });
     const found = parsed.candidates.find((other) => sameKnowledgeAsset(candidate, other));
@@ -224,6 +247,7 @@ export async function searchKnowledgeImages({
   requestTimeoutMs = 30_000, pollIntervalMs = 2_000, options = {}, signal, fetchImpl = fetch,
 } = {}) {
   const startedAt = Date.now();
+  const diagnosticId = randomUUID();
   const normalizedBaseUrl = cleanBaseUrl(baseUrl);
   if (!normalizedBaseUrl) {
     const error = new Error("未配置图片知识库地址");
@@ -245,36 +269,38 @@ export async function searchKnowledgeImages({
     method: "POST",
     headers: { "Idempotency-Key": randomUUID() },
     body: form,
-  }, { fetchImpl, signal, timeoutMs: requestTimeoutMs });
+  }, { fetchImpl, signal, timeoutMs: requestTimeoutMs, stage: "submit", diagnosticId, startedAt });
   const queryId = String(accepted.payload?.data?.query_id || "").trim();
   if (accepted.response.status !== 202 || !queryId) {
-    const error = new Error("知识库未返回有效 query_id");
-    error.code = "knowledge_invalid_acceptance";
-    throw error;
+    throw knowledgeRequestError({
+      stage: "submit", kind: "invalid_response", code: "knowledge_invalid_acceptance", diagnosticId,
+      requestId: accepted.payload?.request_id, errorId: accepted.payload?.error_id, status: accepted.response.status, startedAt,
+    });
   }
   const deadline = Date.now() + Math.max(requestTimeoutMs, Number(timeoutMs) || 120_000);
   while (Date.now() < deadline) {
     const remaining = Math.max(1, deadline - Date.now());
     const current = await fetchJson(`${normalizedBaseUrl}/api/knowledge/output?query_id=${encodeURIComponent(queryId)}`, {
       method: "GET",
-    }, { fetchImpl, signal, timeoutMs: Math.min(requestTimeoutMs, remaining) });
+    }, { fetchImpl, signal, timeoutMs: Math.min(requestTimeoutMs, remaining), stage: "poll", diagnosticId, queryId, startedAt });
     if (current.response.status === 202) {
-      await wait(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())), signal);
+      try {
+        await wait(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())), signal);
+      } catch {
+        throw knowledgeRequestError({ stage: "poll", kind: "cancelled", code: "knowledge_cancelled", diagnosticId, queryId, startedAt });
+      }
       continue;
     }
     const output = current.payload?.data || {};
-    const status = String(output.status || "failed");
+    const status = String(output.status || "");
     if (status === "completed") {
       const parsed = knowledgeOutputToCandidates(output, { baseUrl: normalizedBaseUrl, queryId, queryText });
       const feedback = completedScopeFeedback(output);
-      return { status, queryId, queryText, scope, durationMs: Date.now() - startedAt, candidates: parsed.candidates, records: parsed.records, clarificationNodeIds: [], ...feedback };
+      return { status, queryId, queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, candidates: parsed.candidates, records: parsed.records, clarificationNodeIds: [], ...feedback };
     }
-    if (status === "needs_clarification") return { status, queryId, queryText, scope, durationMs: Date.now() - startedAt, candidates: [], records: [], clarificationNodeIds: Array.isArray(output.clarification_node_ids) ? output.clarification_node_ids : [] };
-    return { status: "failed", queryId, queryText, scope, durationMs: Date.now() - startedAt, candidates: [], records: [], clarificationNodeIds: [], errorId: output.error_id || null, requestId: current.payload?.request_id || null };
+    if (status === "needs_clarification") return { status, queryId, queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, candidates: [], records: [], clarificationNodeIds: Array.isArray(output.clarification_node_ids) ? output.clarification_node_ids : [] };
+    if (status !== "failed") throw knowledgeRequestError({ stage: "poll", kind: "invalid_response", code: "knowledge_invalid_output", diagnosticId, queryId, requestId: current.payload?.request_id, status: current.response.status, startedAt });
+    return { status: "failed", queryId: safeDiagnosticId(queryId), queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, knowledgeStage: "terminal", knowledgeFailureKind: "terminal_failure", candidates: [], records: [], clarificationNodeIds: [], errorId: safeDiagnosticId(output.error_id), requestId: safeDiagnosticId(current.payload?.request_id) };
   }
-  const error = new Error(`知识库查询超时：${queryId}`);
-  error.code = "knowledge_timeout";
-  error.queryId = queryId;
-  error.durationMs = Date.now() - startedAt;
-  throw error;
+  throw knowledgeRequestError({ stage: "poll", kind: "timeout", code: "knowledge_timeout", diagnosticId, queryId, startedAt });
 }

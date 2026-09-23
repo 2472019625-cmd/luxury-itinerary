@@ -80,6 +80,71 @@ export function webHotelIdentityEvidence(candidate, slot) {
   if (declared?.length >= 2 && !declared.every(token => required.includes(token))) return null;
   return { basis: imageNamed ? 'image_metadata' : 'property_page', quote: imageNamed ? imageText.slice(0, 500) : galleryBound ? `${pagePath} | ${resourcePath}`.slice(0, 500) : pagePath.slice(0, 500), evidenceIds: imageNamed ? ['resourcePath'] : galleryBound ? ['entityPagePath', 'resourcePath'] : ['entityPagePath'] };
 }
+
+// A full entity name in the site's own domain can bind an image on that
+// entity's substantive page. This is deliberately narrower than a matching
+// page title/path: a shared brand site, homepage, third-party asset, script
+// URL, or navigation image does not establish the depicted entity.
+export function webEntityOwnedPageImageEvidence(candidate, slot) {
+  if (slot.exactIdentityRequired !== true || String(slot.moduleType || '').toLowerCase().includes('hotel')) return null;
+  let page, image;
+  try {
+    page = new URL(candidate.pageUrl);
+    image = new URL(resourceUrl(candidate.downloadedImageUrl || candidate.imageUrl));
+  } catch { return null; }
+  if (page.protocol !== 'https:' || image.protocol !== 'https:') return null;
+  const pageHost = page.hostname.toLowerCase().replace(/^www\./, '');
+  const imageHost = image.hostname.toLowerCase().replace(/^www\./, '');
+  if (pageHost !== imageHost || candidate.resourceRole !== 'media') return null;
+  const contentImage = candidate.pagePosition === 'content'
+    && (['page-image', 'image-srcset', 'picture-srcset', 'gallery-link', 'media-link', 'css-background'].includes(candidate.kind)
+      || /^lazy-data-/.test(candidate.kind || ''));
+  // Open Graph's image declaration belongs to this exact fetched page even
+  // though a <meta> tag sits outside the visible content DOM. Other metadata
+  // and script/preload discoveries do not receive this provenance.
+  const declaredPageImage = candidate.kind === 'og:image' && candidate.pagePosition !== 'chrome';
+  if (!contentImage && !declaredPageImage) return null;
+  const hostLabels = pageHost.split('.');
+  const ownerLabel = hostLabels.length === 2 ? hostLabels[0]
+    : hostLabels.length === 3 && /^(?:co|com|org|net|gov|ac)$/.test(hostLabels[1]) && /^[a-z]{2}$/.test(hostLabels[2]) ? hostLabels[0] : '';
+  if (!ownerLabel || !/^[a-z0-9-]+$/.test(ownerLabel)) return null;
+  const aliases = [slot.queryCore?.identityEn, slot.queryCore?.identity, slot.entityName].filter(Boolean);
+  const owned = aliases.some(value => {
+    const words = terms(value);
+    return words.length >= 2 && words.join('') === ownerLabel.replace(/-/g, '');
+  });
+  if (!owned) return null;
+  let pagePath;
+  try { pagePath = decodeURIComponent(page.pathname); } catch { return null; }
+  const segments = pagePath.toLowerCase().split('/').filter(Boolean);
+  // A first-party site can still publish photos of partners, other venues or
+  // properties. Such collections are not a page about the planned entity;
+  // leave their otherwise plausible images for human confirmation.
+  const collectionTerms = new Set([
+    'all', 'affiliate', 'affiliates', 'brand', 'brands', 'camp', 'camps',
+    'categories', 'category', 'destination', 'destinations', 'directory',
+    'hotel', 'hotels', 'listing', 'listings', 'location', 'locations',
+    'lodges', 'operator', 'operators', 'partner', 'partners', 'properties',
+    'property', 'provider', 'providers', 'resorts', 'results', 'search',
+    'sponsor', 'sponsors', 'supplier', 'suppliers', 'tag', 'tags',
+    'venue', 'venues',
+  ]);
+  if (!segments.length || segments.some(segment => segment.split(/[^a-z0-9]+/).some(token => collectionTerms.has(token)))) return null;
+  // Only the HTML extractor's final response-path binding is usable here.
+  // A search result URL paired with an arbitrary image URL is not a page image.
+  if (!candidate.entityPagePath) return null;
+  try { if (decodeURIComponent(candidate.entityPagePath) !== pagePath) return null; }
+  catch { return null; }
+  if (candidate.depictedIdentity) {
+    const depicted = terms(candidate.depictedIdentity);
+    if (!aliases.some(value => terms(value).every(word => depicted.includes(word)))) return null;
+  }
+  return {
+    basis: 'entity_page',
+    quote: `${pageHost}${page.pathname} -> ${image.pathname}`.slice(0, 500),
+    evidenceIds: ['entityPagePath', 'resourcePath'],
+  };
+}
 function matchTerms(values, evidence) {
   const words = terms(evidence);
   const alternatives = values.filter(Boolean).map(terms).filter(v => v.length);
@@ -107,6 +172,7 @@ export function imageRelevanceDecision(candidate, slot) {
   });
   const identityCore = slot.exactIdentityRequired === true;
   const hotelProof = webHotelIdentityEvidence(candidate, slot);
+  const entityOwnedPageProof = webEntityOwnedPageImageEvidence(candidate, slot);
   // A publisher-declared image identity can prove a conflict. Arbitrary names
   // in page text, and failure to match words, cannot establish one.
   const targetIdentity = (hotel && slot.hotel) || slot.entityName;
@@ -121,13 +187,13 @@ export function imageRelevanceDecision(candidate, slot) {
   const negatedCore = [...terms(core.subjectEn), ...terms(core.actionEn)].some(t => new RegExp(`\\b(?:no|not|without)\\s+${t}\\b`, 'i').test(explicitText));
   // A hotel name on the page or image proves at most its identity. It cannot
   // make a room photograph a strong match for a requested exterior.
-  const identitySupportedForRank = hotel ? Boolean(hotelProof) : (!identityCore || identity);
+  const identitySupportedForRank = hotel ? Boolean(hotelProof) : (!identityCore || identity || Boolean(entityOwnedPageProof));
   const state = declaredIdentityConflict || namedOtherHotel || negatedCore ? 'explicit_mismatch'
     : identitySupportedForRank && subjectSupported && (!actionValues.length || action.matched) ? 'strong_match' : 'insufficient_evidence';
   const pass = state !== 'explicit_mismatch';
   return { pass, state, status: pass ? 'pending_visual_confirmation' : 'filtered_before_download',
     reason: declaredIdentityConflict ? 'declared_image_identity_conflict' : namedOtherHotel ? 'named_other_hotel_in_image_filename' : negatedCore ? 'explicit_core_negation' : state === 'strong_match' ? 'local_core_evidence' : 'local_evidence_insufficient_not_mismatch',
-    rankBoost: (state === 'strong_match' ? 100 : 0) + (hotelProof ? 250 : 0) + subject.matches.filter(t => !hotel || !genericHotelSubjectTerms.has(t)).length * 12 + action.matches.length * 10 + (!hotel && identity ? 25 : 0),
+    rankBoost: (state === 'strong_match' ? 100 : 0) + (hotelProof || entityOwnedPageProof ? 250 : 0) + subject.matches.filter(t => !hotel || !genericHotelSubjectTerms.has(t)).length * 12 + action.matches.length * 10 + (!hotel && identity ? 25 : 0),
     resourcePath,
     subjectMatches: subject.matches, actionMatches: action.matches, identitySupported: identity,
     hotelIdentityEvidence: hotelProof,

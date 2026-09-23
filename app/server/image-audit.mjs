@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import sharp from "sharp";
 import { IMAGE_AUDIT_EVIDENCE_VERSION, isHardRejectionCode, normalizeHardRejectCode } from "./image-candidate-eligibility.mjs";
-import { resourceUrl } from "./web-image-candidates.mjs";
+import { knowledgeEntityProbeEvidence } from "./knowledge-scope-resolver.mjs";
+import { resourceUrl, webEntityOwnedPageImageEvidence } from "./web-image-candidates.mjs";
 import { missingVisualJudgmentFields } from "./image-audit-contract.mjs";
 
 function auditError(message, { status, code, cause } = {}) {
@@ -119,7 +120,17 @@ function supportedIdentityEvidence(evidence, source, slot, conflict = false) {
         || quote.includes(comparable(record.text)) && hasIdentityAnchor(record.text, slot)));
 }
 
-function normalizeIdentityEvidence(audit, source, slot) {
+function optionalEntitySourceProof(slot, candidate) {
+  if (candidate?.sourceKind === "knowledge_library") {
+    const directPaths = [candidate.knowledgeMatchedFile?.sourceDisplayPath, candidate.knowledgePreview?.sourceDisplayPath].filter(Boolean);
+    if (new Set(directPaths.map(comparable)).size > 1) return null;
+    const proof = knowledgeEntityProbeEvidence(slot, directPaths.length ? { ...candidate, knowledgeSourcePaths: [] } : candidate);
+    return proof.match === true && proof.basis === "knowledge_path" ? proof : null;
+  }
+  return candidate && webEntityOwnedPageImageEvidence(candidate, { ...slot, exactIdentityRequired: true });
+}
+
+function normalizeIdentityEvidence(audit, source, slot, candidate) {
   const supplied = audit.identityEvidence && typeof audit.identityEvidence === "object" ? audit.identityEvidence : {};
   const required = requiresExactIdentity(slot);
   const code = normalizeHardRejectCode(audit.hardRejectCode);
@@ -133,6 +144,31 @@ function normalizeIdentityEvidence(audit, source, slot) {
     quote: evidenceText(supplied.quote), visibleIdentifier: evidenceText(supplied.visibleIdentifier), observedIdentity: evidenceText(supplied.observedIdentity), explanation: evidenceText(supplied.explanation),
   };
   const normalized = { ...audit, auditEvidenceVersion: IMAGE_AUDIT_EVIDENCE_VERSION, identityEvidence };
+  const optionalVenue = slot.exactIdentityRequired === false && (slot.queryCore?.identity || slot.queryCore?.identityEn)
+    && !["hotel_space", "hotel_experience"].includes(slot.knowledgeImagePurpose)
+    && !["hotel", "hotels", "transport"].includes(String(slot.moduleType || slot.module || "").toLowerCase());
+  if (optionalVenue && !visibleConflict) {
+    const proof = optionalEntitySourceProof(slot, candidate);
+    normalized.identityEvidence = proof ? {
+      status: "not_required", basis: proof.basis, evidenceIds: proof.evidenceIds || [],
+      quote: evidenceText(proof.quote), visibleIdentifier: "", observedIdentity: "",
+      explanation: "逐图来源支持该场地；具体身份仅作为画面偏好。",
+    } : {
+      status: "not_required", basis: "none", evidenceIds: [], quote: "", visibleIdentifier: "", observedIdentity: "",
+      explanation: "具体场地不是必要身份，逐图来源未证实该场地。",
+    };
+    if (!proof) {
+      // A model's free-form source claim cannot turn a contextual venue into
+      // image-level proof, or reject a matching generic experience as wrong.
+      const identityOnlyCode = code === "wrong_hotel"
+        || code === "wrong_subject" && audit.coreSubjectMatch === true
+        || code === "wrong_location" && audit.locationMatch === true;
+      if (identityOnlyCode) normalized.hardRejectCode = "none";
+      if (["exact", "exact_match", "mismatch"].includes(normalized.matchLevel)
+        && !isHardRejectionCode(normalized.hardRejectCode)) normalized.matchLevel = "representative";
+    }
+    normalized.reason = `${audit.coreSubjectMatch === true && audit.coreActionMatch === true ? "核心主体与动作符合视觉审核" : "核心主体或动作须按视觉审核结果核对"}；${proof ? "逐图来源支持该场地" : "逐图来源未证实具体场地，仅可作为代表性素材"}${isHardRejectionCode(normalized.hardRejectCode) ? `；另有独立硬拒绝：${normalized.hardRejectCode}` : ""}`;
+  }
   if (status === "insufficient") {
     // An unproved identity is different from a wrong identity. Keep independent
     // subject/action/technical conflicts intact for the existing hard gates.
@@ -282,7 +318,7 @@ export async function judgeCandidatesBatch({ slot, candidates, apiKey, baseUrl, 
     const item = byId.get(candidateId) || { candidateId };
     const missingFields = missingVisualJudgmentFields(item);
     return {
-      ...normalizeIdentityEvidence(item, evidenceById.get(candidateId), slot),
+      ...normalizeIdentityEvidence(item, evidenceById.get(candidateId), slot, judgedCandidates.find((candidate) => candidate.candidateId === candidateId)),
       auditContract: {
         complete: missingFields.length === 0, missingFields,
         repairAttempted: repairAttempted && incompleteById.has(candidateId),

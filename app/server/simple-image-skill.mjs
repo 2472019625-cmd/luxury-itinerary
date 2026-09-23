@@ -15,7 +15,7 @@ import { canonicalImageAssetKey, createImageRetrievalSession, extractPageImages,
 import { searchCommonsImages } from "./commons-search.mjs";
 import { buildWebExecutionQueries, classifyWebFallback } from "./image-web-execution.mjs";
 import { buildImageSearchDiagnostic } from "./image-search-diagnostics.mjs";
-import { prepareWebCandidates, gateWebCandidates, webHotelIdentityEvidence, webHotelPropertyPage, webImageAssetKey } from "./web-image-candidates.mjs";
+import { prepareWebCandidates, gateWebCandidates, webEntityOwnedPageImageEvidence, webHotelIdentityEvidence, webHotelPropertyPage, webImageAssetKey } from "./web-image-candidates.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -119,7 +119,7 @@ export function buildImageConstraints(slot = {}) {
   const hotelIdentityRequired = ["hotel_space", "hotel_experience"].includes(knowledgePurpose);
   const locationRole = slot.locationRole === "visual_identity" ? "visual_identity" : "scope_only";
   const identityRequirement = unique([
-    plannedIdentity,
+    slot.exactIdentityRequired === true && plannedIdentity,
     hotelIdentityRequired && hotel,
     transportType && (transportType || text(slot.category) || subject),
   ]).join("；");
@@ -748,17 +748,21 @@ export function applyKnowledgeSourcePathEvidence(slot, audit, pathDecision = {})
 }
 
 export function applyWebImageIdentityEvidence(slot, candidate, audit) {
-  const proof = webHotelIdentityEvidence(candidate, slot);
-  if (!proof || !audit || audit.auditEvidenceVersion !== IMAGE_AUDIT_EVIDENCE_VERSION) return audit;
+  const hotelProof = webHotelIdentityEvidence(candidate, slot);
+  const entityProof = hotelProof ? null : webEntityOwnedPageImageEvidence(candidate, slot);
+  const proof = hotelProof || entityProof;
+  if (!proof || !completeVisualJudgment(audit) || audit.auditEvidenceVersion !== IMAGE_AUDIT_EVIDENCE_VERSION) return audit;
+  if (audit.identityEvidence?.status !== "insufficient") return audit;
   if (audit.identityEvidence?.status === "conflict" || audit.visibleIdentityConflict === true || audit.visibleLocationConflict === true) return audit;
   if (isHardRejectionCode(audit.hardRejectCode) || audit.matchLevel === "mismatch") return audit;
-  if (["coreSubjectMatch", "coreActionMatch", "subjectClear", "subjectLargeEnough", "subjectPrimary", "watermarkFree", "nonAI", "photographic", "technicalUsable"].some((field) => audit[field] === false)) return audit;
+  if (["coreSubjectMatch", "coreActionMatch", "subjectMatch", "activityMatch", "subjectClear", "watermarkFree", "nonAI", "photographic", "technicalUsable"].some((field) => audit[field] === false)) return audit;
+  if (entityProof && slot.locationRole === "visual_identity" && audit.locationMatch !== true) return audit;
   return {
     ...audit,
     hotelIdentityMatch: true,
     identityMatch: true,
-    identityEvidence: { status: "supported", basis: proof.basis, evidenceIds: proof.evidenceIds, quote: proof.quote, explanation: "酒店专属来源与图片级证据经程序核验，且画面审核未发现冲突", visibleIdentifier: audit.identityEvidence?.visibleIdentifier || "" },
-    reason: [audit.reason, "酒店专属来源已核验；原身份字段不一致已纠正"].filter(Boolean).join("；"),
+    identityEvidence: { status: "supported", basis: proof.basis, evidenceIds: proof.evidenceIds, quote: proof.quote, explanation: "实体专属来源与图片级证据经程序核验，且画面审核未发现冲突", visibleIdentifier: audit.identityEvidence?.visibleIdentifier || "" },
+    reason: [audit.reason, "实体专属来源已核验；原身份字段不一致已纠正"].filter(Boolean).join("；"),
   };
 }
 
@@ -1347,7 +1351,7 @@ export async function runImageSearchSkill({
               invoked = await invoke(queryText, scopeResolution, `:scope-${scopeIndex + 1}:query-${queryIndex + 1}`);
               lastResult = invoked.value;
             } catch (error) {
-              attempts.push({ queryText, queryId: error?.queryId || null, status: error?.code === "knowledge_timeout" ? "timeout" : "failed", requestReuse: "none", scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, startedAt: new Date(attemptStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: error?.durationMs ?? Date.now() - attemptStartedAt, candidateCount: 0, errorId: error?.errorId || null, failureReason: error?.message || String(error) });
+              attempts.push({ queryText, queryId: error?.queryId || null, status: error?.code === "knowledge_timeout" ? "timeout" : "failed", requestReuse: "none", scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, startedAt: new Date(attemptStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: error?.durationMs ?? Date.now() - attemptStartedAt, candidateCount: 0, diagnosticId: error?.diagnosticId || null, knowledgeStage: error?.knowledgeStage || null, knowledgeFailureKind: error?.knowledgeFailureKind || null, requestId: error?.requestId || null, errorId: error?.errorId || null, httpStatus: error?.status || null, failureReason: error?.message || String(error) });
               if (error?.code === "knowledge_timeout") metrics.knowledgeTimeouts += 1;
               countOutcome("failed");
               syncEvidence(error?.code === "knowledge_timeout" ? "timeout" : "failed", error?.message || String(error));
@@ -1356,7 +1360,7 @@ export async function runImageSearchSkill({
             }
             if (lastResult?.status === "completed" && !lastResult?.candidates?.length) lastScopeFeedback = lastResult.message ? { scopeState: lastResult.scopeState || null, message: lastResult.message } : null;
             else if (lastResult?.status === "completed") lastScopeFeedback = null;
-            attempts.push({ queryText, queryId: lastResult?.queryId || null, status: lastResult?.status || "failed", requestReuse: invoked.reuse, scopeState: lastResult?.scopeState || null, message: lastResult?.message || null, scopeIndex, scopeRole: plannedScope.role, scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, scope: lastResult?.scope || null, startedAt: new Date(attemptStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: lastResult?.durationMs ?? Date.now() - attemptStartedAt, candidateCount: lastResult?.candidates?.length || 0, errorId: lastResult?.errorId || null });
+            attempts.push({ queryText, queryId: lastResult?.queryId || null, status: lastResult?.status || "failed", requestReuse: invoked.reuse, scopeState: lastResult?.scopeState || null, message: lastResult?.message || null, scopeIndex, scopeRole: plannedScope.role, scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, scope: lastResult?.scope || null, startedAt: new Date(attemptStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: lastResult?.durationMs ?? Date.now() - attemptStartedAt, candidateCount: lastResult?.candidates?.length || 0, diagnosticId: lastResult?.diagnosticId || null, knowledgeStage: lastResult?.knowledgeStage || null, knowledgeFailureKind: lastResult?.knowledgeFailureKind || null, requestId: lastResult?.requestId || null, errorId: lastResult?.errorId || null });
             if (lastResult?.status === "needs_clarification") {
               metrics.knowledgeNeedsClarification += 1;
               if (plannedScope.role !== "entity_parent_probe" && !clarificationUsed && lastResult.clarificationNodeIds?.length && scopeResolution.reason !== "test_adapter_without_hierarchy") {
@@ -1371,7 +1375,7 @@ export async function runImageSearchSkill({
                   const correctedStartedAt = Date.now();
                   const corrected = await invoke(queryText, scopeResolution, `:query-${queryIndex + 1}:clarification`);
                   lastResult = corrected.value;
-                  attempts.push({ queryText, queryId: lastResult?.queryId || null, status: lastResult?.status || "failed", requestReuse: corrected.reuse, scopeState: lastResult?.scopeState || null, message: lastResult?.message || null, scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, scope: lastResult?.scope || null, startedAt: new Date(correctedStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: lastResult?.durationMs ?? Date.now() - correctedStartedAt, candidateCount: lastResult?.candidates?.length || 0, errorId: lastResult?.errorId || null, clarificationCorrection: true });
+                  attempts.push({ queryText, queryId: lastResult?.queryId || null, status: lastResult?.status || "failed", requestReuse: corrected.reuse, scopeState: lastResult?.scopeState || null, message: lastResult?.message || null, scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, scope: lastResult?.scope || null, startedAt: new Date(correctedStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: lastResult?.durationMs ?? Date.now() - correctedStartedAt, candidateCount: lastResult?.candidates?.length || 0, diagnosticId: lastResult?.diagnosticId || null, knowledgeStage: lastResult?.knowledgeStage || null, knowledgeFailureKind: lastResult?.knowledgeFailureKind || null, requestId: lastResult?.requestId || null, errorId: lastResult?.errorId || null, clarificationCorrection: true });
                   if (lastResult?.status !== "needs_clarification") metrics.knowledgeClarificationResolved += 1;
                 }
               }
@@ -2065,7 +2069,7 @@ export async function runImageSearchSkill({
               invoked = await invoke(queryText, scopeResolution, `:scope-${scopeIndex + 1}:query-${queryIndex + 1}`);
               lastResult = invoked.value;
             } catch (error) {
-              attempts.push({ queryText, queryId: error?.queryId || null, status: error?.code === "knowledge_timeout" ? "timeout" : "failed", requestReuse: "none", scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, startedAt: new Date(attemptStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: error?.durationMs ?? Date.now() - attemptStartedAt, candidateCount: 0, failureReason: error?.message || String(error) });
+              attempts.push({ queryText, queryId: error?.queryId || null, status: error?.code === "knowledge_timeout" ? "timeout" : "failed", requestReuse: "none", scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, startedAt: new Date(attemptStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: error?.durationMs ?? Date.now() - attemptStartedAt, candidateCount: 0, diagnosticId: error?.diagnosticId || null, knowledgeStage: error?.knowledgeStage || null, knowledgeFailureKind: error?.knowledgeFailureKind || null, requestId: error?.requestId || null, errorId: error?.errorId || null, httpStatus: error?.status || null, failureReason: error?.message || String(error) });
               if (error?.code === "knowledge_timeout") metrics.knowledgeTimeouts += 1;
               if (candidatePool.size) {
                 warnings.push(`${layerName} 后续知识库搜索失败，继续审核此前已找到的候选：${error?.message || error}`);
@@ -2077,7 +2081,7 @@ export async function runImageSearchSkill({
             }
             if (lastResult?.status === "completed" && !lastResult?.candidates?.length) lastScopeFeedback = lastResult.scopeState || lastResult.message ? { scopeState: lastResult.scopeState || null, message: lastResult.message || null } : null;
             else if (lastResult?.status === "completed") lastScopeFeedback = null;
-            attempts.push({ queryText, queryId: lastResult?.queryId || null, status: lastResult?.status || "failed", requestReuse: invoked.reuse, scopeState: lastResult?.scopeState || null, message: lastResult?.message || null, scopeIndex, scopeRole: plannedScope.role, scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, scope: lastResult?.scope || null, startedAt: new Date(attemptStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: lastResult?.durationMs ?? Date.now() - attemptStartedAt, candidateCount: lastResult?.candidates?.length || 0, errorId: lastResult?.errorId || null });
+            attempts.push({ queryText, queryId: lastResult?.queryId || null, status: lastResult?.status || "failed", requestReuse: invoked.reuse, scopeState: lastResult?.scopeState || null, message: lastResult?.message || null, scopeIndex, scopeRole: plannedScope.role, scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, scope: lastResult?.scope || null, startedAt: new Date(attemptStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: lastResult?.durationMs ?? Date.now() - attemptStartedAt, candidateCount: lastResult?.candidates?.length || 0, diagnosticId: lastResult?.diagnosticId || null, knowledgeStage: lastResult?.knowledgeStage || null, knowledgeFailureKind: lastResult?.knowledgeFailureKind || null, requestId: lastResult?.requestId || null, errorId: lastResult?.errorId || null });
             if (lastResult?.status === "needs_clarification") {
               metrics.knowledgeNeedsClarification += 1;
               if (plannedScope.role !== "entity_parent_probe" && !clarificationUsed && lastResult.clarificationNodeIds?.length && scopeResolution.reason !== "test_adapter_without_hierarchy") {
@@ -2091,7 +2095,7 @@ export async function runImageSearchSkill({
                   const correctedStartedAt = Date.now();
                   const corrected = await invoke(queryText, scopeResolution, `:query-${queryIndex + 1}:clarification`);
                   lastResult = corrected.value;
-                  attempts.push({ queryText, queryId: lastResult?.queryId || null, status: lastResult?.status || "failed", requestReuse: corrected.reuse, scopeState: lastResult?.scopeState || null, message: lastResult?.message || null, scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, scope: lastResult?.scope || null, startedAt: new Date(correctedStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: lastResult?.durationMs ?? Date.now() - correctedStartedAt, candidateCount: lastResult?.candidates?.length || 0, clarificationCorrection: true });
+                  attempts.push({ queryText, queryId: lastResult?.queryId || null, status: lastResult?.status || "failed", requestReuse: corrected.reuse, scopeState: lastResult?.scopeState || null, message: lastResult?.message || null, scopeNodeIds: [...(scopeResolution.nodeIds || [])], scopePath: scopeResolution.fullPath || null, scope: lastResult?.scope || null, startedAt: new Date(correctedStartedAt).toISOString(), endedAt: new Date().toISOString(), durationMs: lastResult?.durationMs ?? Date.now() - correctedStartedAt, candidateCount: lastResult?.candidates?.length || 0, diagnosticId: lastResult?.diagnosticId || null, knowledgeStage: lastResult?.knowledgeStage || null, knowledgeFailureKind: lastResult?.knowledgeFailureKind || null, requestId: lastResult?.requestId || null, errorId: lastResult?.errorId || null, clarificationCorrection: true });
                   if (lastResult?.status !== "needs_clarification") metrics.knowledgeClarificationResolved += 1;
                 }
               }
