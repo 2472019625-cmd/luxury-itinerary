@@ -78,6 +78,7 @@ test("Program 为 subtitle、DAY theme、spot description 与酒店 proofPoints 
   assert.deepEqual(byPath.get("days.0.spots.0.description").relevantContext.spotOccurrence, { dayNumber: 1, ordinal: 1, total: 1 });
   assert.match(byPath.get("days.0.theme").plannerGoal, /1 个主记忆点/);
   assert.match(byPath.get("days.0.description").plannerGoal, /1 个主体验、最多 1 个辅助体验/);
+  assert.match(byPath.get("days.0.description").plannerGoal, /estimatedTravelTime.*正文不得再次写数字车程/);
   assert.match(byPath.get("hotels.0.editorialCopy").plannerGoal, /2—4 句直接、易读/);
   assert.match(byPath.get("hotels.0.proofPoints").plannerGoal, /真实、具体、可快速理解/);
   assert.match(byPath.get("transportSummary.0.usageLabel").plannerGoal, /客户可见使用范围/);

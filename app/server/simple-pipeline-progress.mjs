@@ -1,11 +1,11 @@
 export const SIMPLE_PIPELINE_PROGRESS = Object.freeze({
   initial: 1,
-  parserComplete: 3,
-  plannerComplete: 16,
-  copyWeight: 18,
-  imageWeight: 60,
-  workComplete: 94,
-  writebackComplete: 96,
+  parserComplete: 8,
+  plannerComplete: 18,
+  copyWeight: 20,
+  imageWeight: 44,
+  workComplete: 82,
+  writebackComplete: 94,
   rendererComplete: 99,
   complete: 100,
 });

@@ -774,7 +774,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     copyTasks.push(copyTask({
       targetId: `copy:day:${index + 1}`, targetPath: `days.${index}.description`, moduleType: "day",
       facts: day,
-      plannerGoal: `站在高端定制旅行产品经理视角，从当天真实事实中选择 1 个主体验、最多 1 个辅助体验，写成顺畅的客户叙事。结构字段负责保存完整路线、餐食、住宿、交通、Spot 与状态，正文不需要逐项复述。与相邻 DAY 保持真实重点差异，说明最核心的体验如何发生、为什么值得；不要为了事实完整把当天所有活动全部塞进正文。`,
+      plannerGoal: `站在高端定制旅行产品经理视角，从当天真实事实中选择 1 个主体验、最多 1 个辅助体验，写成顺畅的客户叙事。结构字段负责保存完整路线、餐食、住宿、交通、Spot 与状态，正文不需要逐项复述。若 facts.estimatedTravelTime 已有可靠具体车程时长，正文不得再次写数字车程，只保留不带时长的自然移动衔接；该字段为空或待定时不得删除正文中唯一存在的移动事实。与相邻 DAY 保持真实重点差异，说明最核心的体验如何发生、为什么值得；不要为了事实完整把当天所有活动全部塞进正文。`,
       relevantContext: { ...itineraryContext, dayRole: role, adjacentDays },
       layoutHints: { placement: "day_detail", dayIndex: index, ordinaryDaySoftMaxChars: 220, transferDaySoftMaxChars: 130, sentenceCountReference: 5 }, required: true,
     }));

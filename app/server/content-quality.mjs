@@ -18,6 +18,8 @@ const EXPERIENCE_VALUE = /值得|意义|从容|节奏|省去|免去|避开|留�
 const ACTIONABLE = /建议|请|可(?:提前|准备|携带|联系|选择)|准备|留意|听从|联系|确认|核对|穿戴|避免|预留/;
 const DAY_WARNING = /重要说明|安全须知|红色警告|后果自负|概不负责/;
 const ACTION_ONLY_THEME = /^(?:全天)?(?:游猎|抵达|返程|离境|自由活动|前往[^，。；]{0,16}|入住[^，。；]{0,16}|乘车|飞行|转场)$/i;
+const SPECIFIC_DURATION = /\d+(?:\.\d+)?(?:\s*(?:-|–|—|~|～|至|到)\s*\d+(?:\.\d+)?)?\s*(?:小时|分钟)/i;
+const ROAD_TRAVEL_DURATION = /(?:(?:车程|驱车|乘车|行车|行驶|开车)[^，。；\n]{0,12}(?:约|大约|预计)?\s*\d+(?:\.\d+)?(?:\s*(?:-|–|—|~|～|至|到)\s*\d+(?:\.\d+)?)?\s*(?:小时|分钟)|(?:约|大约|预计)?\s*\d+(?:\.\d+)?(?:\s*(?:-|–|—|~|～|至|到)\s*\d+(?:\.\d+)?)?\s*(?:小时|分钟)[^，。；\n]{0,8}(?:车程|驱车|乘车|行车|行驶|开车))/i;
 
 const text = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 const chars = (value) => [...text(value)].length;
@@ -41,6 +43,14 @@ function similarity(left, right) {
 function isSimpleTransitDay(day = {}) {
   const body = `${day.theme || ''} ${day.description || ''}`;
   return day.overnightType === 'inflight' || day.overnightType === 'none' || /返程|离境|送机|抵达|转场|飞往/.test(body) && list(day.spots).length <= 1;
+}
+
+function repeatsStructuredRoadTravelTime(day = {}, body = '') {
+  const structuredTravelTime = text(day.estimatedTravelTime);
+  if (!SPECIFIC_DURATION.test(structuredTravelTime)) return false;
+  const isRoadOrGenericDuration = /车程|驱车|乘车|行车|行驶|开车/.test(structuredTravelTime)
+    || !/飞行|航程|飞机|游船|轮渡|渡轮|船程|徒步/.test(structuredTravelTime);
+  return isRoadOrGenericDuration && ROAD_TRAVEL_DURATION.test(text(body));
 }
 
 function targetModuleForPath(path = '') {
@@ -204,6 +214,7 @@ function checkDays(data, sourceData, issues) {
     if (!simple && !SCENE.test(body)) issues.push(issue('COPY-010','day_no_scene',`days.${index}.description`, `DAY ${index + 1} 没有可感知的现场画面`));
     if (!simple && !EXPERIENCE_VALUE.test(body)) issues.push(issue('COPY-010','day_no_value',`days.${index}.description`, `DAY ${index + 1} 没有解释体验价值或路线意义`));
     if (/^(?:早餐后|随后)?(?:乘车|驱车|前往|抵达).{0,28}(?:参观|游览|入住|返回酒店)[。.]?$/.test(body) || /前往.+参观.+结束后.+(?:酒店|入住)/.test(body)) issues.push(issue(['COPY-001','COPY-010'],'day_supplier_log',`days.${index}.description`, `DAY ${index + 1} 仍是供应商流水账`));
+    if (repeatsStructuredRoadTravelTime(day, body)) issues.push(issue('COPY-010','day_travel_time_duplicate',`days.${index}.description`, `DAY ${index + 1} 已在当日节奏显示具体车程，正文不得重复数字时长；保留不带时长的自然移动衔接`));
     if (DAY_WARNING.test(body)) issues.push(issue(['COPY-012','COPY-013'],'day_warning_stack',`days.${index}.description`,'安全与免责信息不应堆在每日正文'));
     const tips = list(day.dayNotices).filter((item) => item?.type === 'tip');
     if (tips.length > 1) issues.push(issue('COPY-012','too_many_tips',`days.${index}.dayNotices`, `DAY ${index + 1} 最多一条今日贴士`));

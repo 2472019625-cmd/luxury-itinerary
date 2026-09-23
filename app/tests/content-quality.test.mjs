@@ -99,6 +99,31 @@ test('requires source coverage counts for expenses and transport modules', () =>
   assert.ok(codes.includes('transport_module_missing'));
 });
 
+test('detects numeric road duration repeated in DAY copy only when structured travel time already exists', () => {
+  const data = goodSample();
+  data.days[0].estimatedTravelTime = '车程约4—5小时';
+  data.days[0].description = '抵达后乘坐专车离开城市，约4—5小时车程后抵达草原营地，在露台休整，让第一天从容完成节奏转换。';
+  data.days[1].estimatedTravelTime = '车程约5—6小时';
+  data.days[1].description = '早餐后沿公路南下前往下一处保护区，在途中逐渐进入更开阔的草原景观。';
+  const duplicates = reviewCustomerContent(data).issues.filter((item) => item.code === 'day_travel_time_duplicate');
+  assert.deepEqual(duplicates.map((item) => item.path), ['days.0.description']);
+  assert.equal(duplicates[0].issueLevel, 'optimization');
+
+  const onlyInBody = goodSample();
+  onlyInBody.days[0].description = '抵达后乘坐专车离开城市，约4—5小时车程后抵达草原营地，在露台休整，让第一天从容完成节奏转换。';
+  assert.equal(reviewCustomerContent(onlyInBody).issues.some((item) => item.code === 'day_travel_time_duplicate'), false);
+
+  const durationAfterVerb = goodSample();
+  durationAfterVerb.days[0].estimatedTravelTime = '车程约4—5小时';
+  durationAfterVerb.days[0].description = '午餐后驱车约4—5小时前往保护区，沿途景观逐渐从城市过渡到开阔草原。';
+  assert.equal(reviewCustomerContent(durationAfterVerb).issues.some((item) => item.code === 'day_travel_time_duplicate'), true);
+
+  const differentTransport = goodSample();
+  differentTransport.days[0].estimatedTravelTime = '飞行约1小时';
+  differentTransport.days[0].description = '落地后还需约2小时车程前往营地，抵达后在露台休整。';
+  assert.equal(reviewCustomerContent(differentTransport).issues.some((item) => item.code === 'day_travel_time_duplicate'), false);
+});
+
 test('a confirmed hidden expense module preserves source facts without requiring customer-facing fee rewrites', () => {
   const source = goodSample();
   const data = { ...structuredClone(source), showExpenseSection: false, includedCustomer: [], excludedCustomer: [], cancellationCustomer: [] };

@@ -1,12 +1,13 @@
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createDemoAuth } from "./demo-auth.mjs";
 import { servePublicStatic } from "./public-static.mjs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { AgentPlanStore, removeDirectoryTree } from "./agent-plan-store.mjs";
+import { AgentProjectCatalog, PROJECT_TRASH_DAYS } from "./agent-project-catalog.mjs";
 import { AGENT_CAPABILITY_VERSION } from "../config/agent-capabilities.mjs";
 import { AGENT_RULE_PROFILE_VERSION } from "../config/agent-rule-profile.mjs";
 import { AGENT_PROMPT_VERSION, buildAgentFactBasis, fingerprintFacts, generateAgentPlan } from "./agent-trip-planner.mjs";
@@ -38,12 +39,12 @@ function json(response, status, value) {
   response.end(JSON.stringify(value));
 }
 
-async function requestBody(request) {
+async function requestBody(request, maxBytes = 8 * 1024 * 1024) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 8 * 1024 * 1024) throw new Error("请求内容超过8MB限制");
+    if (size > maxBytes) throw new Error("请求内容超过大小限制");
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -54,7 +55,7 @@ async function requestBuffer(request) {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 14 * 1024 * 1024) throw new Error("图片超过14MB限制");
+    if (size > 14 * 1024 * 1024) throw new Error("上传文件超过14MB限制");
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -73,6 +74,8 @@ export function createAgentPlannerServer(options = {}) {
   mkdirSync(workspaceRoot, { recursive: true });
   const store = options.store || new AgentPlanStore(workspaceRoot);
   const simpleStore = options.simpleStore || new AgentPlanStore(path.join(root, "output", "simple-pipeline", "projects"));
+  const catalog = options.catalog || new AgentProjectCatalog(options.catalogFile || path.join(path.dirname(workspaceRoot), "catalog", "projects.sqlite"));
+  const sourceRoot = path.join(path.dirname(workspaceRoot), "sources");
   const jobs = new Map();
   const controllers = new Map();
   const simpleJobs = new Map();
@@ -173,6 +176,28 @@ export function createAgentPlannerServer(options = {}) {
     const result = executionRun ? simpleStore.getFinalResult(projectId, executionRun.executionRunId) : null;
     return { project: project || job.project, plan, executionRun, result, activeJob: job, confirmations: [] };
   };
+  const markSimpleProjectCancelled = (projectId, job) => {
+    const now = new Date().toISOString();
+    if (job) {
+      const stageStates = Object.fromEntries(Object.entries(job.stageStates || {}).map(([id, status]) => [id, status === "running" ? "cancelled" : status]));
+      Object.assign(job, {
+        cancelRequested: true,
+        status: "cancelled",
+        currentAction: "制作已停止",
+        stageStates,
+        stages: simpleStageDefinitions.map(([id, label]) => ({ id, label, status: stageStates[id] || "pending" })),
+        updatedAt: now,
+      });
+      job.project = { ...(job.project || {}), projectId, flowKind: "simple_skill_v1", status: "cancelled", currentStage: "制作已停止", updatedAt: now };
+    }
+    const project = simpleStore.getProject(projectId);
+    if (!project) return;
+    const activeRun = project.activeExecutionRunId ? simpleStore.getExecutionRun(projectId, project.activeExecutionRunId) : null;
+    if (activeRun && !["cancelled", "complete"].includes(activeRun.status)) {
+      simpleStore.updateExecutionRun(projectId, { ...activeRun, status: "cancelled", executionEnabled: false, currentStage: "制作已停止", updatedAt: now });
+    }
+    simpleStore.updateProject(projectId, { status: "cancelled", executionEnabled: false, currentStage: "制作已停止", updatedAt: now });
+  };
   const removeOutputFile = (candidate) => {
     if (!candidate) return;
     const outputRoot = path.resolve(root, "output");
@@ -200,6 +225,56 @@ export function createAgentPlannerServer(options = {}) {
     simpleJobs.delete(projectId);
     simpleControllers.delete(projectId);
     return existed;
+  };
+  const associatedIds = (project) => [...new Set([project.agentProjectId, ...(project.generationAttempts || []).map((attempt) => attempt.agentProjectId)].filter(Boolean))];
+  const assertAssociatedOwnership = (project) => {
+    for (const id of associatedIds(project)) {
+      const stored = project.flowKind === "simple_skill_v1" ? simpleStore.getProject(id) : store.getProject(id);
+      if (stored && (stored.ownerId || "shared-demo") !== project.ownerId) throw new Error("项目制作记录归属不一致");
+    }
+  };
+  const stopAssociatedRuns = (project) => {
+    assertAssociatedOwnership(project);
+    for (const id of associatedIds(project)) {
+      if (project.flowKind === "simple_skill_v1") {
+        const stored = simpleStore.getProject(id);
+        const job = simpleJobs.get(id);
+        if (job?.status === "running" || ["running", "planning", "preparing"].includes(stored?.status)) {
+          if (job) job.cancelRequested = true;
+          simpleControllers.get(id)?.abort();
+          markSimpleProjectCancelled(id, job);
+        }
+      } else {
+        const stored = store.getProject(id);
+        if (!stored || !["running", "planning", "preparing", "ready_for_execution"].includes(stored.status)) continue;
+        for (const job of jobs.values()) if (job.projectId === id) {
+          job.cancelRequested = true;
+          controllers.get(job.jobId)?.abort();
+        }
+        store.updateProject(id, { status: "cancelled", executionEnabled: false, currentStage: "制作已停止" });
+      }
+    }
+  };
+  const purgeAssociatedData = async (project) => {
+    stopAssociatedRuns(project);
+    for (const id of associatedIds(project)) {
+      if (project.flowKind === "simple_skill_v1") deleteSimpleProject(id);
+      else {
+        const activeRun = store.getActiveExecutionRun(id);
+        const result = activeRun ? store.getFinalResult(id, activeRun.executionRunId) : null;
+        removeOutputFile(result?.outputFile);
+        removeOutputFile(result?.qaFile);
+        store.deleteProject(id);
+      }
+    }
+    const sourceDir = path.resolve(sourceRoot, project.id);
+    if (path.dirname(sourceDir) === path.resolve(sourceRoot) && existsSync(sourceDir)) removeDirectoryTree(sourceDir);
+  };
+  const purgeExpiredProjects = async () => {
+    for (const project of catalog.due()) {
+      try { await catalog.purge(project.ownerId, project.id, purgeAssociatedData); }
+      catch (error) { console.error("回收站到期清理失败", project.id, error?.message || error); }
+    }
   };
   const startSimplePipeline = (payload, ownerId) => {
     const projectId = randomUUID();
@@ -240,18 +315,26 @@ export function createAgentPlannerServer(options = {}) {
             visionModel: visionModelConfig.model,
           },
           signal: controller.signal,
-          onEvent: (event) => updateSimpleJob(job, event),
+          onEvent: (event) => { if (!job.cancelRequested) updateSimpleJob(job, event); },
         });
+        if (job.cancelRequested || controller.signal.aborted) {
+          markSimpleProjectCancelled(projectId, job);
+          return;
+        }
         job.status = result.pipelineStatus;
         job.progress = result.pipelineStatus === "complete" ? 100 : job.progress;
         job.currentAction = result.pipelineStatus === "complete" ? "新版流程已完成" : result.pipelineStatus === "awaiting_user_action" ? "需要补充必需图片" : "部分责任单元需要处理";
       } catch (failure) {
-        job.status = controller.signal.aborted ? "cancelled" : "failed";
-        job.currentAction = controller.signal.aborted ? "已取消" : "新版流程执行失败";
+        if (job.cancelRequested || controller.signal.aborted || failure?.name === "AbortError" || failure?.code === "pipeline_cancelled") {
+          markSimpleProjectCancelled(projectId, job);
+          return;
+        }
+        job.status = "failed";
+        job.currentAction = "新版流程执行失败";
         job.error = failure.message || String(failure);
         const runningStages = Object.entries(job.stageStates).filter(([, status]) => status === "running").map(([id]) => id);
         const failedStage = runningStages.at(-1);
-        if (failedStage) job.stageStates = { ...job.stageStates, [failedStage]: controller.signal.aborted ? "cancelled" : "failed" };
+        if (failedStage) job.stageStates = { ...job.stageStates, [failedStage]: "failed" };
         job.stages = simpleStageDefinitions.map(([id, label]) => ({ id, label, status: job.stageStates[id] }));
       } finally {
         job.updatedAt = new Date().toISOString();
@@ -366,6 +449,68 @@ export function createAgentPlannerServer(options = {}) {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${port}`);
     if (await authenticate(request, response, url)) return;
+    const catalogRoot = "/api/agent-workspace/projects";
+    if (url.pathname === catalogRoot || url.pathname.startsWith(`${catalogRoot}/`)) {
+      const ownerId = request.authUser?.id || (request.authDisabled ? String(request.headers["x-agent-local-user"] || "") : "");
+      if (!ownerId) return json(response, 401, { error: "请先登录后访问项目" });
+      const detail = url.pathname.slice(catalogRoot.length).match(/^\/([^/]+)(?:\/(trash|restore|source))?$/);
+      const enrich = (project) => {
+        if (!project?.agentProjectId) return project;
+        const backend = project.flowKind === "simple_skill_v1" ? simpleStore.getProject(project.agentProjectId) : store.getProject(project.agentProjectId);
+        const run = backend?.activeExecutionRunId && (project.flowKind === "simple_skill_v1" ? simpleStore : store).getExecutionRun(project.agentProjectId, backend.activeExecutionRunId);
+        const result = run && (project.flowKind === "simple_skill_v1" ? simpleStore : store).getFinalResult(project.agentProjectId, run.executionRunId);
+        const inMemoryJob = simpleJobs.get(project.agentProjectId);
+        const runtimeStatus = inMemoryJob?.status || (["running", "planning", "preparing"].includes(backend?.status) ? "interrupted" : backend?.status);
+        return { ...project, runtimeStatus, unresolvedCount: result?.unresolvedItems?.length || 0 };
+      };
+      try {
+        if (request.method === "GET" && url.pathname === catalogRoot) return json(response, 200, { projects: catalog.list(ownerId).map(enrich), trashDays: PROJECT_TRASH_DAYS });
+        if (request.method === "POST" && url.pathname === catalogRoot) {
+          const payload = await requestBody(request, 32 * 1024 * 1024);
+          assertAssociatedOwnership({ ...payload.project, ownerId });
+          const project = catalog.create(ownerId, payload.project);
+          return json(response, 201, { project: enrich(project) });
+        }
+        if (!detail) return json(response, 404, { error: "项目接口不存在" });
+        const projectId = decodeURIComponent(detail[1]);
+        const action = detail[2];
+        const current = catalog.get(ownerId, projectId);
+        if (!current) return json(response, 404, { error: "项目不存在" });
+        if (request.method === "GET" && !action) return json(response, 200, { project: enrich(current) });
+        if (request.method === "PUT" && !action) {
+          const payload = await requestBody(request, 32 * 1024 * 1024);
+          assertAssociatedOwnership({ ...payload.project, ownerId });
+          const updated = catalog.update(ownerId, projectId, payload.project, payload.expectedRevision);
+          return updated ? json(response, 200, { project: enrich(updated) }) : json(response, 409, { error: "回收站中的项目不能修改" });
+        }
+        if (request.method === "PUT" && action === "source") {
+          if (current.trashedAt) return json(response, 409, { error: "回收站中的项目不能上传资料" });
+          const buffer = await requestBuffer(request);
+          const sourceDir = path.resolve(sourceRoot, current.id);
+          if (path.dirname(sourceDir) !== path.resolve(sourceRoot)) throw new Error("项目资料路径无效");
+          mkdirSync(sourceDir, { recursive: true });
+          writeFileSync(path.join(sourceDir, "original.xlsx"), buffer);
+          return json(response, 200, { saved: true, sha256: createHash("sha256").update(buffer).digest("hex") });
+        }
+        if (request.method === "POST" && action === "trash") {
+          stopAssociatedRuns(current);
+          return json(response, 200, { project: enrich(catalog.trash(ownerId, projectId)) });
+        }
+        if (request.method === "POST" && action === "restore") {
+          const restored = catalog.restore(ownerId, projectId);
+          return restored ? json(response, 200, { project: enrich(restored) }) : json(response, 410, { error: "项目已过恢复期限" });
+        }
+        if (request.method === "DELETE" && !action) {
+          if (!current.trashedAt) return json(response, 409, { error: "请先将项目移入回收站" });
+          await catalog.purge(ownerId, projectId, purgeAssociatedData);
+          return json(response, 200, { deleted: true });
+        }
+        return json(response, 405, { error: "不支持的项目操作" });
+      } catch (failure) {
+        const conflict = failure.code === "revision_conflict" || String(failure.message).includes("UNIQUE constraint");
+        return json(response, conflict ? 409 : 400, { error: failure.message || "项目操作失败", code: failure.code || "project_operation_failed" });
+      }
+    }
     const simpleOwnerMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)/);
     if (simpleOwnerMatch) {
       const projectId = decodeURIComponent(simpleOwnerMatch[1]);
@@ -382,10 +527,12 @@ export function createAgentPlannerServer(options = {}) {
       if (job && !authorizeProject(request, response, store, job.projectId)) return;
     }
     if (request.method === "POST" && url.pathname === "/api/simple/projects") {
+      const ownerId = request.authUser?.id || (request.authDisabled ? String(request.headers["x-agent-local-user"] || "").trim() : "");
+      if (!ownerId) return json(response, 401, { error: "请先登录后开始制作" });
       try {
         const payload = await requestBody(request);
         if (!payload?.facts?.days?.length) return json(response, 400, { error: "没有识别到可执行的逐日行程" });
-        const job = startSimplePipeline(payload, request.authUser?.id);
+        const job = startSimplePipeline(payload, ownerId);
         return json(response, 202, { projectId: job.projectId, flowKind: job.flowKind, status: job.status, progress: job.progress });
       } catch (failure) { return json(response, 400, { error: failure.message || "无法启动新版 Simple Pipeline" }); }
     }
@@ -410,8 +557,9 @@ export function createAgentPlannerServer(options = {}) {
       const projectId = decodeURIComponent(simpleCancelMatch[1]);
       const job = simpleJobs.get(projectId);
       if (!job) return json(response, 404, { error: "Simple Pipeline 任务不存在" });
+      job.cancelRequested = true;
       simpleControllers.get(projectId)?.abort();
-      job.status = "cancelled"; job.currentAction = "正在取消"; job.updatedAt = new Date().toISOString();
+      markSimpleProjectCancelled(projectId, job);
       return json(response, 202, simpleProjectPayload(projectId));
     }
     const simpleManualMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images$/);
@@ -807,7 +955,11 @@ export function createAgentPlannerServer(options = {}) {
     if (!existsSync(file)) { response.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end("请先运行 npm run build"); return; }
     servePublicStatic(request, response, file, clientDir, contentTypes);
   });
-  return { server, port, store, jobs, controllers, executor, simpleStore, simpleJobs, simpleControllers };
+  const cleanupInterval = options.cleanupIntervalMs === 0 ? null : setInterval(purgeExpiredProjects, options.cleanupIntervalMs || 60 * 60 * 1000);
+  cleanupInterval?.unref();
+  queueMicrotask(purgeExpiredProjects);
+  server.on("close", () => { if (cleanupInterval) clearInterval(cleanupInterval); if (!options.catalog) catalog.close(); });
+  return { server, port, store, jobs, controllers, executor, simpleStore, simpleJobs, simpleControllers, catalog, purgeExpiredProjects };
 }
 
 const csvValues = (value) => String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
