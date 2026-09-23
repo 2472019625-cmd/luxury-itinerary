@@ -232,3 +232,11 @@ Commons 实时 imageinfo 返回可用 JPEG/BITMAP 元数据（1798×1197、CC BY
 新运行资源位于 `D:\CodexRuntime\agent-runtime\luxury-itinerary\2026-09-23-kb-restart-regression`，其中 `live-regression/result.json`、`summary.json`、`editor.png` 为逐位对照证据。ACL仅当前账号、系统与管理员；脚本登记的4174服务及浏览器进程已退出，端口已关闭；证据保留至用户复核或2026-10-23，之后由登记清理流程核对消费者再退休。原两轮证据没有被覆盖。
 
 回归后的 DAY7 回退修正完成后，`npm run test:simple-skills` 177/177、`npm run test:images` 与 `npm run test:rules` 均通过；`npm run test:simple-pipeline` 19/20，唯一失败仍是批准收款二维码资产缺失的既有断言，按用户要求不处理。代码静态复核未发现新回退绕过身份、完整视觉审核或原件尺寸检查。上述自动化不能代替修正后的真实联网结果。
+
+## 2026-09-23 用户重启后的 DAY7 回退真实复验
+
+4180已由用户在配置与`63e60d4`提交之后重启，独立4174重新创建项目；复用同Excel、同一份真实Planner输出，不覆盖前两轮证据，也未另发Planner请求。新项目31图片位自动采用25（知识库17、Web8），13必需位采用11；相比上一轮24位，新增DAY2主图、DAY3辅助图、私享酒窖图，同时DAY6和DAY7各一张可选辅助图本轮丢失。知识库层级一次成功，33次实际图片请求记录6次失败、4次超时；服务当前仍可返回509节点，并非整体宕机。草稿宽2000px、编辑器页面错误0、耗时约17分24秒，项目仍为`awaiting_user_action`。
+
+DAY7主图的原件低清条件已触发同批Web回退，说明新接线真实生效。Web下载了尺寸2150×740的长颈鹿中心喂食互动图，来源为Giraffe Centre官网`Our Sanctuary`页面；图片文件路径仅为通用`Activities-hero-image.jpg`，视觉审核将身份记为`insufficient`，保留可本地预览的人工候选，不自动采用。DAY3主图仍因Planner两个不同主体未确定而未搜索；这是剩余两个必需缺图位。DAY2由观景台专题页对应照片经审核采用。二维码固定模块提醒按用户决定暂不处理，正式完成状态仍受影响。
+
+新运行的受限证据目录为 `D:\CodexRuntime\agent-runtime\luxury-itinerary\2026-09-23-kb-restart-regression\post-restart-4180`，`result.json`、`summary.json`、`editor.png`及过程日志供授权复核；其父目录资源记录已登记目的、消费者和退休条件。独立4174及浏览器已退出，4180未触碰。该轮验证了DAY7接续Web，但未达到全部必需图片采用，也未完成独立验收。
