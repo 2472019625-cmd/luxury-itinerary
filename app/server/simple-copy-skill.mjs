@@ -229,6 +229,13 @@ function sourceIncludes(source, value) {
   return clean(source).toLowerCase().includes(clean(value).toLowerCase());
 }
 
+function diagnosticTargetPath(value) {
+  if (typeof value !== "string") return `[${value === null ? "null" : typeof value}]`;
+  if (value.length > 160) return "[overlong_string]";
+  return /^[A-Za-z][A-Za-z0-9_]*(?:\.(?:[A-Za-z][A-Za-z0-9_]*|\d+))*$/.test(value)
+    ? value : "[invalid_string]";
+}
+
 const VISUAL_SUBJECT_CONCEPTS = Object.freeze([
   /(?:大象|象群|elephants?)/i,
   /(?:花豹|豹类|leopards?)/i,
@@ -236,12 +243,12 @@ const VISUAL_SUBJECT_CONCEPTS = Object.freeze([
   /(?:狮群|狮子|lions?)/i,
   /(?:角马|wildebeest)/i,
   /(?:非洲五霸|五霸|big five|predator safari|掠食者)/i,
-  /(?:迁徙|渡河|天国之渡|river crossing|migration)/i,
+  /(?:迁徙|渡河|横渡(?:马拉河|[^\s，。；]{0,6}河(?:流|道)?)|天国之渡|river crossing|migration)/i,
   /(?:长颈鹿|giraffes?)/i,
   /(?:热气球|hot air balloon|balloon safari)/i,
   /(?:星空床|星空寝|star bed|sleep[ -]?out|outdoor bed)/i,
   /(?:徒步(?:游猎|safari)?|walking safari)/i,
-  /(?:夜间游猎|night safari|night game drive)/i,
+  /(?:夜间游猎|夜巡|night safari|night game drive)/i,
   /(?:观景台|观景山|viewpoint|observation hill)/i,
   /(?:欢迎仪式|文化欢迎|welcome ceremony|cultural welcome|maasai welcome)/i,
   /(?:博物馆|museum|长颈鹿中心|giraffe centre|giraffe center)/i,
@@ -254,10 +261,14 @@ export function validateVisualCardSubjectRetention(value, task = {}) {
   const subject = clean(task.facts?.titleCoreSubject || task.facts?.visualSubject);
   const title = clean(value.cardTitle);
   if (!subject || !title) return [];
+  const missingSubject = () => `Visual Card 标题“${title}”丢失了明确视觉主体“${subject}”，不能退化成泛化游猎或体验名称`;
+  const nightSafari = /(?:夜间游猎|夜巡|night safari|night game drive)/i;
+  if (/夜巡/.test(title) && !nightSafari.test(subject)) return [missingSubject()];
   const subjectConcepts = VISUAL_SUBJECT_CONCEPTS.filter((pattern) => pattern.test(subject));
-  if (subjectConcepts.length && !subjectConcepts.some((pattern) => pattern.test(title))) {
-    return [`Visual Card 标题“${title}”丢失了明确视觉主体“${subject}”，不能退化成泛化游猎或体验名称`];
-  }
+  // This is one known museum's historical house name, never a synonym for museums in general.
+  const karenMuseumSource = /(?:Karen Blixen Museum|凯伦[·\s]?布里克森博物馆|凯伦博物馆)/i.test(subject);
+  if (karenMuseumSource && /凯伦故居/.test(title)) return [];
+  if (subjectConcepts.length && !subjectConcepts.some((pattern) => pattern.test(title))) return [missingSubject()];
   return [];
 }
 
@@ -569,7 +580,10 @@ export async function runCopyWriterSkill({
           continue;
         }
         if (item.targetPath !== task.targetPath) {
-          resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: { code: "target_path_mismatch", message: "返回 targetPath 与 Planner 任务不一致" }, warnings: item.warnings || [] });
+          resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: {
+            code: "target_path_mismatch", message: "返回 targetPath 与 Planner 任务不一致",
+            expectedTargetPath: diagnosticTargetPath(task.targetPath), actualTargetPath: diagnosticTargetPath(item.targetPath),
+          }, warnings: item.warnings || [] });
           continue;
         }
         const normalized = normalizeCopyValueForSchema(item.value, task.outputSchema);

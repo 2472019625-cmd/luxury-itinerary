@@ -25,6 +25,41 @@ const task = (targetId, targetPath, moduleType = "day") => ({
   outputSchema: { type: "string", minLength: 2 },
 });
 
+test('target_path_mismatch 只记录受控点路径，仍严格拒绝且不重绑', async () => {
+  const expected = 'days.0.description';
+  const input = task('day-path', expected);
+  const returnedValue = '这段模型文案不应出现在路径错误诊断中。';
+  const run = async (actualPath) => runCopyWriterSkill({ tasks: [input], requestJson: async () => ({
+    json: { results: [{ targetId: input.targetId, targetPath: actualPath, value: returnedValue }] },
+    attemptUsages: [{}],
+  }) });
+
+  const wrong = (await run('days.1.description')).results[0];
+  assert.equal(wrong.status, 'failed');
+  assert.equal(wrong.targetPath, expected);
+  assert.equal(wrong.error.code, 'target_path_mismatch');
+  assert.equal(wrong.error.expectedTargetPath, expected);
+  assert.equal(wrong.error.actualTargetPath, 'days.1.description');
+  assert.equal('value' in wrong, false);
+
+  for (const [actualPath, placeholder] of [
+    ['days.1.description;PRIVATE_MODEL_PAYLOAD', '[invalid_string]'],
+    [`days.${'x'.repeat(200)}`, '[overlong_string]'],
+    [{ hidden: 'PRIVATE_MODEL_PAYLOAD' }, '[object]'],
+    [null, '[null]'],
+  ]) {
+    const rejected = (await run(actualPath)).results[0];
+    assert.equal(rejected.status, 'failed');
+    assert.equal(rejected.error.code, 'target_path_mismatch');
+    assert.equal(rejected.error.actualTargetPath, placeholder);
+    assert.doesNotMatch(JSON.stringify(rejected), /PRIVATE_MODEL_PAYLOAD|这段模型文案/);
+  }
+
+  const matched = (await run(expected)).results[0];
+  assert.equal(matched.status, 'success');
+  assert.equal(matched.value, returnedValue);
+});
+
 test('visual_card 与 DAY 同批并明确支持内部描述路径，不新增调用或重试', async () => {
   let calls = 0;
   const input = [task('day', 'days.0.description'), task('copy:visual:image:day:1:primary', 'simpleImageSlotBindings.image_day_1_primary.description', 'visual_card')];

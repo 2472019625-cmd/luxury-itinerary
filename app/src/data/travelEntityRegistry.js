@@ -127,7 +127,7 @@ export const TRAVEL_ENTITY_REGISTRY = Object.freeze([
     id: "attraction-karen-blixen-museum",
     entityType: "attraction",
     canonicalName: "Karen Blixen Museum",
-    aliases: ["凯伦·布里克森博物馆", "凯伦博物馆"],
+    aliases: ["凯伦·布里克森博物馆", "凯伦博物馆", "凯伦故居"],
     displayNames: { "zh-CN": "凯伦·布里克森博物馆" },
     country: "Kenya",
     region: "Nairobi",
