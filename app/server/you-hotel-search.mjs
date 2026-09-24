@@ -1,6 +1,16 @@
+import { TRAVEL_ENTITY_REGISTRY } from "../src/data/travelEntityRegistry.js";
 const SEARCH_URL = "https://ydc-index.io/v1/search";
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
 const genericNameTokens = new Set(["the", "hotel", "resort", "lodge", "camp", "safari", "and", "spa"]);
+const snippetCategoryKeys = (value) => {
+  const text = clean(value).toLowerCase();
+  return [
+    ["location", /\b(?:located|near|overlook|river|coast|park|reserve|conservancy|distance|setting)\b|位于|坐落|毗邻|河畔|临近|地处/],
+    ["rooms", /\b(?:rooms?|suites?|villas?|tents?|accommodations?|bedrooms?)\b|客房|套房|别墅|帐篷|住宿/],
+    ["design", /\b(?:design|architecture|architect|interior|style|built)\b|设计|建筑|室内|风格/],
+    ["facilities", /\b(?:pool|spa|deck|restaurant|lounge|gym|library|facility|facilities)\b|泳池|水疗|餐厅|露台|休息区|设施/],
+  ].filter(([, pattern]) => pattern.test(text)).map(([key]) => key);
+};
 
 function identityTokens(name) {
   const latin = clean(name).toLowerCase().match(/[a-z0-9]+/g) || [];
@@ -8,11 +18,20 @@ function identityTokens(name) {
   return [...new Set([...latin.filter((token) => token.length >= 2 && !genericNameTokens.has(token)), ...cjk])];
 }
 
-function resultMatchesHotel(result, entityName) {
-  const tokens = identityTokens(entityName);
-  if (!tokens.length) return false;
+function hotelIdentityMatch(result, entityName) {
+  const normalized = clean(entityName).toLowerCase();
+  const registry = TRAVEL_ENTITY_REGISTRY.find((entity) =>
+    [entity.canonicalName, ...(entity.aliases || [])].some((alias) => clean(alias).toLowerCase() === normalized));
+  const aliases = [entityName, ...(registry?.aliases || [])];
   const local = clean(`${result?.title || ""} ${result?.url || ""}`).toLowerCase();
-  return tokens.filter((token) => local.includes(token)).length >= Math.min(2, tokens.length);
+  const matchedAlias = aliases.find((alias) => {
+    const tokens = identityTokens(alias);
+    const singleNamedProperty = tokens.length === 1 && /(?:hotel|lodge|camp|resort|酒店|营地|度假村)/i.test(alias)
+      && clean(result?.title).toLowerCase().includes(clean(alias).toLowerCase());
+    return (tokens.length >= 2 || singleNamedProperty || tokens.length === 1 && /[\u4e00-\u9fff]{2,}/.test(tokens[0]))
+      && tokens.every((token) => local.includes(token));
+  });
+  return matchedAlias ? { method: "title_url_alias_tokens", matchedAlias: clean(matchedAlias) } : null;
 }
 
 function publicSourceUrl(value) {
@@ -40,7 +59,8 @@ export async function searchHotelHighlights({ researchRequest, apiKey = process.
   for (const result of results) {
     if (snippets.length >= 16) break;
     const sourceUrl = publicSourceUrl(result?.url);
-    if (!sourceUrl || !resultMatchesHotel(result, entityName)) continue;
+    const identityEvidence = hotelIdentityMatch(result, entityName);
+    if (!sourceUrl || !identityEvidence) continue;
     const excerpts = Array.isArray(result?.contents?.highlights) && result.contents.highlights.length
       ? result.contents.highlights : Array.isArray(result?.snippets) && result.snippets.length
         ? result.snippets : [result?.description];
@@ -51,7 +71,7 @@ export async function searchHotelHighlights({ researchRequest, apiKey = process.
       const key = `${sourceUrl}\n${sourceExcerpt}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      snippets.push({ sourceUrl, sourceTitle: clean(result?.title), sourceExcerpt, sourceClass: "search_highlight", checkedAt });
+      snippets.push({ entityName, identityEvidence, sourceUrl, sourceTitle: clean(result?.title), sourceExcerpt, categoryKeys: snippetCategoryKeys(sourceExcerpt), sourceClass: "search_highlight", checkedAt });
     }
   }
   return {

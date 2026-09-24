@@ -32,3 +32,29 @@ test("You hotel search keeps empty result separate from a failed request", async
   assert.equal(empty.status, "not_found");
   await assert.rejects(searchHotelHighlights({ researchRequest: request, apiKey: "test-key", fetchImpl: async () => ({ ok: false, status: 503 }) }), { code: "you_hotel_search_failed" });
 });
+
+test("hotel snippets reject a different property sharing brand and region words", async () => {
+  const result = await searchHotelHighlights({
+    researchRequest: { researchType: "official_entity_facts", entityKind: "hotel", entityName: "Example Mara River Lodge" },
+    apiKey: "test-key",
+    fetchImpl: async () => ({ ok: true, json: async () => ({ results: { web: [
+      { title: "Example Mara Plains Lodge", url: "https://example.com/mara-plains-lodge", contents: { highlights: ["Example Mara Plains Lodge has a pool beside the plains."] } },
+      { title: "Example Mara River Lodge", url: "https://example.com/mara-river-lodge", contents: { highlights: ["Example Mara River Lodge has riverside suites and a pool."] } },
+    ] } }) }),
+  });
+  assert.equal(result.searchSnippets.length, 1);
+  assert.equal(result.searchSnippets[0].sourceUrl, "https://example.com/mara-river-lodge");
+  assert.equal(result.searchSnippets[0].identityEvidence.method, "title_url_alias_tokens");
+});
+
+test("a one-distinctive-token hotel is accepted only with its full property name", async () => {
+  const result = await searchHotelHighlights({
+    researchRequest: { researchType: "official_entity_facts", entityKind: "hotel", entityName: "Solio Lodge" }, apiKey: "test-key",
+    fetchImpl: async () => ({ ok: true, json: async () => ({ results: { web: [
+      { title: "Solio region overview", url: "https://example.com/solio", contents: { highlights: ["Solio region offers wildlife viewing and several lodging choices."] } },
+      { title: "Solio Lodge", url: "https://example.com/solio-lodge", contents: { highlights: ["Solio Lodge has rooms and a viewing deck beside the reserve."] } },
+    ] } }) }),
+  });
+  assert.equal(result.searchSnippets.length, 1);
+  assert.equal(result.searchSnippets[0].sourceTitle, "Solio Lodge");
+});

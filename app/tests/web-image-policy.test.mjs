@@ -80,7 +80,7 @@ test('Soroi 专属第三方页可在官网首页与别家酒店图之间优先�
     },
     judgeCandidatesBatch: async ({ candidates }) => candidates.map(candidate => ({ candidateId: candidate.candidateId, auditEvidenceVersion: 2, identityEvidence: { status: 'insufficient', basis: 'entity_page', quote: candidate.imageUrl }, actualSubject: '营地外观', reason: '来源页与画面符合目标酒店', matchLevel: 'representative', hardRejectCode: 'none', locationMatch: true, visibleLocationConflict: false, hotelIdentityMatch: false, visibleIdentityConflict: false, activityMatch: true, coreActionMatch: true, subjectMatch: true, coreSubjectMatch: true, identityMatch: false, subjectClear: true, subjectLargeEnough: true, subjectPrimary: true, transportType: 'none', transportTypeMatch: true, watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true, eligible: false, relevance: 95, luxury: 90, cleanliness: 95, composition: 90, score: 93 })),
   } });
-  assert.equal(downloaded.length, 1, '先查到专属页面且审核通过时不再打开品牌首页');
+  assert.equal(downloaded.length, 1, `先查到专属页面且审核通过时不再打开品牌首页：${JSON.stringify({ downloaded, status: result.results[0].status, reasons: result.results[0].pipelineEvidence?.webExecution?.candidateReasons })}`);
   assert.equal(downloaded[0], propertyImage);
   assert.ok(downloaded.every(url => !url.includes('Lukimbi')));
   assert.equal(result.results[0].status, 'success', JSON.stringify(result.results[0]));
@@ -100,6 +100,7 @@ test('英文首先使用核心主体动作，车辆不被机场替代',()=>{
   const q=buildWebExecutionQueries(s,['机场航站楼送机','Jomo Kenyatta Airport terminal drop-off']);
   assert.equal(q[0],'Nairobi drop-off vehicle parked at the terminal');
   assert.equal(q[1],'Nairobi 送机车辆 停靠航站楼');
+  assert.equal(buildWebExecutionQueries({ ...s, locationRole: 'scope_only' }, ['机场航站楼送机'])[0], 'drop-off vehicle parked at the terminal');
 });
 
 test('英文Core缺主体或动作时保留完整Planner英文词，不以半套英文覆盖', () => {

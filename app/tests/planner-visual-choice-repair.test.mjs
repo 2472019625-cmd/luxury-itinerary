@@ -441,6 +441,42 @@ test("酒店来源明确的特定房型或体验及跨店身份冲突不得被�
   assert.equal(other.slot.primaryVisualSubject, `${hotelName}和Other Hotel的玻璃穹顶房型`);
 });
 
+test("另一DAY的酒店观景体验不证明本酒店摄影承诺，普通空间目标局部归一", async () => {
+  for (const [hotelName, subject, action, visual, dayDescription] of [
+    ["Angama Amboseli", "营地公共区域外观", "面向雪山方向", "营地公共区域外观面向雪山方向", "抵达Angama Amboseli；另一天安排专属乞力马扎罗观景台体验。"],
+    ["Saruni Leopard Hill", "营地帐篷外观", "立于草原环境", "营地帐篷外观立于草原环境", "入住Saruni Leopard Hill营地，随后在Naboisho参加草原游猎。"],
+  ]) {
+    const original = hotelVisual({ primaryVisualSubject: `${hotelName}${visual}`,
+      queryCore: { subject, action, identity: hotelName, subjectEn: "", actionEn: "", identityEn: hotelName },
+      location: hotelName, locationRole: "visual_identity", fidelityQuery: `${hotelName} ${subject}`,
+      alternateQueries: [`${hotelName} exterior`] });
+    const { slot, plan, data } = await generateWithVisual(original, { factHotelName: hotelName, dayDescription, dayHotel: hotelName,
+      factHotelDetails: { selectionReason: "出行衔接便利", signatureExperience: "已确认的私人晚餐" } });
+    assert.equal(slot.plannerSlotStatus, "locally_repaired", hotelName);
+    assert.equal(slot.queryCore.subject, "酒店代表性空间");
+    assert.equal(slot.queryCore.identity, hotelName);
+    assert.equal(slot.exactIdentityRequired, true);
+    assert.equal(materializeSimpleSkillPlan({ data, agentPlan: plan }).imageSlots.find((item) => item.moduleType === "hotel").needsUserAction, false);
+  }
+});
+
+test("酒店公共区域与外观同属代表空间，具体设施景观和互斥动物仍未决", async () => {
+  const hotelName = "JW Marriott Hotel Nairobi";
+  const ordinary = hotelVisual({ primaryVisualSubject: `${hotelName}酒店外观或大堂公共区域`,
+    queryCore: { subject: "酒店公共区域", action: "", identity: hotelName, subjectEn: "hotel public area", actionEn: "", identityEn: hotelName },
+    fidelityQuery: `${hotelName} hotel exterior`, alternateQueries: [`${hotelName} hotel lobby`] });
+  const { slot } = await generateWithVisual(ordinary, { factHotelName: hotelName });
+  assert.equal(slot.plannerSlotStatus, "locally_repaired");
+  assert.equal(slot.queryCore.subject, "酒店代表性空间");
+  assert.deepEqual(slot.plannerLocalRepairs[0].allowedCategories.sort(), ["exterior", "main_areas"]);
+  const promised = await generateWithVisual({ ...ordinary, primaryVisualSubject: `${hotelName}私人泳池或肯尼亚山景客房`,
+    queryCore: { ...ordinary.queryCore, subject: "私人泳池或肯尼亚山景客房" } }, { factHotelName: hotelName });
+  assert.equal(promised.slot.plannerSlotStatus, "unresolved");
+  const day = await planDaySubject("草原上猎豹或狮群的追踪画面", ["猎豹追踪", "狮群追踪"]);
+  assert.equal(day.slot.plannerSlotStatus, "unresolved");
+  assert.ok(day.slot.plannerValidationIssues.some((issue) => issue.code === "ambiguous_visual_subject"));
+});
+
 test("普通单一酒店空间无需专属来源也不会降级为泛代表图", async () => {
   for (const [hotelName, subject, visual] of [
     ["Open Savanna Camp", "帐篷营地开放式休息区", "Open Savanna Camp营地的开放式公共休息区"],

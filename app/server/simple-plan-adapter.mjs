@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeTravelEntityName, resolveTravelEntity } from "../src/lib/travelEntityDisplay.js";
 import { TRAVEL_ENTITY_REGISTRY } from "../src/data/travelEntityRegistry.js";
 import { normalizeHighlightForDisplay } from "../src/lib/highlightDisplay.js";
+import { deriveFeaturedCardLayout } from "../src/lib/featuredCardLayout.js";
 import { STRUCTURED_HOTEL_FACT_FORMAT } from "../src/lib/hotelFactPresentation.js";
 import { publicSheyouProductValues } from "../config/sheyou-product-values.mjs";
 
@@ -678,6 +679,13 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
   if (!moduleVisibility.dining) data.diningExperiences = [];
   if (!moduleVisibility.transport) data.transportSummary = [];
   enrichTransportConfiguration(data, report);
+  // Resolve the renderer's odd-card promotion before image acceptance. Lock
+  // that presentation choice so image metadata cannot move the wide frame
+  // after a candidate has passed the slot's resolution policy.
+  if (data.transportSummary.length >= 3 && data.transportSummary.length % 2 === 1) {
+    const featured = deriveFeaturedCardLayout(data.transportSummary, "transport").entries.find((entry) => entry.isFeatured);
+    if (featured) data.transportSummary[featured.originalIndex].layout = "wide";
+  }
   data.notes = Array.isArray(data.notes) ? data.notes : [];
   data.days = Array.isArray(data.days) ? data.days : [];
   data.days.forEach((_day, index) => ensureDaySpot(data, index));
@@ -777,7 +785,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     copyTasks.push(copyTask({
       targetId: `copy:hotel:${hotel.id || index + 1}:fact-rows`, targetPath: `hotels.${index}.factRows`, moduleType: "hotel_fact_rows",
       facts,
-      plannerGoal: "按位置、客房、设计、设施固定四行写给最终客户。若提供 hotelSearchSnippets，从当前酒店的搜索片段中选择每类最能体现独特住宿价值的具体信息，写成自然、直观的中文文案；每行通常20—60字，说明特色与住宿感受，不只罗列名词，四行之间不重复同一事实，也不要出现‘让客人’‘适合客人’等向内部解释价值的说法。每个非空行必须引用当前片段中的准确 sourceUrl；缺少依据的行留空并标为 not_found。公开客房信息不得写成此次已订房型，不保证动物出现、景观或未确认服务。不新增搜索片段与订单事实之外的具体设施、数量、奖项或承诺。若没有 hotelSearchSnippets，保持现有已核验事实的程序映射。",
+      plannerGoal: "按位置、客房、设计、设施固定四行写给最终客户。若提供 hotelSearchSnippets，只从当前酒店且实际内容支持该行类别的片段提取或忠实改写，categoryKeys 只作提示；每个非空行必须引用准确 sourceUrl 和该片段中的逐字 sourceExcerpt。每行通常20—60字，说明特色与住宿感受，四行不重复同一事实；缺少依据的行留空并标为 not_found。公开客房信息不得写成此次已订房型，不保证动物出现、景观或未确认服务。不新增搜索片段与订单事实之外的具体设施、数量、奖项或承诺。用户及供应商已确认事实优先。若没有 hotelSearchSnippets，保持现有已核验事实的程序映射。",
       relevantContext: itineraryContext, layoutHints: { placement: "hotel_fact_rows", itemIndex: index }, outputSchema: hotelFactRowsSchema, researchRequest, required: false,
     }));
   });

@@ -4,10 +4,25 @@ const unique = (items) => [...new Set(items.filter(Boolean).map((item) => item.t
 const english = (value) => Boolean(value && /[a-z]/i.test(value) && !/[\u4e00-\u9fff]/.test(value));
 const entityFor = (value) => TRAVEL_ENTITY_REGISTRY.find((entity) => [entity.canonicalName, ...(entity.aliases || []), ...Object.values(entity.displayNames || {})].some((alias) => alias && alias.toLowerCase() === name(value).toLowerCase()));
 const englishName = (value) => { const entity = entityFor(value); return [entity?.displayNames?.en, entity?.canonicalName, ...(entity?.aliases || []), name(value)].find(english) || name(value); };
+const hotelSpaceEnglish = (value) => ({ "酒店外观": "exterior", "建筑外观": "exterior", "外观": "exterior", "客房": "guest room", "套房": "suite", "大堂": "lobby", "公共空间": "public space", "酒店代表性空间": "public space" })[name(value)] || "";
 export function buildWebExecutionQueries(slot, queries, purpose = "", route = null) {
   const hotelModule = String(slot.moduleType).toLowerCase().includes("hotel");
   const hotel = name(slot.hotelOfficialName) || name(slot.hotel) || (route?.matched && route.entityType === "hotel" ? route.entityName : "");
-  if (hotelModule) return hotel ? ["exterior", "suite", "pool", "public space"].map((category) => `${englishName(hotel)} ${category}`) : [];
+  if (hotelModule) {
+    if (!hotel) return [];
+    const core = slot.queryCore || {};
+    if (!name(core.subject) || /^(?:酒店代表性空间|representative hotel space)$/i.test(name(core.subject))) {
+      return ["exterior", "suite", "pool", "public space"].map((category) => `${englishName(hotel)} ${category}`);
+    }
+    const subject = name(core.subject) || name(slot.subject);
+    const action = name(core.action);
+    const subjectEn = name(core.subjectEn) || hotelSpaceEnglish(subject);
+    const actionEn = name(core.actionEn);
+    const completeEnglish = subjectEn && (!action || actionEn);
+    const planned = completeEnglish ? `${subjectEn} ${actionEn}`.trim() : [subject, action].filter(Boolean).join(" ");
+    const expressions = planned ? [planned] : unique(queries).slice(0, 2);
+    return unique(expressions.map((query) => query.toLowerCase().includes(englishName(hotel).toLowerCase()) ? query : `${englishName(hotel)} ${query}`));
+  }
   const core = slot.queryCore || {};
   const shortQueries = unique(queries);
   const visualIdentity = slot.exactIdentityRequired === true && english(core.identityEn) ? core.identityEn : "";
@@ -38,6 +53,9 @@ export function buildWebExecutionQueries(slot, queries, purpose = "", route = nu
       return context && !base.toLowerCase().includes(context.toLowerCase()) ? `${base} ${context}` : base;
     });
   }
+  // A visual-identity location may supply necessary background. Scope-only
+  // geography stays in the scope plan and never narrows the Web query.
+  if (slot.locationRole !== "visual_identity") return ordered.slice(0, 2);
   const locationEntity = entityFor(slot.location) || (slot.visualContext?.scopeFallbackLocations || []).map(entityFor).find((entity) => entity && ["place", "park", "conservancy"].includes(entity.entityType));
   const identity = unique([slot.regionEn, slot.countryEn, slot.region, slot.country, locationEntity?.region, locationEntity?.country, slot.destinationEn, slot.destination].map(englishName)).find(english) || "";
   return ordered.slice(0, 2).map((query) => identity && !query.toLowerCase().includes(identity.toLowerCase()) ? `${identity} ${query}` : query);

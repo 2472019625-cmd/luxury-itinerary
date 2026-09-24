@@ -1,5 +1,6 @@
 import path from "node:path";
 import * as XLSX from "xlsx";
+import sharp from "sharp";
 
 export function createWorkbookFile() {
   const rows = [
@@ -119,7 +120,7 @@ export async function copyResearchFacts({ researchRequest }) {
 export function imageAdapters({ appRoot, failMatcher = () => false, delayMs = 80 } = {}) {
   const assets = Array.from({ length: 12 }, (_, index) => {
     const number = String(index + 1).padStart(2, "0");
-    return { filePath: path.join(appRoot, "public", "assets", "placeholders", `destination-${number}.png`), publicUrl: `/assets/placeholders/destination-${number}.png` };
+    return { number, color: { r: 35 + index * 10, g: 80 + index * 5, b: 110 + index * 7 } };
   });
   let cursor = 0;
   const pageAssets = new Map();
@@ -137,7 +138,16 @@ export function imageAdapters({ appRoot, failMatcher = () => false, delayMs = 80
       const asset = pageAssets.get(page.pageUrl);
       return [{ ...page, imageUrl: `${page.pageUrl}/image.jpg`, width: 1800, height: 1100, fixtureAsset: asset }];
     },
-    downloadCandidate: async (candidate) => ({ ...candidate, filePath: candidate.fixtureAsset.filePath, publicUrl: candidate.fixtureAsset.publicUrl, sha256: `fixture-${candidate.fixtureAsset.publicUrl}` }),
+    downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+      const asset = candidate.fixtureAsset;
+      const fileName = `fixture-${asset.number}.jpg`;
+      const filePath = path.join(directory, fileName);
+      const number = Number(asset.number);
+      const shapes = Array.from({ length: 8 }, (_, index) => `<rect x="${(index * 193 + number * 89) % 1500}" y="${(index * 119 + number * 71) % 900}" width="${70 + ((number * index * 23) % 230)}" height="${65 + ((number * (index + 2) * 17) % 210)}" fill="${index % 2 ? '#e4c17a' : '#293d5a'}"/>`).join("");
+      const svg = `<svg width="1600" height="1000" xmlns="http://www.w3.org/2000/svg"><rect width="1600" height="1000" fill="rgb(${asset.color.r},${asset.color.g},${asset.color.b})"/>${shapes}</svg>`;
+      await sharp(Buffer.from(svg)).jpeg().toFile(filePath);
+      return { ...candidate, filePath, publicUrl: `${publicPrefix}/${fileName}`, sha256: `fixture-${asset.number}`, width: 1600, height: 1000 };
+    },
     judgeCandidatesBatch: async ({ slot, candidates }) => candidates.map((candidate, index) => ({
       candidateId: candidate.candidateId,
       score: 90 - index,

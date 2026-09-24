@@ -43,6 +43,11 @@ export function buildImagePipelineStageTrace(slot = {}, result = {}, sourceMode 
   const web = evidence.webExecution || {};
   const attempts = Array.isArray(knowledge.attempts) ? knowledge.attempts : [];
   const failedAttempts = attempts.filter((attempt) => ["failed", "timeout"].includes(attempt.status)).length;
+  const knowledgeFailureBreakdown = {
+    terminalFailed: attempts.filter((attempt) => attempt.status === "failed" && attempt.knowledgeFailureKind === "terminal_failure").length,
+    pollTransportFailed: attempts.filter((attempt) => attempt.status === "failed" && attempt.knowledgeStage === "poll" && attempt.knowledgeFailureKind === "transport").length,
+    clientDeadlineExceeded: attempts.filter((attempt) => attempt.status === "timeout" && attempt.knowledgeStage === "poll" && attempt.knowledgeFailureKind === "client_deadline").length,
+  };
   const webCandidates = (result.candidates || []).filter((candidate) => candidate?.sourceKind !== "knowledge_library");
   const plannerIssues = (slot.plannerValidationIssues || []).map((issue) => diagnosticCode(issue?.code)).filter(Boolean);
   const plannerStatus = slot.plannerSlotStatus === "unresolved" || slot.needsUserAction === true
@@ -72,7 +77,7 @@ export function buildImagePipelineStageTrace(slot = {}, result = {}, sourceMode 
     planner: { status: plannerStatus, issueCodes: plannerIssues },
     hierarchy: { status: hierarchyStatus, failureCode: diagnosticCode(hierarchy.failureCode), attempts: Number(hierarchy.attempts || 0), technicalRetries: Number(hierarchy.technicalRetries || 0) },
     directory: { status: directoryStatus, reasonCode: diagnosticCode(scopePlan.blockedReason || knowledge.failureReason), scopeCount: scopePlan.scopes?.length || 0 },
-    knowledgeQuery: { status: sourceMode === "web_only" ? "not_requested" : queryStatus, attempts: attempts.length, failedAttempts, returnedCandidates: Number(knowledge.previewReturned || 0), sourcePathRejected: Number(knowledge.sourcePathRejectedCount || 0), previewsAudited: Number(knowledge.previewAudited || 0), originalsSaved: Number(knowledge.originalDownloadSavedCount || 0) },
+    knowledgeQuery: { status: sourceMode === "web_only" ? "not_requested" : queryStatus, attempts: attempts.length, failedAttempts, failureBreakdown: knowledgeFailureBreakdown, returnedCandidates: Number(knowledge.previewReturned || 0), sourcePathRejected: Number(knowledge.sourcePathRejectedCount || 0), previewsAudited: Number(knowledge.previewAudited || 0), originalsSaved: Number(knowledge.originalDownloadSavedCount || 0) },
     web: { entered: webEntered, fallbackReason: diagnosticCode(evidence.sourceFallback?.reason), queryCount: web.executedQueries?.length || 0, pagesAccessed: Number(web.pagesUsed || 0), candidates: webCandidates.length, rejectedCandidates: webCandidates.filter((candidate) => candidate.qualificationStatus === "rejected").length, eligibleCandidates: webCandidates.filter((candidate) => candidate.qualificationStatus === "eligible").length },
     terminal: {
       status: finalStatus,
@@ -775,6 +780,7 @@ export function applyWebImageIdentityEvidence(slot, candidate, audit) {
 
 function retryableTechnicalError(error) {
   if (error?.technicalRetryHandled) return false;
+  if (["search_quota_rejected", "search_rate_limited", "search_provider_failed"].includes(error?.code)) return false;
   const value = `${error?.code || ""} ${error?.name || ""} ${error?.message || error || ""}`;
   if (/page_access_blocked|page_redirect_mismatch|分辨率不足|文件过大|资源上限|不支持的图片格式|下载失败（4\d\d）/i.test(value)) return false;
   return /invalid_json|JSON|parse|解析|decode|解码|corrupt|sharp|unsupported image|network|网络错误|fetch|socket|ECONN|ETIMEDOUT|timeout|timed out|超时|aborted|abort|unavailable|请求失败|下载失败/i.test(value);
@@ -2203,7 +2209,20 @@ export async function runImageSearchSkill({
       const terminal = (kind) => ["success", "visual_unavailable", "visual_failed", "inconclusive"].includes(kind);
       const hasBudget = () => webBudget.pages < networkPageLimit && webBudget.effectivePages.size < sourcePagesPerSlot && webBudget.downloads < downloadsPerSlot;
       const mergeResult = (current) => {
-        result = { ...current, candidates: mergePublicCandidates(result.candidates, current.candidates || []), sourceEvidence: unique([...result.sourceEvidence, ...(current.sourceEvidence || [])]) };
+        const candidates = mergePublicCandidates(result.candidates, current.candidates || []);
+        const sourceEvidence = unique([...result.sourceEvidence, ...(current.sourceEvidence || [])]);
+        const reasons = {};
+        for (const candidate of candidates) {
+          const reason = candidate.rejection || candidate.hardJudgment?.hardRejectCode || candidate.qualificationStatus || "unreviewed";
+          reasons[reason] = (reasons[reason] || 0) + 1;
+        }
+        evidence.webExecution.candidateReasons = reasons;
+        const incomplete = candidates.some((item) => item.autoReviewStatus === "needs_user_judgment" || item.autoReviewStatus === "audit_timeout" || item.hardJudgment?.auditContract?.complete === false);
+        const reviewed = candidates.some((item) => item.hardJudgment);
+        const base = ["success", "visual_unavailable", "visual_failed"].includes(current.kind) ? current
+          : incomplete ? { ...current, kind: "inconclusive", technicalStatus: "visual_judgment_inconclusive" }
+            : reviewed ? { ...current, kind: "no_eligible", technicalStatus: "no_eligible_candidate" } : current;
+        result = { ...base, candidates, sourceEvidence };
       };
       for (const [queryIndex, query] of queries.entries()) {
         if (signal?.aborted) { evidence.webExecution.stopReason = "aborted"; break; }
@@ -2265,12 +2284,13 @@ export async function runImageSearchSkill({
       const knowledgeScopeResolution = null;
       const knowledgeRawCandidates = [];
       const knowledgeCandidates = [];
+      const commonsSkipped = Boolean(resumedPages || isHotel || webBudget.commonsCalled);
       const [pagesResult, commonsResult] = await Promise.allSettled([
         resumedPages ? Promise.resolve(resumedPages) : searchQueue.add(() => tracked("image_search", `${slot.slotId}:${layerName}`, async (recordAttempt) => withOneTechnicalRetry(async () => {
           recordAttempt(); metrics.searchCalls += 1;
           return webMeasure("searchProvider", () => searchFn({ queries: layerQueries, apiKey: searchApiKey, baseUrl: searchBaseUrl, model: searchModel, count: sourcePagesPerSlot, signal }));
         }, (error) => { metrics.technicalRetries.search += 1; warnings.push(`${layerName} 搜索技术重试：${error?.message || error}`); }))),
-        resumedPages || isHotel || webBudget.commonsCalled ? Promise.resolve([]) : searchQueue.add(async () => { webBudget.commonsCalled = true; metrics.commonsCalls += 1; return webMeasure("commons", () => commonsFn(layerQueries[0], { signal, count: downloadsPerSlot })); }),
+        commonsSkipped ? Promise.resolve([]) : searchQueue.add(async () => { webBudget.commonsCalled = true; metrics.commonsCalls += 1; return webMeasure("commons", () => commonsFn(layerQueries[0], { signal, count: downloadsPerSlot })); }),
       ]);
       evidence.searchCompleted = evidence.searchCompleted || (sourceChoice === "knowledge" ? knowledgeResult?.status === "completed" : pagesResult.status === "fulfilled");
       if (pagesResult.status === "rejected") warnings.push(`${layerName} 搜索失败：${pagesResult.reason?.message || pagesResult.reason}`);
@@ -2292,6 +2312,11 @@ export async function runImageSearchSkill({
       }
       const searchedPages = (pagesResult.status === "fulfilled" ? pagesResult.value : []).filter((item, index, array) => item?.pageUrl && array.findIndex((other) => other.pageUrl === item.pageUrl) === index);
       const queryReport = { query: layerQueries[0], allowance: { ...evidence.webExecution.currentAllowance }, returnedPages: searchedPages.length, accessedPages: 0, pageFailures: 0, effectivePages: 0, rawResources: 0, technicalFiltered: 0, resizeDuplicates: 0, relevanceFiltered: 0, downloadPool: 0, admittedCandidates: 0, deferredCandidates: 0, downloadAttempts: 0, downloadSuccess: 0, visionAudits: 0, selected: false };
+      const sourceOutcome = (settled, count) => settled.status === "rejected" ? "failed" : count ? "success" : "success_empty";
+      queryReport.sources = {
+        web: { status: resumedPages ? "reused" : sourceOutcome(pagesResult, searchedPages.length), ...(pagesResult.status === "rejected" ? { errorCode: diagnosticCode(pagesResult.reason?.code) || "search_provider_failed", httpStatus: Number.isInteger(pagesResult.reason?.status) ? pagesResult.reason.status : null } : {}) },
+        commons: { status: commonsSkipped ? "skipped" : sourceOutcome(commonsResult, Array.isArray(commonsResult.value) ? commonsResult.value.length : 0), ...(commonsResult.status === "rejected" ? { errorCode: diagnosticCode(commonsResult.reason?.code) || "commons_search_failed" } : {}) },
+      };
       evidence.webExecution.queryReports.push(queryReport);
       queryReport.resumed = Boolean(resumedPages);
       const failureStart = evidence.pageFailures.length;
@@ -2363,11 +2388,16 @@ export async function runImageSearchSkill({
       const returnedCandidates = uniqueImageAssets([...extractedGroups.flat(), ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))));
       const remainingDownloadBudget = Math.min(Math.max(0, downloadsPerSlot - webBudget.downloads), evidence.webExecution.currentAllowance.downloads);
       const rankedCandidates = uniqueImageAssets([...diverseExtracted, ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot)));
-      const strongHotelCount = isHotel ? rankedCandidates.filter((item) => item.downloadRelevance?.state === "strong_match").length : 0;
+      const propertyCandidates = isHotel ? rankedCandidates.filter((candidate) => webHotelPropertyPage(candidate.pageUrl, layerSlot)) : [];
+      // A target property's own page has stronger identity evidence than a
+      // brand homepage. Admit it first; homepage images remain in the record
+      // and later queries can still be used if no property image qualifies.
+      const prioritizedCandidates = propertyCandidates.length ? propertyCandidates : rankedCandidates;
+      const strongHotelCount = isHotel ? prioritizedCandidates.filter((item) => item.downloadRelevance?.state === "strong_match").length : 0;
       // Keep one weaker fallback if strong hotel evidence exists. Downloading
       // five weak homepage images beside one property image wastes the budget.
       const focusedAllowance = strongHotelCount ? Math.min(remainingDownloadBudget, strongHotelCount + 1) : remainingDownloadBudget;
-      const rawCandidates = selectDiverseWebDownloads(rankedCandidates, focusedAllowance);
+      const rawCandidates = selectDiverseWebDownloads(prioritizedCandidates, focusedAllowance);
       const admittedKeys = new Set(rawCandidates.map(candidate => webImageAssetKey(candidate.imageUrl)));
       const rankedKeys = new Set(rankedCandidates.map(candidate => webImageAssetKey(candidate.imageUrl)));
       for (const candidate of returnedCandidates) {
@@ -2436,10 +2466,10 @@ export async function runImageSearchSkill({
         const knowledgeOnlyStatus = sourceChoice === "knowledge" ? evidence.knowledgeSearch?.status : null;
         const allSearchFailed = resolvedSourceMode === "knowledge_only"
           ? ["failed", "timeout"].includes(knowledgeOnlyStatus)
-          : pagesResult.status === "rejected" && (isHotel || commonsResult.status === "rejected");
+          : pagesResult.status === "rejected" && !allPages.length && !directCandidates.length;
         const layers = evidence.downloadFailures.map((item) => item.layer);
         const knowledgeTechnicalStatus = knowledgeOnlyStatus === "needs_clarification" ? "knowledge_needs_clarification" : knowledgeOnlyStatus === "timeout" ? "knowledge_timeout" : knowledgeOnlyStatus === "failed" ? "knowledge_failed" : knowledgeOnlyStatus === "completed" && knowledgeRawCandidates.length && !knowledgeCandidates.length ? "knowledge_no_valid_candidate" : knowledgeOnlyStatus === "completed" && !directCandidates.length ? "knowledge_not_found" : null;
-        const technicalStatus = knowledgeTechnicalStatus || (allSearchFailed ? "search_failed" : !allPages.length && !directCandidates.length ? "no_search_results" : !evidence.extractedCandidates ? "page_extraction_empty" : layers.length && layers.every((item) => item === "size") ? "all_candidates_too_small" : layers.includes("decode") ? "candidate_decode_failed" : layers.includes("download") || layers.includes("page_access") ? "candidate_download_failed" : "no_technical_candidate");
+        const technicalStatus = knowledgeTechnicalStatus || (allSearchFailed ? "search_failed" : !allPages.length && !directCandidates.length ? "no_search_results" : !evidence.extractedCandidates ? "page_extraction_empty" : layers.length && layers.every((item) => item === "size") && !retainedCandidates.length ? "all_candidates_too_small" : layers.includes("decode") ? "candidate_decode_failed" : layers.includes("download") || layers.includes("page_access") ? "candidate_download_failed" : "no_technical_candidate");
         const kind = knowledgeOnlyStatus === "needs_clarification" ? "knowledge_needs_clarification" : allSearchFailed ? "search_failed" : "no_candidate";
         return { kind, candidates: retain([]), sourceEvidence: unique([...allPages.map((item) => item.pageUrl), ...knowledgeCandidates.map((item) => item.pageUrl)]), actualSubject: null, technicalStatus };
       }

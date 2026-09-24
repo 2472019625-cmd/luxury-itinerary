@@ -7,9 +7,45 @@ import { runSimplePipeline, statusFor } from "../server/simple-pipeline-executor
 import { materializeSimpleSkillPlan } from "../server/simple-plan-adapter.mjs";
 import { applySimpleSkillResults } from "../server/simple-pipeline-writeback.mjs";
 import { APPROVED_PAYMENT } from "../server/simple-fixed-modules.mjs";
+import { imageResolutionPolicyForSlot } from "../server/image-download.mjs";
+import { deriveFeaturedCardLayout } from "../src/lib/featuredCardLayout.js";
 import { copyRequestJson, copyResearchFacts, createWorkbookFile, imageAdapters, plannerRequestJson } from "./helpers/simple-pipeline-fixture.mjs";
 
 const appRoot = path.resolve(import.meta.dirname, "..");
+
+test("three transport cards lock the actual wide frame before image resolution admission", () => {
+  const plan = materializeSimpleSkillPlan({
+    data: { title: "三段交通", destination: "Kenya", sourcePosterHighlights: [], hotels: [], diningExperiences: [],
+      transportSummary: [{ id: "a", category: "游猎车", images: [] }, { id: "b", category: "商务车", images: [] }, { id: "c", category: "草原飞机", images: [] }], days: [], notes: [] },
+    agentPlan: { selectedHighlights: [], imagePlan: { slots: [] } },
+  });
+  const slots = plan.imageSlots.filter((item) => item.moduleType === "transport");
+  const featured = deriveFeaturedCardLayout(plan.preparedData.transportSummary, "transport").entries.filter((entry) => entry.isFeatured);
+  assert.equal(featured.length, 1);
+  assert.equal(slots[featured[0].originalIndex].displayLayout, "wide");
+  const standard = slots.find((slot) => slot.displayLayout === "standard");
+  assert.ok(standard);
+  assert.ok(774 >= imageResolutionPolicyForSlot(standard).minWidth);
+  assert.ok(945 >= imageResolutionPolicyForSlot(standard).minHeight);
+  const wide = slots[featured[0].originalIndex];
+  assert.ok(774 < imageResolutionPolicyForSlot(wide).minWidth);
+  assert.ok(Math.max(1125 / 774, 640 / 945) > 1.35);
+});
+
+test("hotel search rows cannot replace a supplied or verified fact row", () => {
+  const sourceRow = { key: "rooms", label: "客房", text: "原资料确认的房型", status: "success", sourceClass: "supplier_original", sourceExcerpt: "供应商原资料确认的房型" };
+  const result = applySimpleSkillResults({
+    preparedData: { hotels: [{ officialName: "Target Lodge", roomType: "原资料确认的房型", factRows: [sourceRow] }], days: [], transportSummary: [] },
+    copyTasks: [{ targetId: "hotel-rows", targetPath: "hotels.0.factRows", moduleType: "hotel_fact_rows", outputSchema: { type: "array" }, required: false }],
+    copyExecution: { results: [{ targetId: "hotel-rows", targetPath: "hotels.0.factRows", status: "success", value: [
+      { key: "rooms", label: "客房", text: "网页称另一房型", status: "success", sourceClass: "search_highlight" },
+      { key: "facilities", label: "设施", text: "设有泳池", status: "success", sourceClass: "search_highlight" },
+    ] }] },
+  });
+  assert.equal(result.data.hotels[0].factRows[0].text, sourceRow.text);
+  assert.equal(result.data.hotels[0].factRows[1].text, "设有泳池");
+  assert.equal(result.data.hotels[0].roomType, "原资料确认的房型");
+});
 
 test("完整链路隔离单项失败，必需项未齐时仍生成可编辑草稿但不进入100%", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-pipeline-partial-"));
@@ -72,7 +108,7 @@ test("全部必需单元满足时进入 Renderer，并只在真实渲染成功�
   assert.equal(result.outputPath, outputPath);
   assert.equal(result.callCounts.rendererCalls, 1);
   assert.equal(result.unresolvedItems.length, 0);
-  assert.ok(receivedData.heroImage.startsWith("/assets/placeholders/"));
+  assert.ok(receivedData.heroImage.startsWith("/image-assets/"));
   assert.ok(receivedData.hotels.every((hotel) => hotel.images?.[0]?.src));
   assert.ok(receivedData.days.every((day) => day.spots?.[0]?.images?.[0]?.src));
   assert.ok(receivedData.notes.length > 0);
@@ -81,6 +117,7 @@ test("全部必需单元满足时进入 Renderer，并只在真实渲染成功�
   const coverWriteback = result.writeback.images.find((item) => item.slotId === "image:cover:primary");
   assert.equal(coverExecution.selected.candidateId, coverWriteback.candidateId);
   assert.equal(coverExecution.selected.localUrl, coverWriteback.src);
+  assert.equal(receivedData.heroImage, coverWriteback.src);
   assert.equal(coverExecution.selected.actualSubject, coverExecution.candidates.find((item) => item.candidateId === coverExecution.selected.candidateId).actualSubject);
   assert.deepEqual(receivedData.payment, APPROVED_PAYMENT);
   assert.ok(result.plannerResult.warnings.some((item) => item.code === "product_highlight_material_insufficient"));

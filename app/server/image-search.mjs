@@ -149,7 +149,17 @@ async function runSearchRequest({ userPrompt, apiKey, baseUrl, model, count, sig
     signal,
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error?.message || payload?.message || `Gemini 图片搜索失败（${response.status}）`);
+  if (!response.ok) {
+    const upstreamCode = String(payload?.error?.code || payload?.code || "").slice(0, 80);
+    const upstreamMessage = String(payload?.error?.message || payload?.message || "").slice(0, 300);
+    const quotaRejected = /(?:insufficient[_ -]?(?:quota|balance|credit)|quota[_ -]?(?:exhausted|insufficient)|prepay|预扣额度不足|余额不足|额度不足)/i.test(`${upstreamCode} ${upstreamMessage}`);
+    const code = quotaRejected ? "search_quota_rejected" : response.status === 429 ? "search_rate_limited" : "search_provider_failed";
+    const error = new Error(quotaRejected ? "图片搜索服务明确拒绝：额度不足" : `图片搜索服务请求失败（HTTP ${response.status}）`);
+    error.code = code;
+    error.status = response.status;
+    error.upstreamCode = /^[a-z][a-z0-9_.-]{0,79}$/i.test(upstreamCode) ? upstreamCode : null;
+    throw error;
+  }
   const contentResults = parseSearchResults(payload?.choices?.[0]?.message?.content);
   const raw = mergeSearchSources(contentResults, parseSearchMetadata(payload));
   const resolved = [];

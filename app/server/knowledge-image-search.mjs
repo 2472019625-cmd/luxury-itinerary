@@ -9,7 +9,7 @@ function safeDiagnosticId(value) {
 
 function knowledgeRequestError({ stage, kind, code, diagnosticId, queryId, requestId, errorId, status, startedAt }) {
   const action = stage === "submit" ? "提交" : stage === "refresh" ? "刷新原件" : "轮询";
-  const suffix = kind === "timeout" ? "超时" : kind === "cancelled" ? "已取消" : kind === "invalid_response" ? "响应无效" : "失败";
+  const suffix = kind === "timeout" || kind === "client_deadline" ? "超时" : kind === "cancelled" ? "已取消" : kind === "invalid_response" ? "响应无效" : "失败";
   const error = new Error(`知识库${action}请求${suffix}`);
   error.code = code;
   if (kind === "cancelled") error.name = "AbortError";
@@ -303,5 +303,5 @@ export async function searchKnowledgeImages({
     if (status !== "failed") throw knowledgeRequestError({ stage: "poll", kind: "invalid_response", code: "knowledge_invalid_output", diagnosticId, queryId, requestId: current.payload?.request_id, status: current.response.status, startedAt });
     return { status: "failed", queryId: safeDiagnosticId(queryId), queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, knowledgeStage: "terminal", knowledgeFailureKind: "terminal_failure", candidates: [], records: [], clarificationNodeIds: [], errorId: safeDiagnosticId(output.error_id), requestId: safeDiagnosticId(current.payload?.request_id) };
   }
-  throw knowledgeRequestError({ stage: "poll", kind: "timeout", code: "knowledge_timeout", diagnosticId, queryId, startedAt });
+  throw knowledgeRequestError({ stage: "poll", kind: "client_deadline", code: "knowledge_timeout", diagnosticId, queryId, startedAt });
 }

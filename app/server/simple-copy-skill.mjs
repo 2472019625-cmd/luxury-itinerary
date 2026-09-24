@@ -195,7 +195,7 @@ export function buildHotelFactRows(research = {}, facts = {}) {
   });
 }
 
-export function normalizeHotelSnippetRows(value, snippets = []) {
+export function normalizeHotelSnippetRows(value, snippets = [], entityName = "") {
   const sourceKey = (value) => {
     try {
       const url = new URL(clean(value));
@@ -204,15 +204,24 @@ export function normalizeHotelSnippetRows(value, snippets = []) {
       return url.href;
     } catch { return clean(value); }
   };
-  const evidenceByUrl = new Map(snippets.map((item) => [sourceKey(item?.sourceUrl), item]));
+  const evidenceByUrl = new Map();
+  for (const item of snippets) {
+    if (clean(item?.entityName) && clean(item.entityName) !== clean(entityName)) continue;
+    const key = sourceKey(item?.sourceUrl);
+    if (!evidenceByUrl.has(key)) evidenceByUrl.set(key, []);
+    evidenceByUrl.get(key).push(item);
+  }
   const submitted = new Map((Array.isArray(value) ? value : []).map((row) => [clean(row?.key), row]));
   return HOTEL_FACT_ROW_DEFINITIONS.map(({ key, label }) => {
     const row = submitted.get(key);
-    const source = evidenceByUrl.get(sourceKey(row?.sourceUrl));
-    if (!source || clean(row?.status) !== "success" || !clean(row?.text) || clean(row?.label) !== label) {
+    const quote = clean(row?.sourceExcerpt);
+    const source = (evidenceByUrl.get(sourceKey(row?.sourceUrl)) || []).find((item) =>
+      quote && clean(item.sourceExcerpt).includes(quote));
+    if (!source || clean(row?.status) !== "success" || !clean(row?.text) || clean(row?.label) !== label
+      || /(?:本次|此次|订单|已订|已预订|保证入住|已升级|费用已含|免费赠送)/u.test(clean(row.text))) {
       return { key, label, text: "", status: "not_found" };
     }
-    return { key, label, text: clean(row.text), status: "success", sourceUrl: source.sourceUrl, sourceClass: "search_highlight", checkedAt: source.checkedAt };
+    return { key, label, text: clean(row.text), status: "success", sourceUrl: source.sourceUrl, sourceExcerpt: quote, sourceClass: "search_highlight", checkedAt: source.checkedAt };
   });
 }
 
@@ -227,7 +236,7 @@ const VISUAL_SUBJECT_CONCEPTS = Object.freeze([
   /(?:狮群|狮子|lions?)/i,
   /(?:角马|wildebeest)/i,
   /(?:非洲五霸|五霸|big five|predator safari|掠食者)/i,
-  /(?:迁徙|渡河|river crossing|migration)/i,
+  /(?:迁徙|渡河|天国之渡|river crossing|migration)/i,
   /(?:长颈鹿|giraffes?)/i,
   /(?:热气球|hot air balloon|balloon safari)/i,
   /(?:星空床|星空寝|star bed|sleep[ -]?out|outdoor bed)/i,
@@ -236,7 +245,7 @@ const VISUAL_SUBJECT_CONCEPTS = Object.freeze([
   /(?:观景台|观景山|viewpoint|observation hill)/i,
   /(?:欢迎仪式|文化欢迎|welcome ceremony|cultural welcome|maasai welcome)/i,
   /(?:博物馆|museum|长颈鹿中心|giraffe centre|giraffe center)/i,
-  /(?:酒窖|品酒|wine cellar|wine tasting|丛林早餐|bush breakfast|星空晚宴|starlit dinner|sundowner)/i,
+  /(?:酒窖|品酒|wine cellar|wine tasting|丛林早餐|bush breakfast|星空晚宴|starlit dinner|sundowner|落日酒会)/i,
   /(?:草原飞机|小型飞机|light aircraft|bush plane|airstrip)/i,
 ]);
 
@@ -538,7 +547,7 @@ export async function runCopyWriterSkill({
         baseUrl,
         model,
         messages: [
-          { role: "system", content: `${skillPrompt}\n\n## Runtime response contract\n只处理输入 tasks，不新增、删除、重排或重新规划任务。只输出 JSON 对象：{"results":[{"targetId":"与输入一致","targetPath":"与输入一致","value":"严格符合该任务 outputSchema 的值","warnings":[]}]}；targetId 与 targetPath 必须和输入完全一致，一个任务无法完成时仍保留其他任务结果。\n酒店 task 的 hotelSearchSnippets 是当前酒店的搜索片段证据，可用于位置、客房、设计、设施的公开介绍；每个 hotel_fact_rows 非空行必须填写对应片段的准确 sourceUrl。不要从片段推断本次订单房型、包含项、价格或保证服务，不要把来源或审核措辞写入客户文案。酒店四行直接面向客户，不写“让客人”“适合客人”等内部讲解语气。其他模块仍只按原 verifiedFacts 与订单事实边界生成。\n固定钟点、保证性结果、明确人员资质等级、强制预约要求或期限、具体金额、订单包含或已预订状态，以及具体房型或车型履约，必须有当前 task 的订单事实或 verifiedFacts 支持。\n不得返回 Reviewer、finding、自动改写或 retry 决策。` },
+          { role: "system", content: `${skillPrompt}\n\n## Runtime response contract\n只处理输入 tasks，不新增、删除、重排或重新规划任务。只输出 JSON 对象：{"results":[{"targetId":"与输入一致","targetPath":"与输入一致","value":"严格符合该任务 outputSchema 的值","warnings":[]}]}；targetId 与 targetPath 必须和输入完全一致，一个任务无法完成时仍保留其他任务结果。\n酒店 task 的 hotelSearchSnippets 只属于标明的 entityName，每条有 sourceExcerpt 和 categoryKeys；酒店正文、卖点与四行共用这批片段。只可提取或忠实改写片段明确支持的公开一般属性，不能把不同来源拼成新事实。hotel_fact_rows 每个非空行必须填写准确 sourceUrl 和该来源片段中的逐字 sourceExcerpt，categoryKeys 只是类别提示；必须按片段实际语义判断归属。用户确认和 supplierHotelContext 与搜索片段冲突时以前者为准；公开客房选择不能写成本次已订房型，设施不能写成本次已含服务。不要从片段推断本次订单房型、包含项、价格或保证服务，不要把来源或审核措辞写入客户文案。酒店四行直接面向客户，不写“让客人”“适合客人”等内部讲解语气。其他模块仍只按原 verifiedFacts 与订单事实边界生成。\n固定钟点、保证性结果、明确人员资质等级、强制预约要求或期限、具体金额、订单包含或已预订状态，以及具体房型或车型履约，必须有当前 task 的订单事实或 verifiedFacts 支持。\n不得返回 Reviewer、finding、自动改写或 retry 决策。` },
           { role: "user", content: JSON.stringify({ itineraryContext, batchKind, tasks: batchTasks }) },
         ],
         reasoningEffort,
@@ -565,7 +574,9 @@ export async function runCopyWriterSkill({
         }
         const normalized = normalizeCopyValueForSchema(item.value, task.outputSchema);
         if (task.moduleType === "hotel_fact_rows" && task.facts.hotelSearchSnippets?.length) {
-          normalized.value = normalizeHotelSnippetRows(normalized.value, task.facts.hotelSearchSnippets);
+          normalized.value = normalizeHotelSnippetRows(normalized.value, task.facts.hotelSearchSnippets, task.researchRequest?.entityName);
+          const supplierRows = buildHotelFactRows({}, task.facts);
+          normalized.value = normalized.value.map((row, index) => supplierRows[index]?.sourceClass === "supplier_original" && supplierRows[index]?.status === "success" ? supplierRows[index] : row);
         }
         const resultWarnings = [...new Set([...(Array.isArray(item.warnings) ? item.warnings : []), ...normalized.warnings, researchWarningById.get(task.targetId)].filter(Boolean))];
         const schemaErrors = validateCopyValue(normalized.value, task.outputSchema);

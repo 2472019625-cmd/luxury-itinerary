@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createDemoAuth } from "./demo-auth.mjs";
 import { servePublicStatic } from "./public-static.mjs";
@@ -76,6 +76,9 @@ export function createAgentPlannerServer(options = {}) {
   mkdirSync(workspaceRoot, { recursive: true });
   const store = options.store || new AgentPlanStore(workspaceRoot);
   const simpleStore = options.simpleStore || new AgentPlanStore(path.join(root, "output", "simple-pipeline", "projects"));
+  // Process-local test entry for already generated isolated projects. It is
+  // never read from a request and leaves the production default unchanged.
+  const simpleRuntimeRoot = path.resolve(options.simpleRuntimeRoot || root);
   const catalog = options.catalog || new AgentProjectCatalog(options.catalogFile || path.join(path.dirname(workspaceRoot), "catalog", "projects.sqlite"));
   const sourceRoot = path.join(path.dirname(workspaceRoot), "sources");
   const jobs = new Map();
@@ -84,8 +87,9 @@ export function createAgentPlannerServer(options = {}) {
   const simpleControllers = new Map();
   const planner = options.planner || generateAgentPlan;
   const simplePipelineRunner = options.simplePipelineRunner || runSimplePipeline;
-  const simpleOrigin = `http://127.0.0.1:${port}`;
-  const simpleRenderer = options.simpleRenderer || ((input) => runSimpleRenderer({ ...input, origin: simpleOrigin }));
+  const simpleOrigin = () => `http://127.0.0.1:${server?.address()?.port || port}`;
+  const simpleRenderer = options.simpleRenderer || ((input) => runSimpleRenderer({ ...input, root,
+    outputDirectory: path.join(simpleRuntimeRoot, "output", "simple-pipeline", input.projectId), origin: simpleOrigin() }));
   const modelConfig = options.modelConfig || { apiKey: process.env.TEXT_MODEL_API_KEY, baseUrl: (process.env.TEXT_MODEL_BASE_URL || "https://api.deepseek.com").replace(/\/$/, ""), model: process.env.TEXT_MODEL_NAME || "deepseek-v4-flash" };
   const searchModelConfig = options.searchModelConfig || { apiKey: process.env.IMAGE_SEARCH_API_KEY, baseUrl: (process.env.IMAGE_SEARCH_BASE_URL || "https://api.vveai.com/v1").replace(/\/$/, ""), model: "gemini-3.7-flash-search", imageSearchModel: process.env.IMAGE_SEARCH_MODEL || "gemini-3.6-flash-search" };
   const visionModelConfig = options.visionModelConfig || { apiKey: process.env.BIGMODEL_API_KEY, baseUrl: (process.env.BIGMODEL_BASE_URL || "https://open.bigmodel.cn/api/paas/v4").replace(/\/$/, ""), model: process.env.BIGMODEL_MODEL || "glm-5.3-flash" };
@@ -204,7 +208,7 @@ export function createAgentPlannerServer(options = {}) {
   };
   const removeOutputFile = (candidate) => {
     if (!candidate) return;
-    const outputRoot = path.resolve(root, "output");
+    const outputRoot = path.resolve(simpleRuntimeRoot, "output");
     const file = path.resolve(candidate);
     if (file.startsWith(`${outputRoot}${path.sep}`) && file !== outputRoot && existsSync(file)) rmSync(file, { force: true });
   };
@@ -216,13 +220,13 @@ export function createAgentPlannerServer(options = {}) {
     const project = simpleStore.getProject(projectId);
     const activeRun = project?.activeExecutionRunId ? simpleStore.getExecutionRun(projectId, project.activeExecutionRunId) : null;
     const result = activeRun ? simpleStore.getFinalResult(projectId, activeRun.executionRunId) : null;
-    const outputDirectory = path.resolve(root, "output", "simple-pipeline", projectId);
-    const allowedOutputParent = path.resolve(root, "output", "simple-pipeline");
+    const outputDirectory = path.resolve(simpleRuntimeRoot, "output", "simple-pipeline", projectId);
+    const allowedOutputParent = path.resolve(simpleRuntimeRoot, "output", "simple-pipeline");
     if (path.dirname(outputDirectory) === allowedOutputParent && existsSync(outputDirectory)) removeDirectoryTree(outputDirectory);
     const batchId = result?.imageExecution?.batchId;
     if (batchId) {
-      const assetDirectory = path.resolve(root, "output", "image-assets", `simple-${batchId}`);
-      const assetRoot = path.resolve(root, "output", "image-assets");
+      const assetDirectory = path.resolve(simpleRuntimeRoot, "output", "image-assets", `simple-${batchId}`);
+      const assetRoot = path.resolve(simpleRuntimeRoot, "output", "image-assets");
       if (path.dirname(assetDirectory) === assetRoot && existsSync(assetDirectory)) removeDirectoryTree(assetDirectory);
     }
     const existed = simpleStore.deleteProject(projectId);
@@ -296,13 +300,13 @@ export function createAgentPlannerServer(options = {}) {
     const sourceData = { data: payload.facts, report: payload.report || {}, fileName: payload.sourceName || payload.report?.workbookName || "行程资料.xlsx" };
     setImmediate(async () => {
       try {
-        if (!options.simplePipelineRunner) await assertSimpleRendererOrigin(simpleOrigin);
+        if (!options.simplePipelineRunner) await assertSimpleRendererOrigin(simpleOrigin());
         const result = await simplePipelineRunner({
           projectId,
           ownerId,
           sourceData,
           root,
-          origin: simpleOrigin,
+          origin: simpleOrigin(),
           adapters: { store: simpleStore },
           plannerOptions: modelConfig,
           copyOptions: {
@@ -533,6 +537,7 @@ export function createAgentPlannerServer(options = {}) {
       if (job && !authorizeProject(request, response, store, job.projectId)) return;
     }
     if (request.method === "POST" && url.pathname === "/api/simple/projects") {
+      if (simpleRuntimeRoot !== root) return json(response, 409, { error: "隔离项目读取入口不启动新的制作批次" });
       const ownerId = request.authUser?.id || (request.authDisabled ? String(request.headers["x-agent-local-user"] || "").trim() : "");
       if (!ownerId) return json(response, 401, { error: "请先登录后开始制作" });
       try {
@@ -544,6 +549,7 @@ export function createAgentPlannerServer(options = {}) {
     }
     const simpleProjectMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)$/);
     if (request.method === "DELETE" && simpleProjectMatch) {
+      if (simpleRuntimeRoot !== root) return json(response, 409, { error: "隔离项目读取入口不删除项目" });
       try {
         const payload = await requestBody(request).catch(() => ({}));
         if (payload.confirmed !== true) return json(response, 400, { error: "永久删除需要明确确认" });
@@ -577,7 +583,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "PUT" && simpleDayEditorMatch) {
       try {
         const payload = await requestBody(request);
-        const result = await saveSimpleDayEditor({ store: simpleStore, root, render: simpleRenderer, deferRender: true, projectId: decodeURIComponent(simpleDayEditorMatch[1]), dayIndex: Number(simpleDayEditorMatch[2]), ...payload });
+        const result = await saveSimpleDayEditor({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, deferRender: true, projectId: decodeURIComponent(simpleDayEditorMatch[1]), dayIndex: Number(simpleDayEditorMatch[2]), ...payload });
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "day_editor_save_failed" }); }
     }
@@ -585,7 +591,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "POST" && simpleCandidateMatch) {
       try {
         const payload = await requestBody(request);
-        const input = { store: simpleStore, root, render: simpleRenderer, projectId: decodeURIComponent(simpleCandidateMatch[1]), slotId: decodeURIComponent(simpleCandidateMatch[2]), candidateId: String(payload.candidateId || ""), manualConfirmed: payload.manualConfirmed === true };
+        const input = { store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleCandidateMatch[1]), slotId: decodeURIComponent(simpleCandidateMatch[2]), candidateId: String(payload.candidateId || ""), manualConfirmed: payload.manualConfirmed === true };
         const result = simpleCandidateMatch[3] === "select" ? await chooseSimpleImageCandidate({ ...input, deferRender: true, knowledgeImageConfig }) : await rejectSimpleImageCandidate(input);
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_decision_failed" }); }
@@ -596,7 +602,7 @@ export function createAgentPlannerServer(options = {}) {
         const contentType = String(request.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
         const buffer = await requestBuffer(request);
         const dataUrl = `data:${contentType};base64,${buffer.toString("base64")}`;
-        const result = await uploadSimpleImage({ store: simpleStore, root, render: simpleRenderer, deferRender: true, projectId: decodeURIComponent(simpleUploadMatch[1]), slotId: decodeURIComponent(simpleUploadMatch[2]), dataUrl, fileName: decodeURIComponent(String(request.headers["x-file-name"] || "用户上传图片")) });
+        const result = await uploadSimpleImage({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, deferRender: true, projectId: decodeURIComponent(simpleUploadMatch[1]), slotId: decodeURIComponent(simpleUploadMatch[2]), dataUrl, fileName: decodeURIComponent(String(request.headers["x-file-name"] || "用户上传图片")) });
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_upload_failed" }); }
     }
@@ -606,7 +612,7 @@ export function createAgentPlannerServer(options = {}) {
         const result = await researchSimpleImageSlot({
           deferRender: true,
           store: simpleStore,
-          root,
+          root: simpleRuntimeRoot,
           render: simpleRenderer,
           projectId: decodeURIComponent(simpleResearchMatch[1]),
           slotId: decodeURIComponent(simpleResearchMatch[2]),
@@ -636,7 +642,7 @@ export function createAgentPlannerServer(options = {}) {
         const result = await researchSimpleImageSlots({
           deferRender: true,
           store: simpleStore,
-          root,
+          root: simpleRuntimeRoot,
           render: simpleRenderer,
           projectId: decodeURIComponent(simpleImageBatchRetryMatch[1]),
           slotIds: Array.isArray(payload.slotIds) ? payload.slotIds : undefined,
@@ -665,7 +671,7 @@ export function createAgentPlannerServer(options = {}) {
         const payload = await requestBody(request);
         const result = await retrySimpleCopyTargets({
           store: simpleStore,
-          root,
+          root: simpleRuntimeRoot,
           render: simpleRenderer,
           projectId: decodeURIComponent(simpleCopyBatchRetryMatch[1]),
           targetIds: Array.isArray(payload.targetIds) ? payload.targetIds : undefined,
@@ -684,7 +690,7 @@ export function createAgentPlannerServer(options = {}) {
       try {
         const result = await retrySimpleCopyTarget({
           store: simpleStore,
-          root,
+          root: simpleRuntimeRoot,
           render: simpleRenderer,
           projectId: decodeURIComponent(simpleCopyRetryMatch[1]),
           targetId: decodeURIComponent(simpleCopyRetryMatch[2]),
@@ -701,7 +707,7 @@ export function createAgentPlannerServer(options = {}) {
     const simpleRendererRetryMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/repair\/renderer$/);
     if (request.method === "POST" && simpleRendererRetryMatch) {
       try {
-        const result = await retrySimpleRenderer({ store: simpleStore, root, render: simpleRenderer, projectId: decodeURIComponent(simpleRendererRetryMatch[1]) });
+        const result = await retrySimpleRenderer({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleRendererRetryMatch[1]) });
         return json(response, 200, result);
       } catch (failure) { return json(response, failure.code === "repair_in_progress" ? 409 : 400, { error: failure.message, code: failure.code || "targeted_renderer_retry_failed" }); }
     }
@@ -712,7 +718,7 @@ export function createAgentPlannerServer(options = {}) {
         const project = simpleStore.getProject(projectId);
         const activeRun = project?.activeExecutionRunId ? simpleStore.getExecutionRun(projectId, project.activeExecutionRunId) : null;
         const result = activeRun ? simpleStore.getFinalResult(projectId, activeRun.executionRunId) : null;
-        const outputRoot = path.resolve(root, "output");
+        const outputRoot = path.resolve(simpleRuntimeRoot, "output");
         const file = result?.pipelineStatus === "complete" && result.outputPath ? path.resolve(result.outputPath) : null;
         if (!file || !file.startsWith(`${outputRoot}${path.sep}`) || !existsSync(file)) return json(response, 404, { error: "正式成品文件不存在" });
         response.writeHead(200, { "content-type": "image/png", "content-disposition": `attachment; filename="itinerary-${projectId}.png"` });
@@ -951,12 +957,17 @@ export function createAgentPlannerServer(options = {}) {
     }
     if (url.pathname.startsWith("/api/")) return json(response, 404, { error: "智能体规划服务未提供该能力" });
     if (["GET", "HEAD"].includes(request.method) && url.pathname.startsWith("/image-assets/")) {
-      const assetRoot = path.resolve(root, "output", "image-assets");
-      const relativeAsset = decodeURIComponent(url.pathname.slice("/image-assets/".length));
-      const file = path.resolve(assetRoot, relativeAsset);
-      if (!file.startsWith(`${assetRoot}${path.sep}`) || !existsSync(file)) return json(response, 404, { error: "图片素材不存在" });
-      if (request.method === "HEAD") { response.writeHead(200, { "content-type": contentTypes[path.extname(file).toLowerCase()] || "application/octet-stream" }); return response.end(); }
-      return streamFile(response, file);
+      try {
+        const assetRoot = path.resolve(simpleRuntimeRoot, "output", "image-assets");
+        const relativeAsset = decodeURIComponent(url.pathname.slice("/image-assets/".length));
+        const file = path.resolve(assetRoot, relativeAsset);
+        if (!file.startsWith(`${assetRoot}${path.sep}`) || !existsSync(file)) return json(response, 404, { error: "图片素材不存在" });
+        const realRoot = realpathSync(assetRoot);
+        const realFile = realpathSync(file);
+        if (!realFile.startsWith(`${realRoot}${path.sep}`)) return json(response, 404, { error: "图片素材不存在" });
+        if (request.method === "HEAD") { response.writeHead(200, { "content-type": contentTypes[path.extname(realFile).toLowerCase()] || "application/octet-stream" }); return response.end(); }
+        return streamFile(response, realFile);
+      } catch { return json(response, 404, { error: "图片素材不存在" }); }
     }
     if (!["GET", "HEAD"].includes(request.method)) { response.writeHead(405).end("Method not allowed"); return; }
     const relative = decodeURIComponent(url.pathname === "/" ? "index.html" : url.pathname.replace(/^\/+/, ""));
@@ -965,9 +976,9 @@ export function createAgentPlannerServer(options = {}) {
     if (!existsSync(file)) { response.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end("请先运行 npm run build"); return; }
     servePublicStatic(request, response, file, clientDir, contentTypes);
   });
-  const cleanupInterval = options.cleanupIntervalMs === 0 ? null : setInterval(purgeExpiredProjects, options.cleanupIntervalMs || 60 * 60 * 1000);
+  const cleanupInterval = simpleRuntimeRoot !== root || options.cleanupIntervalMs === 0 ? null : setInterval(purgeExpiredProjects, options.cleanupIntervalMs || 60 * 60 * 1000);
   cleanupInterval?.unref();
-  queueMicrotask(purgeExpiredProjects);
+  if (simpleRuntimeRoot === root) queueMicrotask(purgeExpiredProjects);
   server.on("close", () => { if (cleanupInterval) clearInterval(cleanupInterval); if (!options.catalog) catalog.close(); });
   return { server, port, store, jobs, controllers, executor, simpleStore, simpleJobs, simpleControllers, catalog, purgeExpiredProjects };
 }

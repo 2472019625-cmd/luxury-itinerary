@@ -425,7 +425,7 @@ const hotelRepresentativeCategories = [
   ["exterior", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:建筑外观|建筑|外观)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:building\s+exterior|building|exterior))$/i],
   ["suite", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:套房|客房)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:suites?|(?:guest\s*)?rooms?))$/i],
   ["pool", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:游泳池|泳池)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:swimming\s+)?pools?)$/i],
-  ["main_areas", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:公共空间|大堂)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:public\s+(?:spaces?|areas?)|lobb(?:y|ies)))$/i],
+  ["main_areas", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:公共空间|公共区域|大堂(?:公共区域|公共空间)?)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:public\s+(?:spaces?|areas?)|lobb(?:y|ies)))$/i],
 ];
 const splitVisualChoices = (value) => cleanText(value).split(/或者|或|二选一|\bor\b|\//i).map(cleanText);
 const visualKey = (value) => cleanText(value).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
@@ -486,11 +486,21 @@ function hotelSpecificVisualDisposition(slot, factBasis = {}) {
 
   const sourceText = (factBasis.days || []).flatMap((day) => [day.experience, ...(day.spots || []).map((spot) => `${cleanText(spot.name)} ${cleanText(spot.description)}`)])
     .map(cleanText).filter(Boolean);
-  const subjectWords = visualWords(coreSubject).filter((word) => visualKey(word).length >= 2);
+  const subjectKey = visualKey(coreSubject);
+  const actionKey = visualKey(`${cleanText(core.action)} ${cleanText(core.actionEn)}`);
+  const specificWords = unique(visualWords(`${coreSubject} ${cleanText(core.action)}`).filter((word) =>
+    visualKey(word).length >= 2 && !/^(?:酒店|营地|公共|区域|外观|空间|客房|套房|房型|体验)$/u.test(word)));
+  const supportsTargetDetail = (value) => {
+    const key = visualKey(value);
+    return Boolean(key && (subjectKey.length >= 4 && key.includes(subjectKey)
+      || actionKey.length >= 4 && key.includes(actionKey)
+      || specificWords.filter((word) => key.includes(visualKey(word))).length >= 2));
+  };
   const explicitDayPromise = sourceText.some((text) => text.split(/[。！？\n]/u).some((sentence) =>
     sentence.toLocaleLowerCase("en").includes(hotelName.toLocaleLowerCase("en"))
-      && subjectWords.some((word) => visualKey(sentence).includes(visualKey(word)))));
-  const hotelPromise = [hotel.roomType, hotel.signatureExperience, hotel.selectionReason].some((value) => cleanText(value));
+      && supportsTargetDetail(sentence)));
+  const hotelPromise = (/(?:房型|客房|套房|房间|\b(?:room|suite|villa)\b)/i.test(coreSubject) && cleanText(hotel.roomType))
+    || [hotel.signatureExperience, hotel.selectionReason].some(supportsTargetDetail);
   const otherKnownHotel = (factBasis.hotels || []).some((item) => item !== hotel && cleanText(item.name)
     && visual.toLocaleLowerCase("en").includes(cleanText(item.name).toLocaleLowerCase("en")));
   const anotherNamedProperty = /(?:和|与|及|以及|\band\b|&)\s*[\p{L}][\p{L} .'-]{0,80}(?:\b(?:Hotel|Lodge|Camp|Resort)\b|酒店|营地|度假村)/iu.test(visualDetail);

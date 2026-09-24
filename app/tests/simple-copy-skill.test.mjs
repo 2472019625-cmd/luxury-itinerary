@@ -1,6 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildHotelFactRows, normalizeCopyValueForSchema, runCopyWriterSkill, validateCopyCommitments, validateCopyValue } from "../server/simple-copy-skill.mjs";
+import { buildHotelFactRows, normalizeCopyValueForSchema, normalizeHotelSnippetRows, runCopyWriterSkill, validateCopyCommitments, validateCopyValue } from "../server/simple-copy-skill.mjs";
+
+test("hotel snippet rows require the same entity, matching category and a literal source passage", () => {
+  const snippets = [{ entityName: "Target Lodge", sourceUrl: "https://example.com/hotel", sourceExcerpt: "Target Lodge has a swimming pool.", categoryKeys: ["facilities"], checkedAt: "2026-09-24" }];
+  const rows = [
+    { key: "location", label: "位置", status: "success", text: "坐落于河畔。", sourceUrl: snippets[0].sourceUrl, sourceExcerpt: "riverside" },
+    { key: "rooms", label: "客房", status: "success", text: "本次已订套房。", sourceUrl: snippets[0].sourceUrl, sourceExcerpt: "swimming pool" },
+    { key: "design", label: "设计", status: "not_found", text: "" },
+    { key: "facilities", label: "设施", status: "success", text: "设有泳池。", sourceUrl: snippets[0].sourceUrl, sourceExcerpt: "swimming pool" },
+  ];
+  assert.deepEqual(normalizeHotelSnippetRows(rows, snippets, "Target Lodge").map((row) => row.status), ["not_found", "not_found", "not_found", "success"]);
+  assert.deepEqual(normalizeHotelSnippetRows(rows, snippets, "Other Lodge").map((row) => row.status), ["not_found", "not_found", "not_found", "not_found"]);
+});
 
 const task = (targetId, targetPath, moduleType = "day") => ({
   targetId,
@@ -224,7 +236,7 @@ test("同酒店不同消费者共享实体缓存和持久接口，业务补证�
 
 test("hotel search highlights become four customer-facing rows in the existing Writer batch", async () => {
   const request = { researchType: "official_entity_facts", entityKind: "hotel", entityName: "Example Lodge", categories: ["位置", "客房", "设计", "设施"] };
-  const factRows = { ...task("snippet-rows", "hotels.0.factRows", "hotel_fact_rows"), researchRequest: request, outputSchema: { type: "array", minItems: 4, maxItems: 4, items: { type: "object", required: ["key", "label", "text", "status"], properties: { key: { type: "string" }, label: { type: "string" }, text: { type: "string" }, status: { type: "string" }, sourceUrl: { type: "string" }, sourceClass: { type: "string" }, checkedAt: { type: "string" } }, additionalProperties: false } } };
+  const factRows = { ...task("snippet-rows", "hotels.0.factRows", "hotel_fact_rows"), researchRequest: request, outputSchema: { type: "array", minItems: 4, maxItems: 4, items: { type: "object", required: ["key", "label", "text", "status"], properties: { key: { type: "string" }, label: { type: "string" }, text: { type: "string" }, status: { type: "string" }, sourceUrl: { type: "string" }, sourceExcerpt: { type: "string" }, sourceClass: { type: "string" }, checkedAt: { type: "string" } }, additionalProperties: false } } };
   const sourceUrl = "https://example.com/lodge";
   let modelCalls = 0;
   const result = await runCopyWriterSkill({
@@ -236,10 +248,10 @@ test("hotel search highlights become four customer-facing rows in the existing W
       assert.equal(payload.tasks.length, 1);
       assert.equal(payload.tasks[0].facts.hotelSearchSnippets.length, 1);
       return { json: { results: [{ targetId: "snippet-rows", targetPath: "hotels.0.factRows", value: [
-        { key: "location", label: "位置", text: "坐拥河岸景观，停留本身也有风景。", status: "success", sourceUrl },
-        { key: "rooms", label: "客房", text: "六间河畔套房保留了小型营地的私密感。", status: "success", sourceUrl },
+        { key: "location", label: "位置", text: "坐拥河岸景观，停留本身也有风景。", status: "success", sourceUrl, sourceExcerpt: "riverside suites" },
+        { key: "rooms", label: "客房", text: "六间河畔套房保留了小型营地的私密感。", status: "success", sourceUrl, sourceExcerpt: "six riverside suites" },
         { key: "design", label: "设计", text: "", status: "not_found" },
-        { key: "facilities", label: "设施", text: "观景平台延续了营地里的自然体验。", status: "success", sourceUrl: "https://wrong.example/lodge" },
+        { key: "facilities", label: "设施", text: "观景平台延续了营地里的自然体验。", status: "success", sourceUrl: "https://wrong.example/lodge", sourceExcerpt: "a viewing deck" },
       ] }] }, attemptUsages: [{}] };
     },
   });

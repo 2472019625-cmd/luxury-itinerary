@@ -8,9 +8,43 @@ import sharp from "sharp";
 import { applyKnowledgeSourcePathEvidence, buildImageConstraints, buildImagePipelineStageTrace, buildImageQueries, buildKnowledgeQueryCacheKey, classifyTransportType, completeVisualJudgment, failedHardRequirement, runImageSearchSkill } from "../server/simple-image-skill.mjs";
 import { judgeCandidatesBatch } from "../server/image-audit.mjs";
 import { searchKnowledgeImages } from "../server/knowledge-image-search.mjs";
+import { searchWebBatch } from "../server/image-search.mjs";
 import { buildKnowledgeHierarchy, explicitEntityRoute } from "../server/knowledge-scope-resolver.mjs";
 
 const slot = (id, overrides = {}) => ({ slotId: id, moduleType: "day", required: true, location: "塞伦盖蒂", activity: "全天游猎", subject: "草原环境与游猎行动", searchIntent: ["草原游猎", "野生动物观察"], visualGoal: "表现进入草原后的环境建立", visualContext: { dayRole: "环境建立", avoid: ["与相邻 DAY 相同机位"] }, copyTargetId: `copy-${id}`, aspectRatio: "16:9", userLocked: false, ...overrides });
+
+test("Web provider rejection is not concealed by an empty Commons response", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "image-source-outcome-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const result = await runImageSearchSkill({ root, sourceMode: "web_only", slots: [slot("quota", { searchIntent: ["savanna"], queryCore: { subject: "草原" } })], adapters: {
+    searchWebBatch: async () => { throw Object.assign(new Error("quota rejected"), { code: "search_quota_rejected", status: 429 }); },
+    searchCommonsImages: async () => [],
+  } });
+  const image = result.results[0];
+  assert.equal(image.technicalStatus, "search_failed");
+  assert.equal(image.pipelineEvidence.webExecution.queryReports[0].sources.web.status, "failed");
+  assert.equal(image.pipelineEvidence.webExecution.queryReports[0].sources.web.errorCode, "search_quota_rejected");
+  assert.equal(image.pipelineEvidence.webExecution.queryReports[0].sources.commons.status, "success_empty");
+});
+
+test("provider HTTP quota refusal survives the real adapter and is not retried as an empty search", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "image-provider-quota-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let providerCalls = 0;
+  const result = await runImageSearchSkill({ root, sourceMode: "web_only", slots: [slot("quota-http", { searchIntent: ["savanna"], queryCore: { subject: "草原" } })],
+    searchApiKey: "fixture", searchModel: "fixture", adapters: {
+      searchWebBatch: (args) => searchWebBatch({ ...args, fetchImpl: async () => {
+        providerCalls += 1;
+        return { ok: false, status: 402, json: async () => ({ error: { code: "insufficient_balance", message: "prepay balance insufficient" } }) };
+      } }),
+      searchCommonsImages: async () => [],
+    } });
+  assert.equal(providerCalls, 1);
+  assert.equal(result.metrics.technicalRetries.search, 0);
+  assert.equal(result.results[0].technicalStatus, "search_failed");
+  assert.deepEqual(result.results[0].pipelineEvidence.webExecution.queryReports[0].sources,
+    { web: { status: "failed", errorCode: "search_quota_rejected", httpStatus: 402 }, commons: { status: "success_empty" } });
+});
 
 test("图片位诊断区分规划、目录、查询、Web 与采用，不包含地址或图片名", () => {
   const unresolved = buildImagePipelineStageTrace(
@@ -36,6 +70,7 @@ test("图片位诊断区分规划、目录、查询、Web 与采用，不包含�
   assert.equal(selected.hierarchy.technicalRetries, 1);
   assert.equal(selected.knowledgeQuery.status, "candidates_returned");
   assert.equal(selected.knowledgeQuery.failedAttempts, 1);
+  assert.equal(selected.knowledgeQuery.failureBreakdown.terminalFailed, 0);
   assert.equal(selected.terminal.status, "auto_adopted");
   assert.equal(selected.terminal.selectedSource, "knowledge_library");
   const webSelected = buildImagePipelineStageTrace(slot("web-selected"), {
@@ -43,6 +78,12 @@ test("图片位诊断区分规划、目录、查询、Web 与采用，不包含�
   }, "web_only");
   assert.equal(webSelected.terminal.selectedSource, "web");
   assert.doesNotMatch(JSON.stringify(selected), /https?:|selected\.jpg|node_[a-z0-9]+/i);
+  const failures = buildImagePipelineStageTrace(slot("failures"), { pipelineEvidence: { knowledgeSearch: { attempts: [
+    { status: "failed", knowledgeStage: "terminal", knowledgeFailureKind: "terminal_failure" },
+    { status: "failed", knowledgeStage: "poll", knowledgeFailureKind: "transport" },
+    { status: "timeout", knowledgeStage: "poll", knowledgeFailureKind: "client_deadline" },
+  ] } } }, "knowledge_first");
+  assert.deepEqual(failures.knowledgeQuery.failureBreakdown, { terminalFailed: 1, pollTransportFailed: 1, clientDeadlineExceeded: 1 });
 });
 
 test("规划未解决不搜图；层级故障零知识库查询但同批安全进入 Web", async (t) => {
@@ -319,6 +360,31 @@ const completeAudit = (candidateOrId, overrides = {}) => ({
   score: 90,
   reason: "测试判断完整",
   ...overrides,
+});
+
+test("later size failure preserves an earlier wrong-subject candidate", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "image-reason-pool-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let queryNumber = 0;
+  const result = await runImageSearchSkill({ root, sourceMode: "web_only", sourcePagesPerSlot: 2, downloadsPerSlot: 2,
+    visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture",
+    slots: [slot("reason-pool", { subject: "象群", activity: "elephant safari", queryCore: { subject: "象群", subjectEn: "elephant" }, searchIntent: ["elephant safari", "象群游猎"] })], adapters: {
+      searchWebBatch: async () => [{ pageUrl: `https://example.test/q${++queryNumber}`, title: "elephant safari" }],
+      searchCommonsImages: async () => [],
+      extractPageImages: async (page) => [{ ...page, imageUrl: `${page.pageUrl}/elephant.jpg`, alt: "elephant safari", pagePosition: "content" }],
+      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+        if (candidate.pageUrl.endsWith("q2")) throw Object.assign(new Error("分辨率不足"), { code: "image_resolution_insufficient" });
+        const filePath = path.join(directory, "first.jpg");
+        await sharp({ create: { width: 1600, height: 1000, channels: 3, background: "#7b8c6d" } }).jpeg().toFile(filePath);
+        return { filePath, publicUrl: `${publicPrefix}/first.jpg`, sha256: "first-candidate", width: 1600, height: 1000 };
+      },
+      judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate) => completeAudit(candidate, { actualSubject: "zebra", subjectMatch: false, coreSubjectMatch: false, eligible: false, hardRejectCode: "wrong_subject", matchLevel: "mismatch" })),
+    } });
+  const image = result.results[0];
+  assert.equal(image.technicalStatus, "no_eligible_candidate");
+  assert.ok(image.candidates.some((candidate) => candidate.rejection === "wrong_subject"));
+  assert.ok(image.pipelineEvidence.downloadFailures.some((failure) => failure.layer === "size"));
+  assert.notEqual(image.technicalStatus, "all_candidates_too_small");
 });
 
 test("父级补查同asset后续逐图路径可补齐身份，复用视觉且共享说明不能升级", async (t) => {
@@ -3053,11 +3119,13 @@ test("默认多图片位与知识库搜索并发上限为4", async (t) => {
   assert.equal(result.metrics.concurrencyPeak.slots, 4);
   assert.equal(result.metrics.concurrencyPeak.search, 4);
 });
-test("Web只补结构化身份：普通两条、酒店四类且不使用理想长句", () => {
+test("Web酒店代表空间保留四类早停，特定Core锁定单一画面", () => {
   assert.deepEqual(buildWebExecutionQueries({ moduleType: "day", country: "测试国家", primaryVisualSubject: "不该进入搜索的长句" }, ["核心主体动作", "core action", "ignored"]), ["core action", "核心主体动作"]);
-  assert.deepEqual(buildWebExecutionQueries({ moduleType: "hotel", hotel: { officialName: "Official Hotel" } }, ["very specific ideal"]), ["Official Hotel exterior", "Official Hotel suite", "Official Hotel pool", "Official Hotel public space"]);
+  assert.deepEqual(buildWebExecutionQueries({ moduleType: "hotel", hotel: { officialName: "Official Hotel" }, queryCore: { subject: "酒店外观" } }, ["very specific ideal"]), ["Official Hotel exterior"]);
+  assert.deepEqual(buildWebExecutionQueries({ moduleType: "hotel", hotel: { officialName: "Official Hotel" }, queryCore: { subject: "酒店代表性空间" } }, []), ["Official Hotel exterior", "Official Hotel suite", "Official Hotel pool", "Official Hotel public space"]);
   assert.deepEqual(buildWebExecutionQueries({ moduleType: "dining", hotel: "Official Hotel",exactIdentityRequired:true,queryCore:{identity:"Official Hotel"} }, ["户外晚餐"], "hotel_experience"), ["Official Hotel 户外晚餐"]);
-  assert.deepEqual(buildWebExecutionQueries({ moduleType: "dining", hotel: "Context Hotel", country: "Destination" }, ["户外晚餐"], "destination_experience"), ["Destination 户外晚餐"]);
+  assert.deepEqual(buildWebExecutionQueries({ moduleType: "dining", hotel: "Context Hotel", country: "Destination" }, ["户外晚餐"], "destination_experience"), ["户外晚餐"]);
+  assert.deepEqual(buildWebExecutionQueries({ moduleType: "hotel", hotel: "Official Hotel", queryCore: { subject: "帐篷", action: "面向草原" } }, []), ["Official Hotel 帐篷 面向草原"]);
   assert.deepEqual(buildWebExecutionQueries({ moduleType: "hotel" }, ["suite"]), []);
 });
 

@@ -42,6 +42,14 @@ function writeAtPath(root, targetPath, value) {
   cursor[leaf] = value;
 }
 
+function mergeHotelFactRows(existing, incoming) {
+  if (!Array.isArray(existing) || !Array.isArray(incoming)) return incoming;
+  const confirmed = new Map(existing.filter((row) => row?.status === "success" && row.text
+    && (row.sourceClass === "supplier_original" && row.sourceExcerpt || row.sourceClass === "official_entity" && row.sourceUrl))
+    .map((row) => [row.key, row]));
+  return incoming.map((row) => confirmed.get(row.key) || row);
+}
+
 function unresolved(kind, id, status, required, details = {}) {
   return { kind, id, status, required, ...details };
 }
@@ -86,6 +94,11 @@ export function applySimpleSkillResults({ preparedData, copyTasks = [], copyExec
         visualBinding.cardDescription = result.value.cardDescription;
       }
       else if (visualPathAllowed) visualBinding.description = result.value;
+      else if (task.moduleType === "hotel_fact_rows") {
+        const index = Number(/^hotels\.(\d+)\.factRows$/.exec(task.targetPath)?.[1]);
+        if (!Number.isInteger(index) || !data.hotels?.[index]) throw new Error("酒店事实行目标不存在");
+        writeAtPath(data, task.targetPath, mergeHotelFactRows(data.hotels[index].factRows, result.value));
+      }
       else writeAtPath(data, task.targetPath, result.value);
       copyWriteback.push({ targetId: task.targetId, targetPath: task.targetPath, status: "written" });
     } catch (error) {

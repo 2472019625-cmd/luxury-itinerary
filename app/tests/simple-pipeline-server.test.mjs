@@ -1,11 +1,45 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { scryptSync } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AgentPlanStore } from "../server/agent-plan-store.mjs";
 import { createAgentPlannerServer } from "../server/agent-planner-app.mjs";
+
+test("isolated existing-project entry reads only its asset root and preserves owner isolation", async (t) => {
+  const runRoot = await mkdtemp(path.join(os.tmpdir(), "simple-existing-project-ui-"));
+  const simpleStore = new AgentPlanStore(path.join(runRoot, "projects"));
+  simpleStore.createProject({ projectId: "mine", flowKind: "simple_skill_v1", ownerId: "shared-demo", status: "partial", activePlanId: null, planIds: [], executionRunIds: [] });
+  simpleStore.createProject({ projectId: "other", flowKind: "simple_skill_v1", ownerId: "user-other", status: "partial", activePlanId: null, planIds: [], executionRunIds: [] });
+  const assetDir = path.join(runRoot, "output", "image-assets", "simple-batch");
+  await mkdir(assetDir, { recursive: true });
+  await writeFile(path.join(assetDir, "image.png"), Buffer.from("fixture image"));
+  await writeFile(path.join(runRoot, "secret.log"), "not public");
+  const salt = "d".repeat(32);
+  const authFile = path.join(runRoot, "auth.json");
+  await writeFile(authFile, JSON.stringify({ name: "dsy", login: "dsy", salt, hash: scryptSync("test-password", salt, 64).toString("hex") }));
+  const origin = "https://sheyou-ai.cn";
+  const runtime = createAgentPlannerServer({ port: 0, simpleStore, simpleRuntimeRoot: runRoot, workspaceRoot: path.join(runRoot, "agent"), cleanupIntervalMs: 0,
+    auth: { enabled: true, file: authFile, usersFile: path.join(runRoot, "users.json"), origin, secure: false } });
+  await new Promise((resolve) => runtime.server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise((resolve) => runtime.server.close(resolve)); await rm(runRoot, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${runtime.server.address().port}`;
+  const authHeaders = { host: "sheyou-ai.cn", "x-forwarded-for": "203.0.113.4", origin };
+  const login = await fetch(`${base}/api/auth/login`, { method: "POST", headers: { ...authHeaders, "content-type": "application/json" }, body: JSON.stringify({ login: "dsy", password: "test-password" }) });
+  assert.equal(login.status, 200);
+  const headers = { ...authHeaders, cookie: login.headers.get("set-cookie").split(";")[0] };
+  assert.equal((await fetch(`${base}/api/simple/projects/mine`, { headers })).status, 200);
+  assert.equal((await fetch(`${base}/api/simple/projects/other`, { headers })).status, 404);
+  const image = await fetch(`${base}/image-assets/simple-batch/image.png`, { headers });
+  assert.equal(image.status, 200);
+  assert.equal(await image.text(), "fixture image");
+  assert.equal((await fetch(`${base}/image-assets/%2e%2e%2f%2e%2e%2fsecret.log`, { headers })).status, 404);
+  assert.equal((await fetch(`${base}/image-assets/secret.log`, { headers })).status, 404);
+  assert.equal((await fetch(`${base}/api/simple/projects`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: "{}" })).status, 409);
+  assert.equal((await fetch(`${base}/api/simple/projects/mine`, { method: "DELETE", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) })).status, 409);
+  assert.ok(simpleStore.getProject("mine"));
+});
 
 test("Simple 项目按登录定制师隔离且旧项目只归 dsy 兼容账号", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-owner-auth-"));

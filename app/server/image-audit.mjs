@@ -3,7 +3,7 @@ import sharp from "sharp";
 import { IMAGE_AUDIT_EVIDENCE_VERSION, isHardRejectionCode, normalizeHardRejectCode } from "./image-candidate-eligibility.mjs";
 import { knowledgeEntityProbeEvidence } from "./knowledge-scope-resolver.mjs";
 import { resourceUrl, webEntityOwnedPageImageEvidence } from "./web-image-candidates.mjs";
-import { missingVisualJudgmentFields } from "./image-audit-contract.mjs";
+import { IMAGE_AUDIT_BOOLEAN_FIELDS, IMAGE_AUDIT_SCORE_FIELDS, missingVisualJudgmentFields } from "./image-audit-contract.mjs";
 
 function auditError(message, { status, code, cause } = {}) {
   const error = new Error(message, cause ? { cause } : undefined);
@@ -283,6 +283,14 @@ export async function judgeCandidatesBatch({ slot, candidates, apiKey, baseUrl, 
   for (const item of Array.isArray(result.judgments) ? result.judgments : []) {
     if (knownIds.has(item?.candidateId) && !byId.has(item.candidateId)) byId.set(item.candidateId, item);
   }
+  // Retain only field names and types from the structured response. Text,
+  // URLs, image data and credentials are never copied into this diagnostic.
+  const diagnosticFields = [...IMAGE_AUDIT_BOOLEAN_FIELDS, ...IMAGE_AUDIT_SCORE_FIELDS, "actualSubject", "matchLevel", "hardRejectCode", "identityEvidence"];
+  const initialShapes = new Map([...byId].map(([candidateId, item]) => [candidateId,
+    Object.fromEntries(diagnosticFields.filter((key) => Object.hasOwn(item, key)).map((key) => {
+      const value = item[key];
+      return [key, Array.isArray(value) ? "array" : value === null ? "null" : typeof value];
+    }))]));
   const incomplete = judgedCandidates.map(({ candidateId }) => ({
     candidateId,
     missingFields: missingVisualJudgmentFields(byId.get(candidateId) || { candidateId }),
@@ -321,6 +329,7 @@ export async function judgeCandidatesBatch({ slot, candidates, apiKey, baseUrl, 
       ...normalizeIdentityEvidence(item, evidenceById.get(candidateId), slot, judgedCandidates.find((candidate) => candidate.candidateId === candidateId)),
       auditContract: {
         complete: missingFields.length === 0, missingFields,
+        responseFieldTypes: initialShapes.get(candidateId) || {},
         repairAttempted: repairAttempted && incompleteById.has(candidateId),
         ...(incompleteById.has(candidateId) ? { originallyMissingFields: incompleteById.get(candidateId) } : {}),
         ...(repairErrorCode && incompleteById.has(candidateId) ? { repairErrorCode } : {}),
