@@ -22,16 +22,20 @@ function hotelIdentityMatch(result, entityName) {
   const normalized = clean(entityName).toLowerCase();
   const registry = TRAVEL_ENTITY_REGISTRY.find((entity) =>
     [entity.canonicalName, ...(entity.aliases || [])].some((alias) => clean(alias).toLowerCase() === normalized));
-  const aliases = [entityName, ...(registry?.aliases || [])];
-  const local = clean(`${result?.title || ""} ${result?.url || ""}`).toLowerCase();
+  const aliases = [...new Set([entityName, registry?.canonicalName, ...(registry?.aliases || []), ...Object.values(registry?.displayNames || {})].map(clean).filter(Boolean))];
+  const phraseKey = (value) => clean(value).normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  let url;
+  try { url = new URL(result?.url); } catch { url = null; }
+  let pathname = url?.pathname || "";
+  try { pathname = decodeURIComponent(pathname); } catch { /* Keep the encoded path. */ }
+  const sources = [result?.title, url?.hostname, pathname].map(phraseKey).filter(Boolean);
   const matchedAlias = aliases.find((alias) => {
     const tokens = identityTokens(alias);
-    const singleNamedProperty = tokens.length === 1 && /(?:hotel|lodge|camp|resort|酒店|营地|度假村)/i.test(alias)
-      && clean(result?.title).toLowerCase().includes(clean(alias).toLowerCase());
-    return (tokens.length >= 2 || singleNamedProperty || tokens.length === 1 && /[\u4e00-\u9fff]{2,}/.test(tokens[0]))
-      && tokens.every((token) => local.includes(token));
+    const specificName = tokens.length >= 2 || Boolean(registry) || /(?:hotel|lodge|camp|resort|酒店|营地|度假村)/i.test(alias);
+    const key = phraseKey(alias);
+    return specificName && key.length >= 4 && sources.some((source) => source.includes(key));
   });
-  return matchedAlias ? { method: "title_url_alias_tokens", matchedAlias: clean(matchedAlias) } : null;
+  return matchedAlias ? { method: "full_alias_phrase", matchedAlias: clean(matchedAlias) } : null;
 }
 
 function publicSourceUrl(value) {

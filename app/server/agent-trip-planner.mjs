@@ -503,12 +503,16 @@ function hotelSpecificVisualDisposition(slot, factBasis = {}) {
     || [hotel.signatureExperience, hotel.selectionReason].some(supportsTargetDetail);
   const otherKnownHotel = (factBasis.hotels || []).some((item) => item !== hotel && cleanText(item.name)
     && visual.toLocaleLowerCase("en").includes(cleanText(item.name).toLocaleLowerCase("en")));
+  const joinedHotelSpaces = /(?:与|和|及|以及|\band\b|&)/i.test(coreSubject)
+    && [/(?:建筑|外观|\b(?:building|exterior)\b)/i, /(?:客房|套房|房间|\b(?:room|suite)\b)/i,
+      /(?:泳池|游泳池|\bpool\b)/i, /(?:公共空间|公共区域|大堂|\b(?:public\s+(?:space|area)|lobby)\b)/i]
+      .filter((pattern) => pattern.test(coreSubject)).length >= 2;
   const anotherNamedProperty = /(?:和|与|及|以及|\band\b|&)\s*[\p{L}][\p{L} .'-]{0,80}(?:\b(?:Hotel|Lodge|Camp|Resort)\b|酒店|营地|度假村)/iu.test(visualDetail);
   const identitySuffix = coreIdentity.startsWith(hotelName) ? coreIdentity.slice(hotelName.length).trim() : "";
   const identityUnsafe = !coreIdentity.startsWith(hotelName)
     || (identitySuffix && (/(?:酒店|营地|度假村|\b(?:hotel|lodge|camp|resort)\b)/i.test(identitySuffix)
       || ![visual, coreSubject].some((value) => visualKey(value).includes(visualKey(identitySuffix)))));
-  const unsafe = !visualStartsWithHotel || identityUnsafe || otherKnownHotel || anotherNamedProperty
+  const unsafe = !visualStartsWithHotel || identityUnsafe || otherKnownHotel || joinedHotelSpaces || anotherNamedProperty
     || visualSubjectPolicyIssue(visual, core);
   if (hotelPromise || explicitDayPromise || unsafe) return {
     code: "hotel_specific_visual_source_unconfirmed",

@@ -80,11 +80,53 @@ test('Soroi 专属第三方页可在官网首页与别家酒店图之间优先�
     },
     judgeCandidatesBatch: async ({ candidates }) => candidates.map(candidate => ({ candidateId: candidate.candidateId, auditEvidenceVersion: 2, identityEvidence: { status: 'insufficient', basis: 'entity_page', quote: candidate.imageUrl }, actualSubject: '营地外观', reason: '来源页与画面符合目标酒店', matchLevel: 'representative', hardRejectCode: 'none', locationMatch: true, visibleLocationConflict: false, hotelIdentityMatch: false, visibleIdentityConflict: false, activityMatch: true, coreActionMatch: true, subjectMatch: true, coreSubjectMatch: true, identityMatch: false, subjectClear: true, subjectLargeEnough: true, subjectPrimary: true, transportType: 'none', transportTypeMatch: true, watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true, eligible: false, relevance: 95, luxury: 90, cleanliness: 95, composition: 90, score: 93 })),
   } });
-  assert.equal(downloaded.length, 1, `先查到专属页面且审核通过时不再打开品牌首页：${JSON.stringify({ downloaded, status: result.results[0].status, reasons: result.results[0].pipelineEvidence?.webExecution?.candidateReasons })}`);
+  assert.ok(downloaded.length <= 6, '下载仍受原Slot预算约束');
   assert.equal(downloaded[0], propertyImage);
   assert.ok(downloaded.every(url => !url.includes('Lukimbi')));
   assert.equal(result.results[0].status, 'success', JSON.stringify(result.results[0]));
+  assert.equal(result.results[0].selected.imageUrl, propertyImage, '品牌首页候选不得替代已核验的专属物业图');
   assert.equal(result.results[0].selected?.hardJudgment?.identityEvidence?.status, 'supported');
+});
+
+test('专属物业页原图过小时同批有身份依据的另一来源仍可审核', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hotel-property-fallback-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const hotel = 'Soroi Luxury Migration Camp';
+  const slot = { slotId: 'image:hotel:property-fallback', moduleType: 'hotel', hotel, hotelOfficialName: hotel,
+    required: true, visualGoal: '酒店营地主图', visualContext: { destination: 'Kenya' }, copyTargetId: 'copy:hotel:property-fallback', userLocked: false,
+    aspectRatio: '16:9', queryCore: { identity: hotel, subject: '酒店外观' }, exactIdentityRequired: true };
+  const propertyImage = 'https://travel.example.com/images/soroi-luxury-migration-camp-exterior.jpg';
+  const otherImage = 'https://media.example.com/soroi-luxury-migration-camp-exterior.jpg';
+  const downloaded = [];
+  const result = await runImageSearchSkill({ root, slots: [slot], sourceMode: 'web_only', searchApiKey: 'fixture', searchModel: 'fixture',
+    visionApiKey: 'fixture', visionBaseUrl: 'https://vision.invalid', visionModel: 'fixture', downloadsPerSlot: 2, sourcePagesPerSlot: 2, adapters: {
+      searchWebBatch: async () => [
+        { pageUrl: 'https://travel.example.com/hotels/soroi-luxury-migration-camp/', title: hotel },
+        { pageUrl: 'https://media.example.com/kenya-camps/', title: 'Kenya camps' },
+      ],
+      searchCommonsImages: async () => [],
+      extractPageImages: async (page) => [{ ...page, imageUrl: page.pageUrl.includes('travel.example.com') ? propertyImage : otherImage,
+        alt: `${hotel} exterior`, pagePosition: 'content' }],
+      downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+        downloaded.push(candidate.imageUrl);
+        if (candidate.imageUrl === propertyImage) throw Object.assign(new Error('分辨率不足'), { code: 'image_resolution_insufficient' });
+        const filePath = path.join(directory, 'other-source.jpg');
+        await sharp({ create: { width: 1600, height: 1000, channels: 3, background: '#75855d' } }).jpeg().toFile(filePath);
+        return { filePath, publicUrl: `${publicPrefix}/other-source.jpg`, sha256: 'other-source', width: 1600, height: 1000 };
+      },
+      judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate) => ({ candidateId: candidate.candidateId,
+        auditEvidenceVersion: 2, identityEvidence: { status: 'insufficient', basis: 'entity_page' },
+        actualSubject: '营地外观', reason: '照片与实体文件名一致', matchLevel: 'representative', hardRejectCode: 'none',
+        locationMatch: true, visibleLocationConflict: false, hotelIdentityMatch: false, visibleIdentityConflict: false,
+        activityMatch: true, coreActionMatch: true, subjectMatch: true, coreSubjectMatch: true, identityMatch: false,
+        subjectClear: true, subjectLargeEnough: true, subjectPrimary: true, transportType: 'none', transportTypeMatch: true,
+        watermarkFree: true, nonAI: true, photographic: true, technicalUsable: true, eligible: false,
+        relevance: 95, luxury: 90, cleanliness: 95, composition: 90, score: 93 })),
+    } });
+  assert.deepEqual(downloaded, [propertyImage, otherImage], JSON.stringify({ status: result.results[0].status, reason: result.results[0].technicalStatus, evidence: result.results[0].pipelineEvidence?.webExecution }));
+  assert.equal(result.results[0].status, 'success', JSON.stringify({ candidates: result.results[0].candidates.map((item) => ({ rejection: item.rejection, identity: item.hardJudgment?.identityEvidence, imageUrl: item.imageUrl })), reasons: result.results[0].pipelineEvidence?.webExecution?.candidateReasons }));
+  assert.equal(result.results[0].selected.imageUrl, otherImage);
+  assert.ok(result.results[0].pipelineEvidence.downloadFailures.some((item) => item.layer === 'size'));
 });
 
 const ordinary = (subject, subjectEn, action, actionEn, location) => ({moduleType:'day',subject,primaryVisualSubject:subject,location,locationRole:'visual_identity',destination:'Kenya',queryCore:{subject,subjectEn,action,actionEn,identity:location}});

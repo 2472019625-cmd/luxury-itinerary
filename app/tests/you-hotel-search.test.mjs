@@ -44,7 +44,30 @@ test("hotel snippets reject a different property sharing brand and region words"
   });
   assert.equal(result.searchSnippets.length, 1);
   assert.equal(result.searchSnippets[0].sourceUrl, "https://example.com/mara-river-lodge");
-  assert.equal(result.searchSnippets[0].identityEvidence.method, "title_url_alias_tokens");
+  assert.equal(result.searchSnippets[0].identityEvidence.method, "full_alias_phrase");
+});
+
+test("a shorter property name cannot absorb an extra branch word", async () => {
+  const result = await searchHotelHighlights({
+    researchRequest: { researchType: "official_entity_facts", entityKind: "hotel", entityName: "Example Mara Lodge" }, apiKey: "test-key",
+    fetchImpl: async () => ({ ok: true, json: async () => ({ results: { web: [
+      { title: "Example Mara River Lodge", url: "https://example.com/example-mara-river-lodge/", contents: { highlights: ["Example Mara River Lodge has a pool."] } },
+      { title: "Travel review", url: "https://example.com/hotels/example-mara-lodge/", contents: { highlights: ["Example Mara Lodge has a viewing deck."] } },
+    ] } }) }),
+  });
+  assert.equal(result.searchSnippets.length, 1);
+  assert.equal(result.searchSnippets[0].sourceUrl, "https://example.com/hotels/example-mara-lodge/");
+});
+
+test("a registered Chinese property alias remains valid for a canonical English hotel name", async () => {
+  const result = await searchHotelHighlights({
+    researchRequest: { researchType: "official_entity_facts", entityKind: "hotel", entityName: "The Ritz-Carlton, Masai Mara Safari Camp" }, apiKey: "test-key",
+    fetchImpl: async () => ({ ok: true, json: async () => ({ results: { web: [
+      { title: "丽思卡尔顿马赛马拉营地", url: "https://example.com/masai-mara-camp/", contents: { highlights: ["丽思卡尔顿马赛马拉营地设有公共休息空间，住客可在开阔的室内外区域欣赏营地周围的自然环境。"] } },
+    ] } }) }),
+  });
+  assert.equal(result.searchSnippets.length, 1);
+  assert.equal(result.searchSnippets[0].identityEvidence.matchedAlias, "丽思卡尔顿马赛马拉营地");
 });
 
 test("a one-distinctive-token hotel is accepted only with its full property name", async () => {

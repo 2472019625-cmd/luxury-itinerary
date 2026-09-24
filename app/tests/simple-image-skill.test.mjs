@@ -46,6 +46,25 @@ test("provider HTTP quota refusal survives the real adapter and is not retried a
     { web: { status: "failed", errorCode: "search_quota_rejected", httpStatus: 402 }, commons: { status: "success_empty" } });
 });
 
+test("HTTP 503 keeps one technical retry and prepay service outage is not a quota refusal", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "image-provider-503-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let providerCalls = 0;
+  const result = await runImageSearchSkill({ root, sourceMode: "web_only", slots: [slot("provider-503", { searchIntent: ["savanna"], queryCore: { subject: "草原" } })],
+    searchApiKey: "fixture", searchModel: "fixture", adapters: {
+      searchWebBatch: (args) => searchWebBatch({ ...args, fetchImpl: async () => {
+        providerCalls += 1;
+        return { ok: false, status: 503, json: async () => ({ error: { code: "service_unavailable", message: "prepay service temporarily unavailable" } }) };
+      } }),
+      searchCommonsImages: async () => [],
+    } });
+  assert.equal(providerCalls, 2);
+  assert.equal(result.metrics.technicalRetries.search, 1);
+  assert.equal(result.results[0].technicalStatus, "search_failed");
+  assert.deepEqual(result.results[0].pipelineEvidence.webExecution.queryReports[0].sources,
+    { web: { status: "failed", errorCode: "search_provider_failed", httpStatus: 503 }, commons: { status: "success_empty" } });
+});
+
 test("图片位诊断区分规划、目录、查询、Web 与采用，不包含地址或图片名", () => {
   const unresolved = buildImagePipelineStageTrace(
     slot("unresolved", { plannerSlotStatus: "unresolved", needsUserAction: true, plannerValidationIssues: [{ code: "ambiguous_visual_subject" }] }),

@@ -780,7 +780,8 @@ export function applyWebImageIdentityEvidence(slot, candidate, audit) {
 
 function retryableTechnicalError(error) {
   if (error?.technicalRetryHandled) return false;
-  if (["search_quota_rejected", "search_rate_limited", "search_provider_failed"].includes(error?.code)) return false;
+  if (["search_quota_rejected", "search_rate_limited"].includes(error?.code)) return false;
+  if (error?.code === "search_provider_failed") return Number(error.status) >= 500;
   const value = `${error?.code || ""} ${error?.name || ""} ${error?.message || error || ""}`;
   if (/page_access_blocked|page_redirect_mismatch|分辨率不足|文件过大|资源上限|不支持的图片格式|下载失败（4\d\d）/i.test(value)) return false;
   return /invalid_json|JSON|parse|解析|decode|解码|corrupt|sharp|unsupported image|network|网络错误|fetch|socket|ECONN|ETIMEDOUT|timeout|timed out|超时|aborted|abort|unavailable|请求失败|下载失败/i.test(value);
@@ -2389,10 +2390,15 @@ export async function runImageSearchSkill({
       const remainingDownloadBudget = Math.min(Math.max(0, downloadsPerSlot - webBudget.downloads), evidence.webExecution.currentAllowance.downloads);
       const rankedCandidates = uniqueImageAssets([...diverseExtracted, ...directCandidates].filter((item) => item?.imageUrl && !webBudget.assets.has(webImageAssetKey(item.imageUrl))).sort((a, b) => candidateRankScore(b, layerSlot) - candidateRankScore(a, layerSlot)));
       const propertyCandidates = isHotel ? rankedCandidates.filter((candidate) => webHotelPropertyPage(candidate.pageUrl, layerSlot)) : [];
-      // A target property's own page has stronger identity evidence than a
-      // brand homepage. Admit it first; homepage images remain in the record
-      // and later queries can still be used if no property image qualifies.
-      const prioritizedCandidates = propertyCandidates.length ? propertyCandidates : rankedCandidates;
+      // Order target property pages first, then independently identifiable
+      // images. Keep all remaining candidates at the tail: pre-download
+      // evidence cannot safely become a new exclusion rule.
+      const otherCandidates = rankedCandidates.filter((candidate) => !webHotelPropertyPage(candidate.pageUrl, layerSlot)
+        && webHotelIdentityEvidence(candidate, layerSlot));
+      const prioritizedCandidates = propertyCandidates.length
+        ? [...propertyCandidates.slice(0, 1), ...otherCandidates.slice(0, 1), ...propertyCandidates.slice(1),
+          ...otherCandidates.slice(1), ...rankedCandidates.filter((candidate) => !propertyCandidates.includes(candidate) && !otherCandidates.includes(candidate))]
+        : rankedCandidates;
       const strongHotelCount = isHotel ? prioritizedCandidates.filter((item) => item.downloadRelevance?.state === "strong_match").length : 0;
       // Keep one weaker fallback if strong hotel evidence exists. Downloading
       // five weak homepage images beside one property image wastes the budget.

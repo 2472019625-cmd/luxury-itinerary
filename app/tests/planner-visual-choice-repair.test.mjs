@@ -480,6 +480,25 @@ test("酒店公共区域与外观同属代表空间，具体设施景观和互�
   assert.ok(day.slot.plannerValidationIssues.some((issue) => issue.code === "ambiguous_visual_subject"));
 });
 
+test("酒店泳池与公共空间复合Core不能由另一DAY可选池畔晚餐归一放行", async () => {
+  const hotelName = "Example Safari Camp";
+  const dayDescription = "亦可体验瑜伽、水疗与泳池边晚餐。";
+  const original = hotelVisual({ primaryVisualSubject: `${hotelName}泳池与公共空间外观并呈现山景`,
+    location: hotelName, locationRole: "visual_identity", exactIdentityRequired: true,
+    queryCore: { subject: "泳池与公共空间外观", action: "", identity: hotelName,
+      subjectEn: "pool and public space exterior", actionEn: "", identityEn: hotelName },
+    fidelityQuery: `${hotelName} pool mountain view`, alternateQueries: [`${hotelName} public space`] });
+  const { slot, plan, data } = await generateWithVisual(original, { factHotelName: hotelName, dayDescription, dayHotel: hotelName });
+  assert.equal(slot.plannerSlotStatus, "unresolved");
+  assert.equal(slot.needsUserAction, true);
+  assert.deepEqual(slot.queryCore, original.queryCore);
+  assert.equal(slot.exactIdentityRequired, true);
+  assert.ok(slot.plannerValidationIssues.some((issue) => issue.code === "hotel_specific_visual_source_unconfirmed"));
+  assert.ok(!slot.plannerLocalRepairs.some((repair) => repair.code === "hotel_unbound_specific_visual_normalized"));
+  assert.equal(plan.factBasis.days[0].experience, dayDescription);
+  assert.equal(materializeSimpleSkillPlan({ data, agentPlan: plan }).imageSlots.find((item) => item.moduleType === "hotel").needsUserAction, true);
+});
+
 test("普通单一酒店空间无需专属来源也不会降级为泛代表图", async () => {
   for (const [hotelName, subject, visual] of [
     ["Open Savanna Camp", "帐篷营地开放式休息区", "Open Savanna Camp营地的开放式公共休息区"],

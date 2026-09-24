@@ -152,7 +152,7 @@ async function runSearchRequest({ userPrompt, apiKey, baseUrl, model, count, sig
   if (!response.ok) {
     const upstreamCode = String(payload?.error?.code || payload?.code || "").slice(0, 80);
     const upstreamMessage = String(payload?.error?.message || payload?.message || "").slice(0, 300);
-    const quotaRejected = /(?:insufficient[_ -]?(?:quota|balance|credit)|quota[_ -]?(?:exhausted|insufficient)|prepay|预扣额度不足|余额不足|额度不足)/i.test(`${upstreamCode} ${upstreamMessage}`);
+    const quotaRejected = /(?:insufficient[_ -]?(?:quota|balance|credit)|(?:quota|balance|credit)[_ -]?(?:exhausted|insufficient|exceeded)|prepay.{0,30}(?:insufficient|exhausted|not enough)|预扣额度不足|余额不足|额度不足)/i.test(`${upstreamCode} ${upstreamMessage}`);
     const code = quotaRejected ? "search_quota_rejected" : response.status === 429 ? "search_rate_limited" : "search_provider_failed";
     const error = new Error(quotaRejected ? "图片搜索服务明确拒绝：额度不足" : `图片搜索服务请求失败（HTTP ${response.status}）`);
     error.code = code;

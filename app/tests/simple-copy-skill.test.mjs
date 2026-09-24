@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildHotelFactRows, normalizeCopyValueForSchema, normalizeHotelSnippetRows, runCopyWriterSkill, validateCopyCommitments, validateCopyValue } from "../server/simple-copy-skill.mjs";
 
-test("hotel snippet rows require the same entity, matching category and a literal source passage", () => {
+test("hotel snippet rows require the same entity, source URL and literal passage without claiming semantic proof", () => {
   const snippets = [{ entityName: "Target Lodge", sourceUrl: "https://example.com/hotel", sourceExcerpt: "Target Lodge has a swimming pool.", categoryKeys: ["facilities"], checkedAt: "2026-09-24" }];
   const rows = [
     { key: "location", label: "位置", status: "success", text: "坐落于河畔。", sourceUrl: snippets[0].sourceUrl, sourceExcerpt: "riverside" },
