@@ -19,6 +19,15 @@ const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const disabledLegacyCapabilities = new Set(["brand_reviewer", "review_decision", "finding_package", "copy_regeneration", "image_second_round", "targeted_image_research", "stage_budget"]);
 
 function elapsed(startedAt) { return Date.now() - startedAt; }
+function cancellationError() {
+  const error = new Error("本次制作已停止");
+  error.name = "AbortError";
+  error.code = "pipeline_cancelled";
+  return error;
+}
+function assertNotCancelled(signal) {
+  if (signal?.aborted) throw cancellationError();
+}
 export function statusFor(unresolved, renderStatus) {
   if (renderStatus === "success" && !unresolved.length) return "complete";
   const required = unresolved.filter((item) => item.required);
@@ -111,6 +120,7 @@ export async function runSimplePipeline({
     timingsMs.parser = elapsed(parserStartedAt);
   }
   const parsedData = normalizeItineraryFacts(imported?.data || {});
+  assertNotCancelled(signal);
   const factValidation = validateItineraryFacts(parsedData);
   if (!parsedData.days?.length || !factValidation.valid) {
     const error = new Error(!parsedData.days?.length ? "核心事实结构无法建立：没有逐日行程" : `核心事实存在无法继续的冲突：${factValidation.errors.join("；")}`);
@@ -149,6 +159,7 @@ export async function runSimplePipeline({
   } finally {
     timingsMs.persistence += elapsed(persistStartedAt);
   }
+  assertNotCancelled(signal);
 
   emit({ stage: "planner", phase: "started", projectId });
   const plannerStartedAt = Date.now();
@@ -162,11 +173,19 @@ export async function runSimplePipeline({
   };
   try {
     agentPlanning = await planAgent({ project, simpleSkillContract: true, ...plannerOptions, onModelAttempt, signal, onStatus: (event) => emit({ stage: "planner", phase: "progress", detail: event }) });
+    assertNotCancelled(signal);
     for (const attempt of agentPlanning.attempts || []) store.saveAttempt(projectId, attempt);
     simplePlan = adaptPlan({ data: parsedData, report: imported.report || {}, agentPlan: agentPlanning.plan || agentPlanning });
     simplePlan.projectId = projectId;
     simplePlan.inputFingerprint = inputFingerprint;
   } catch (error) {
+    if (signal?.aborted || error?.name === "AbortError" || error?.code === "pipeline_cancelled") {
+      const cancelled = error?.code === "pipeline_cancelled" ? error : cancellationError();
+      try { store.updateProject(projectId, { status: "cancelled", currentStage: "制作已停止", executionEnabled: false, updatedAt: new Date().toISOString() }); }
+      catch { /* 项目可能尚未完成首次持久化，由上层任务状态兜底。 */ }
+      emit({ stage: "planner", phase: "cancelled", projectId, durationMs: elapsed(plannerStartedAt) });
+      throw cancelled;
+    }
     timingsMs.planner = elapsed(plannerStartedAt);
     timingsMs.total = elapsed(totalStartedAt);
     const executionRunId = randomUUID();
@@ -216,6 +235,7 @@ export async function runSimplePipeline({
   } finally {
     timingsMs.persistence += elapsed(planPersistStartedAt);
   }
+  assertNotCancelled(signal);
   emit({ stage: "planner", phase: "finished", durationMs: timingsMs.planner, copyTaskCount: simplePlan.copyTasks.length, imageSlotCount: simplePlan.imageSlots.length });
 
   const executionRunId = randomUUID();
@@ -242,6 +262,7 @@ export async function runSimplePipeline({
     .catch((error) => { emit({ stage: "image_skill", phase: "failed", status: "failed", error: { code: error?.code || "image_skill_failed", message: error?.message || String(error) } }); throw error; })
     .finally(() => { imageFinishedAt = Date.now(); });
   const [copySettled, imageSettled] = await Promise.allSettled([copyPromise, imagePromise]);
+  assertNotCancelled(signal);
   copyFinishedAt ||= Date.now();
   imageFinishedAt ||= Date.now();
   timingsMs.copySkill = copySettled.status === "fulfilled" ? Number(copySettled.value?.metrics?.durationMs || copyFinishedAt - copyStartedAt) : copyFinishedAt - copyStartedAt;
@@ -264,6 +285,7 @@ export async function runSimplePipeline({
   };
   emit({ stage: "skills", phase: "finished", parallelEvidence });
 
+  assertNotCancelled(signal);
   const writebackStartedAt = Date.now();
   emit({ stage: "program_writeback", phase: "started" });
   const writeback = applyResults({ preparedData: simplePlan.preparedData, copyTasks: simplePlan.copyTasks, copyExecution, imageSlots: simplePlan.imageSlots, slotBindings: simplePlan.slotBindings, imageExecution });
@@ -271,17 +293,20 @@ export async function runSimplePipeline({
   emit({ stage: "program_writeback", phase: "finished", durationMs: timingsMs.programWriteback, unresolvedCount: writeback.unresolvedItems.length });
 
   const renderMode = writeback.requiredUnresolved.length ? "draft" : "final";
+  assertNotCancelled(signal);
   emit({ stage: "renderer", phase: "started", mode: renderMode });
   const rendererStartedAt = Date.now();
   let renderExecution;
-  try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: renderMode }); }
-  catch (error) { renderExecution = { status: "failed", mode: renderMode, outputPath: null, rendererCalls: 1, error: { code: "renderer_failed", message: error.message } }; }
+  try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: renderMode, signal }); }
+  catch (error) { assertNotCancelled(signal); renderExecution = { status: "failed", mode: renderMode, outputPath: null, rendererCalls: 1, error: { code: "renderer_failed", message: error.message } }; }
+  assertNotCancelled(signal);
   if (renderMode === "final" && renderExecution.status !== "success") {
     const finalAttempt = renderExecution;
     writeback.unresolvedItems.push(unresolvedRender(finalAttempt));
     emit({ stage: "renderer", phase: "draft_fallback_started" });
-    try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: "draft" }); }
-    catch (error) { renderExecution = { status: "failed", mode: "draft", outputPath: null, rendererCalls: 1, error: { code: "renderer_failed", message: error.message } }; }
+    try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: "draft", signal }); }
+    catch (error) { assertNotCancelled(signal); renderExecution = { status: "failed", mode: "draft", outputPath: null, rendererCalls: 1, error: { code: "renderer_failed", message: error.message } }; }
+    assertNotCancelled(signal);
     renderExecution = {
       ...renderExecution,
       mode: "draft",
@@ -329,13 +354,17 @@ export async function runSimplePipeline({
   };
   const finalPersistStartedAt = Date.now();
   try {
+    assertNotCancelled(signal);
     for (const item of copyExecution.results || []) store.saveTaskResult(projectId, executionRunId, `copy-${item.targetId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, item);
     for (const item of imageExecution.results || []) store.saveTaskResult(projectId, executionRunId, `image-${item.slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, item);
+    assertNotCancelled(signal);
     const finalResultRef = store.saveFinalResult(projectId, executionRunId, { ...result, data: writeback.data, render: renderExecution });
+    assertNotCancelled(signal);
     store.updateExecutionRun(projectId, { ...initialRun, status: pipelineStatus, progress, executionEnabled: false, updatedAt: new Date().toISOString(), finalResultRef });
     store.updateProject(projectId, { status: pipelineStatus, currentStage: pipelineStatus === "complete" ? "完成" : "等待处理", progress, outputPath: result.outputPath });
     result.finalResultRef = finalResultRef;
   } catch (error) {
+    if (signal?.aborted || error?.name === "AbortError" || error?.code === "pipeline_cancelled") throw error?.code === "pipeline_cancelled" ? error : cancellationError();
     const wrapped = new Error(`项目保存失败：${error.message}`);
     wrapped.code = "project_save_failed";
     throw wrapped;

@@ -87,7 +87,7 @@ test("员工端确认后创建 simple_skill_v1 运行而不是旧 agent_v1", asy
   const port = runtime.server.address().port;
   const response = await fetch(`http://127.0.0.1:${port}/api/simple/projects`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-agent-local-user": "simple-server-test" },
     body: JSON.stringify({ facts: { destination: "肯尼亚", days: [{ day: 1 }] }, report: { workbookName: "fixture.xlsx" }, sourceName: "fixture.xlsx" }),
   });
   const created = await response.json();
@@ -101,12 +101,50 @@ test("员工端确认后创建 simple_skill_v1 运行而不是旧 agent_v1", asy
   assert.equal(received.copyOptions.researchBaseUrl, "https://search.example/v1");
   assert.equal(received.copyOptions.researchModel, "facts-search-model");
   assert.equal(runtime.simpleJobs.get(created.projectId).stageStates.image_skill, "running", "单个视觉能力结束不能把整个图片阶段标成完成");
-  assert.equal(runtime.simpleJobs.get(created.projectId).progress, 27, "百分比应由 Copy/Image 的真实完成数联合计算");
+  assert.equal(runtime.simpleJobs.get(created.projectId).progress, 29, "百分比应由 Copy/Image 的真实完成数联合计算");
   assert.deepEqual(runtime.simpleJobs.get(created.projectId).copyTaskProgress, { completed: 41, total: 88 });
   assert.deepEqual(runtime.simpleJobs.get(created.projectId).imageSlotProgress, { completed: 1, total: 28 });
   releaseRunner();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(runtime.simpleJobs.get(created.projectId).status, "complete");
+});
+
+test("取消 Simple 生成后保持已停止且迟到的完成结果不能覆盖终态", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-pipeline-server-cancel-"));
+  const simpleStore = new AgentPlanStore(path.join(root, "projects"));
+  let releaseRunner;
+  const paused = new Promise((resolve) => { releaseRunner = resolve; });
+  const runtime = createAgentPlannerServer({
+    port: 0,
+    simpleStore,
+    simplePipelineRunner: async (options) => {
+      simpleStore.createProject({ projectId: options.projectId, flowKind: "simple_skill_v1", status: "running", currentStage: "内容制作", progress: 42, activePlanId: null, planIds: [], executionRunIds: [], activeExecutionRunId: null });
+      options.onEvent({ stage: "copy_skill", phase: "started", targetCount: 10 });
+      await paused;
+      options.onEvent({ stage: "pipeline", phase: "finished", status: "complete" });
+      return { projectId: options.projectId, pipelineStatus: "complete" };
+    },
+  });
+  await new Promise((resolve) => runtime.server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { releaseRunner(); await new Promise((resolve) => runtime.server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  const url = `http://127.0.0.1:${runtime.server.address().port}`;
+  const createdResponse = await fetch(`${url}/api/simple/projects`, { method: "POST", headers: { "content-type": "application/json", "x-agent-local-user": "simple-server-test" }, body: JSON.stringify({ facts: { destination: "肯尼亚", days: [{ day: 1 }] }, report: {}, sourceName: "cancel.xlsx" }) });
+  const created = await createdResponse.json();
+  await new Promise((resolve) => setImmediate(resolve));
+  const cancelResponse = await fetch(`${url}/api/simple/projects/${created.projectId}/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
+  const cancelled = await cancelResponse.json();
+  assert.equal(cancelResponse.status, 202);
+  assert.equal(cancelled.project.status, "cancelled");
+  assert.equal(cancelled.activeJob.status, "cancelled");
+  assert.equal(cancelled.activeJob.currentAction, "制作已停止");
+  assert.equal(simpleStore.getProject(created.projectId).status, "cancelled");
+  releaseRunner();
+  await new Promise((resolve) => setImmediate(resolve));
+  const finalResponse = await fetch(`${url}/api/simple/projects/${created.projectId}`);
+  const finalState = await finalResponse.json();
+  assert.equal(finalState.project.status, "cancelled");
+  assert.equal(finalState.activeJob.status, "cancelled");
+  assert.equal(finalState.result, null);
 });
 
 test("致命失败冻结真实百分比并把当前阶段标失败、后续阶段保持未执行", async (t) => {
@@ -129,14 +167,14 @@ test("致命失败冻结真实百分比并把当前阶段标失败、后续阶�
   const port = runtime.server.address().port;
   const response = await fetch(`http://127.0.0.1:${port}/api/simple/projects`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-agent-local-user": "simple-server-test" },
     body: JSON.stringify({ facts: { destination: "肯尼亚", days: [{ day: 1 }] }, report: {}, sourceName: "failure.xlsx" }),
   });
   const created = await response.json();
   await new Promise((resolve) => setImmediate(resolve));
   const job = runtime.simpleJobs.get(created.projectId);
   assert.equal(job.status, "failed");
-  assert.equal(job.progress, 3);
+  assert.equal(job.progress, 8);
   assert.equal(job.stageStates.parser, "complete");
   assert.equal(job.stageStates.planner, "failed");
   assert.equal(job.stageStates.copy_skill, "pending");
@@ -168,7 +206,7 @@ test("Simple 项目确认永久删除时先终止运行且后台不会重新写�
   const port = runtime.server.address().port;
   const createdResponse = await fetch(`http://127.0.0.1:${port}/api/simple/projects`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-agent-local-user": "simple-server-test" },
     body: JSON.stringify({ facts: { destination: "测试", days: [{ day: 1 }] }, report: {}, sourceName: "delete.xlsx" }),
   });
   const created = await createdResponse.json();

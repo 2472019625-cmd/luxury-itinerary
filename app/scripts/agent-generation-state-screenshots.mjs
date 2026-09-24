@@ -18,11 +18,13 @@ const stageDefinitions = [
 ];
 
 function snapshot(mode) {
-  const status = mode === "running" ? "running" : mode === "completed" ? "complete" : "failed";
+  const status = mode === "running" ? "running" : mode === "completed" ? "complete" : mode === "cancelled" ? "cancelled" : "failed";
   const stageStatuses = mode === "running"
     ? ["complete", "complete", "running", "running", "pending", "pending"]
     : mode === "completed"
       ? stageDefinitions.map(() => "complete")
+      : mode === "cancelled"
+        ? ["complete", "complete", "cancelled", "pending", "pending", "pending"]
       : ["complete", "complete", "failed", "pending", "pending", "pending"];
   const progress = mode === "completed" ? 100 : 54;
   return {
@@ -31,7 +33,7 @@ function snapshot(mode) {
       flowKind: "simple_skill_v1",
       status,
       progress,
-      currentStage: mode === "failed" ? "Copy Skill failure" : mode === "completed" ? "complete" : "copy_skill",
+      currentStage: mode === "failed" ? "Copy Skill failure" : mode === "completed" ? "complete" : mode === "cancelled" ? "制作已停止" : "copy_skill",
       createdAt,
       updatedAt,
       lastError: mode === "failed" ? "copy_request_failed: upstream response ended before a valid result was returned" : null,
@@ -60,7 +62,7 @@ function snapshot(mode) {
       updatedAt,
       completedActions: mode === "completed" ? 40 : 18,
       totalWorkItems: 40,
-      currentAction: mode === "running" ? "正在完善第 5 天的客户版行程介绍" : mode === "completed" ? "客户版行程已制作完成" : "文案生成任务已停止",
+      currentAction: mode === "running" ? "正在完善第 5 天的客户版行程介绍" : mode === "completed" ? "客户版行程已制作完成" : mode === "cancelled" ? "制作已停止" : "文案生成任务已停止",
       error: mode === "failed" ? "copy_request_failed: upstream response ended before a valid result was returned" : null,
       imageSlotProgress: { completed: mode === "completed" ? 28 : 22, total: 28 },
       stages: stageDefinitions.map(([id, label], index) => ({ id, label, status: stageStatuses[index] })),
@@ -69,14 +71,21 @@ function snapshot(mode) {
 }
 
 await mkdir(outputDir, { recursive: true });
-const browser = await puppeteer.launch({ executablePath, headless: true, args: ["--no-sandbox", "--disable-gpu"], defaultViewport: { width: 1600, height: 1050, deviceScaleFactor: 1 } });
+const browser = await puppeteer.launch({ executablePath, headless: true, args: ["--no-sandbox", "--disable-gpu"], defaultViewport: { width: 1920, height: 1080, deviceScaleFactor: 1 } });
 
 try {
-  for (const mode of ["running", "failed", "completed"]) {
+  for (const mode of ["running", "failed", "cancelled", "completed"]) {
     const page = await browser.newPage();
+    await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "reduce" }]);
     await page.setRequestInterception(true);
     page.on("request", (request) => {
-      if (request.url().includes(`/api/simple/projects/state-${mode}`)) {
+      if (request.method() === "POST" && request.url().endsWith("/api/simple/projects")) {
+        request.respond({ status: 201, contentType: "application/json", body: JSON.stringify({ projectId:`state-${mode}-restart`, status:"planning", progress:1, createdAt:new Date().toISOString() }) });
+      } else if (request.url().includes(`/api/simple/projects/state-${mode}-restart`)) {
+        const restarted = snapshot("running");
+        restarted.project.projectId = `state-${mode}-restart`;
+        request.respond({ status: 200, contentType: "application/json", body: JSON.stringify(restarted) });
+      } else if (request.url().includes(`/api/simple/projects/state-${mode}`)) {
         request.respond({ status: 200, contentType: "application/json", body: JSON.stringify(snapshot(mode)) });
       } else request.continue();
     });
@@ -89,7 +98,7 @@ try {
         agentProjectId: `state-${mode}`,
         ownerId: user.id,
         title: "肯尼亚8日顶奢",
-        workflowStage: "simple-running",
+        workflowStage: mode === "cancelled" ? "cancelled" : "simple-running",
         updatedAt: Date.parse(createdAt),
         files: [{ name: "肯尼亚8日顶奢.xlsx", size: 1024 }],
         versions: [],
@@ -100,13 +109,25 @@ try {
       localStorage.setItem("sheyou-agent-projects-v1", JSON.stringify([project]));
     }, { mode, createdAt });
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.waitForSelector(".project-row");
-    await page.click(".project-row");
+    await page.waitForSelector(".workspace-recent-card");
+    await page.click(".workspace-recent-card");
     await page.waitForSelector(`.agent-progress-card-${mode}`);
     await page.evaluate(() => document.fonts.ready);
     await new Promise((resolve) => setTimeout(resolve, 700));
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: path.join(outputDir, `${mode}.png`), fullPage: true });
+    if (mode === "cancelled") {
+      await page.click(".agent-progress-primary-action .ws-button");
+      await page.waitForSelector(".restart-generation-dialog");
+      await page.screenshot({ path: path.join(outputDir, "cancelled-restart-confirmation.png"), fullPage: true });
+      await page.click(".restart-generation-dialog .ws-button-primary");
+      await page.waitForFunction(() => {
+        const projects = JSON.parse(localStorage.getItem("sheyou-agent-projects-v1") || "[]");
+        return projects.length === 1 && projects[0]?.agentProjectId === "state-cancelled-restart" && projects[0]?.generationAttempts?.[0]?.agentProjectId === "state-cancelled";
+      });
+      await page.waitForSelector(".agent-progress-card-running");
+      await page.screenshot({ path: path.join(outputDir, "cancelled-restarted.png"), fullPage: true });
+    }
     await page.close();
   }
 } finally {

@@ -19,17 +19,28 @@ test("4174正式入口复用原Workspace五步前端而非简化项目页", () =
   assert.doesNotMatch(diagnostic, /智能体内部诊断|管理员/);
 });
 
-test("智能体浏览器存储使用独立命名空间且项目管理形成回收站闭环", () => {
+test("登录与创建账号的凭据输入可手动显示和隐藏", () => {
+  const auth = workspace.slice(workspace.indexOf("export function AuthScreen"), workspace.indexOf("export function AppHeader"));
+  assert.match(auth, /type=\{showPin \? "text" : "password"\}/);
+  assert.match(auth, /type="button" aria-label=\{showPin \? "隐藏密码" : "显示密码"\}/);
+  assert.match(auth, /aria-pressed=\{showPin\}/);
+  assert.match(auth, /setShowPin\(false\)/);
+  assert.match(workspaceCss, /\.auth-secret-toggle \{[^}]*width: 44px; height: 44px;/);
+});
+
+test("智能体项目以服务端为准且项目管理形成30天回收站闭环", () => {
   assert.match(workspace, /sheyou-agent-users-v1/);
   assert.match(workspace, /sheyou-agent-session-v1/);
   assert.match(workspace, /sheyou-agent-projects-v1/);
   assert.match(workspace, /onTrash=\{agentMode \? setTrashProject : undefined\}/);
   assert.match(workspace, /onRestore=\{agentMode \? restoreProject : undefined\}/);
-  assert.match(workspace, /trashedAt: Date\.now\(\)/);
-  assert.match(workspace, /trashedAt: null/);
+  assert.match(workspace, /agentProjectsApi\.list\(user\)/);
+  assert.match(workspace, /agentProjectsApi\.create\(user, next\)/);
+  assert.match(workspace, /agentProjectsApi\.trash\(user, project\.id\)/);
+  assert.match(workspace, /agentProjectsApi\.restore\(user, project\.id\)/);
   assert.match(workspace, /永久删除项目？/);
   assert.match(workspace, /清空回收站？/);
-  assert.match(workspace, /method: "DELETE"/);
+  assert.match(workspace, /agentProjectsApi\.remove\(user, project\.id\)/);
   assert.match(workspace, /项目已恢复/);
   assert.match(workspace, /项目已永久删除/);
   assert.match(workspace, /操作失败，请重试/);
@@ -40,10 +51,10 @@ test("智能体浏览器存储使用独立命名空间且项目管理形成回�
   assert.match(workspace, /<WorkspaceHome[\s\S]{0,400}onTrash=\{setTrashProject\}/);
   assert.doesNotMatch(workspace.slice(workspace.indexOf("function ProjectThumbnail"), workspace.indexOf("function UploadStep")), />缺图</);
   assert.doesNotMatch(workspace.slice(workspace.indexOf("function PermanentDeleteDialog"), workspace.indexOf("export function Workspace")), /window\.(alert|confirm)/);
-  assert.match(workspace, /项目、原始资料、运行记录和成品都会完整保留/);
-  assert.match(workspace, /正在执行的生成任务不会因此取消/);
+  assert.match(workspace, /这会停止本次制作/);
+  assert.match(workspace, /回收站保留30天/);
   assert.match(workspace, /!project\.trashedAt/);
-  assert.match(workspace, /writeStorage\(storageKeys\.projects, next\); setProjects\(next\)/);
+  assert.match(workspace, /本地缓存不会替代服务端数据/);
   assert.match(workspace, /project-list-\$\{displayMode\}/);
   assert.match(workspace, /trash-project-grid/);
   assert.match(workspace, /草稿编辑中/);
@@ -52,6 +63,14 @@ test("智能体浏览器存储使用独立命名空间且项目管理形成回�
   assert.match(workspace, /beginProjectExit/);
   assert.match(workspaceCss, /project-item-exiting/);
   assert.match(workspaceCss, /grid-template-columns:\s*repeat\(3/);
+});
+
+test("开始与重新制作绑定当前账号，启动失败留在确认弹窗并提示", () => {
+  const starts = workspace.match(/fetch\("\/api\/simple\/projects", \{ method: "POST", headers: agentProjectHeaders\(user, true\)/g) || [];
+  assert.equal(starts.length, 2);
+  assert.match(workspace, /await onContinue\(\)/);
+  assert.match(workspace, /startingGeneration \? "正在开始制作…" : "确认并开始生成"/);
+  assert.match(workspace, /<ConfirmationPreview project=\{project\} \/>\{modalMessage && <p className="confirmation-modal-message" role="alert">/);
 });
 
 test("智能体工作台首页只负责开始和进入唯一项目列表", () => {
@@ -94,6 +113,19 @@ test("Step4人工换图允许未自动采用候选且结果提示自动消失", 
   assert.match(editor, /if \(saved\) setPickerOpen\(false\)/);
 });
 
+test("编辑页以紧凑结构栏和右侧待处理视图替代底部重复提示", () => {
+  const editor = workspace.slice(workspace.indexOf("export function Editor"), workspace.indexOf("export function VersionsStep"));
+  assert.match(editor, /structure-compact/);
+  assert.match(editor, /editor-issues-trigger/);
+  assert.match(editor, /editor-issues-view/);
+  assert.match(editor, /setFinalIssuesOpen\(false\);[\s\S]{0,500}selectBlockingImage\(item\)/);
+  assert.match(editor, /setDayInfoOpen\(true\)/);
+  assert.match(editor, /pendingIssueFocusRef/);
+  assert.doesNotMatch(editor, /正式下载还差|可编辑草稿已生成|className=\{`editor-final-step/);
+  assert.match(workspaceCss, /\.editor-grid\.structure-compact/);
+  assert.match(workspaceCss, /\.inspector-issues-open > \.inspector-body/);
+});
+
 test("编辑器将预订流程与资金安全提醒拆为独立显示模块", () => {
   assert.match(workspace, /\{ id: "booking", label: "预订流程" \},\s*\{ id: "security", label: "资金安全提醒" \}/);
   const visibility = workspace.slice(workspace.indexOf("function visibilityData"), workspace.indexOf("function versionSnapshot"));
@@ -119,14 +151,15 @@ test("生成步骤只展示定制师可理解的状态且不暴露技术运行�
   assert.match(workspace, /SIMPLE_DESIGNER_STAGES/);
   assert.match(workspace, /run\.progress\.stages/);
   assert.match(workspace, /aria-valuenow=\{safeProgress\}/);
-  assert.match(generation, /本次定制摘要/);
-  assert.match(generation, /已按你的确认制作/);
-  assert.match(generation, /本次定制重点/);
+  assert.doesNotMatch(generation, /本次定制摘要|已按你的确认制作|本次定制重点|确认信息优先/);
+  assert.match(generation, /<AgentProgressOverview snapshot=\{snapshot\}/);
+  assert.doesNotMatch(generation, /请勿重复生成|后台可能仍在运行/);
   assert.doesNotMatch(generation, /管理员运行详情|projectId|executionRunId|次下游调用|当前内部动作/);
   assert.doesNotMatch(generation, /mini-itinerary|当前项目/);
   assert.match(workspace, /screen === "editor" && currentProject/);
   assert.match(workspace, /existingOnly=\{agentMode\}/);
   assert.match(workspace, /ready_for_editor/);
+  assert.doesNotMatch(generation, /查看确认信息|onReview/);
 });
 
 test("产品前端只有定制师角色且确认页不展示技术警告", () => {
@@ -174,6 +207,10 @@ test("客户行程制作进度使用单列卡并保留真实子任务状态", ()
   const progressCss = workspaceCss.slice(workspaceCss.indexOf(".agent-progress-overview"), workspaceCss.indexOf(".agent-stage-banner"));
   assert.match(progressView, /客户行程制作进度/);
   assert.match(progressView, /已用时/);
+  assert.match(progressView, /正在重新连接/);
+  assert.match(progressView, /最后同步/);
+  assert.match(progressView, /当前显示最近一次同步进度/);
+  assert.match(progressView, /进度暂时未更新，我们会自动继续尝试/);
   assert.match(progressView, /getDesignerCurrentAction\(snapshot\)/);
   assert.match(progressView, /客户文案已整理完成/);
   assert.match(progressView, /已完成.*个图片位/);
@@ -206,13 +243,63 @@ test("生成页全宽对齐并明确区分运行完成和终止状态", () => {
   const generation = workspace.slice(workspace.indexOf("function AgentProgressOverview"), workspace.indexOf("function CandidatePreview"));
   assert.match(generation, /display\.failed \? "本次生成已停止"/);
   assert.match(generation, /display\.completed \? "生成完成"/);
+  assert.match(generation, /display\.cancelled \? "制作已停止"/);
+  assert.match(generation, /未完成内容不会进入编辑页；已确认的资料仍会保留/);
   assert.match(generation, /failed:\s*"失败"/);
-  assert.match(generation, /pending:\s*display\.failed \? "未执行"/);
+  assert.match(generation, /pending:\s*display\.failed \|\| display\.cancelled \? "未执行"/);
   assert.match(generation, /agentFailurePresentation/);
-  assert.match(workspaceCss, /\.agent-workspace-generation \.generation-main[^}]+padding-right:\s*5vw[^}]+padding-left:\s*5vw/);
-  assert.match(workspaceCss, /\.agent-designer-summary > header \{ max-width:\s*none/);
-  assert.match(workspaceCss, /\.agent-fact-assurance[^}]+max-width:\s*none/);
-  assert.match(workspaceCss, /\.agent-custom-priorities[^}]+max-width:\s*none/);
+  assert.match(workspaceCss, /\.agent-workspace-generation[^}]+display:\s*flex[^}]+flex-direction:\s*column/);
+  assert.match(workspaceCss, /\.agent-progress-overview[^}]+min-height:\s*clamp\(440px,calc\(100dvh - 340px\),620px\)/);
+  assert.match(workspaceCss, /\.agent-progress-overview ol[^}]+flex:\s*1/);
+  assert.match(workspaceCss, /\.agent-workspace-generation > \.generation-footer[^}]+margin:\s*-8px 5vw 24px[^}]+border-top:\s*0[^}]+background:\s*transparent/);
+});
+
+test("取消生成停留在进度页、冻结本地项目且不开放编辑入口", () => {
+  const generation = workspace.slice(workspace.indexOf("function AgentGenerationStep"), workspace.indexOf("function CandidatePreview"));
+  const cancellation = workspace.slice(workspace.indexOf("const cancelAgent"), workspace.indexOf("const createProject"));
+  const polling = workspace.slice(workspace.indexOf("const cancellationLocked"), workspace.indexOf("const commitProjects"));
+  assert.match(workspace, /stage === "cancelled"[^\n]+label: "已停止"/);
+  assert.match(generation, /const canEdit = ready \|\| draft/);
+  assert.match(generation, /const canCancel = !waiting && !canEdit && !cancelled && !failed/);
+  assert.match(generation, /<StepRail active=\{2\} stopped=\{cancelled\}/);
+  assert.match(workspace, /state === "stopped" \? "本次制作已停止"/);
+  assert.doesNotMatch(generation, /查看确认信息|onReview/);
+  assert.match(cancellation, /workflowStage: "cancelled"/);
+  assert.match(cancellation, /setScreen\("generate"\)/);
+  assert.match(polling, /currentProject\.workflowStage === "cancelled"/);
+  assert.match(polling, /cancelledAgentIdsRef\.current\.has/);
+});
+
+test("非首页提供明确返回入口且返回首页不会取消后台制作", () => {
+  const strip = workspace.slice(workspace.indexOf("export function AgentModeStrip"), workspace.indexOf("function projectStatusLabel"));
+  const render = workspace.slice(workspace.indexOf("const activeProjects"));
+  assert.match(strip, /agent-home-return/);
+  assert.match(strip, /name="return"/);
+  assert.match(strip, /返回首页/);
+  assert.match(render, /<AgentModeStrip showHome=\{screen !== "home"\} onHome=\{goHome\}/);
+  assert.match(workspace, /const goHome = async \(\) =>[\s\S]*?flushAgentSave\(currentProject\)/);
+  assert.match(diagnostic, /<AgentModeStrip showHome onHome=\{goHome\}/);
+  assert.doesNotMatch(strip, /\/cancel|cancelAgent/);
+});
+
+test("停止或失败后在同一业务项目下创建新制作批次并保留旧批次", () => {
+  const generation = workspace.slice(workspace.indexOf("function AgentGenerationStep"), workspace.indexOf("function CandidatePreview"));
+  const restart = workspace.slice(workspace.indexOf("const restartAgent"), workspace.indexOf("const createProject"));
+  const deletion = workspace.slice(workspace.indexOf("const permanentlyDeleteProjects"), workspace.indexOf("const updateProject"));
+  assert.match(generation, /cancelled \|\| failed/);
+  assert.match(generation, /重新制作/);
+  assert.match(generation, /重新尝试/);
+  assert.match(workspace, /function RestartGenerationDialog/);
+  assert.match(workspace, /系统会按当前确认的信息重新开始制作/);
+  assert.match(workspace, /之前的制作记录会保留，已经完成的处理不会撤销/);
+  assert.match(restart, /fetch\("\/api\/simple\/projects"/);
+  assert.match(restart, /generationAttempts/);
+  assert.match(restart, /agentProjectId: currentProject\.agentProjectId/);
+  assert.match(restart, /agentProjectId: created\.projectId, workflowStage: "simple-running"/);
+  assert.doesNotMatch(restart, /commitProjects\(\[|uid\("project"\)/);
+  const backend = readFileSync(new URL("../server/agent-planner-app.mjs", import.meta.url), "utf8");
+  assert.match(backend, /project\.generationAttempts/);
+  assert.match(backend, /purgeAssociatedData/);
 });
 
 test("终止态保留品牌进度并只局部提示失败", () => {
@@ -232,6 +319,6 @@ test("终止态保留品牌进度并只局部提示失败", () => {
 test("等待确认保留在生成页并从当前任务继续", () => {
   assert.match(workspace, /agent-runtime-confirm/);
   assert.match(workspace, /保存选择并从当前任务继续/);
-  assert.match(workspace, /waiting \? `「\$\{tripTitle\}」需要你的确认`/);
+  assert.match(workspace, /waiting && <section className="agent-generation-support"/);
   assert.doesNotMatch(workspace.slice(workspace.indexOf("function AgentGenerationStep"), workspace.indexOf("function CandidatePreview")), /返回处理确认/);
 });

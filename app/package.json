@@ -22,6 +22,7 @@
     "test:rule-coverage": "node --test tests/rule-coverage.test.mjs",
     "test:model": "node --test tests/deepseek-client.test.mjs",
     "test:agent-planner": "node --test tests/agent-planner*.test.mjs",
+    "test:agent-storage": "node --test tests/agent-project-catalog.test.mjs tests/agent-workspace-storage.test.mjs",
     "test:agent-visual": "node scripts/agent-planner-visual-validation.mjs",
     "agent:evidence": "node scripts/agent-planner-evidence.mjs",
     "test:copy-generation": "node --test tests/deepseek-client.test.mjs tests/copy-generation.test.mjs",

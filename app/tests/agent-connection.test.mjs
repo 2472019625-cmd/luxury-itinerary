@@ -4,11 +4,11 @@ import {readAgentSnapshot,agentDisplayState,displayAgentStages,agentElapsed,agen
 test('HTML gateway errors retain HTTP diagnostic, not HTML content',async()=>{
  await assert.rejects(readAgentSnapshot(new Response('<!DOCTYPE html><h1>gateway</h1>',{status:502,headers:{'content-type':'text/html','cf-ray':'test'}})),/HTTP 502.*text\/html.*HTML response/);
 });
-test('connection loss freezes last status without claiming execution failure; recovery clears it',async()=>{
+test('connection loss freezes elapsed time but preserves the last known business stage; recovery clears it',async()=>{
  const old={project:{status:'running',createdAt:'2026-09-08T00:00:00Z'},_observedAt:Date.parse('2026-09-08T00:01:00Z'),_connectionError:'HTML response'};
  assert.equal(agentElapsed(old),60);
  assert.equal(agentDisplayState(old).failed,false);
- assert.equal(displayAgentStages([{state:'active'}],agentDisplayState(old))[0].state,'unknown');
+ assert.equal(displayAgentStages([{state:'active'}],agentDisplayState(old))[0].state,'active');
  const next=await readAgentSnapshot(Response.json({project:{status:'running'}}));
  assert.equal(agentDisplayState(next).disconnected,false);
 });

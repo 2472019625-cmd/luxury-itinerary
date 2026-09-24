@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { mergeManualImagePayload, mergeTargetedRepairPayload } from "./lib/manualImageState.js";
-import { AGENT_STORAGE, AppHeader, Editor, VersionsStep, readStorage } from "./Workspace.jsx";
+import { AGENT_STORAGE, AgentModeStrip, AppHeader, Editor, VersionsStep, readStorage } from "./Workspace.jsx";
 
 async function readJson(response) { const value = await response.json(); if (!response.ok) throw Object.assign(new Error(value.error || "请求失败"), { payload:value }); return value; }
 
@@ -135,10 +135,10 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   const headerProject = { ...payload.project, title:payload.project.title || payload.project.data?.title || "定制行程" };
   const goHome = () => window.location.assign("/agent");
   const logout = () => { if(window.__sheyouServerUser){window.dispatchEvent(new Event('sheyou-logout'));return;} localStorage.removeItem(AGENT_STORAGE.session); window.location.assign("/agent"); };
-  if (screen === "versions" && payload.canEnterFinal) return <div className="workspace-shell workspace-agent-mode"><AppHeader user={workspaceUser} project={headerProject} saved="saved" canGenerate={false} onHome={goHome} onLogout={logout} /><VersionsStep project={payload.project} existingOnly onBack={() => setScreen("editor")} /></div>;
+  if (screen === "versions" && payload.canEnterFinal) return <div className="workspace-shell workspace-agent-mode"><AppHeader user={workspaceUser} project={headerProject} saved="saved" canGenerate={false} onHome={goHome} onLogout={logout} /><AgentModeStrip showHome onHome={goHome} /><VersionsStep project={payload.project} existingOnly onBack={() => setScreen("editor")} /></div>;
   const firstUnresolved = payload.unresolvedRequiredSlotIds?.[0] || "image:cover:primary";
   const pendingSummary = payload.unresolvedNotices?.map((item) => item.message) || [];
-  return <div className="workspace-shell workspace-agent-mode"><AppHeader user={workspaceUser} project={headerProject} saved="saved" canGenerate={false} onHome={goHome} onLogout={logout} /><Editor
+  return <div className="workspace-shell workspace-agent-mode"><AppHeader user={workspaceUser} project={headerProject} saved="saved" canGenerate={false} onHome={goHome} onLogout={logout} /><AgentModeStrip showHome onHome={goHome} /><Editor
     project={payload.project}
     ItineraryComponent={ItineraryComponent}
     onProject={(project) => setPayload((current) => ({ ...current, project }))}
