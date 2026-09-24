@@ -264,9 +264,12 @@ export function validateVisualCardSubjectRetention(value, task = {}) {
   const missingSubject = () => `Visual Card 标题“${title}”丢失了明确视觉主体“${subject}”，不能退化成泛化游猎或体验名称`;
   const nightSafari = /(?:夜间游猎|夜巡|night safari|night game drive)/i;
   if (/夜巡/.test(title) && !nightSafari.test(subject)) return [missingSubject()];
+  const riverCrossing = /(?:渡河|横渡(?:马拉河|[^\s，。；]{0,6}河(?:流|道)?)|天国之渡|river[\s-]?crossing)/i;
+  if (riverCrossing.test(title) && !riverCrossing.test(subject)) return [missingSubject()];
   const subjectConcepts = VISUAL_SUBJECT_CONCEPTS.filter((pattern) => pattern.test(subject));
   // This is one known museum's historical house name, never a synonym for museums in general.
-  const karenMuseumSource = /(?:Karen Blixen Museum|凯伦[·\s]?布里克森博物馆|凯伦博物馆)/i.test(subject);
+  const karenMuseumSource = /(?:Karen Blixen Museum|凯伦[·\s]?布里克森博物馆|凯伦博物馆|凯伦故居)/i.test(subject);
+  if (/凯伦故居/.test(title) && !karenMuseumSource) return [missingSubject()];
   if (karenMuseumSource && /凯伦故居/.test(title)) return [];
   if (subjectConcepts.length && !subjectConcepts.some((pattern) => pattern.test(title))) return [missingSubject()];
   return [];

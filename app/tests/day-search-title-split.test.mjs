@@ -58,8 +58,12 @@ test('DIAG04真实失败标题只修正来源绑定的视觉主体同义识别',
   assert.deepEqual(retained('角马横渡河道', '等待天国之渡'), []);
   assert.deepEqual(retained('角马横渡河流', '等待天国之渡'), []);
   assert.match(retained('草原上静止休息的角马', '守候天国之渡')[0], /丢失了明确视觉主体/);
+  assert.match(retained('草原上静止休息的角马', '角马的天国之渡')[0], /丢失了明确视觉主体/);
+  assert.match(retained('草原角马大迁徙', '角马渡河')[0], /丢失了明确视觉主体/);
   assert.deepEqual(retained('Karen Blixen Museum exterior', '《走出非洲》里的凯伦故居'), []);
+  assert.deepEqual(retained('凯伦故居外观', '《走出非洲》里的凯伦故居'), []);
   assert.match(retained('其他人物博物馆外观', '探访凯伦故居')[0], /丢失了明确视觉主体/);
+  assert.match(retained('其他人物故居外观', '探访凯伦故居')[0], /丢失了明确视觉主体/);
   assert.match(retained('凯伦·布里克森博物馆外观', '探访其他人物故居')[0], /丢失了明确视觉主体/);
   assert.equal(resolveTravelEntity('凯伦故居', { entityType: 'attraction' }).canonicalName, 'Karen Blixen Museum');
   assert.equal(resolveTravelEntity('其他人物故居', { entityType: 'attraction' }).status, 'unmapped');
