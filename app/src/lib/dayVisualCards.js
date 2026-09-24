@@ -14,7 +14,7 @@ export function dayVisualCards(day, dayIndex, bindings, { includeUnboundSpots = 
     if (usesExperience && spotId) boundSpotIds.add(spotId);
     return [{ slotId, spotId: usesExperience ? spotId : null, spotIndex: resolvedSpotIndex, imageIndex: binding.imageIndex, cardKind: usesExperience ? 'experience' : 'visual', spot: {
       ...(usesExperience ? source : { description: binding.description || '', status: binding.status || '', statusLabel: binding.statusLabel || '', feeBoundary: binding.feeBoundary || '', reminder: binding.reminder || '' }),
-      name: usesExperience ? source.name : binding.cardTitle || '行程体验',
+      name: usesExperience && binding.manualEditorCard === true ? source.name : binding.cardTitle || (usesExperience ? source.name : '行程体验'),
       description: usesExperience ? source.experience || source.description || '' : binding.cardDescription || binding.description || '',
       experience: undefined,
       images: image?.src ? [image] : [],

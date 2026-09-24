@@ -208,14 +208,22 @@ test('独立视觉短文案随Copy批次写回，不复制泛化Spot；客户投
   assert.equal(fixture().plan.imageSlots.filter(s => s.moduleType === 'day').length, 1);
 });
 
-test('同名Spot继续保留原文、状态与费用', () => {
+test('同名Spot保留原名、原文、状态与费用，客户标题独立显示', () => {
   const { plan } = fixture('安博塞利游猎');
+  const searchSlotsBeforeCopy = structuredClone(plan.imageSlots);
   plan.preparedData.days[0].spots[0].description = '已有的游猎体验介绍';
-  const card = dayVisualCards(plan.preparedData.days[0], 0, plan.preparedData.simpleImageSlotBindings)[0].spot;
+  const task = plan.copyTasks.find(t => t.moduleType === 'visual_card');
+  const result = applySimpleSkillResults({ ...plan, copyTasks: [task], copyExecution: { results: [{ ...task, status: 'success', value: { cardTitle: '走进安博塞利的游猎时光', cardDescription: '乘车进入保护区，从车窗观察草原上的动物踪迹。' } }] }, imageExecution: { results: [] } });
+  const card = dayVisualCards(result.data.days[0], 0, result.data.simpleImageSlotBindings)[0].spot;
+  assert.equal(result.data.days[0].spots[0].name, '安博塞利游猎');
+  assert.equal(card.name, '走进安博塞利的游猎时光');
+  assert.equal(selectCustomerRenderData(result.data).days[0].spots[0].name, card.name);
   assert.equal(card.description, '已有的游猎体验介绍');
   assert.equal(card.status, 'included');
   assert.equal(card.feeBoundary, 'included');
+  assert.equal(buildLayoutImageSlots(result.data).find(s => s.slotId === task.layoutHints.slotId).label, card.name);
   assert.equal(plan.copyTasks.filter(t => t.moduleType === 'visual_card').length, 1);
+  assert.deepEqual(plan.imageSlots, searchSlotsBeforeCopy);
 });
 
 test('独立视觉通过括号来源引用保留自费状态，但不复制泛化描述', () => {

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dayVisualCards } from '../src/lib/dayVisualCards.js';
+import { buildLayoutImageSlots } from '../src/lib/imageSlots.js';
 import { createManualDayCard, deleteDaySpotPreservingSlots, reorderDaySpots, resolveDayPreviewSpotIndex, resolveDaySpotIndex } from '../src/lib/dayEditorState.js';
 
 function fixture() {
@@ -51,17 +52,28 @@ test('deleting a real experience preserves Planner slots without rebinding them 
   assert.ok(data.simpleImageSlotBindings['slot-visual']);
 });
 
-test('human-edited experience copy wins and unbound spots do not create extra customer cards', () => {
+test('matched Spot keeps factual name while card and editor use the same display title', () => {
   const data = fixture();
   data.days[0].spots[0].name = '定制师修改后的落日酒会';
   data.days[0].spots[0].description = '定制师修改后的介绍';
   data.days[0].spots.push({ id: 'spot-new', name: '新体验', description: '刚刚新增', userProvided: true, images: [] });
   const customerCards = dayVisualCards(data.days[0], 0, data.simpleImageSlotBindings);
-  assert.equal(customerCards.find((card) => card.spotId === 'spot-sundowner').spot.name, '定制师修改后的落日酒会');
+  assert.equal(data.days[0].spots[0].name, '定制师修改后的落日酒会');
+  assert.equal(customerCards.find((card) => card.spotId === 'spot-sundowner').spot.name, '旧的生成标题');
+  assert.equal(buildLayoutImageSlots(data).find((slot) => slot.slotId === 'slot-sundowner').label, '旧的生成标题');
   assert.equal(customerCards.find((card) => card.spotId === 'spot-sundowner').spot.description, '定制师修改后的介绍');
   assert.equal(customerCards.some((card) => card.spotId === 'spot-new'), false);
   assert.equal(customerCards.some((card) => card.spotId === 'spot-safari'), false);
   assert.equal(customerCards.find((card) => card.slotId === 'slot-visual').spot.name, '草原光影');
+});
+
+test('manual card continues to follow its edited experience name', () => {
+  const data = fixture();
+  const created = createManualDayCard(data, 0, { spotId: 'spot-manual', slotId: 'manual:day:1:spot-manual:primary' });
+  created.spot.name = '定制师新增的体验';
+  created.spot.images[0] = { src: '/manual.jpg' };
+  assert.equal(dayVisualCards(data.days[0], 0, data.simpleImageSlotBindings).find((card) => card.slotId === created.slotId).spot.name, created.spot.name);
+  assert.ok(buildLayoutImageSlots(data).find((slot) => slot.slotId === created.slotId).label.startsWith(created.spot.name));
 });
 
 test('manual experience card stays editor-only until it has an image and deletes without touching Planner slots', () => {

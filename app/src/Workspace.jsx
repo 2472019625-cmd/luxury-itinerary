@@ -1276,7 +1276,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   };
   const selectedDaySlotTools = currentSlot && <div className="day-slot-tools">
     {currentSlot.src ? <div className="day-slot-focus-preview"><img src={currentSlot.src} alt="当前图片" style={{ objectPosition: currentSlot.focus }} /></div> : <div className="day-slot-empty"><UiIcon name="itinerary" /><span>上传真实图片后，这张卡片才会进入中间客户预览</span></div>}
-    {selectedBinding?.useSpotCopy === false && <div className="day-visual-copy"><Field label="卡片标题" value={selectedBinding.cardTitle || ""} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardTitle = value; }, `visual-title-${currentSlot.slotId}`)} /><Field label="图片下方文字" rows={3} value={selectedBinding.cardDescription || ""} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardDescription = value; }, `visual-copy-${currentSlot.slotId}`)} /></div>}
+    {selectedBinding && <div className="day-visual-copy">{selectedBinding.manualEditorCard !== true && <Field label="卡片标题" value={selectedBinding.cardTitle || (selectedBinding.useSpotCopy !== false ? selectedDay?.spots?.[resolveDaySpotIndex(selectedDay, { spotId: currentSlot.spotId, subItemIndex: currentSlot.subItemIndex })]?.name || "" : "")} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardTitle = value; }, `visual-title-${currentSlot.slotId}`)} />}{selectedBinding.useSpotCopy === false && <Field label="图片下方文字" rows={3} value={selectedBinding.cardDescription || ""} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardDescription = value; }, `visual-copy-${currentSlot.slotId}`)} />}</div>}
     <div className="day-inline-image-actions">{selectedBinding?.manualEditorCard ? <Button tone="primary" onClick={() => fileRef.current?.click()}>{currentSlot.src ? "更换上传图片" : "上传体验图片"}</Button> : <Button tone="primary" onClick={() => setPickerOpen(true)}>处理图片</Button>}{currentSlot.src && <Button onClick={() => setFocus(50, 50)}>恢复居中</Button>}{currentSlot.src && !selectedBinding?.manualEditorCard && <button className="day-image-danger" onClick={deleteImage}>删除图片</button>}</div>
   </div>;
   const dayPanel = selection.module === "days" && <div className="day-editor-flow">
@@ -1293,7 +1293,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
         const spotIndex = binding.useSpotCopy === false ? -1 : resolveDaySpotIndex(selectedDay, { spotId: slot.spotId, subItemIndex: slot.subItemIndex });
         const spot = spotIndex >= 0 ? daySpots[spotIndex] : null;
         const active = selection.slotId === slot.slotId && collapsedDaySlotId !== slot.slotId;
-        const title = binding.useSpotCopy === false ? binding.cardTitle || "行程体验" : spot?.name || String(slot.label || "体验卡片").split("｜")[0];
+        const title = binding.manualEditorCard === true ? spot?.name || "新体验卡片" : binding.cardTitle || (binding.useSpotCopy === false ? "行程体验" : spot?.name || String(slot.label || "体验卡片").split("｜")[0]);
         const summary = binding.useSpotCopy === false ? binding.cardDescription || "暂无图片说明" : spot?.description || spot?.experience || "暂无体验介绍";
         const status = spot ? dayStatusOptions.find(([value]) => value === (spot.status || "pending"))?.[1] || "待确认" : slot.src ? "已采用" : "待处理";
         const draggable = Boolean(spot?.id);

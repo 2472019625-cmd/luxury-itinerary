@@ -174,8 +174,8 @@ description: 为奢游行程单批量生成封面、产品亮点、总览、酒�
 - `moduleType=visual_card` 是现有 DAY 批次中的独立文案任务，不是图片搜索指令，也不是可以省略的内部元数据。必须逐个返回原始 `targetId`、`targetPath` 和对象 `value:{cardTitle,cardDescription}`，即使视觉主题没有同名 Spot。旧任务若明确要求字符串则遵守该任务 outputSchema。
 - `simpleImageSlotBindings.<bindingKey>` 是合法的内部文案写回位置；不要因为它不以 `days.` 开头而忽略、改路径或把结果合并进 DAY/Spot 正文。
 - 只围绕该任务 `facts.visualSubject`，根据本日 `daySourceFacts` 和 `sourceEvidence` 写 1—2 句：怎样体验、为什么值得。不总结整日，不复制其他视觉卡或泛化 Spot 描述，不从相邻 DAY 借用事实。
-- cardTitle由本次Copy生成，第一职责是说明这张图展示的核心主体，必须保留 `facts.visualSubject/titleCoreSubject` 中最有辨识度的实体、动物、景点或体验。标题可以删去姿态、构图、光线等非核心画面描述，但不能在已有明确主体时退化成只有“清晨游猎、傍晚游猎、全天游猎”等泛化名称，也不能用泛标题掩盖图片不匹配。不得把英文 `searchIntent` 作为客户标题，不改视觉主题、不新增体验。任务 facts 提供 `entityDisplayName` 时，标题必须原样包含该名称，不得把同一实体重新翻译成另一种中文名；这不改变 `searchIntent`。
-- cardDescription写1—2句简短体验说明。客户卡片只显示图片、cardTitle和cardDescription，不输出单独的状态/费用标签。保留事实费用和可选边界，不暗示未购买的体验已包含，不把观察动物或天气写成保证。cardTitle和cardDescription不参与搜图，也不决定Image输入。
+- cardTitle由本次Copy生成，是客户看到的体验型短标题：优先表达客人如何参与、从什么角度感受或期待什么，不把图片主体、姿态和构图直接写成照片说明。仍须保留 `facts.visualSubject/titleCoreSubject` 中最有辨识度的真实实体、动物、景点或体验锚点；不得在已有明确主体时退化成只有“清晨游猎、傍晚游猎、全天游猎”等泛化名称，也不能用泛标题掩盖图片不匹配。不得把英文 `searchIntent` 作为客户标题，不改视觉主题、不新增体验或保证动物、天气结果。任务 facts 提供 `entityDisplayName` 时，标题必须原样包含该名称，不得把同一实体重新翻译成另一种中文名；这不改变 `searchIntent`。
+- cardDescription写1—2句简短体验说明。客户卡片只显示图片、cardTitle和cardDescription，不输出单独的状态/费用标签。保留事实费用和可选边界，不暗示未购买的体验已包含，不把观察动物或天气写成保证。匹配已有Spot时也只用cardTitle作为客户卡标题，不改Spot名称、状态或描述；编辑器卡片列表和客户预览显示同一标题。cardTitle和cardDescription不参与搜图，也不决定Image输入。
 - 输出前核对输入的每一个 visual_card target 都有独立结果；不能仅返回原有 DAY 和 Spot 文案。
 
 ### 5.10 其他模块与辅助检测
