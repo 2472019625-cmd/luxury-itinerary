@@ -881,7 +881,10 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   const [dayInfoOpen, setDayInfoOpen] = useState(false);
   const [daySettingsOpen, setDaySettingsOpen] = useState(false);
   const [finalIssuesOpen, setFinalIssuesOpen] = useState(false);
-  const [structureExpanded, setStructureExpanded] = useState(false);
+  const [structureExpanded, setStructureExpanded] = useState(() => window.innerWidth > 900);
+  const [fitPreviewZoom, setFitPreviewZoom] = useState(0.4);
+  const [previewZoom, setPreviewZoom] = useState(null);
+  const [collapsedDaySlotId, setCollapsedDaySlotId] = useState(null);
   const pendingIssueFocusRef = useRef(null);
   const [dragSpotId, setDragSpotId] = useState(null);
   const historyRef = useRef({ undo: [], redo: [], group: null, at: 0 });
@@ -947,6 +950,17 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     return () => window.removeEventListener("keydown", onKey);
   }, [project]);
   useEffect(() => { if (!hasImages && tab === "image") setTab("copy"); }, [hasImages, tab]);
+  useEffect(() => {
+    const stage = previewRef.current;
+    if (!stage) return undefined;
+    const fit = () => setFitPreviewZoom(Math.min(0.4, Math.max(0.15, (stage.clientWidth - 48) / 2000)));
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, []);
+  const effectivePreviewZoom = previewZoom ?? fitPreviewZoom;
+  const adjustPreviewZoom = (step) => setPreviewZoom(Math.min(0.65, Math.max(0.2, Math.round((effectivePreviewZoom + step) * 100) / 100)));
 
   const selectionPath = (value = selection) => {
     if (value.module === "days") return value.subItemIndex == null ? `days.${value.itemIndex}` : `days.${value.itemIndex}.spots.${value.subItemIndex}`;
@@ -970,6 +984,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     || matchingDataNode(inspectorRef.current, "data-day-spot-id", value.spotId);
   const choose = (next, nextTab) => {
     historyRef.current.group = null;
+    setCollapsedDaySlotId(null);
     setSelection(next);
     if (next.module !== "days" && nextTab) setTab(nextTab);
     requestAnimationFrame(() => {
@@ -1118,6 +1133,10 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   const setFocus = (x, y) => currentSlot && setImage(currentSlot.src, `${Math.round(x)}% ${Math.round(y)}%`);
   const [focusX, focusY] = String(currentSlot?.focus || "50% 50%").match(/[\d.]+/g)?.map(Number) || [50, 50];
   const selectSlot = (slot) => {
+    if (selection.module === "days" && selection.slotId === slot.slotId && collapsedDaySlotId !== slot.slotId) {
+      setCollapsedDaySlotId(slot.slotId);
+      return;
+    }
     const spotIndex = selection.module === "days" ? resolveDaySpotIndex(selectedDay, { spotId: slot.spotId, subItemIndex: slot.subItemIndex }) : slot.subItemIndex;
     choose({ ...selection, itemIndex: slot.itemIndex, spotId: slot.spotId || null, slotId: slot.slotId, subItemIndex: spotIndex >= 0 ? spotIndex : null, imageIndex: slot.imageIndex }, "image");
   };
@@ -1273,7 +1292,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
         const binding = project.data.simpleImageSlotBindings?.[slot.slotId] || slot.binding || {};
         const spotIndex = binding.useSpotCopy === false ? -1 : resolveDaySpotIndex(selectedDay, { spotId: slot.spotId, subItemIndex: slot.subItemIndex });
         const spot = spotIndex >= 0 ? daySpots[spotIndex] : null;
-        const active = currentSlot?.slotId === slot.slotId;
+        const active = selection.slotId === slot.slotId && collapsedDaySlotId !== slot.slotId;
         const title = binding.useSpotCopy === false ? binding.cardTitle || "行程体验" : spot?.name || String(slot.label || "体验卡片").split("｜")[0];
         const summary = binding.useSpotCopy === false ? binding.cardDescription || "暂无图片说明" : spot?.description || spot?.experience || "暂无体验介绍";
         const status = spot ? dayStatusOptions.find(([value]) => value === (spot.status || "pending"))?.[1] || "待确认" : slot.src ? "已采用" : "待处理";
@@ -1306,7 +1325,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   };
   return <main className="editor-page"><StepRail active={3} maxStep={canOpenVersions ? 4 : 3} onStep={(step) => step === 4 && canOpenVersions && onVersions()} /><div className={`editor-grid ${selection.module === "days" ? "editor-grid-day" : ""} ${structureExpanded ? "structure-expanded" : "structure-compact"}`}>
     <aside className="structure-panel"><header><span><UiIcon name="itinerary" /><b>行程结构</b></span><button type="button" className="structure-expand-toggle" onClick={() => setStructureExpanded((value) => !value)} aria-label={structureExpanded ? "收起行程结构" : "展开行程结构"} aria-expanded={structureExpanded}>{structureExpanded ? "‹" : "›"}</button></header><nav>{MODULES.map((module) => module.id === "days" ? <div key={module.id} className="day-nav-group"><button title="每日行程" className={selection.module === "days" ? "active" : ""} onClick={() => selectModule("days", selection.itemIndex)}><UiIcon name={moduleIcons.days} /><span className="structure-label">每日行程</span></button><div>{project.data.days.map((day, index) => <button key={index} title={`DAY ${String(index + 1).padStart(2, "0")} · ${day.city || day.theme || ""}`} className={selection.module === "days" && selection.itemIndex === index ? "active" : ""} onClick={() => selectModule("days", index)}><span>DAY {String(index + 1).padStart(2, "0")}</span><em>{day.city || day.theme}</em></button>)}</div></div> : <button key={module.id} title={module.label} className={selection.module === module.id ? "active" : ""} onClick={() => selectModule(module.id)}><UiIcon name={moduleIcons[module.id]} /><span className="structure-label">{module.label}</span>{visibility[module.id] === false && <small>已隐藏</small>}</button>)}</nav></aside>
-    <section className="canvas-stage" ref={previewRef} onClick={onPreviewClick} tabIndex="0" aria-label="行程长图预览，使用滚轮、PageDown、Home 或 End 浏览"><div className="workspace-itinerary"><ItineraryComponent data={viewData} /></div></section>
+    <section className="canvas-stage" ref={previewRef} onClick={onPreviewClick} tabIndex="0" aria-label="行程长图预览，使用滚轮、PageDown、Home 或 End 浏览" style={{ "--preview-zoom": effectivePreviewZoom }}><div className="preview-zoom-controls" role="group" aria-label="预览缩放" onClick={(event) => event.stopPropagation()}><svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><circle cx="10.8" cy="10.8" r="6.2" /><path d="m15.5 15.5 5 5" /></svg><button type="button" onClick={() => adjustPreviewZoom(-0.05)} aria-label="缩小预览" disabled={effectivePreviewZoom <= 0.2}>−</button><span aria-live="polite">{Math.round(effectivePreviewZoom * 100)}%</span><button type="button" onClick={() => adjustPreviewZoom(0.05)} aria-label="放大预览" disabled={effectivePreviewZoom >= 0.65}>+</button><button type="button" onClick={() => setPreviewZoom(null)} aria-label="预览适合宽度">适合宽度</button></div><div className="workspace-itinerary"><ItineraryComponent data={viewData} /></div></section>
     <aside className={`inspector-panel ${finalIssuesOpen ? "inspector-issues-open" : ""}`} ref={inspectorRef}>
       <div className="editor-inspector-toolbar"><span>{selection.module === "days" ? `每日行程 / DAY ${String(selection.itemIndex + 1).padStart(2, "0")}` : selectedModule.label}</span>{onVersions && (canOpenVersions ? <Button tone="primary" onClick={onVersions}>查看并下载</Button> : <button type="button" className="editor-issues-trigger" aria-expanded={finalIssuesOpen} onClick={() => setFinalIssuesOpen((value) => !value)}>{finalIssuesOpen ? "返回编辑" : `待处理 ${blockingItems.length}`}</button>)}</div>
       {finalIssuesOpen && <section className="editor-issues-view" aria-label="待处理事项">

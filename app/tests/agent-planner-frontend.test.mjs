@@ -8,6 +8,17 @@ const diagnostic = readFileSync(new URL("../src/AgentWorkspace.jsx", import.meta
 const workspaceCss = readFileSync(new URL("../src/workspace.css", import.meta.url), "utf8");
 const confirmationActions = readFileSync(new URL("../src/lib/confirmationActionItems.js", import.meta.url), "utf8");
 
+test("Step4预览缩放仅作用于编辑器，结构栏默认展开且体验卡可收起", () => {
+  assert.match(workspace, /setStructureExpanded\] = useState\(\(\) => window\.innerWidth > 900\)/);
+  assert.match(workspace, /setFitPreviewZoom\(Math\.min\(0\.4, Math\.max\(0\.15,/);
+  assert.match(workspace, /aria-label="预览缩放"/);
+  assert.match(workspace, /aria-label="预览适合宽度"/);
+  assert.match(workspace, /selection\.slotId === slot\.slotId && collapsedDaySlotId !== slot\.slotId/);
+  assert.match(workspace, /setCollapsedDaySlotId\(slot\.slotId\)/);
+  assert.match(workspaceCss, /\.editor-grid \.workspace-itinerary \.export-frame \{ zoom: var\(--preview-zoom, \.4\); \}/);
+  assert.doesNotMatch(workspaceCss, /^\.workspace-itinerary \.export-frame \{ zoom: var\(--preview-zoom/m);
+});
+
 test("4174正式入口复用原Workspace五步前端而非简化项目页", () => {
   assert.match(app, /<Workspace[^>]+agentMode=/);
   assert.match(workspace, /上传资料[\s\S]+确认信息[\s\S]+生成内容[\s\S]+编辑预览[\s\S]+下载版本/);
