@@ -2578,6 +2578,34 @@ test("知识库视觉字段补全后自动下载原件采用，补判复用技�
   }
 });
 
+test("历史档案照片不能自动代表现代送机，历史展示仍可使用", () => {
+  const departure = slot("airport-departure", {
+    moduleType: "day", subject: "机场与行李", primaryVisualSubject: "旅客带行李在机场办理返程送机",
+    queryCore: { subject: "机场与行李", action: "送机离境", identity: "" },
+    visualGoal: "现代行程的机场送机", context: "肯尼亚行程其他日有草原飞机返程",
+  });
+  const archive = completeAudit("archive-plane", {
+    actualSubject: "1960年代 Fokker 飞机历史幻灯片", coreSubjectMatch: true, coreActionMatch: true,
+    transportType: "bush_plane", transportTypeMatch: true,
+  });
+  const candidate = { knowledgeMatchedFile: { filename: "Dar es salaam Late1960.avif" }, knowledgeSourcePaths: ["Kenya/Cottars/History of Safaris"] };
+  assert.equal(classifyTransportType(departure), null);
+  assert.equal(failedHardRequirement(departure, archive, candidate), "wrong_activity");
+  assert.equal(failedHardRequirement(departure, completeAudit("modern", { actualSubject: "旅客带行李经过现代机场出发大厅" })), null);
+  assert.equal(failedHardRequirement(departure, completeAudit("transfer", { actualSubject: "旅客及行李在机场由接送车辆接送" })), null);
+  assert.equal(failedHardRequirement(departure, completeAudit("heritage-building", { actualSubject: "旅客站在建于1890年的老机场建筑前办理送机" })), null);
+  assert.equal(failedHardRequirement(departure, completeAudit("classic-car", { actualSubject: "旅客乘坐1960年车型的老爷车前往机场；这是现代实拍，不是历史照片" })), null);
+  assert.equal(failedHardRequirement(departure, completeAudit("ambiguous", { actualSubject: "飞机在停机坪", reason: "主体清晰" }), candidate), "needs_user_judgment");
+  assert.equal(failedHardRequirement(departure, completeAudit("archive-film", { actualSubject: "机场展柜里的1960年代飞机胶片影像" })), "wrong_activity");
+  const wrongPlace = applyKnowledgeSourcePathEvidence(departure, completeAudit("wrong-place", {
+    actualSubject: "Dar es Salaam 机场出发大厅", visibleLocationConflict: true,
+    hardRejectCode: "wrong_location", reason: "图片文字明确为坦桑尼亚机场",
+  }), { match: true, mode: "country_context", scopePath: "Kenya/Cottars/History of Safaris" });
+  assert.equal(failedHardRequirement(departure, wrongPlace), "wrong_location");
+  const museum = { ...departure, queryCore: { subject: "历史飞机照片", action: "博物馆展览", identity: "" }, visualGoal: "航空历史展览" };
+  assert.equal(failedHardRequirement(museum, archive, candidate), null);
+});
+
 test("Web同批缺字段不能阻止其他低于早停分数的完整代表图自动采用", async (t) => {
   const result = await runAuditedFixture(t, slot("partial-peer", { exactIdentityRequired: false }), { candidateCount: 2, judgments: candidates => candidates.map((candidate, index) => ({
     candidateId: candidate.candidateId, actualSubject: "草原环境与游猎行动", matchLevel: "representative", score: 70, relevance: 70,
@@ -2611,15 +2639,19 @@ test("知识库返回10张 preview 全部保留，首批四张出现高质量eli
     slots: [slot("preview-ten", { location: "Masai Mara", activity: "leopard safari", subject: "leopard", primaryVisualSubject: "leopard", searchIntent: ["花豹游猎", "leopard safari"] })],
     visionApiKey: "vision", visionBaseUrl: "https://vision.invalid", visionModel: "model",
     adapters: {
-      searchKnowledgeImages: (() => { let calls = 0; return async ({ queries }) => { calls += 1; return calls === 1
-        ? knowledgeFixture(queries[0], { queryId: "qry-preview-ten", prefix: "preview-ten", count: 10, fragment: "leopard safari" })
-        : { status: "completed", queryId: "qry-preview-ten-empty", queryText: queries[0], scopeState: "no_match", records: [], candidates: [], clarificationNodeIds: [] }; }; })(),
+      searchKnowledgeImages: (() => { let calls = 0; return async ({ queries }) => { calls += 1; if (calls === 1) {
+        const found = knowledgeFixture(queries[0], { queryId: "qry-preview-ten", prefix: "preview-ten", count: 10, fragment: "leopard safari" });
+        found.candidates[1].knowledgeMatchedFile.mimeType = "image/avif";
+        return found;
+      }
+        return { status: "completed", queryId: "qry-preview-ten-empty", queryText: queries[0], scopeState: "no_match", records: [], candidates: [], clarificationNodeIds: [] }; }; })(),
       downloadCandidate: async (candidate, { directory, publicPrefix }) => {
         fetched.push(candidate.imageUrl);
         const index = fetched.length;
         const filePath = path.join(directory, `preview-ten-${index}.jpg`);
         await writeDistinctTestImage(filePath, index);
-        return { ...candidate, filePath, publicUrl: `${publicPrefix}/preview-ten-${index}.jpg`, sha256: `preview-ten-hash-${index}`, width: 1400, height: 900 };
+        return { ...candidate, filePath, publicUrl: `${publicPrefix}/preview-ten-${index}.jpg`, sha256: `preview-ten-hash-${index}`, width: 1400, height: 900,
+          contentType: "image/jpeg", sourceContentType: "image/jpeg", sourceFormat: "jpeg", sourceBytes: 1234, conversion: "preview_reencoded" };
       },
       judgeCandidatesBatch: async ({ candidates }) => {
         audited.push(...candidates.map((candidate) => candidate.candidateId));
@@ -2641,6 +2673,13 @@ test("知识库返回10张 preview 全部保留，首批四张出现高质量eli
   assert.equal(result.metrics.originalDownloadSavedCount, 1);
   assert.equal(imageResult.candidates.filter((candidate) => candidate.selected).length, 1);
   assert.equal(imageResult.candidates.filter((candidate) => candidate.localPreviewUrl).length, 10);
+  const avifOriginalAwaitingDownload = imageResult.candidates.find((candidate) => candidate.knowledgeMatchedFile?.mimeType === "image/avif");
+  assert.equal(avifOriginalAwaitingDownload.originalDownloaded, false);
+  assert.equal(avifOriginalAwaitingDownload.originalMime, "image/avif");
+  assert.equal(avifOriginalAwaitingDownload.storedMime, null);
+  assert.equal(avifOriginalAwaitingDownload.sourceFormat, null);
+  assert.equal(avifOriginalAwaitingDownload.sourceBytes, null);
+  assert.equal(avifOriginalAwaitingDownload.conversion, null);
   assert.equal(imageResult.candidates.filter((candidate) => candidate.candidateStatus === "not_auto_reviewed").length, 6);
   assert.equal(imageResult.candidates.find((candidate) => candidate.selected).candidateStatus, "selected");
 });

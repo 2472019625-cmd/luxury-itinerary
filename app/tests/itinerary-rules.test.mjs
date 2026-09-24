@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildCoreSpots,
   compactProofPoints,
   EXPERIENCE_STATUS,
   formatTravelerCount,
@@ -12,6 +13,15 @@ import {
   synchronizeExperienceStatus,
   validateItineraryFacts,
 } from "../src/lib/itineraryRules.js";
+
+test('草原飞机体验只从当天明确工具事实生成，国际航班与商务送机不冒充', () => {
+  const returnFlight = buildCoreSpots({ routeNodes: ['甲地', '机场'], vehicle: '商务用车', description: '酒店早餐后，按国际航班时间专人送机，结束旅程。' });
+  assert.ok(!returnFlight.some((spot) => /草原飞机/.test(spot.name)));
+  const bushReturn = buildCoreSpots({ routeNodes: ['甲地', '机场'], vehicle: '草原飞机', description: '搭乘草原飞机返程，结束旅程。' });
+  assert.ok(bushReturn.some((spot) => spot.name === '草原飞机返程'));
+  const bushArrival = buildCoreSpots({ routeNodes: ['甲地', '乙地'], vehicle: '轻型草原飞机', description: '搭乘轻型草原飞机飞往乙地。' });
+  assert.ok(bushArrival.some((spot) => spot.name === '草原飞机抵达'));
+});
 
 test("maps DAY dates continuously and rejects a conflicting inclusive return span", () => {
   const mapped = mapDaysFromStart({ days: [{}, {}, {}, {}, {}, {}, {}, {}], endDate: "2026-08-25" }, "2026-08-17");

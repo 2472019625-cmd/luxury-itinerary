@@ -283,6 +283,56 @@ test("官方候选成功后不再访问同字段的外部候选", async () => {
   assert.deepEqual(visited, [officialUrl]);
 });
 
+test("HTTP 200 图片响应不能按页面正文核验，同一失效 URL 不重复抓取", async () => {
+  const url = "https://examplelodge.com/downloadimg";
+  let fetches = 0;
+  const result = await verifyCopyFactsResearch({
+    researchRequest: { ...hotelResearch, categories: ["客房", "设计"] },
+    candidates: [fixtureFact("客房", url), fixtureFact("设计", url)],
+    fetchSource: async () => { fetches += 1; return textResponse("Example Lodge river courtyard rooms pool", "image/jpeg", url); },
+    fetchBrowserSource: null,
+  });
+  assert.equal(fetches, 1);
+  assert.equal(result.verifiedFacts.length, 0);
+  assert.deepEqual(result.rejected.map((item) => item.reason), ["image_not_fact_evidence", "duplicate_failed_source_url"]);
+  assert.equal(result.rejected[0].verificationAttempts[0].contentType, "image/jpeg");
+});
+
+test("同页错误摘录只拒该断言，另一类别可复用正文核验", async () => {
+  const url = "https://examplelodge.com/facts";
+  let fetches = 0;
+  const result = await verifyCopyFactsResearch({ researchRequest: { ...hotelResearch, categories: ["位置", "设施"] },
+    candidates: [
+      { ...fixtureFact("位置", url), sources: [{ sourceUrl: url, sourceExcerpt: "not on this page", sourceMediaType: "page" }] },
+      { ...fixtureFact("设施", url), sources: [{ sourceUrl: url, sourceExcerpt: "Example Lodge has a pool", sourceMediaType: "page" }] },
+    ],
+    fetchSource: async () => { fetches += 1; return textResponse("<title>Example Lodge</title><p>Example Lodge has a pool</p>", undefined, url); }, fetchBrowserSource: null,
+  });
+  assert.equal(fetches, 1);
+  assert.equal(result.rejected[0].reason, "source_excerpt_not_supported");
+  assert.deepEqual(result.verifiedFacts.map((item) => item.category), ["设施"]);
+});
+
+test("明确 404 不再用浏览器重复请求同一失效页", async () => {
+  let browserCalls = 0;
+  const url = "https://examplelodge.com/rooms/missing";
+  const result = await verifyCopyFactsResearch({ researchRequest: { ...hotelResearch, categories: ["客房"] }, candidates: [fixtureFact("客房", url)],
+    fetchSource: async (candidateUrl) => ({ ok: false, status: 404, url: candidateUrl, headers: { get: () => "text/html" } }),
+    fetchBrowserSource: async () => { browserCalls += 1; return fixturePage(url); },
+  });
+  assert.equal(browserCalls, 0);
+  assert.equal(result.rejected[0].reason, "source_unavailable");
+});
+
+test("content_filter 与空正文保留技术失败", async () => {
+  for (const finishReason of ["content_filter", "stop"]) {
+    await assert.rejects(requestCopyFactsResearch({
+      apiKey: "fixture-key", researchRequest: hotelResearch, emptyContentRetries: 0,
+      fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ finish_reason: finishReason, message: { content: "" } }] }) }),
+    }), (error) => error.code === (finishReason === "content_filter" ? "copy_facts_research_content_filtered" : "copy_facts_research_empty"));
+  }
+});
+
 test("品牌官网页面必须绑定当前酒店，不能把同品牌另一城市门店的事实写入", async () => {
   const request = { researchType: "official_entity_facts", entityKind: "hotel", entityName: "JW Marriott Hotel Nairobi", location: "Nairobi", categories: ["设施"], officialDomains: ["marriott.example"] };
   const candidate = { category: "设施", fact: "设有屋顶泳池。", sourceUrl: "https://marriott.example/hotels/jw-marriott-hotel-mombasa/", sourceExcerpt: "rooftop pool", sourceMediaType: "page" };
@@ -511,6 +561,81 @@ test("主研究和补证共享外部两页预算；没有持久状态不擅自�
   assert.equal(noJournal.supplementStopReason, "durable_state_unavailable");
 });
 
+test("官方 404 后同批有效详情页可核验，补搜排除旧页", async () => {
+  const missing = "https://examplelodge.com/rooms/missing";
+  const valid = "https://examplelodge.com/rooms/example-lodge";
+  const designPage = "https://examplelodge.com/design/example-lodge";
+  const requests = [];
+  const result = await runCopyFactsResearch({ researchRequest: hotelResearch, researchStateStore: memoryResearchState(),
+    requestResearch: async ({ researchRequest }) => {
+      requests.push(researchRequest);
+      return { json: { facts: researchRequest.researchPhase === "supplement" ? [fixtureFact("设计", designPage)] : [{ ...fixtureFact("客房"), sources: [{ sourceUrl: missing, sourceExcerpt: "rooms", sourceMediaType: "page" }, { sourceUrl: valid, sourceExcerpt: "rooms", sourceMediaType: "page" }] }] } };
+    },
+    fetchSource: async (url) => url.includes("/missing") ? { ok: false, status: 404, url, headers: { get: () => "text/html" } } : fixturePage(url), fetchBrowserSource: null,
+  });
+  assert.equal(result.verifiedFacts.length, 2);
+  assert.equal(result.verifiedFacts[0].sourceUrl, valid);
+  assert.ok(requests[1].excludedSourceUrls.includes(missing));
+  assert.equal(result.supplementAttempted, true);
+});
+
+test("外部两页用尽仍可用唯一补搜查同酒店官方详情页", async () => {
+  const requests = [];
+  const result = await runCopyFactsResearch({ researchRequest: { ...hotelResearch, officialDomains: ["examplelodge.com"] }, researchStateStore: memoryResearchState(),
+    requestResearch: async ({ researchRequest }) => {
+      requests.push(researchRequest);
+      return { json: { facts: researchRequest.researchPhase === "supplement" ? [fixtureFact("位置", "https://examplelodge.com/about/example-lodge")] : [fixtureFact("设计", "https://www.sleepermagazine.com/project/example-lodge"), fixtureFact("客房", "https://www.booking.com/hotel/example-lodge.html")] } };
+    }, fetchSource: async (url) => fixturePage(url), fetchBrowserSource: null,
+  });
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1].sourceDirections[0].domains, ["examplelodge.com"]);
+  assert.equal(result.externalSourcePagesUsed, 2);
+  assert.equal(result.verifiedFacts.length, 3);
+  assert.equal(result.verifiedFacts.at(-1).sourceClass, "official_entity");
+});
+
+test("母品牌域名不同于酒店名时，失败候选只作为外部额度耗尽后的唯一补搜方向", async () => {
+  const missing = "https://globalstays.example/hotels/example-lodge/rooms-old";
+  const valid = "https://globalstays.example/hotels/example-lodge/rooms";
+  const requests = [];
+  const result = await runCopyFactsResearch({ researchRequest: hotelResearch, researchStateStore: memoryResearchState(),
+    requestResearch: async ({ researchRequest }) => {
+      requests.push(researchRequest);
+      return { json: { facts: researchRequest.researchPhase === "supplement"
+        ? [{ ...fixtureFact("客房", valid), sources: [{ sourceUrl: valid, sourceExcerpt: "Example Lodge river courtyard rooms pool", sourceMediaType: "page", sourceClass: "official_brand" }] }]
+        : [
+          { ...fixtureFact("客房", missing), sources: [{ sourceUrl: missing, sourceExcerpt: "rooms", sourceMediaType: "page", sourceClass: "official_brand" }] },
+          fixtureFact("位置", "https://www.booking.com/hotel/xx/example-lodge.html"),
+          fixtureFact("设计", "https://www.sleepermagazine.com/project/example-lodge"),
+        ] } };
+    },
+    fetchSource: async (url) => url === missing || url.includes("www.globalstays.example/hotels/example-lodge/rooms-old")
+      ? { ok: false, status: 404, url, headers: { get: () => "text/html" } }
+      : url === valid || url.includes("www.globalstays.example/hotels/example-lodge/rooms")
+        ? textResponse(`<title>Example Lodge rooms</title><h1>Example Lodge</h1><link rel="canonical" href="${url}"><script type="application/ld+json">{"@type":"Hotel","name":"Example Lodge","brand":{"name":"Global Stays"}}</script><p>Book now. Example Lodge river courtyard rooms pool</p>`, undefined, url)
+        : fixturePage(url),
+    fetchBrowserSource: null,
+  });
+  assert.equal(requests.length, 2);
+  assert.equal(result.externalSourcePagesUsed, 2);
+  assert.ok(requests[1].sourceDirections.some((item) => item.category === "客房" && item.domains.includes("globalstays.example")));
+  assert.ok(requests[1].excludedSourceUrls.includes(missing));
+  assert.equal(result.verifiedFacts.find((item) => item.category === "客房")?.sourceClass, "official_brand");
+  assert.equal(result.rejected.find((item) => item.sourceUrl === missing)?.declaredSourceClass, "official_brand");
+});
+
+test("自称母品牌的冒牌域名可给搜索方向但不能提升为可信事实", async () => {
+  const result = await verifyCopyFactsResearch({
+    researchRequest: hotelResearch,
+    candidates: [{ category: "客房", fact: "酒店设有河景客房。", sourceUrl: "https://impostor.example/hotels/example-lodge/rooms", sourceExcerpt: "river-view rooms", sourceMediaType: "page", sourceClass: "official_brand" }],
+    fetchSource: async (url) => textResponse("<title>Example Lodge</title><h1>Example Lodge</h1><p>river-view rooms</p>", undefined, url),
+    fetchBrowserSource: null,
+  });
+  assert.equal(result.verifiedFacts.length, 0);
+  assert.equal(result.rejected[0].declaredSourceClass, "official_brand");
+  assert.equal(result.rejected[0].reason, "source_not_official_or_authoritative");
+});
+
 test("已领取主研究但未落结果不会重复派发，不同酒店键互不混用", async () => {
   const researchStateStore = memoryResearchState();
   const key = copyResearchStateKey(hotelResearch);
@@ -526,7 +651,7 @@ test("已领取主研究但未落结果不会重复派发，不同酒店键互�
   assert.equal(result.categoryOutcomes[0].reason, "research_interrupted");
 });
 
-test("补证不接受成功字段改写、重复旧页面或方向外来源，也不递归补证", async () => {
+test("补证不接受成功字段改写或方向外来源，已核验页面可为缺失类别提供新摘录", async () => {
   let calls = 0;
   const result = await runCopyFactsResearch({ researchRequest: hotelResearch, researchStateStore: memoryResearchState(),
     requestResearch: async ({ researchRequest }) => {
@@ -535,9 +660,28 @@ test("补证不接受成功字段改写、重复旧页面或方向外来源，�
     }, fetchSource: async (url) => fixturePage(url), fetchBrowserSource: null,
   });
   assert.equal(calls, 2);
-  assert.equal(result.verifiedFacts.length, 1);
+  assert.equal(result.verifiedFacts.length, 2);
   assert.equal(result.verifiedFacts[0].sourceUrl, "https://examplelodge.com/facts");
-  assert.equal(result.rejected.filter((item) => item.reason === "source_direction_not_allowed").length, 3);
+  assert.equal(result.verifiedFacts[1].category, "设计");
+  assert.equal(result.rejected.filter((item) => item.reason === "source_direction_not_allowed").length, 2);
+});
+
+test("补搜可复用主搜摘录失败但正文有效的官方页面", async () => {
+  const url = "https://examplelodge.com/facts";
+  const requests = [];
+  let fetches = 0;
+  const result = await runCopyFactsResearch({ researchRequest: hotelResearch, researchStateStore: memoryResearchState(),
+    requestResearch: async ({ researchRequest }) => {
+      requests.push(researchRequest);
+      return { json: { facts: [{ ...fixtureFact("位置", url), sources: [{ sourceUrl: url, sourceExcerpt: researchRequest.researchPhase === "supplement" ? "Example Lodge beside the river" : "incorrect excerpt", sourceMediaType: "page" }] }] } };
+    },
+    fetchSource: async () => { fetches += 1; return textResponse("<title>Example Lodge</title><p>Example Lodge beside the river</p>", undefined, url); }, fetchBrowserSource: null,
+  });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].excludedSourceUrls.includes(url), false);
+  assert.equal(fetches, 1);
+  assert.equal(result.verifiedFacts[0].category, "位置");
+  assert.equal(result.verifiedFacts[0].sourceUrl, url);
 });
 
 test("物理请求与业务次数分别持久记录；截断主研究不启动缺类补证", async () => {

@@ -234,6 +234,72 @@ test("buildHotelFactRows 固定顺序保存核验事实与缺失状态", () => {
   assert.equal(rows[3].sourceUrl, "https://example.com");
 });
 
+test("酒店级原始供应商证据进入四类事实，泛国家、DAY 住宿名与已订房型不冒充公开事实", () => {
+  const rows = buildHotelFactRows({ status: "not_found", verifiedFacts: [], categoryOutcomes: [] }, {
+    officialName: "JW Marriott Hotel Nairobi", region: "肯尼亚", roomType: "已订行政套房",
+    sourceEvidence: [
+      "DAY 1 住宿：JW Marriott Hotel Nairobi",
+      "JW Marriott Hotel Nairobi 位于 Westlands 商务区。",
+      "JW Marriott Hotel Nairobi 的建筑采用现代设计。",
+      "JW Marriott Hotel Nairobi 设有室内泳池。",
+      "本次已订 JW Marriott Hotel Nairobi 行政套房。",
+      "当天参观 Westlands 的其他酒店。",
+    ],
+  });
+  assert.deepEqual(rows.map((row) => row.text), ["JW Marriott Hotel Nairobi 位于 Westlands 商务区", "", "JW Marriott Hotel Nairobi 的建筑采用现代设计", "JW Marriott Hotel Nairobi 设有室内泳池"]);
+  assert.equal(rows[0].sourceClass, "supplier_original");
+  assert.equal(rows[1].status, "not_found");
+  assert.equal(rows[0].sourceExcerpt, rows[0].text);
+  assert.equal(buildHotelFactRows({}, { officialName: "JW Marriott Hotel Nairobi", region: "肯尼亚", sourceEvidence: ["DAY 1 住宿：JW Marriott Hotel Nairobi"] }).every((row) => !row.text), true);
+});
+
+test("酒店简称紧邻具体区域可提取位置，同段其他游览地不串入酒店事实", () => {
+  const rows = buildHotelFactRows({}, {
+    officialName: "JW Marriott Hotel Nairobi", shortName: "JW万豪酒店", region: "肯尼亚",
+    sourceEvidence: ["专人接机送往 Westlands 商圈JW万豪酒店，随后前往 Karen 长颈鹿中心。"],
+  });
+  assert.equal(rows[0].text, "JW万豪酒店位于Westlands 商圈");
+  assert.equal(rows[0].sourceExcerpt, "专人接机送往 Westlands 商圈JW万豪酒店");
+  assert.equal(rows[1].text, "");
+  assert.equal(rows[2].text, "");
+  assert.equal(rows[3].text, "");
+});
+
+test("带城市前缀的酒店简称可绑定供应商所写品牌简称", () => {
+  const rows = buildHotelFactRows({}, {
+    officialName: "JW Marriott Hotel Nairobi", shortName: "内罗毕JW万豪", region: "肯尼亚",
+    sourceEvidence: ["DAY 7 住宿：JW Marriott Hotel Nairobi", "乘机抵达城市，专人接机送往 Westlands 商圈JW万豪酒店。随后前往 Karen 的景点。"],
+  });
+  assert.equal(rows[0].text, "内罗毕JW万豪位于Westlands 商圈");
+  assert.equal(rows[0].sourceClass, "supplier_original");
+  assert.equal(rows[0].sourceExcerpt.includes("Karen"), false);
+  assert.equal(rows.slice(1).every((row) => !row.text), true);
+});
+
+test("派生品牌碎片只提取紧邻区域，不证明设计设施；类别词来自酒店名也不能成事实", () => {
+  const fragmentRows = buildHotelFactRows({}, {
+    officialName: "JW Marriott Hotel Nairobi", shortName: "内罗毕JW万豪",
+    sourceEvidence: ["送往 Westlands 商圈JW万豪酒店，JW万豪酒店设有泳池与现代设计。"],
+  });
+  assert.equal(fragmentRows[0].status, "success");
+  assert.equal(fragmentRows.slice(1).every((row) => !row.text), true);
+  const designRows = buildHotelFactRows({}, { officialName: "Design Hotel", sourceEvidence: ["Design Hotel 位于中心城区。"] });
+  const poolRows = buildHotelFactRows({}, { officialName: "Pool Resort", sourceEvidence: ["Pool Resort 位于海滨区域。"] });
+  assert.equal(designRows[2].text, "");
+  assert.equal(poolRows[3].text, "");
+});
+
+test("酒店事实要求属性归属，离开酒店后的餐厅和设计展览不属于酒店", () => {
+  const hotel = { officialName: "测试酒店" };
+  for (const sentence of ["入住测试酒店后前往当地餐厅用餐", "从测试酒店出发参观建筑设计展览"]) {
+    assert.equal(buildHotelFactRows({}, { ...hotel, sourceEvidence: [sentence] }).every((row) => !row.text), true);
+  }
+  const location = buildHotelFactRows({}, { ...hotel, sourceEvidence: ["测试酒店位于市区"] });
+  const facilities = buildHotelFactRows({}, { ...hotel, sourceEvidence: ["测试酒店设有泳池"] });
+  assert.equal(location[0].text, "测试酒店位于市区");
+  assert.equal(facilities[3].text, "测试酒店设有泳池");
+});
+
 test("酒店 verifiedFacts 为零时显式注入事实边界且 proofPoints 可按真实数量留空", async () => {
   const request = { researchType: "official_entity_facts", entityName: "Sparse Lodge", categories: ["空间与设计"] };
   const editorial = { ...task("sparse-copy", "hotels.0.editorialCopy", "hotel"), facts: { officialName: "Sparse Lodge", region: "保护区", nights: 1, supplierHotelContext: [] }, researchRequest: request };

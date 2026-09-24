@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
-import { importItineraryWorkbook } from "../src/lib/itineraryImport.js";
+import { hotelStayDayIndexes, importItineraryWorkbook } from "../src/lib/itineraryImport.js";
 
 test('住宿栏陌生名称不依赖酒店品牌词，交通同义配置合并但不同座位保留', async () => {
   const rows = [['日期','简要行程','详细','用餐','参考酒店','用车'],
@@ -19,6 +19,67 @@ test('住宿栏陌生名称不依赖酒店品牌词，交通同义配置合并�
   assert.equal(data.transportSummary[0].usageSegments.length,2);
   assert.ok(data.transportSummary[0].sourceEvidence.some(s=>s.includes('敞篷式')));
   assert.deepEqual(data.transportSummary.slice(1,3).map(s=>s.seatCount),[7,9]);
+});
+
+test('机上过夜同义写法保留每日来源但不生成酒店实体，真实含飞机词酒店仍保留', async () => {
+  const rows = [['日期', '简要行程', '详细', '用餐', '参考酒店', '用车'],
+    ['DAY 1', '甲地', '入住', '晚餐', '飞机主题酒店', '商务车'],
+    ['DAY 2', '甲地', '入住', '晚餐', '飞机主题酒店', '商务车'],
+    ['DAY 3', '返程', '夜间航班', '早餐', ' 飞 机 上 ', '航班'],
+    ['DAY 4', '返程', '夜间航班', '早餐', '机上过夜', '航班'],
+    ['DAY 5', '返程', '夜间航班', '早餐', ' In Flight ', '航班']];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), '行程');
+  const file = new File([XLSX.write(workbook, { type: 'array', bookType: 'xlsx' })], '住宿类型.xlsx');
+  const { data, report } = await importItineraryWorkbook(file, { days: [] });
+  assert.deepEqual(data.hotels.map(({ officialName, nights }) => [officialName, nights]), [['飞机主题酒店', 2]]);
+  assert.deepEqual(data.days.map((day) => day.overnightType), ['hotel', 'hotel', 'inflight', 'inflight', 'inflight']);
+  assert.ok(data.days.slice(2).every((day) => !day.hotel));
+  assert.ok(report.cellCoverage.some((cell) => cell.raw === '机上过夜'));
+});
+
+test('逐日住宿列全为机上过夜时不从全局表头或正文反建假酒店', async () => {
+  const rows = [['测试行程'], ['住宿说明：全程机上过夜，不安排酒店'],
+    ['日期', '简要行程', '详细', '用餐', '参考酒店', '用车'],
+    ['DAY 1', '甲地→乙地', '夜间航班', '机上晚餐', '飞机上', '航班'],
+    ['DAY 2', '乙地→甲地', '返程航班', '机上早餐', '机上过夜', '航班']];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), '行程');
+  const file = new File([XLSX.write(workbook, { type: 'array', bookType: 'xlsx' })], '纯夜航.xlsx');
+  const { data } = await importItineraryWorkbook(file, { days: [] });
+  assert.deepEqual(data.hotels, []);
+  assert.deepEqual(data.days.map((day) => day.overnightType), ['inflight', 'inflight']);
+});
+
+test('未结构化的独立供应商酒店行仍可进入酒店模块', async () => {
+  const rows = [['测试行程'], ['酒店安排：Azure Retreat Lodge'], ['DAY 1', '甲地', '到达入住']];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), '行程');
+  const file = new File([XLSX.write(workbook, { type: 'array', bookType: 'xlsx' })], '未结构化住宿.xlsx');
+  const { data } = await importItineraryWorkbook(file, { days: [] });
+  assert.deepEqual(data.hotels.map((hotel) => hotel.officialName), ['Azure Retreat Lodge']);
+});
+
+test('两家酒店与空白返程DAY严格绑定各自晚数和来源叙事', async () => {
+  const days = [
+    { hotel: 'Azure Retreat', description: '甲地入住' },
+    { hotel: 'Dune House', description: '乙地入住' },
+    { hotel: '', description: '返程后在机场候机' },
+  ];
+  assert.deepEqual(hotelStayDayIndexes(days, 'Azure Retreat'), [0]);
+  assert.deepEqual(hotelStayDayIndexes(days, 'Dune House'), [1]);
+  const rows = [['日期', '简要行程', '详细', '用餐', '参考酒店', '用车'],
+    ['DAY 1', '甲地', '甲地入住', '晚餐', 'Azure Retreat', '商务车'],
+    ['DAY 2', '乙地', '乙地入住', '晚餐', 'Dune House', '商务车'],
+    ['DAY 3', '机场', '返程后在机场候机', '早餐', '', '商务车']];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), '行程');
+  const file = new File([XLSX.write(workbook, { type: 'array', bookType: 'xlsx' })], '两店返程.xlsx');
+  const { data } = await importItineraryWorkbook(file, { days: [] });
+  assert.deepEqual(data.hotels.map(({ officialName, nights }) => [officialName, nights]), [['Azure Retreat', 1], ['Dune House', 1]]);
+  assert.ok(data.hotels.every((hotel) => !hotel.sourceEvidence.some((line) => /DAY 3|返程后在机场候机/.test(line))));
+  assert.ok(data.hotels[0].sourceEvidence.some((line) => line.includes('DAY 1 住宿')));
+  assert.ok(data.hotels[1].sourceEvidence.some((line) => line.includes('DAY 2 住宿')));
 });
 
 test("imports a standard itinerary workbook and isolates internal quote notes", async () => {

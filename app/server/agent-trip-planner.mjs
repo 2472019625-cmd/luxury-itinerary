@@ -67,6 +67,17 @@ export function validateSimpleHighlightSelection(raw = {}, factBasis = {}) {
 
 export function buildAgentFactBasis(data = {}, report = {}) {
   const days = Array.isArray(data.days) ? data.days : [];
+  const transportScope = (item) => {
+    const dayNumbers = [...(item.usageSegments || []), ...(item.sourceEvidence || [])]
+      .map((entry) => Number(/\bDAY\s*(\d+)\b/i.exec(cleanText(entry))?.[1]))
+      .filter((number) => Number.isInteger(number) && number > 0 && number <= days.length);
+    if (!dayNumbers.length) return null;
+    const matched = [...new Set(dayNumbers)].map((number) => days[number - 1]);
+    const locations = unique(matched.flatMap((day) => Array.isArray(day.routeNodes) ? day.routeNodes.map(cleanText).filter(Boolean) : []));
+    if (locations.length === 1) return locations[0];
+    const country = cleanText(data.country || data.destination);
+    return country && country.length <= 20 && !/[\d→+＋、，,;；\/｜|]/u.test(country) ? country : null;
+  };
   const hotels = (Array.isArray(data.hotels) ? data.hotels : []).map((hotel, index) => ({
     sourceIndex: index,
     id: cleanText(hotel.id) || `hotel-${index + 1}`,
@@ -87,7 +98,7 @@ export function buildAgentFactBasis(data = {}, report = {}) {
     endDate: cleanText(data.endDate) || null,
     travelerCount: Number(data.travelers || data.adults) || null,
     hotels,
-    transport: (Array.isArray(data.transportSummary) ? data.transportSummary : []).map((item, index) => ({ sourceIndex: index, id: cleanText(item.id) || `transport-${index + 1}`, category: cleanText(item.category || item.title || item.label), serviceLevel: cleanText(item.serviceLevel), model: cleanText(item.model) || null, modelGuaranteed: item.modelGuaranteed === true, usageLabel: cleanText(item.usageLabel) || null, features: item.features || [], status: item.status || null, currentCopy: cleanText(item.editorialCopy || item.description) })).filter((item) => item.category).slice(0, 20),
+    transport: (Array.isArray(data.transportSummary) ? data.transportSummary : []).map((item, index) => ({ sourceIndex: index, id: cleanText(item.id) || `transport-${index + 1}`, category: cleanText(item.category || item.title || item.label), serviceLevel: cleanText(item.serviceLevel), model: cleanText(item.model) || null, modelGuaranteed: item.modelGuaranteed === true, usageLabel: cleanText(item.usageLabel) || null, usageSegments: item.usageSegments || [], scopeLocation: transportScope(item), features: item.features || [], status: item.status || null, currentCopy: cleanText(item.editorialCopy || item.description) })).filter((item) => item.category).slice(0, 20),
     diningExperiences: (Array.isArray(data.diningExperiences) ? data.diningExperiences : []).map((item, index) => ({ sourceIndex: index, id: cleanText(item.id) || `dining-${index + 1}`, name: cleanText(item.title || item.officialName), officialName: cleanText(item.officialName) || null, location: cleanText(item.location) || null, status: item.status || item.feeBoundary || null, currentCopy: cleanText(item.editorialCopy) })).filter((item) => item.name).slice(0, 20),
     coreExperiences: unique([...(Array.isArray(data.highlights) ? data.highlights.map(highlightToText) : []), ...days.map((day) => cleanText(day.title || day.route))]).slice(0, 24),
     days: days.map((day, index) => ({
@@ -667,6 +678,44 @@ function repairEquivalentVisualChoice(slot) {
   } };
 }
 
+function repairTransportOverviewPose(slot, factBasis) {
+  const role = /^transport:(\d+)$/.exec(cleanText(slot.role));
+  const transport = role && (factBasis.transport || [])[Number(role[1]) - 1];
+  if (!transport || slot.exactIdentityRequired !== false || slot.locationRole !== "scope_only") return null;
+  const core = slot.queryCore || {};
+  if (!/飞机|aircraft|plane/i.test(`${transport.category} ${transport.serviceLevel}`)
+    || !/飞机|aircraft|plane/i.test(cleanText(core.subject))
+    || [core.subject, core.identity, core.subjectEn, core.identityEn].some((value) => visualChoicePattern.test(cleanText(value)))) return null;
+  const visual = cleanText(slot.primaryVisualSubject);
+  const ordinaryPose = /(?:起飞|降落|起降|停靠|停放|飞行中|飞行|空中|跑道|taking[ -]?off|landing|parked|flying|in[ -]?flight|airstrip|runway)/i;
+  const choices = splitVisualChoices(visual);
+  if (choices.length !== 2 || !choices.every((part) => ordinaryPose.test(part))
+    || !/飞机|aircraft|plane/i.test(visual)
+    || /机场|航站楼|airport|terminal|直升机|热气球|船只?|商务车|越野车|helicopter|balloon|boat/i.test(`${visual} ${core.subject} ${core.identity}`)) return null;
+  const sourceDays = (transport.usageSegments || []).flatMap((entry) => {
+    const number = Number(/\bDAY\s*(\d+)\b/i.exec(cleanText(entry))?.[1]);
+    return Number.isInteger(number) && number > 0 ? [(factBasis.days || [])[number - 1]] : [];
+  }).filter(Boolean);
+  if (!sourceDays.length) return null;
+  const sourceFacts = sourceDays.map((day) => `${day.experience || ""} ${day.vehicle || ""}`).join(" ");
+  if (/航拍|空中观光|观景飞行|低空飞越|起飞|降落|停靠|停放|飞行中|scenic[ -]?flight|aerial[ -]?tour|taking[ -]?off|landing|parked/i.test(`${sourceFacts} ${transport.usageLabel || ""}`)
+    || /航拍体验|空中观光|观景飞行|低空飞越|scenic[ -]?flight|aerial[ -]?tour/i.test(visual)) return null;
+  const onlyOrdinaryMotion = (value) => !cleanText(value).replace(/(?:在|于)?[^或\s]{0,16}?(?:跑道)(?:上)?/gu, "")
+    .replace(/\b(?:on|at)\s+(?:a\s+)?(?:[a-z-]+\s+){0,3}(?:airstrip|runway)\b/gi, "")
+    .replace(/起飞|降落|起降|停靠|停放|飞行中|飞行|空中|taking[ -]?off|landing|parked|flying|in[ -]?flight|flight/gi, "")
+    .replace(/或者|或|\bor\b|[\s,，.。/\-]+/gi, "");
+  if (!onlyOrdinaryMotion(core.action) || !onlyOrdinaryMotion(core.actionEn)) return null;
+  const subject = /(?:在|于).*(?:跑道|airstrip|runway)|\b(?:on|at)\s+(?:a\s+)?(?:dirt\s+)?(?:airstrip|runway)/i.test(cleanText(core.subject))
+    ? cleanText(transport.serviceLevel || transport.category) : cleanText(core.subject);
+  const queryCore = { ...core, subject, subjectEn: cleanText(core.subjectEn).replace(/\s+\b(?:on|at)\s+(?:a\s+)?(?:dirt\s+)?(?:airstrip|runway).*$/i, ""), action: "", actionEn: "" };
+  const primaryVisualSubject = subject;
+  if (visualSubjectPolicyIssue(primaryVisualSubject, queryCore)) return null;
+  const queryPlan = buildKnowledgeQueryPlan({ ...slot, queryCore, primaryVisualSubject }, null);
+  if (queryPlan.validationError || queryPlan.queries.length < 2) return null;
+  return { primaryVisualSubject, queryCore, fidelityQuery: queryPlan.queries[0], alternateQueries: queryPlan.queries.slice(1, 4), searchIntent: queryPlan.queries.slice(0, 4),
+    repair: { code: "transport_overview_pose_normalized", message: "交通概览保留原始飞机类型，普通跑道或空中姿态只作表现偏好", originalPrimaryVisualSubject: slot.primaryVisualSubject, primaryVisualSubject } };
+}
+
 function completePlannerObjectEnd(source, start) {
   const stack = [];
   let inString = false;
@@ -758,15 +807,24 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
     const localRepairs = [];
     let repaired = { ...slot };
     const visualRepair = issues.some((issue) => issue.code === "ambiguous_visual_subject")
-      ? repairHotelRepresentativeChoice(slot, factBasis) || repairBackgroundVisualChoice(slot) || repairEquivalentVisualChoice(slot)
+      ? repairHotelRepresentativeChoice(slot, factBasis) || repairBackgroundVisualChoice(slot) || repairEquivalentVisualChoice(slot) || repairTransportOverviewPose(slot, factBasis)
       : issues.some((issue) => issue.code === "hotel_specific_visual_unbound") ? repairUnboundHotelSpecificVisual(slot, factBasis) : null;
     if (visualRepair) {
       const { repair, ...fields } = visualRepair;
       Object.assign(repaired, fields);
       localRepairs.push(repair);
     }
+    const transportRole = /^transport:(\d+)$/.exec(cleanText(role));
+    const scopeLocation = transportRole && cleanText((factBasis.transport || [])[Number(transportRole[1]) - 1]?.scopeLocation);
+    const scopeRepair = issues.some((issue) => issue.code === "image_location_missing")
+      && repaired.locationRole === "scope_only" && !cleanText(repaired.location) && scopeLocation;
+    if (scopeRepair) {
+      repaired.location = scopeLocation;
+      localRepairs.push({ code: "transport_scope_location_restored", message: "仅从该交通项对应DAY路线及已确认目的地恢复检索Scope", location: scopeLocation });
+    }
     let unresolved = issues.some((issue) => !QUERY_REPAIRABLE_CODES.has(issue.code) && issue.code !== "invalid_supporting_visual"
       && !(issue.code === "ambiguous_visual_subject" && visualRepair)
+      && !(issue.code === "image_location_missing" && scopeRepair)
       && !(issue.code === "hotel_specific_visual_unbound" && visualRepair?.repair.code === "hotel_unbound_specific_visual_normalized"));
 
     if (issues.some((issue) => issue.code === "invalid_supporting_visual") && String(role).includes(":supporting:")) {

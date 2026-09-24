@@ -292,7 +292,10 @@ function hotelEntityForSlot(slot = {}) {
 
 export function classifyKnowledgeImagePurpose(slot = {}) {
   const kind = moduleKind(slot);
-  const searchable = normalized(querySourceValues(slot).join(" "));
+  // Purpose belongs to this picture target. A trip-wide activity/context may
+  // mention another day's aircraft without making an airport farewell a plane photo.
+  const targetValues = [slot.queryCore?.subject, slot.queryCore?.action, slot.primaryVisualSubject, slot.subject].filter(Boolean);
+  const searchable = normalized(targetValues.join(" "));
   const hotelEntity = hotelEntityForSlot(slot);
   const hotelIdentity = clean(slot.hotel || slot.hotelOfficialName || slot.hotelShortName || hotelEntity?.canonicalName);
   const namedEntity = namedEntityText(slot);

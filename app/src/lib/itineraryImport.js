@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import { addDays, normalizeItineraryFacts, normalizeSourcePosterHighlights, splitRouteNodes } from "./itineraryRules.js";
+import { accommodationType, addDays, normalizeItineraryFacts, normalizeSourcePosterHighlights, splitRouteNodes } from "./itineraryRules.js";
 import { transportUsageLabel } from './transportPresentation.js';
 
 const INTERNAL_PATTERNS = [
@@ -629,19 +629,33 @@ function buildTransportSummary(days) {
   return [...grouped.values()].map((item) => ({ ...item, usageLabel: transportUsageLabel(item), usageSegments: unique(item.usageSegments), sourceEvidence: unique(item.sourceEvidence) }));
 }
 
-function hotelNames(days, lines) {
+function hotelNames(days, lines, sheets) {
   // The accommodation column is evidence of purpose; an unfamiliar proper name
   // must not need a hotel keyword or a known brand to enter the hotel modules.
-  const fromDays = unique(days.filter(day => !day.overnightType || day.overnightType === "hotel")
-    .map((day) => day.hotel).filter((line) => line && !/最终确认|待确认|早餐|午餐|晚餐|用餐/.test(line)
-      && !/^(?:无|无住宿|不住宿|不含住宿|自行安排|自理|飞机|航班|夜航|返程|[-—–/]+)$/i.test(text(line))));
+  const fromDays = unique(days.filter(day => (!day.overnightType || day.overnightType === "hotel") && accommodationType(day.hotel) === "hotel")
+    .map((day) => day.hotel).filter((line) => line && !/最终确认|待确认|早餐|午餐|晚餐|用餐/.test(line)));
   if (fromDays.length) return fromDays.slice(0, 8);
+  const accommodationColumnMapped = sheets.some(({ rows }) => rows.some((row) => {
+    const map = headerMap(row);
+    return map.hotel !== undefined && (map.day !== undefined || map.date !== undefined)
+      && (map.description !== undefined || map.route !== undefined) && mapScore(map) >= 3;
+  }));
+  if (accommodationColumnMapped) return [];
   const fromLines = lines.filter((line) => HOTEL_PATTERN.test(line) && line.length >= 4 && line.length <= 90);
   return unique(fromLines
     .flatMap((line) => text(line).split(/[、；;\/]/))
-    .map((line) => line.replace(/^(?:入住|酒店|住宿)[：:]?/, "").trim())
-    .filter((line) => HOTEL_PATTERN.test(line) && !/餐食|报价|房型|早餐|午餐|晚餐/.test(line)))
+    .map((line) => line.replace(/^(?:入住|酒店安排|酒店|住宿)[：:]?/, "").trim())
+    .filter((line) => HOTEL_PATTERN.test(line) && !/餐食|报价|房型|早餐|午餐|晚餐|不安排|无住宿|参考酒店|酒店安排/.test(line)))
     .slice(0, 8);
+}
+
+export function hotelStayDayIndexes(days, name) {
+  const hotelName = text(name);
+  if (!hotelName) return [];
+  return days.flatMap((day, index) => {
+    const stay = text(day?.hotel);
+    return stay && accommodationType(stay) === "hotel" && (stay.includes(hotelName) || hotelName.includes(stay)) ? [index] : [];
+  });
 }
 
 function parseWorkbook(buffer) {
@@ -705,17 +719,20 @@ export async function importItineraryWorkbook(file, baseData) {
   const destination = destinationFrom(joined) || "";
   const startDate = days.map((day) => day.date).find(Boolean) || null;
   days.forEach((day, index) => { if (!day.date && startDate) day.date = addDays(startDate, index); });
-  const hotels = hotelNames(days, lines).map((name, index) => ({
-    id: `imported-hotel-${index + 1}`,
-    officialName: name,
-    shortName: name,
-    region: destination,
-    nights: Math.max(1, days.filter((day) => day.hotel.includes(name) || name.includes(day.hotel)).length),
-    editorialCopy: "住宿价值与对应体验将在内容生成阶段依据原始行程完整重写。",
-    proofPoints: [],
-    sourceEvidence: unique(days.flatMap((day, dayIndex) => day.hotel.includes(name) || name.includes(day.hotel) ? [`DAY ${dayIndex + 1} 住宿：${day.hotel}`, day.description] : [])).slice(0, 6),
-    images: [],
-  }));
+  const hotels = hotelNames(days, lines, sheets).map((name, index) => {
+    const stayIndexes = hotelStayDayIndexes(days, name);
+    return {
+      id: `imported-hotel-${index + 1}`,
+      officialName: name,
+      shortName: name,
+      region: destination,
+      nights: Math.max(1, stayIndexes.length),
+      editorialCopy: "住宿价值与对应体验将在内容生成阶段依据原始行程完整重写。",
+      proofPoints: [],
+      sourceEvidence: unique(stayIndexes.flatMap((dayIndex) => [`DAY ${dayIndex + 1} 住宿：${days[dayIndex].hotel}`, days[dayIndex].description])).slice(0, 6),
+      images: [],
+    };
+  });
   const highlights = highlightExtraction.items;
   const internalMatches = unique(lines.filter((line) => INTERNAL_PATTERNS.some((pattern) => pattern.test(line))));
   const diningExtraction = extractDiningExperiences(days);

@@ -19,9 +19,9 @@ function hotelVisual(overrides = {}) {
   };
 }
 
-async function generateWithVisual(visual, { duplicate = false, secondVisual = null, factHotelName = visual.queryCore.identity || "测试酒店", factHotelDetails = {}, dayDescription = "抵达酒店", dayHotel = "", daySpots = [] } = {}) {
+async function generateWithVisual(visual, { duplicate = false, secondVisual = null, factHotelName = visual.queryCore.identity || "测试酒店", factHotelDetails = {}, dayDescription = "抵达酒店", dayHotel = "", daySpots = [], transportFacts = null, routeNodes = [] } = {}) {
   const targetRole = visual.role || "hotel:1";
-  const data = { destination: "肯尼亚", hotels: [{ id: "hotel-1", officialName: factHotelName, region: "内罗毕", ...factHotelDetails }, ...(secondVisual ? [{ id: "hotel-2", officialName: factHotelName, region: "内罗毕" }] : [])], transportSummary: targetRole === "transport:1" ? [{ id: "vehicle-1", category: visual.queryCore.subject }] : [], days: [{ route: "城市", description: dayDescription, hotel: dayHotel, spots: daySpots }] };
+  const data = { destination: "肯尼亚", hotels: [{ id: "hotel-1", officialName: factHotelName, region: "内罗毕", ...factHotelDetails }, ...(secondVisual ? [{ id: "hotel-2", officialName: factHotelName, region: "内罗毕" }] : [])], transportSummary: targetRole === "transport:1" ? [transportFacts || { id: "vehicle-1", category: visual.queryCore.subject }] : [], days: [{ route: "城市", routeNodes, description: dayDescription, hotel: dayHotel, spots: daySpots }] };
   const factBasis = buildAgentFactBasis(data);
   let calls = 0;
   const result = await generateAgentPlan({
@@ -184,6 +184,89 @@ function transportVisual(visual, overrides = {}) {
     queryCore: { subject: "商务车", action: "停靠", identity: "", subjectEn: "business vehicle", actionEn: "parked", identityEn: "" },
     fidelityQuery: "商务车停靠", alternateQueries: ["business vehicle parked"], sourceRefs: ["transport.0"], ...overrides };
 }
+
+test('交通Scope只取该交通项绑定DAY事实，飞机概览普通姿态归一后保持同一检索目标', async () => {
+  const original = transportVisual('草原小飞机停靠在简易跑道或飞行中俯瞰大地', {
+    location: '', queryCore: { subject: '轻型草原小飞机', action: '飞行', identity: '草原飞机', subjectEn: 'light bush plane', actionEn: 'flying', identityEn: 'bush plane' },
+    fidelityQuery: '草原小飞机 飞行', alternateQueries: ['light aircraft savanna flight safari', '轻型飞机 草原 跑道'],
+  });
+  const transportFacts = { id: 'plane', category: '草原飞机', serviceLevel: '轻型草原飞机', usageSegments: ['DAY 1 甲地 → 乙地'], sourceEvidence: ['DAY 1 用车：轻型草原飞机'] };
+  const { slot, plan, data } = await generateWithVisual(original, { transportFacts, routeNodes: ['甲地', '乙地'] });
+  assert.equal(slot.plannerSlotStatus, 'locally_repaired');
+  assert.equal(slot.location, '肯尼亚');
+  assert.equal(slot.locationRole, 'scope_only');
+  assert.equal(slot.queryCore.subject, '轻型草原小飞机');
+  assert.equal(slot.queryCore.action, '');
+  assert.ok(slot.plannerLocalRepairs.some((repair) => repair.code === 'transport_overview_pose_normalized'));
+  assert.ok(slot.plannerLocalRepairs.some((repair) => repair.code === 'transport_scope_location_restored'));
+  assert.equal(materializeSimpleSkillPlan({ data, agentPlan: plan }).imageSlots.find((item) => item.moduleType === 'transport').needsUserAction, false);
+  const noEvidence = await generateWithVisual(original, { transportFacts: { id: 'plane', category: '草原飞机' }, routeNodes: ['甲地', '乙地'] });
+  assert.equal(noEvidence.slot.plannerSlotStatus, 'unresolved');
+  const experience = await generateWithVisual({ ...original, primaryVisualSubject: '轻型草原飞机航拍体验在简易跑道或飞行中' }, { transportFacts, routeNodes: ['甲地', '乙地'] });
+  assert.equal(experience.slot.plannerSlotStatus, 'unresolved');
+});
+
+test('多交通事实的Scope不借用无关DAY地点，歧义路线退到已确认单一目的地', () => {
+  const basis = buildAgentFactBasis({ destination: '测试国', days: [
+    { routeNodes: ['甲区'] }, { routeNodes: ['乙区', '丙区'] }, { routeNodes: ['无关区'] },
+  ], transportSummary: [
+    { category: '商务车', usageSegments: ['DAY 1 甲区'] },
+    { category: '草原飞机', usageSegments: ['DAY 2 乙区 → 丙区'] },
+    { category: '船只', usageSegments: [] },
+  ] });
+  assert.deepEqual(basis.transport.map((item) => item.scopeLocation), ['甲区', '测试国', null]);
+});
+
+test('草原飞机起飞或停靠是交通概览姿态选择，类型与Scope来自绑定事实', async () => {
+  const original = transportVisual('草原飞机在简易跑道起飞或停靠', {
+    location: '', queryCore: { subject: '草原飞机在简易跑道', action: '起飞或停靠', identity: '', subjectEn: 'bush plane on a dirt airstrip', actionEn: 'taking off or parked', identityEn: '' },
+    fidelityQuery: '草原飞机简易跑道', alternateQueries: ['bush plane safari airstrip', '轻型飞机草原起降'],
+  });
+  const { slot } = await generateWithVisual(original, {
+    transportFacts: { category: '草原飞机', serviceLevel: '草原飞机', usageSegments: ['DAY 1 甲地 → 乙地'] }, routeNodes: ['甲地', '乙地'],
+  });
+  assert.equal(slot.plannerSlotStatus, 'locally_repaired');
+  assert.equal(slot.queryCore.subject, '草原飞机');
+  assert.equal(slot.queryCore.action, '');
+  assert.equal(slot.location, '肯尼亚');
+  assert.ok(slot.searchIntent.every((query) => !/起飞或停靠|taking off or parked/i.test(query)));
+  const missingRole = await generateWithVisual({ ...original, locationRole: undefined }, {
+    transportFacts: { category: '草原飞机', serviceLevel: '草原飞机', usageSegments: ['DAY 1 甲地 → 乙地'] }, routeNodes: ['甲地', '乙地'],
+  });
+  assert.equal(missingRole.slot.plannerSlotStatus, 'unresolved');
+  assert.ok(missingRole.slot.plannerValidationIssues.some((issue) => issue.code === 'image_location_role_invalid'));
+});
+
+test('同一草原飞机的常见运动姿态排列可归一，明确动作与异类仍挂起', async () => {
+  const facts = { category: '草原飞机', serviceLevel: '草原飞机', usageSegments: ['DAY 1 甲地 → 乙地'] };
+  const options = { transportFacts: facts, routeNodes: ['甲地', '乙地'] };
+  const make = (visual, action, actionEn = '') => transportVisual(visual, {
+    location: '测试国', queryCore: { subject: '草原小飞机', action, identity: '', subjectEn: 'bush plane', actionEn, identityEn: '' },
+    fidelityQuery: '草原飞机', alternateQueries: ['bush plane'],
+  });
+  for (const [visual, action, actionEn] of [
+    ['草原小飞机在草原跑道起飞或降落', '在草原跑道起降', 'taking off or landing on bush airstrip'],
+    ['草原小飞机降落或起飞', '降落或起飞', 'landing or taking off'],
+    ['草原小飞机停靠或起飞', '停靠或起飞', 'parked or taking off'],
+    ['草原小飞机飞行中或停靠', '飞行中或停靠', 'flying or parked'],
+    ['bush plane taking off or landing', '起飞或降落', 'taking off or landing'],
+  ]) {
+    const { slot } = await generateWithVisual(make(visual, action, actionEn), options);
+    assert.equal(slot.plannerSlotStatus, 'locally_repaired', visual);
+    assert.equal(slot.queryCore.action, '', visual);
+    assert.ok(slot.searchIntent.every((query) => !/或|\bor\b/i.test(query)), visual);
+  }
+  for (const [visual, action, dayDescription] of [
+    ['草原小飞机起飞或降落', '起飞或降落', '明确安排草原飞机起飞观光体验'],
+    ['草原小飞机航拍体验起飞或降落', '起飞或降落', '抵达营地'],
+    ['草原小飞机起飞或直升机降落', '起飞或降落', '抵达营地'],
+    ['草原小飞机在专属机场起飞或降落', '起飞或降落', '抵达营地'],
+    ['草原小飞机起飞或未知场景', '起飞或降落', '抵达营地'],
+  ]) {
+    const { slot } = await generateWithVisual(make(visual, action), { ...options, dayDescription });
+    assert.equal(slot.plannerSlotStatus, 'unresolved', visual);
+  }
+});
 
 test("非核心环境选择不阻断明确主体动作，位置和语言顺序不改变结果", async () => {
   for (const visual of ["商务车在城市道路或机场停靠", "在机场或城市道路，商务车停靠", "商务车停靠，背景为城市道路或机场", "business vehicle parked at an airport or a city road"]) {

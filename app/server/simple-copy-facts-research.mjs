@@ -9,6 +9,8 @@ export const COPY_FACTS_RESEARCH_TYPES = Object.freeze(["official_entity_facts",
 
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
 const imageUrlPattern = /\.(?:avif|gif|jpe?g|png|svg|webp)(?:[?#]|$)/i;
+const binaryUrlPattern = /\.(?:avif|gif|jpe?g|png|svg|webp|ico|pdf|zip|mp4|webm)(?:[?#]|$)/i;
+const textContentTypePattern = /^(?:text\/(?:html|plain)|application\/(?:xhtml\+xml|json|ld\+json))(?:\s*;|$)/i;
 const lowTrustDomains = ["tripadvisor.com", "facebook.com", "instagram.com", "youtube.com", "tiktok.com", "x.com", "twitter.com", "wikipedia.org", "wikivoyage.org"];
 const majorOtaDomains = ["booking.com", "expedia.com", "agoda.com", "hotels.com", "trip.com"];
 const officialPressDomains = ["pressarea.com", "prnewswire.com", "businesswire.com"];
@@ -16,6 +18,7 @@ const trustedTradeDomains = ["sleepermagazine.com", "hospitalitydesign.com", "ho
 const MAX_EXTERNAL_SOURCE_PAGES = 2;
 const MAX_RESEARCH_TRANSPORT_ATTEMPTS = 4;
 const reportedOutcomeStatuses = new Set(["candidate_found", "no_evidence", "access_failed"]);
+const unusablePageReasons = new Set(["source_unavailable", "image_not_fact_evidence", "binary_not_fact_evidence", "source_not_approved", "source_not_official_or_authoritative", "entity_identity_unproven"]);
 const authoritativeDomains = ["who.int", "iata.org", "icao.int"];
 const orderFactPattern = /(?:本次|客人|订单|报价|行程)[^。；]{0,16}(?:已订|预订|入住.*房型|房型|已含|包含|价格|费用|车型|包车|保证|确保)|(?:your|the) (?:booking|reservation|itinerary)[^.;]{0,24}(?:room|include|price|vehicle|guarantee)/i;
 const browserExecutables = [
@@ -377,7 +380,7 @@ export function buildCopyFactsResearchRequest({ researchRequest, model = COPY_FA
           "每个指定类别最多返回一条精炼事实；一条只保留一个可直接用于文案的核心事实，不要把设施、活动、儿童政策和多段宣传合并成长段。餐饮研究总计最多返回两条事实。每条事实可返回 1—3 个相互独立的候选页面，按上述来源优先级排序，每个页面必须附上该页自身的原文证据和 sourceClass。sourceClass 只能是 official_entity、official_brand、official_press、operator_or_tourism_authority、architect_or_design_studio、trusted_trade_media、major_ota。程序会核对候选来源；餐饮的实体官网、品牌官网或正式运营方页面若仅因技术原因无法再次访问，可按餐饮非履约体验事实的窄例外保留。",
           "品牌官网可能由母品牌官方域托管；不要仅按酒店名与域名字符是否相同判断。优先返回实体或品牌官方具体页，并在页面标题、结构化数据或正文中确认实体全名。输入 officialDomains 时优先使用这些已知官方域。",
           "必须逐项覆盖输入 categories；在当前这次研究内优先为每类寻找官方页面及可核验的备选来源。categoryOutcomes 每类恰好一项，status 为 candidate_found（有候选事实）、no_evidence（本次没有取得证据）或 access_failed（发现来源但不可访问）。这只是本次研究结果，不代表穷尽互联网。不得把漏写类别当 no_evidence。",
-          "若 researchPhase=supplement，只研究输入缺失类别及 sourceDirections 的新来源方向，不重复已核验字段，不重复 excludedSourceUrls，不修改已成立事实；没有可靠新证据仍明确返回各类结果。",
+          "若 researchPhase=supplement，只研究输入缺失类别及 sourceDirections 的新来源方向，不重复已核验字段，不重复 excludedSourceUrls，不修改已成立事实。官方方向应寻找同一酒店官网中与缺失类别相关的真实详情子页；旧 URL 返回404不能推断整站无资料，也不能换查询词后重复该 URL。没有可靠新证据仍明确返回各类结果。",
           "禁止采用博客、论坛、用户评论、社交平台、百科和图片。每个来源必须给出可访问的具体页面 URL 和页面中的简短原文证据。只输出 JSON：{facts:[{category,fact,sources:[{sourceUrl,sourceExcerpt,sourceMediaType:\"page\",sourceClass}]}],categoryOutcomes:[{category,status:\"candidate_found\"}]}；status 按实际取上述三个值之一。没有可靠事实时 facts 为空数组，仍逐项返回 categoryOutcomes。",
         ].join("\n"),
       },
@@ -420,7 +423,7 @@ export async function requestCopyFactsResearch({ apiKey, baseUrl, model = COPY_F
     }
     if (attemptRecord.finishReason && attemptRecord.finishReason !== "stop") {
       attemptRecord.outcome = "incomplete_termination";
-      throw Object.assign(new Error("Copy Facts Research 未正常结束"), { code: "copy_facts_research_incomplete", attemptUsages });
+      throw Object.assign(new Error("Copy Facts Research 未正常结束"), { code: attemptRecord.finishReason === "content_filter" ? "copy_facts_research_content_filtered" : "copy_facts_research_incomplete", attemptUsages });
     }
     if (!clean(content) && attempt < attempts) continue;
     if (!clean(content)) throw Object.assign(new Error(`Copy Facts Research 连续 ${attempts} 次没有返回可用内容`), { code: "copy_facts_research_empty", attemptUsages });
@@ -461,7 +464,7 @@ export function buildResearchCategoryOutcomes({ researchRequest, verifiedFacts =
     else if (!failureReason && reportedStatus === "access_failed") reason = "reported_access_failed";
     else if (!failureReason && reportedStatus === "candidate_found") reason = "model_omitted";
     return {
-      category, status: reason === "verified" ? "success" : ["source_access_failed", "reported_access_failed", "research_failed", "research_truncated", "research_interrupted"].includes(reason) ? "source_unavailable" : "not_found",
+      category, status: reason === "verified" ? "success" : ["source_access_failed", "reported_access_failed", "research_failed", "research_truncated", "research_interrupted", "not_executed"].includes(reason) ? "source_unavailable" : "not_found",
       reason, terminal: true, ...(reportedStatus ? { reportedStatus } : {}),
       ...(reasons.length ? { rejectionReasons: reasons } : {}),
     };
@@ -475,6 +478,7 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
   const verifiedCategories = new Set();
   const externalPagesUsed = verificationContext.externalPagesUsed ||= new Set();
   const sourceCache = verificationContext.sourceCache ||= new Map();
+  const failedSourceUrls = verificationContext.failedSourceUrls ||= new Set();
   const fetchPage = async (candidateUrl, fetcher, mode) => {
     const cacheKey = `${mode}:${candidateUrl}`;
     if (!sourceCache.has(cacheKey)) sourceCache.set(cacheKey, (async () => {
@@ -489,8 +493,10 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
         },
       });
       const contentType = clean(response.headers?.get?.("content-type"));
-      const body = response.ok && !/^image\//i.test(contentType) ? await response.text() : "";
-      return { response, contentType, body };
+      const finalUrl = clean(response.url) || candidateUrl;
+      const nonText = binaryUrlPattern.test(finalUrl) || (contentType && !textContentTypePattern.test(contentType));
+      const body = response.ok && !nonText ? await response.text() : "";
+      return { response, contentType, body, nonText };
     })());
     return sourceCache.get(cacheKey);
   };
@@ -513,6 +519,8 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
     else if (!fact || !sourceUrl || !sourceExcerpt) reason = "fact_source_incomplete";
     else if (orderFactPattern.test(fact)) reason = "order_fact_not_researchable";
     else if (candidate?.sourceMediaType === "image" || imageUrlPattern.test(sourceUrl)) reason = "image_not_fact_evidence";
+    else if (binaryUrlPattern.test(sourceUrl)) reason = "binary_not_fact_evidence";
+    else if (failedSourceUrls.has(sourceIdentity(sourceUrl))) reason = "duplicate_failed_source_url";
     else if (verifiedCategories.has(category)) reason = "category_fact_limit_exceeded";
     const directlyAllowed = !reason && isAllowedOfficialSource(sourceUrl, researchRequest);
     const declaredSourceClass = declaredControlledSourceClass(candidate);
@@ -535,11 +543,11 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
     if (!reason) {
       for (const candidateUrl of sourceUrlVariants(sourceUrl)) {
         try {
-          const { response, contentType, body } = await fetchPage(candidateUrl, fetchSource, "http");
-          verificationAttempts.push({ url: candidateUrl, status: response.status || null });
+          const { response, contentType, body, nonText } = await fetchPage(candidateUrl, fetchSource, "http");
+          verificationAttempts.push({ url: candidateUrl, status: response.status || null, ...(contentType ? { contentType } : {}) });
           if (!response.ok) continue;
-          if (/^image\//i.test(contentType)) {
-            reason = "image_not_fact_evidence";
+          if (nonText) {
+            reason = /^image\//i.test(contentType) || imageUrlPattern.test(clean(response.url) || candidateUrl) ? "image_not_fact_evidence" : "binary_not_fact_evidence";
             break;
           }
           if (pageSignalsUnavailable(body)) {
@@ -570,12 +578,14 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
           verificationAttempts.push({ url: candidateUrl, error: clean(error?.message || error) });
         }
       }
-      if (!reason && verificationAttempts.length && !verificationAttempts.some((item) => item.status >= 200 && item.status < 300) && fetchBrowserSource) {
+      const browserRecoverable = verificationAttempts.length && verificationAttempts.every((item) => !item.status || item.status === 403 || item.status === 429 || item.status >= 500);
+      if (!reason && browserRecoverable && fetchBrowserSource) {
         try {
-          const { response, contentType, body } = await fetchPage(sourceUrl, fetchBrowserSource, "browser");
-          verificationAttempts.push({ url: clean(response.url) || sourceUrl, status: response.status || null, mode: "browser" });
+          const { response, contentType, body, nonText } = await fetchPage(sourceUrl, fetchBrowserSource, "browser");
+          verificationAttempts.push({ url: clean(response.url) || sourceUrl, status: response.status || null, mode: "browser", ...(contentType ? { contentType } : {}) });
           if (response.ok && pageSignalsUnavailable(body)) reason = "source_unavailable";
-          else if (response.ok && !/^image\//i.test(contentType) && sourceSupportsExcerpt(body, sourceExcerpt)) {
+          else if (response.ok && nonText) reason = /^image\//i.test(contentType) ? "image_not_fact_evidence" : "binary_not_fact_evidence";
+          else if (response.ok && sourceSupportsExcerpt(body, sourceExcerpt)) {
             const finalUrl = canonicalPageUrl(body, clean(response.url) || sourceUrl);
             const finalUrlDirectlyAllowed = isAllowedOfficialSource(finalUrl, researchRequest);
             const finalExternalClass = externalSourceClass(finalUrl) || initialExternalClass;
@@ -609,7 +619,8 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
       }
     }
     if (reason) {
-      rejected.push({ category, fact, sourceUrl, reason, ...(verificationAttempts.length ? { verificationAttempts } : {}) });
+      if (sourceUrl && unusablePageReasons.has(reason)) failedSourceUrls.add(sourceIdentity(sourceUrl));
+      rejected.push({ category, fact, sourceUrl, reason, declaredSourceClass: clean(candidate.sourceClass), ...(verificationAttempts.length ? { verificationAttempts } : {}) });
       continue;
     }
     verifiedFacts.push({ category, fact, sourceUrl: resolvedSourceUrl, sourceExcerpt, sourceClass: resolvedSourceClass || "official_entity", checkedAt });
@@ -624,15 +635,30 @@ function sourceIdentity(value) {
 }
 
 function supplementDirections(researchRequest, mainResult, externalPagesUsed) {
-  if (researchRequest.entityKind !== "hotel" || researchRequest.researchType !== "official_entity_facts" || externalPagesUsed.size >= MAX_EXTERNAL_SOURCE_PAGES) return [];
+  if (researchRequest.entityKind !== "hotel" || researchRequest.researchType !== "official_entity_facts") return [];
   const attemptedUrls = [...mainResult.verifiedFacts, ...mainResult.rejected].map((item) => item.sourceUrl).filter(Boolean);
-  // Concrete, approved domains not queried for this entity provide a new direction;
-  // changing wording against the same rejected page does not.
+  // A failed candidate's official label is only a search hint. It never enters
+  // officialDomains or changes the verification rules for the next candidate.
+  const declaredOfficialHints = mainResult.rejected.filter((item) =>
+    ["official_entity", "official_brand", "official_press"].includes(item.declaredSourceClass)
+    && item.reason === "source_unavailable"
+    && !isKnownLowTrustSource(item.sourceUrl)
+  ).map((item) => {
+    try { const url = new URL(item.sourceUrl); return url.protocol === "https:" ? url.hostname : ""; } catch { return ""; }
+  });
+  const officialDomains = [...new Set([
+    ...(researchRequest.officialDomains || []),
+    ...attemptedUrls.filter((url) => isAllowedOfficialSource(url, researchRequest)).map((url) => { try { return new URL(url).hostname; } catch { return ""; } }),
+    ...declaredOfficialHints,
+  ].map((domain) => { try { return new URL(domain.includes("://") ? domain : `https://${domain}`).hostname; } catch { return ""; } }).filter(Boolean))].slice(0, 3);
+  // Keep the official domain available for a distinct property detail page.
+  // Controlled external domains remain limited by the shared two-page budget.
   return mainResult.categoryOutcomes.filter((item) => item.status !== "success").flatMap(({ category }) => {
     const sourceClass = /设计|空间/.test(category) ? "trusted_trade_media" : "major_ota";
-    const domains = (sourceClass === "trusted_trade_media" ? trustedTradeDomains : majorOtaDomains)
+    const externalDomains = externalPagesUsed.size >= MAX_EXTERNAL_SOURCE_PAGES ? [] : (sourceClass === "trusted_trade_media" ? trustedTradeDomains : majorOtaDomains)
       .filter((domain) => !attemptedUrls.some((url) => { try { return hostMatches(new URL(url).hostname, domain); } catch { return false; } })).slice(0, 2);
-    return domains.length ? [{ category, sourceClass, domains }] : [];
+    const domains = [...officialDomains, ...externalDomains];
+    return domains.length ? [{ category, sourceClass: officialDomains.length ? "official_first" : sourceClass, domains }] : [];
   });
 }
 
@@ -707,7 +733,7 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
   }
   let result = { ...mainResult, businessCalls: 1, supplementAttempted: false };
   const directions = supplementDirections(researchRequest, mainResult, verificationContext.externalPagesUsed);
-  result.supplementStopReason = mainResult.categoryOutcomes.every((item) => item.status === "success") ? "complete" : !researchStateStore ? "durable_state_unavailable" : verificationContext.externalPagesUsed.size >= MAX_EXTERNAL_SOURCE_PAGES ? "source_budget_exhausted" : !directions.length ? "no_new_source_direction" : transportAttempts >= MAX_RESEARCH_TRANSPORT_ATTEMPTS ? "transport_budget_exhausted" : signal?.aborted ? "aborted" : "eligible";
+  result.supplementStopReason = mainResult.categoryOutcomes.every((item) => item.status === "success") ? "complete" : !researchStateStore ? "durable_state_unavailable" : !directions.length ? verificationContext.externalPagesUsed.size >= MAX_EXTERNAL_SOURCE_PAGES ? "source_budget_exhausted" : "no_new_source_direction" : transportAttempts >= MAX_RESEARCH_TRANSPORT_ATTEMPTS ? "transport_budget_exhausted" : signal?.aborted ? "aborted" : "eligible";
   if (result.supplementStopReason === "eligible") {
     const ownership = await claim("supplement");
     if (!ownership.claimed) {
@@ -716,7 +742,7 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
       // over its journal or consume its request/page budget again.
       return { ...result, businessCalls: 2, supplementAttempted: true, status: result.verifiedFacts.length ? "success" : "not_found", supplementStopReason: "supplement_already_claimed", supplementPending: true, invocationBusinessCalls, invocationTransportAttempts };
     } else {
-      const excludedSourceUrls = [...mainResult.verifiedFacts, ...mainResult.rejected].map((item) => item.sourceUrl).filter(Boolean);
+      const excludedSourceUrls = mainResult.rejected.filter((item) => unusablePageReasons.has(item.reason)).map((item) => item.sourceUrl).filter(Boolean);
       const request = { ...researchRequest, researchPhase: "supplement", categories: directions.map((item) => item.category), sourceDirections: directions, excludedSourceUrls };
       result.businessCalls = 2;
       result.supplementAttempted = true;

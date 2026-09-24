@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import sharp from 'sharp';
 import { assertPublicUrl, fetchPublicUrl } from '../server/page-images.mjs';
 import { downloadCandidate, fetchTrustedKnowledgeUrl, imageResolutionPolicyForSlot } from '../server/image-download.mjs';
+import { knowledgeOutputToCandidates } from '../server/knowledge-image-search.mjs';
 import { reviewCardImageUpscales } from '../server/simple-renderer.mjs';
 
 test('image network boundary rejects local, private and non-http addresses', async () => {
@@ -52,6 +53,49 @@ test('low-resolution knowledge originals report their actual and required dimens
       && error.minWidth === 900
       && error.minHeight === 500,
   );
+});
+
+test('AVIF knowledge original is decoded at full size and stored with its real JPEG MIME and hash', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'knowledge-avif-original-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const original = await sharp({ create: { width: 1200, height: 800, channels: 3, background: '#807060' } }).avif().toBuffer();
+  const fetched = async () => new Response(original, { status: 200, headers: { 'content-type': 'image/avif' } });
+  const result = await downloadCandidate(
+    { sourceKind: 'knowledge_library', imageUrl: 'http://192.168.100.210:9000/original/photo.avif', title: 'photo.avif' },
+    { directory, publicPrefix: '/test', trustedKnowledgeOrigins: ['http://192.168.100.210:9000'], fetchImpl: fetched },
+  );
+  assert.match(result.filePath, /\.jpg$/);
+  assert.equal(result.contentType, 'image/jpeg');
+  assert.equal(result.sourceContentType, 'image/avif');
+  assert.equal(result.conversion, 'avif_to_jpeg');
+  assert.equal(result.sourceBytes, original.length);
+  const stored = await readFile(result.filePath);
+  assert.deepEqual([result.width, result.height], [1200, 800]);
+  assert.equal((await sharp(stored).metadata()).format, 'jpeg');
+  assert.equal(result.bytes, stored.length);
+  assert.equal(result.sha256.length, 64);
+});
+
+test('knowledge discovery retains an AVIF matched original with no declared MIME', () => {
+  const output = { results: [{ path: [
+    { relation: 'preview', version_id: 'v1', filename: 'preview.jpg', url: 'http://192.168.100.210:9000/preview.jpg' },
+    { relation: 'matched_file', version_id: 'v1', filename: 'full.avif', url: 'http://192.168.100.210:9000/full.avif' },
+  ] }] };
+  const result = knowledgeOutputToCandidates(output, { baseUrl: 'http://192.168.100.210:9000', queryId: 'q1', queryText: 'hotel' });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].knowledgeMatchedFile.mimeType, 'image/avif');
+});
+
+test('AVIF normalization rejects corrupt, oversized and disguised originals', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'knowledge-avif-invalid-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const options = { directory, publicPrefix: '/test', trustedKnowledgeOrigins: ['http://192.168.100.210:9000'] };
+  const candidate = { sourceKind: 'knowledge_library', imageUrl: 'http://192.168.100.210:9000/original/photo.avif' };
+  for (const body of [Buffer.from('not an avif'), Buffer.alloc(1025)]) {
+    await assert.rejects(downloadCandidate(candidate, { ...options, maxBytes: 1024, fetchImpl: async () => new Response(body, { status: 200 }) }));
+  }
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800"></svg>');
+  await assert.rejects(downloadCandidate(candidate, { ...options, fetchImpl: async () => new Response(svg, { status: 200, headers: { 'content-type': 'image/avif' } }) }), /不支持的图片格式/);
 });
 
 test('hotel card resolution follows the rendered crop rather than a fixed 900px width', async (t) => {

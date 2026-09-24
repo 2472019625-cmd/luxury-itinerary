@@ -276,7 +276,7 @@ export async function judgeCandidatesBatch({ slot, candidates, apiKey, baseUrl, 
     if (!response.ok) throw responseError(payload, response.status, "批量视觉判断失败");
     return parseAuditJson(payload?.choices?.[0]?.message?.content, "批量视觉判断");
   };
-  const requestPrompt = `${finalPrompt}\n引文格式：quote只逐字引用一个evidenceId中的一段连续原文，优先选择本身含完整实体别名的路径或图注；不要把多个来源用“与/及/and”拼成一句，也不要把不同来源里的部分名称拼成身份证据。`;
+  const requestPrompt = `${finalPrompt}\n时间与用途核对：先根据当前图片位的Core主体/动作判断它展示的实际行程活动，再核对每张图是否为该活动的现实画面。明确的档案照片、历史幻灯片或旧时代展示若被拿来表示现代送机、交通或体验，属于动作/用途冲突；若目标本来是博物馆、历史回顾或档案展示，历史素材可以合格。图片级文件名、图注及画面观察须互相核对；知识库source_path只证明检索范围，不能抹去照片级的年代、地点或身份冲突。不得仅因古建筑、老车等画面风格推断档案用途。\n引文格式：quote只逐字引用一个evidenceId中的一段连续原文，优先选择本身含完整实体别名的路径或图注；不要把多个来源用“与/及/and”拼成一句，也不要把不同来源里的部分名称拼成身份证据。`;
   const result = await requestJudgments(requestPrompt);
   const knownIds = new Set(judgedCandidates.map((candidate) => candidate.candidateId));
   const byId = new Map();

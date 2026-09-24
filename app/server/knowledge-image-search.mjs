@@ -79,7 +79,7 @@ function wait(ms, signal) {
 function imagePaths(result = {}) {
   return (Array.isArray(result.path) ? result.path : []).filter((item) => {
     const mime = String(item?.MIME || item?.mime || item?.mime_type || item?.content_type || "").toLowerCase();
-    return item?.url && (mime.startsWith("image/") || /\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(String(item.filename || item.url)));
+    return item?.url && (mime.startsWith("image/") || /\.(?:avif|jpe?g|png|webp)(?:[?#]|$)/i.test(String(item.filename || item.url)));
   });
 }
 
@@ -149,6 +149,7 @@ function imageMimeType(item = {}) {
   const declared = String(item.MIME || item.mime || item.mime_type || item.content_type || "").toLowerCase();
   if (declared.startsWith("image/")) return declared;
   const value = `${item.filename || ""} ${item.url || ""}`;
+  if (/\.avif(?:[?#]|\s|$)|image%2[fF]avif/i.test(value)) return "image/avif";
   if (/\.webp(?:[?#]|\s|$)|image%2[fF]webp/i.test(value)) return "image/webp";
   if (/\.png(?:[?#]|\s|$)|image%2[fF]png/i.test(value)) return "image/png";
   if (/\.jpe?g(?:[?#]|\s|$)|image%2[fF]jpe?g/i.test(value)) return "image/jpeg";

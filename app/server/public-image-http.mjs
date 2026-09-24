@@ -5,7 +5,7 @@ import https from 'node:https';
 import { Readable, pipeline } from 'node:stream';
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
 
-export const IMAGE_ACCEPT = 'image/webp,image/png,image/jpeg';
+export const IMAGE_ACCEPT = 'image/avif,image/webp,image/png,image/jpeg';
 export const IMAGE_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 LuxuryTravelImageResearch/1.2';
 const responseCleanup = new WeakMap();
 

@@ -125,12 +125,59 @@ function researchFallbackPolicy(task = {}) {
   };
 }
 
-export function buildHotelFactRows(research = {}) {
+function supplierHotelFacts(facts = {}) {
+  const name = clean(facts.officialName || facts.canonicalName || facts.name);
+  const shortName = clean(facts.shortName);
+  // A localized display name may prefix a specific brand with the city while
+  // the supplier's hotel sentence uses the brand plus "酒店" (for example,
+  // 内罗毕JW万豪 / JW万豪酒店). Only derive a Latin+Han brand fragment from an
+  // existing hotel alias; never infer one from a DAY narrative.
+  const brandFragments = [...shortName.matchAll(/[A-Za-z][A-Za-z0-9&.-]*[\u4e00-\u9fff]{2,}/g)].map((match) => match[0]).filter((value) => value.length >= 4);
+  const escapePattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const aliases = [...new Set([name, shortName, facts.canonicalName, facts.name].map(clean).filter(Boolean))];
+  const hotelAttributeClauses = {
+    "位置": /^(?:位于|坐落(?:于)?|地处|is located|is situated)\s*\S/i,
+    "客房": /^(?:(?:设有|提供|拥有|配备)[^。；]{0,45}(?:客房|套房|别墅|rooms?|suites?|villas?)|(?:的)?(?:客房|套房|别墅|rooms?|suites?|villas?)[^。；]{0,35}(?:设有|配备|面向|提供|采用|配有|拥有|可观赏|feature|offer))/i,
+    "设计": /^(?:(?:的)?(?:建筑|室内设计|设计|空间|装饰)[^。；]{0,35}(?:采用|使用|呈现|融入|由|以|features?|uses?)|(?:采用|使用|融入)[^。；]{0,35}(?:设计|建筑|材质|装饰))/i,
+    "设施": /^(?:(?:设有|配有|拥有|配备|提供|内设)[^。；]{0,50}(?:泳池|餐厅|酒吧|水疗|健身|露台|pool|restaurant|spa|gym)|(?:的)?设施(?:包括|涵盖|设有|有)[^。；]{0,50}(?:泳池|餐厅|酒吧|水疗|健身|露台|pool|restaurant|spa|gym))/i,
+  };
+  const result = new Map();
+  if (!name) return result;
+  const evidence = Array.isArray(facts.sourceEvidence) ? facts.sourceEvidence : [];
+  for (const entry of evidence) {
+    for (const sentence of String(entry || "").split(/[。；;，,\n]/).map(clean).filter(Boolean)) {
+      const lower = sentence.toLowerCase();
+      if (sentence.length > 180 || /^DAY\s*\d+\s*住宿：/i.test(sentence) || orderFactPatternForSupplier.test(sentence)) continue;
+      const matchedAlias = aliases.find((alias) => lower.includes(alias.toLowerCase()) && (alias.length >= 4 || alias === name));
+      const fragment = matchedAlias ? "" : brandFragments.find((value) => new RegExp(`${escapePattern(value)}(?:酒店|营地|度假村)`, "i").test(sentence));
+      if (!matchedAlias && !fragment) continue;
+      if (!result.has("位置")) {
+        const matchedName = matchedAlias || sentence.match(new RegExp(`${escapePattern(fragment)}(?:酒店|营地|度假村)`, "i"))?.[0];
+        const beforeName = sentence.slice(0, lower.indexOf(matchedName.toLowerCase()));
+        const located = beforeName.match(/(?:送往|前往|抵达|入住|来到)\s*([^，。；;]{2,40}?(?:商圈|街区|城区|地区|区域))\s*$/i);
+        if (located) result.set("位置", { fact: `${shortName || name}位于${clean(located[1])}`, sourceClass: "supplier_original", sourceExcerpt: sentence });
+      }
+      // A derived brand fragment is insufficient identity for room, design or
+      // facility claims, even when this sentence belongs to a hotel's DAY.
+      if (!matchedAlias) continue;
+      const afterName = sentence.slice(lower.indexOf(matchedAlias.toLowerCase()) + matchedAlias.length).trim();
+      for (const [category, pattern] of Object.entries(hotelAttributeClauses)) {
+        if (!result.has(category) && pattern.test(afterName)) result.set(category, { fact: sentence, sourceClass: "supplier_original", sourceExcerpt: sentence });
+      }
+    }
+  }
+  return result;
+}
+
+const orderFactPatternForSupplier = /(?:本次|客人|订单|已订|预订|安排入住|升级|包含|费用|价格|房型为)/i;
+
+export function buildHotelFactRows(research = {}, facts = {}) {
   const verifiedByCategory = new Map((research.verifiedFacts || []).map((item) => [clean(item?.category), item]));
+  const supplierByCategory = supplierHotelFacts(facts);
   const statusByCategory = new Map((research.categoryOutcomes || []).map((item) => [clean(item?.category), clean(item?.status)]));
   const reasonByCategory = new Map((research.categoryOutcomes || []).map((item) => [clean(item?.category), clean(item?.reason)]));
   return HOTEL_FACT_ROW_DEFINITIONS.map(({ key, label, category }) => {
-    const fact = verifiedByCategory.get(category);
+    const fact = supplierByCategory.get(category) || verifiedByCategory.get(category);
     const fallbackStatus = research.status === "failed" ? "source_unavailable" : "not_found";
     const requestedStatus = statusByCategory.get(category);
     const status = fact ? "success" : ["not_found", "source_unavailable"].includes(requestedStatus) ? requestedStatus : fallbackStatus;
@@ -139,9 +186,10 @@ export function buildHotelFactRows(research = {}) {
       label,
       text: clean(fact?.fact),
       status,
-      ...(reasonByCategory.get(category) ? { reason: reasonByCategory.get(category) } : {}),
+      ...(fact?.sourceClass === "supplier_original" ? { reason: "supplier_original" } : reasonByCategory.get(category) ? { reason: reasonByCategory.get(category) } : {}),
       ...(clean(fact?.sourceUrl) ? { sourceUrl: clean(fact.sourceUrl) } : {}),
       ...(clean(fact?.sourceClass) ? { sourceClass: clean(fact.sourceClass) } : {}),
+      ...(clean(fact?.sourceExcerpt) && fact?.sourceClass === "supplier_original" ? { sourceExcerpt: clean(fact.sourceExcerpt) } : {}),
       ...(clean(fact?.checkedAt) ? { checkedAt: clean(fact.checkedAt) } : {}),
     };
   });
@@ -405,13 +453,15 @@ export async function runCopyWriterSkill({
         verifiedFacts: { researchType: research.researchType, entityName: research.entityName, verifiedFacts: research.verifiedFacts || [] },
       };
       if (task.moduleType === "hotel_fact_rows") {
-        resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: buildHotelFactRows(research), warnings: [] });
+        resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: buildHotelFactRows(research, task.facts), warnings: [] });
       } else writerTaskById.set(task.targetId, writerTask);
       if (research.status !== "success") {
-        const message = `${research.entityName} ${researchPolicy.label}未获得可核验结果；${researchPolicy.notFound}`;
+        const message = research.status === "failed"
+          ? `${research.entityName} ${researchPolicy.label}发生技术故障；${researchPolicy.failed}`
+          : `${research.entityName} ${researchPolicy.label}未获得可核验结果；${researchPolicy.notFound}`;
         researchWarningById.set(task.targetId, message);
         if (task.moduleType === "hotel_fact_rows") resultById.get(task.targetId).warnings.push(message);
-        warnings.push({ code: "copy_facts_not_found", targetId: task.targetId, message });
+        warnings.push({ code: research.status === "failed" ? "copy_facts_research_failed_fallback" : "copy_facts_not_found", targetId: task.targetId, message });
       } else if ((research.categoryOutcomes || []).some((item) => item.status !== "success")) {
         const missing = research.categoryOutcomes.filter((item) => item.status !== "success").map((item) => `${item.category}:${item.status}`).join("、");
         const message = `${research.entityName} ${researchPolicy.label}部分字段未获得可核验结果（${missing}）；Copy 继续使用已核验事实，不补写缺失字段。`;
@@ -442,7 +492,7 @@ export async function runCopyWriterSkill({
         verifiedFacts: { researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, verifiedFacts: [] },
       };
       if (task.moduleType === "hotel_fact_rows") {
-        resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: buildHotelFactRows({ status: "failed", categoryOutcomes }), warnings: [fallbackMessage] });
+        resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: buildHotelFactRows({ status: "failed", categoryOutcomes }, task.facts), warnings: [fallbackMessage] });
       } else writerTaskById.set(task.targetId, writerTask);
       researchWarningById.set(task.targetId, fallbackMessage);
       warnings.push({ code: "copy_facts_research_failed_fallback", targetId: task.targetId, message: fallbackMessage });

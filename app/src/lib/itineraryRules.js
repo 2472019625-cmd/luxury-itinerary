@@ -1,7 +1,14 @@
 import { synchronizeTravelEntityDisplayFields } from "./travelEntityDisplay.js";
 
-const FLIGHT_OVERNIGHT = /^(?:飞机|飞机上|航班|返程航班|夜航|机上)$/i;
-const NO_OVERNIGHT = /^(?:无住宿|不住宿|无需住宿|行程结束|返程结束|—|-)$/i;
+const FLIGHT_OVERNIGHT = /^(?:飞机(?:上(?:过夜|休息)?)?|机上(?:过夜|休息)?|(?:返程|国际|夜间)?航班|夜航|(?:in[ -]?flight|on[ -]?board|overnight[ -]?flight|plane))$/i;
+const NO_OVERNIGHT = /^(?:无|无住宿|不住宿|不含住宿|无需住宿|自行安排|自理|行程结束|返程(?:结束)?|[-—–/]+)$/i;
+
+export function accommodationType(value) {
+  const label = cleanText(value).normalize("NFKC").replace(/[\s\u3000]+/g, "").replace(/[。.!！]+$/g, "");
+  if (FLIGHT_OVERNIGHT.test(label)) return "inflight";
+  if (NO_OVERNIGHT.test(label)) return "none";
+  return "hotel";
+}
 const AIRPORT = /机场|航站楼|airport/i;
 const RESERVATION_REQUIRED = /需(?:要)?提前预约|须提前预约|预约后|预约制/i;
 const PENDING_CONFIRMATION = /待确认|尚未确认|以最终确认|视情况|按.*安排/i;
@@ -440,15 +447,16 @@ export function buildCoreSpots(day = {}) {
     const sourceSentence = sentenceFor(includedDescription, pattern) || includedDescription;
     spots.push({ name: cleanName, description: sourceSentence, sourceEvidence: [sourceSentence], images: [] });
   };
+  const hasBushPlane = /草原(?:小)?飞机|轻型(?:草原)?(?:小)?飞机|bush\s*plane|light\s*aircraft/i.test(`${day.vehicle || ""} ${description}`);
 
   if (/迁徙|天国之渡|马拉河/.test(`${destination} ${description}`)) {
     push(/马拉河/.test(`${destination} ${description}`) ? "马拉河大迁徙" : `${destination}迁徙追踪`, /迁徙|天国之渡|马拉河/);
-  } else if (/草原飞机|飞往|国际航班/.test(`${day.vehicle || ""} ${description}`) && /返程|结束|离开/.test(description)) {
-    push("草原飞机返程", /草原飞机|飞往|国际航班|返程/);
+  } else if (hasBushPlane && /返程|结束|离开/.test(description)) {
+    push("草原飞机返程", /草原(?:小)?飞机|轻型(?:草原)?(?:小)?飞机|飞往|返程/);
   } else if (/游猎|Safari/i.test(description)) {
     push(`${destination || "当日"}${/游猎/.test(destination) ? "" : "游猎"}`, /游猎|五霸|动物/);
-  } else if (/草原飞机|飞往|国际航班|返程/.test(`${day.vehicle || ""} ${description}`)) {
-    push(/返程|结束|离开/.test(description) ? "草原飞机返程" : "草原飞机抵达", /草原飞机|飞往|国际航班|返程/);
+  } else if (hasBushPlane) {
+    push(/返程|结束|离开/.test(description) ? "草原飞机返程" : "草原飞机抵达", /草原(?:小)?飞机|轻型(?:草原)?(?:小)?飞机|飞往|返程/);
   } else if (destination) {
     push(destination, new RegExp(destination.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
@@ -468,10 +476,11 @@ export function buildCoreSpots(day = {}) {
 }
 
 export function inferOvernightType(day = {}, index = 0, dayCount = 1) {
-  if (["hotel", "inflight", "none"].includes(day.overnightType)) return day.overnightType;
   const hotel = cleanText(day.hotel || day.hotelShortName);
-  if (FLIGHT_OVERNIGHT.test(hotel) || /夜航|机上过夜/.test(`${day.theme || ""} ${day.description || ""}`)) return "inflight";
-  if (NO_OVERNIGHT.test(hotel)) return "none";
+  const accommodation = accommodationType(hotel);
+  if (hotel && accommodation !== "hotel") return accommodation;
+  if (["hotel", "inflight", "none"].includes(day.overnightType)) return day.overnightType;
+  if (/夜航|机上过夜/.test(`${day.theme || ""} ${day.description || ""}`)) return "inflight";
   if (!hotel && index === dayCount - 1 && /返程|行程结束|国际航班/.test(`${day.theme || ""} ${day.description || ""}`)) return "none";
   return "hotel";
 }

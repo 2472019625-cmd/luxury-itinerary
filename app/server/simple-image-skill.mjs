@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { judgeCandidatesBatch } from "./image-audit.mjs";
-import { completeVisualJudgment } from "./image-audit-contract.mjs";
+import { completeVisualJudgment, visualSemanticConflict } from "./image-audit-contract.mjs";
 export { completeVisualJudgment } from "./image-audit-contract.mjs";
 import { ImageDeduper } from "./image-dedupe.mjs";
 import { downloadCandidate, imageResolutionPolicyForSlot } from "./image-download.mjs";
@@ -167,10 +167,9 @@ export function classifyTransportType(slot = {}) {
   const value = unique([
     coreSubject,
     coreIdentity,
-    moduleIsTransport && text(slot.subject),
-    moduleIsTransport && text(slot.activity),
-    moduleIsTransport && text(slot.category),
-    moduleIsTransport && text(slot.label),
+    moduleIsTransport && !coreSubject && text(slot.subject),
+    moduleIsTransport && !coreSubject && text(slot.category),
+    moduleIsTransport && !coreSubject && text(slot.label),
   ]).join(" ").toLowerCase();
   if (!value) return null;
   if (/bush\s*plane|light\s*aircraft|airstrip|草原飞机|轻型飞机|小飞机|内陆飞行|飞抵|飞往/.test(value)) return "bush_plane";
@@ -555,7 +554,13 @@ function publicCandidate(candidate, audit = null, rejection = null) {
     sourceKind: candidate.sourceKind || null,
     acquisitionMethod: candidate.acquisitionMethod || null,
     originalImageUrl: fromKnowledgeLibrary ? null : candidate.originalImageUrl || null,
-    originalMime: candidate.originalMime || null,
+    originalMime: originalDownloaded || !fromKnowledgeLibrary
+      ? candidate.sourceContentType || candidate.originalMime || candidate.knowledgeMatchedFile?.mimeType || candidate.knowledgeMimeType || null
+      : candidate.knowledgeMatchedFile?.mimeType || candidate.knowledgeMimeType || candidate.originalMime || null,
+    storedMime: originalDownloaded || !fromKnowledgeLibrary ? candidate.contentType || null : null,
+    sourceFormat: originalDownloaded || !fromKnowledgeLibrary ? candidate.sourceFormat || null : null,
+    conversion: originalDownloaded || !fromKnowledgeLibrary ? candidate.conversion || null : null,
+    sourceBytes: originalDownloaded || !fromKnowledgeLibrary ? candidate.sourceBytes || null : null,
     mediaType: candidate.mediaType || null,
     originalBytes: Number(candidate.originalBytes || 0) || null,
     license: candidate.license || null,
@@ -625,7 +630,9 @@ function resultStatus(results) {
   return "failed";
 }
 
-export function failedHardRequirement(slot, audit) {
+export function failedHardRequirement(slot, audit, candidate = {}) {
+  const semanticConflict = visualSemanticConflict(slot, audit, candidate);
+  if (semanticConflict) return semanticConflict;
   if (isIdentityEvidenceUnresolved(audit)) return "needs_user_judgment";
   const constraints = buildImageConstraints(slot);
   const core = constraints.core;
@@ -1107,7 +1114,7 @@ export async function runImageSearchSkill({
               metrics.resourceReuse.images.attempts += 1;
               increment(metrics.resourceReuse.images.attemptsByUrl, candidate.knowledgeAssetKey || candidate.imageUrl);
               const result = await measure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal, retrievalSession, ...resolutionPolicy, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, candidate.knowledgeAssetKey || candidate.imageUrl); }, trustedKnowledgeOrigins }));
-              return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
+              return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "sourceContentType", "sourceFormat", "sourceBytes", "conversion", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
             }, () => { metrics.technicalRetries.download += 1; })));
             if (record) record.downloadStatus = "success";
             return { ...candidate, ...technical };
@@ -1190,7 +1197,7 @@ export async function runImageSearchSkill({
             continue;
           }
           const gateSlot = knowledgeCandidateGateSlot(layerSlot, candidate);
-          const rejection = failedHardRequirement(gateSlot, effectiveAudit) || (fallbackPlan ? controlledFallbackRejection(fallbackPlan, effectiveAudit) : null);
+          const rejection = failedHardRequirement(gateSlot, effectiveAudit, candidate) || (fallbackPlan ? controlledFallbackRejection(fallbackPlan, effectiveAudit) : null);
           const qualifiedAudit = finalizeAuditEligibility(effectiveAudit, rejection);
           if (rejection) {
             if (rejection === "needs_user_judgment") incompleteJudgment = true;
@@ -1636,7 +1643,7 @@ export async function runImageSearchSkill({
             && existingJudgment?.rejection === "needs_user_judgment" && completeVisualJudgment(existingJudgment.audit)
             && isIdentityEvidenceUnresolved(existingJudgment.audit)) {
             const effectiveAudit = applyKnowledgeSourcePathEvidence(layerSlot, existingJudgment.audit, pathDecision);
-            const rejection = failedHardRequirement(eligibilitySlot, effectiveAudit);
+            const rejection = failedHardRequirement(eligibilitySlot, effectiveAudit, candidate);
             const audit = finalizeAuditEligibility(effectiveAudit, rejection);
             judgmentsByAsset.set(candidate.knowledgeAssetKey, { candidate: { ...existingJudgment.candidate, ...candidate }, audit, rejection });
             if (record) {
@@ -1658,7 +1665,7 @@ export async function runImageSearchSkill({
               const technical = await reuse(downloadCache, metrics.resourceReuse.images, cacheKey, () => downloadQueue.add(async () => {
                 metrics.previewFetchAttempts += 1;
                 const result = await downloadFn({ ...candidate, imageUrl: preview.url, title: preview.filename || candidate.title }, { directory: assetDirectory, publicPrefix, signal, retrievalSession, minWidth: 1, minHeight: 1, maxBytes: 14 * 1024 * 1024, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins });
-                return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
+                return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "sourceContentType", "sourceFormat", "sourceBytes", "conversion", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
               }));
               previewTechnicalByAsset.set(candidate.knowledgeAssetKey, technical);
               if (record) record.previewStatus = "success";
@@ -1686,7 +1693,7 @@ export async function runImageSearchSkill({
                 metrics.matchedFileDownloadAttempts += 1;
                 evidence.downloadAttempts += 1;
                 const result = await measure("originalDownload", () => measure("download", () => downloadFn({ ...candidate, imageUrl: matchedFile.url, title: matchedFile.filename || candidate.title }, { directory: assetDirectory, publicPrefix, signal, retrievalSession, ...resolutionPolicy, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins })));
-                return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
+                return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "sourceContentType", "sourceFormat", "sourceBytes", "conversion", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
               }));
               metrics.matchedFileDownloadSuccess += 1;
               const localized = { ...candidate, ...rescued, originalDownloaded: true, originalDownloadStatus: "success", previewFilePath: rescued.filePath, previewPublicUrl: rescued.publicUrl, previewSha256: rescued.sha256, previewWidth: rescued.width, previewHeight: rescued.height, previewBytes: rescued.bytes, previewContentType: rescued.contentType };
@@ -1776,7 +1783,7 @@ export async function runImageSearchSkill({
                 continue;
               }
               const gateSlot = knowledgeCandidateGateSlot(eligibilitySlot, candidate);
-              const rejection = failedHardRequirement(gateSlot, effectiveAudit);
+              const rejection = failedHardRequirement(gateSlot, effectiveAudit, candidate);
               const qualifiedAudit = finalizeAuditEligibility(effectiveAudit, rejection);
               if (record) {
                 record.judgmentStatus = rejection === "needs_user_judgment" ? "needs_user_judgment" : rejection ? "rejected" : qualifiedAudit.matchLevel === "representative" ? "representative" : "approved_not_selected";
@@ -1844,7 +1851,7 @@ export async function runImageSearchSkill({
               metrics.matchedFileDownloadAttempts += 1;
               evidence.downloadAttempts += 1;
               const result = await measure("originalDownload", () => measure("download", () => downloadFn({ ...entry.candidate, imageUrl: matchedFile.url, title: matchedFile.filename || entry.candidate.title }, { directory: assetDirectory, publicPrefix, signal, retrievalSession, ...resolutionPolicy, onRequest: () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, cacheKey); }, trustedKnowledgeOrigins })));
-              return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
+              return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "sourceContentType", "sourceFormat", "sourceBytes", "conversion", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
             }));
             metrics.matchedFileDownloadSuccess += 1;
             const localized = { ...entry.candidate, ...technical, originalDownloaded: true, originalDownloadStatus: "success" };
@@ -2390,7 +2397,7 @@ export async function runImageSearchSkill({
             const metricKey = candidate.sourceKind === "knowledge_library" ? candidate.knowledgeRecordId : candidate.imageUrl;
             increment(metrics.resourceReuse.images.attemptsByUrl, metricKey);
             const result = await webMeasure("download", () => downloadFn(candidate, { directory: assetDirectory, publicPrefix, signal, retrievalSession, ...resolutionPolicy, onRequest: candidate.sourceKind === "knowledge_library" ? () => { metrics.resourceReuse.images.networkRequests += 1; increment(metrics.resourceReuse.images.networkRequestsByUrl, metricKey); } : networkEvent(metrics.resourceReuse.images), trustedKnowledgeOrigins }));
-            return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
+            return Object.fromEntries(["filePath", "publicUrl", "sha256", "width", "height", "bytes", "contentType", "sourceContentType", "sourceFormat", "sourceBytes", "conversion", "downloadedImageUrl", "downloadVariantAttempts", "acquisitionMethod"].map((key) => [key, result[key]]));
           }, (error) => { metrics.technicalRetries.download += 1; warnings.push(`${layerName} 候选下载技术重试：${error?.message || error}`); })));
           if (knowledgeRecord) knowledgeRecord.downloadStatus = "success";
           queryReport.downloadSuccess += 1;
@@ -2477,7 +2484,7 @@ export async function runImageSearchSkill({
         for (const candidate of wave) {
           const audit = applyWebImageIdentityEvidence(layerSlot, candidate, auditMap.get(candidate.candidateId));
           if (!completeVisualJudgment(audit)) { judged.push({ candidate, audit: audit || null, rejection: "needs_user_judgment" }); continue; }
-          const rejection = failedHardRequirement(layerSlot, audit) || (fallbackPlan ? controlledFallbackRejection(fallbackPlan, audit) : null);
+          const rejection = failedHardRequirement(layerSlot, audit, candidate) || (fallbackPlan ? controlledFallbackRejection(fallbackPlan, audit) : null);
           judged.push({ candidate, audit: finalizeAuditEligibility(audit, rejection), rejection });
         }
         const earlyStop = judged.some((item) => !item.rejection && item.audit?.eligible && (["exact", "exact_match"].includes(item.audit.matchLevel) || (Number(item.audit.score) >= 85 && Number(item.audit.relevance) >= 85)));
