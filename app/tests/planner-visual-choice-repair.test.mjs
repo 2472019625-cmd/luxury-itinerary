@@ -472,7 +472,10 @@ test("酒店公共区域与外观同属代表空间，具体设施景观和互�
   const promised = await generateWithVisual({ ...ordinary, primaryVisualSubject: `${hotelName}私人泳池或肯尼亚山景客房`,
     queryCore: { ...ordinary.queryCore, subject: "私人泳池或肯尼亚山景客房" } }, { factHotelName: hotelName });
   assert.equal(promised.slot.plannerSlotStatus, "unresolved");
-  const day = await planDaySubject("草原上猎豹或狮群的追踪画面", ["猎豹追踪", "狮群追踪"]);
+  const day = await planDaySubject("草原上猎豹或狮群的追踪画面", ["猎豹追踪", "狮群追踪"], {
+    dayDescription: "在马赛马拉草原追踪猎豹或狮群",
+    queryCore: { subject: "猎豹或狮群", action: "草原上追踪", identity: "", subjectEn: "cheetah or lion pride", actionEn: "tracking", identityEn: "" },
+  });
   assert.equal(day.slot.plannerSlotStatus, "unresolved");
   assert.ok(day.slot.plannerValidationIssues.some((issue) => issue.code === "ambiguous_visual_subject"));
 });
@@ -498,8 +501,8 @@ test("Planner事实基座把对象亮点转换为显示文本", () => {
   assert.deepEqual(facts.coreExperiences, ["私家行程：按专属节奏深入", "自然观察"]);
 });
 
-async function planDaySubject(visual, queries) {
-  const data = { destination: "测试保护区", days: [{ route: "测试保护区", description: "在草原观察羚羊与斑马", spots: [{ name: "草原观察", description: "观察羚羊与斑马", status: "included" }] }] };
+async function planDaySubject(visual, queries, { dayDescription = "在草原观察羚羊与斑马", queryCore = null } = {}) {
+  const data = { destination: "测试保护区", days: [{ route: "测试保护区", description: dayDescription, spots: [{ name: "草原观察", description: dayDescription, status: "included" }] }] };
   const factBasis = buildAgentFactBasis(data);
   let calls = 0;
   let systemPrompt = "";
@@ -511,7 +514,7 @@ async function planDaySubject(visual, queries) {
       systemPrompt = options.messages[0].content;
       const response = await plannerRequestJson({ delayMs: 0 })(options);
       const day = response.json.imagePlan.slots.find((item) => item.role === "day:1");
-      Object.assign(day, { primaryVisualSubject: visual, queryCore: { subject: "羚羊", action: "行走", identity: "", subjectEn: "antelope", actionEn: "walking", identityEn: "" }, fidelityQuery: queries[0], alternateQueries: queries.slice(1), location: "测试保护区", locationRole: "scope_only", exactIdentityRequired: false, sourceRefs: ["days.0.spots.0"] });
+      Object.assign(day, { primaryVisualSubject: visual, queryCore: queryCore || { subject: "羚羊", action: "行走", identity: "", subjectEn: "antelope", actionEn: "walking", identityEn: "" }, fidelityQuery: queries[0], alternateQueries: queries.slice(1), location: "测试保护区", locationRole: "scope_only", exactIdentityRequired: false, sourceRefs: ["days.0.spots.0"] });
       response.json.dayRoles[0].primaryVisualSubject = "草原羚羊行走";
       return response;
     },
