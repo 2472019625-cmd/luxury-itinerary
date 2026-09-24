@@ -10,7 +10,7 @@ import { humanReviewReady, recordHumanReview } from './lib/humanReview.js';
 import { collectCopyIssues, copyExportEligibility, generationStateLabel, groupCopyIssueTargets, groupCopyIssues } from './lib/copyIssuePresentation.js';
 import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
 import { AGENT_DESIGNER_STAGES, SIMPLE_DESIGNER_STAGES, getDesignerCurrentAction } from './lib/agentProgressView.js';
-import { readAgentSnapshot, agentDisplayState, displayAgentStages, agentElapsed, agentFailurePresentation } from './lib/agentConnection.js';
+import { readAgentSnapshot, simpleRenderedEditorState, agentDisplayState, displayAgentStages, agentElapsed, agentFailurePresentation } from './lib/agentConnection.js';
 import { buildCustomerTravelEntityData } from './lib/travelEntityDisplay.js';
 import { normalizeHighlightForDisplay } from './lib/highlightDisplay.js';
 import { buildConfirmationActionItems, currentPriceSelection, isChildCountConfirmed, listPriceOffers, matchingPriceOffers, priceOfferKey } from './lib/confirmationActionItems.js';
@@ -544,7 +544,8 @@ function buildAgentProgress(snapshot) {
       }
       return { ...definition, state, progress: stageProgress };
     });
-    return { stages, percent: Number(activeJob?.progress ?? run?.progress ?? project.progress ?? 0), planActive: Boolean(plan) };
+    const percent = Number(activeJob?.progress ?? run?.progress ?? project.progress ?? 0);
+    return { stages, percent: project.status === "complete" ? percent : Math.min(99, percent), planActive: Boolean(plan) };
   }
   const planActive = Boolean(plan?.validation?.passed && project?.activePlanId === plan?.planId);
   if (run?.progress?.stages?.length) {
@@ -623,11 +624,11 @@ function AgentProgressOverview({ snapshot, elapsed, action }) {
   progress.stages = displayAgentStages(progress.stages, display);
   const safeProgress = Math.max(0, Math.min(100, Number(progress.percent) || 0));
   const animatedProgress = useAnimatedProgress(safeProgress, !display.failed && !display.cancelled && !display.disconnected);
-  const routeTarget = agentRouteProgress(progress.stages, display.completed);
+  const routeTarget = display.draft ? Math.min(99, agentRouteProgress(progress.stages)) : agentRouteProgress(progress.stages, display.completed);
   const animatedRouteProgress = useAnimatedProgress(routeTarget, !display.failed && !display.cancelled && !display.disconnected);
   const labels = { complete: "已完成", active: display.disconnected ? "上次状态" : "进行中", waiting: "等待确认", failed: "失败", cancelled: "已停止", pending: display.failed || display.cancelled ? "未执行" : "等待处理", unknown: "状态待确认" };
   const latestEvent = snapshot?.executionRun?.events?.at(-1);
-  const waitingReason = latestEvent?.waitingReason ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_confirmation" ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_user_action" ? "部分内容需要在编辑页补充或确认，不影响你先查看和调整草稿。" : "";
+  const waitingReason = display.draft ? "可编辑草稿已生成，未完成内容请在编辑页补充或确认。" : (latestEvent?.waitingReason || snapshot?.project?.status === "awaiting_confirmation") ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : "";
   const imageSlots = snapshot?.activeJob?.imageSlotProgress;
   const copyTasks = snapshot?.activeJob?.copyTaskProgress;
   const detailedAction = getDesignerCurrentAction(snapshot);
@@ -648,15 +649,15 @@ function AgentProgressOverview({ snapshot, elapsed, action }) {
   const mascotProgress = animatedRouteProgress;
   const failure = agentFailurePresentation(snapshot, failedStage?.label);
   const contentHeadline = imageActive && !copyActive ? "正在为这份客户行程挑选合适的视觉素材" : imageActive && copyActive ? "正在完善客户文案与视觉素材" : copyActive ? "正在把确认资料整理成客户可读的行程内容" : "";
-  const primaryStatus = display.cancelled ? "制作已停止" : display.failed ? "本次生成已停止" : display.completed ? "生成完成" : contentHeadline || (actionStage ? `${actionStage.state === "waiting" ? "等待确认：" : "正在"}${actionStage.label}` : detailedAction);
+  const primaryStatus = display.cancelled ? "制作已停止" : display.failed ? "本次生成已停止" : display.completed ? "生成完成" : display.draft ? "可编辑草稿已生成" : contentHeadline || (actionStage ? `${actionStage.state === "waiting" ? "等待确认：" : "正在"}${actionStage.label}` : detailedAction);
   const runningDetails = [
     copyTasks?.total > 0 ? copyComplete ? "客户文案已整理完成" : `正在完善客户文案 ${copyTasks.completed} / ${copyTasks.total}` : "",
-    imageSlots?.total > 0 ? imageComplete ? `图片位已完成匹配 ${imageSlots.completed} / ${imageSlots.total}` : `已完成 ${imageSlots.completed} / ${imageSlots.total} 个图片位` : "",
+    imageSlots?.total > 0 ? `已处理 ${imageSlots.completed} / ${imageSlots.total} 个图片位` : "",
     detailedAction !== primaryStatus ? detailedAction : "",
   ].filter(Boolean);
-  const auxiliaryParts = display.cancelled ? ["未完成内容不会进入编辑页；已确认的资料仍会保留"] : display.failed ? [`停止于「${failure.stageLabel}」；${failure.userMessage}，后续步骤未继续执行`] : display.completed ? ["客户版行程已制作完成，可以继续调整文案、图片和版式"] : display.disconnected ? [...runningDetails, "当前显示最近一次同步进度"] : runningDetails;
+  const auxiliaryParts = display.cancelled ? ["未完成内容不会进入编辑页；已确认的资料仍会保留"] : display.failed ? [`停止于「${failure.stageLabel}」；${failure.userMessage}，后续步骤未继续执行`] : display.completed ? ["客户版行程已制作完成，可以继续调整文案、图片和版式"] : display.draft ? ["草稿长图已生成；图片和文案仍有待处理内容"] : display.disconnected ? [...runningDetails, "当前显示最近一次同步进度"] : runningDetails;
   const progressNote = !display.failed && !display.cancelled && !display.completed && imageActive ? "图片会逐张核对地点、主体和清晰度，因此通常比文案整理需要更长时间。" : "";
-  const displayMode = display.cancelled ? "cancelled" : display.failed ? "failed" : display.completed ? "completed" : display.disconnected ? "disconnected" : "running";
+  const displayMode = display.cancelled ? "cancelled" : display.failed ? "failed" : display.completed ? "completed" : display.draft ? "draft" : display.disconnected ? "disconnected" : "running";
   const lastSyncAge = Math.max(0, Math.floor((Date.now() - Number(snapshot?._observedAt || Date.now())) / 1000));
   const lastSyncLabel = lastSyncAge < 10 ? "刚刚" : lastSyncAge < 60 ? `${lastSyncAge}秒前` : `${Math.floor(lastSyncAge / 60)}分${lastSyncAge % 60}秒前`;
   const connectionStale = display.disconnected && lastSyncAge >= 30;
@@ -682,23 +683,24 @@ function AgentProgressOverview({ snapshot, elapsed, action }) {
   </section>;
 }
 
-function AgentGenerationStep({ project, snapshot, error, onCancel, onEdit, onRestart, decisions, onDecision, onConfirm, onRetryImage }) {
+function AgentGenerationStep({ project, snapshot, saveState, error, onCancel, onEdit, onRestart, decisions, onDecision, onConfirm, onRetryImage }) {
   const agentProject = snapshot?.project;
   const run = snapshot?.executionRun;
   const display = agentDisplayState(snapshot);
   const elapsed = agentProject?.createdAt ? agentElapsed(snapshot) : 0;
-  const waiting = ["awaiting_confirmation", "awaiting_user_action"].includes(agentProject?.status);
-  const draft = agentProject?.status === "partial";
+  const waiting = agentProject?.status === "awaiting_confirmation";
+  const draft = project.flowKind === "simple_skill_v1" ? simpleRenderedEditorState(snapshot) === "draft" : agentProject?.status === "partial";
   const failed = display.failed;
   const cancelled = agentProject?.status === "cancelled" || project.workflowStage === "cancelled";
   const ready = ["ready_for_editor", "complete"].includes(agentProject?.status);
-  const canEdit = ready || draft;
-  const canCancel = !waiting && !canEdit && !cancelled && !failed;
+  const canEdit = project.flowKind === "simple_skill_v1" ? Boolean(simpleRenderedEditorState(snapshot)) && !failed && !cancelled : (ready || draft) && !failed && !cancelled;
+  const editorSaved = project.flowKind !== "simple_skill_v1" || (saveState === "saved" && project.workflowStage === (simpleRenderedEditorState(snapshot) === "complete" ? "generated" : "partial") && project.runtimeStatus === agentProject?.status);
+  const canCancel = !waiting && !canEdit && !cancelled && !failed && !["partial", "awaiting_user_action", "ready_to_render", "complete", "ready_for_editor"].includes(agentProject?.status);
   return <main className="flow-page"><StepRail active={2} stopped={cancelled} /><section className="generation-page agent-workspace-generation">
     <AgentProgressOverview snapshot={snapshot} elapsed={elapsed} action={(cancelled || failed) ? <Button tone="primary" onClick={() => onRestart(failed ? "failed" : "cancelled")}>{failed ? "重新尝试" : "重新制作"}</Button> : null} />
     {waiting && <section className="agent-generation-support"><div className="agent-runtime-confirm"><AgentConfirmationPanel confirmations={snapshot?.confirmations || []} decisions={decisions} onDecision={onDecision} onRetryImage={onRetryImage} /><Button tone="primary" onClick={onConfirm}>保存选择并从当前任务继续</Button></div></section>}
     {error && !display.disconnected && <section className="agent-generation-support"><p className="generation-error" role="alert"><UiIcon name="warning" />{failed ? "本次生成未完成，请稍后重新尝试。" : "本次操作没有完成，请稍后重试。"}</p></section>}
-    {(canEdit || canCancel) && <footer className="generation-footer">{canEdit && <Button tone="primary" onClick={onEdit}>进入编辑页</Button>}{canCancel && <Button onClick={onCancel}>取消任务</Button>}</footer>}
+    {(canEdit || canCancel) && <footer className="generation-footer">{canEdit && <Button tone="primary" disabled={!editorSaved} onClick={onEdit}>进入编辑页</Button>}{canCancel && <Button onClick={onCancel}>取消任务</Button>}</footer>}
   </section></main>;
 }
 
@@ -1521,7 +1523,26 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
         setAgentSnapshot(observedValue);
         setAgentDecisions((existing) => ({ ...Object.fromEntries((value.confirmations || []).filter((item) => item.status === "pending").map((item) => [item.confirmationId, item.choices.find((choice) => choice.recommended)?.choiceId || item.choices[0]?.choiceId])), ...existing }));
         if (cancellationLocked) return;
-        if (["ready_for_editor", "complete"].includes(value.project.status) && value.result?.data) {
+        const simpleEditorState = currentProject.flowKind === "simple_skill_v1" ? simpleRenderedEditorState(value) : null;
+        if (simpleEditorState) {
+          const workflowStage = simpleEditorState === "complete" ? "generated" : "partial";
+          const runtimeStatus = value.project.status;
+          const unresolvedCount = value.result.unresolvedItems?.length || 0;
+          if (simpleEditorState === "complete") {
+            const executionRunId = value.executionRun?.executionRunId;
+            const versionId = `simple-${executionRunId}`;
+            const versions = currentProject.versions?.some((version) => version.id === versionId) ? currentProject.versions : [...(currentProject.versions || []), { id: versionId, name: `${currentProject.title} · 智能体完整生成版`, createdAt: Date.now(), snapshot: versionSnapshot(value.result.data), downloadUrl: `/api/simple/projects/${currentProject.agentProjectId}/output` }];
+            const visibility = value.result.data.showExpenseSection === false ? { ...(currentProject.visibility || {}), expenses: false } : currentProject.visibility;
+            if (currentProject.workflowStage !== workflowStage || currentProject.runtimeStatus !== runtimeStatus || !currentProject.versions?.some((version) => version.id === versionId)) {
+              await updateProject({ ...currentProject, workflowStage, runtimeStatus, unresolvedCount, revisionMode: false, data: { ...value.result.data, designer: currentProject.data.designer }, visibility, aiGeneration: { executionRunId, finalQa: value.result.finalQa, imageGate: value.result.imageGate }, versions }, true);
+            }
+            setProgress(100);
+          } else if (currentProject.workflowStage !== workflowStage || currentProject.runtimeStatus !== runtimeStatus || currentProject.unresolvedCount !== unresolvedCount) {
+            await updateProject({ ...currentProject, workflowStage, runtimeStatus, unresolvedCount }, true);
+          }
+          return;
+        }
+        if (["ready_for_editor", "complete"].includes(value.project.status) && value.result?.data && currentProject.flowKind !== "simple_skill_v1") {
           const executionRunId = value.executionRun?.executionRunId;
           const versionId = `${currentProject.flowKind === "simple_skill_v1" ? "simple" : "agent"}-${executionRunId}`;
           const downloadBase = currentProject.flowKind === "simple_skill_v1" ? "/api/simple/projects" : "/api/agent/projects";
@@ -1532,12 +1553,7 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
           timer = setTimeout(() => { if (!stopped) { if (currentProject.flowKind === "simple_skill_v1") window.location.assign(`/simple/projects/${currentProject.agentProjectId}`); else setScreen("editor"); } }, 900);
           return;
         }
-        if (["awaiting_user_action", "partial", "ready_to_render"].includes(value.project.status) && value.result?.data && currentProject.flowKind === "simple_skill_v1") {
-          await updateProject({ ...currentProject, workflowStage: "partial", runtimeStatus: value.project.status, unresolvedCount: value.result.unresolvedItems?.length || 0 }, true);
-          window.location.assign(`/simple/projects/${currentProject.agentProjectId}`);
-          return;
-        }
-        if (["preparing", "planning", "ready_for_execution", "running"].includes(value.project.status) || ["pending", "running"].includes(value.executionRun?.status) || value.activeJob?.status === "running") timer = setTimeout(refresh, 1000);
+        if (["preparing", "planning", "ready_for_execution", "running"].includes(value.project.status) || ["pending", "running"].includes(value.executionRun?.status) || value.activeJob?.status === "running" || (currentProject.flowKind === "simple_skill_v1" && ["complete", "ready_for_editor", "partial", "awaiting_user_action", "ready_to_render"].includes(value.project.status) && !value.result)) timer = setTimeout(refresh, 1000);
       } catch (error) {
         if (!stopped) {
           setAgentSnapshot(previous => ({ ...previous, _connectionError: error?.message || "状态请求失败", _observedAt: previous?._observedAt || Date.now() }));
@@ -1548,6 +1564,14 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     refresh();
     return () => { stopped = true; clearTimeout(timer); };
   }, [agentMode, currentProject?.agentProjectId, currentProject?.workflowStage, screen, agentSnapshot?.project?.activeJobId]);
+  useEffect(() => {
+    if (!agentMode || screen !== "generate" || currentProject?.flowKind !== "simple_skill_v1" || saveState !== "saved") return;
+    const editorState = simpleRenderedEditorState(agentSnapshot);
+    if (!editorState) return;
+    if (currentProject.workflowStage !== (editorState === "complete" ? "generated" : "partial")) return;
+    if (currentProject.runtimeStatus !== agentSnapshot.project.status) return;
+    window.location.assign(`/simple/projects/${currentProject.agentProjectId}`);
+  }, [agentMode, screen, currentProject?.agentProjectId, currentProject?.workflowStage, currentProject?.runtimeStatus, saveState, agentSnapshot]);
   const persistAgentProject = (project) => {
     const previous = serverSaves.current.get(project.id) || Promise.resolve();
     const pending = previous.catch(() => {}).then(async () => {
@@ -2001,7 +2025,7 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
     {screen === "list" && <ProjectList user={user} projects={projects} exitingProjectIds={exitingProjectIds} onCreate={createProject} onOpen={openProject} onDelete={agentMode ? undefined : setDeleteProject} onTrash={agentMode ? setTrashProject : undefined} onRestore={agentMode ? restoreProject : undefined} onPermanentDelete={agentMode ? (project) => setPermanentDelete({ project }) : undefined} onClearTrash={agentMode ? (items) => setPermanentDelete({ projects: items }) : undefined} onRename={agentMode ? setRenameProject : undefined} />}
     {screen === "upload" && currentProject && <UploadStep project={currentProject} onFiles={async (files, recognition, sourceSha256) => agentMode ? attachAgentProject(currentProject, files, recognition, sourceSha256) : updateProject({ ...currentProject, workflowStage: "uploaded", title: recognition.data.title || currentProject.title, data: { ...recognition.data, designer: currentProject.data.designer }, recognition: recognition.report, files: files.map((file) => ({ name: file.name, size: file.size, type: file.type })) }, true)} onContinue={() => setScreen("confirm")} />}
     {screen === "confirm" && currentProject && <ConfirmStep project={currentProject} agentMode={agentMode} agentSnapshot={agentSnapshot} agentDecisions={agentDecisions} onAgentDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onChange={(data, metadata = {}) => updateProject({ ...currentProject, ...metadata, data })} onBack={() => setScreen("upload")} onContinue={() => agentMode ? continueAgent() : (() => { setProgress(0); setGenerationError(""); setGenerationStatus({ phase: "queued", status: "idle", currentAction: "尚未开始", stats: {}, elapsedMs: 0 }); setScreen("generate"); })()} />}
-    {screen === "generate" && currentProject && (agentMode ? <AgentGenerationStep project={currentProject} snapshot={agentSnapshot} error={generationError} decisions={agentDecisions} onDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onConfirm={() => continueAgent().catch((error) => setGenerationError(error?.message || "无法保存确认"))} onRetryImage={(slotId) => retryAgentImage(slotId).catch((error) => setGenerationError(error?.message || "无法重新搜索图片"))} onEdit={() => setScreen("editor")} onRestart={setRestartGenerationStatus} onCancel={() => cancelAgent().catch((error) => setGenerationError(error?.message || "无法取消任务"))} /> : <GenerationStep project={currentProject} progress={progress} status={generationStatus} error={generationError} onStart={generateProject} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onRevision={() => { updateProject({ ...currentProject, revisionMode: true }, true); setScreen('editor'); }} />)}
+    {screen === "generate" && currentProject && (agentMode ? <AgentGenerationStep project={currentProject} snapshot={agentSnapshot} saveState={saveState} error={generationError} decisions={agentDecisions} onDecision={(confirmationId, choiceId) => setAgentDecisions((current) => ({ ...current, [confirmationId]: choiceId }))} onConfirm={() => continueAgent().catch((error) => setGenerationError(error?.message || "无法保存确认"))} onRetryImage={(slotId) => retryAgentImage(slotId).catch((error) => setGenerationError(error?.message || "无法重新搜索图片"))} onEdit={() => currentProject.flowKind === "simple_skill_v1" ? window.location.assign(`/simple/projects/${currentProject.agentProjectId}`) : setScreen("editor")} onRestart={setRestartGenerationStatus} onCancel={() => cancelAgent().catch((error) => setGenerationError(error?.message || "无法取消任务"))} /> : <GenerationStep project={currentProject} progress={progress} status={generationStatus} error={generationError} onStart={generateProject} onReview={() => setScreen("confirm")} onEdit={() => setScreen("editor")} onRevision={() => { updateProject({ ...currentProject, revisionMode: true }, true); setScreen('editor'); }} />)}
     {screen === "editor" && currentProject && <Editor project={currentProject} ItineraryComponent={ItineraryComponent} onProject={updateProject} onResearchSlot={agentMode ? undefined : async (slotId) => { try { await researchImageSlot(slotId); } catch (error) { setGenerationError(error?.message || "当前位置搜索失败"); alert(error?.message || "当前位置搜索失败"); } }} onRepairCopy={agentMode ? undefined : repairCopy} onRecheckCopy={agentMode ? undefined : () => recheckCopy()} onReviewFacts={() => setScreen('confirm')} copyRepairState={copyRepairState} onVersions={() => setScreen('versions')} defaultDesigner={designerProfile(user)} />}
     {screen === "versions" && currentProject && <VersionsStep project={currentProject} exporting={exporting} exportError={exportError} existingOnly={agentMode} onExport={exportProject} onBack={() => setScreen("editor")} onReviewDecision={(key, checked) => updateProject({ ...currentProject, data: { ...currentProject.data, humanReview: recordHumanReview(currentProject.data.humanReview, key, checked, user.id) } }, true)} />}
     {profileOpen && <ProfilePanel user={user} onClose={() => setProfileOpen(false)} onSave={(profile, syncProjects) => { const nextUsers = users.map((item) => item.id === user.id ? { ...item, name: profile.name || item.name, profile } : item); const nextUser = nextUsers.find((item) => item.id === user.id); setUsers(nextUsers); setUser(nextUser); writeStorage(storageKeys.users, nextUsers); if (syncProjects) { const nextProjects = projects.map((item) => item.ownerId === user.id ? { ...item, data: { ...item.data, designer: clone(profile) }, updatedAt: Date.now() } : item); commitProjects(nextProjects); } setProfileOpen(false); }} />}

@@ -213,7 +213,8 @@ test("客户行程制作进度使用单列卡并保留真实子任务状态", ()
   assert.match(progressView, /进度暂时未更新，我们会自动继续尝试/);
   assert.match(progressView, /getDesignerCurrentAction\(snapshot\)/);
   assert.match(progressView, /客户文案已整理完成/);
-  assert.match(progressView, /已完成.*个图片位/);
+  assert.match(progressView, /已处理.*个图片位/);
+  assert.doesNotMatch(progressView, /图片位已完成匹配/);
   assert.match(progressView, /图片会逐张核对地点、主体和清晰度/);
   assert.match(progressView, /content_creation/);
   assert.match(progressView, /agent-progress-headline/);
@@ -259,8 +260,9 @@ test("取消生成停留在进度页、冻结本地项目且不开放编辑入�
   const cancellation = workspace.slice(workspace.indexOf("const cancelAgent"), workspace.indexOf("const createProject"));
   const polling = workspace.slice(workspace.indexOf("const cancellationLocked"), workspace.indexOf("const commitProjects"));
   assert.match(workspace, /stage === "cancelled"[^\n]+label: "已停止"/);
-  assert.match(generation, /const canEdit = ready \|\| draft/);
-  assert.match(generation, /const canCancel = !waiting && !canEdit && !cancelled && !failed/);
+  assert.match(generation, /const canEdit = project\.flowKind === "simple_skill_v1" \? Boolean\(simpleRenderedEditorState\(snapshot\)\)/);
+  assert.match(generation, /&& !failed && !cancelled/);
+  assert.match(generation, /const canCancel = !waiting && !canEdit && !cancelled && !failed && !\["partial", "awaiting_user_action"/);
   assert.match(generation, /<StepRail active=\{2\} stopped=\{cancelled\}/);
   assert.match(workspace, /state === "stopped" \? "本次制作已停止"/);
   assert.doesNotMatch(generation, /查看确认信息|onReview/);
@@ -321,4 +323,17 @@ test("等待确认保留在生成页并从当前任务继续", () => {
   assert.match(workspace, /保存选择并从当前任务继续/);
   assert.match(workspace, /waiting && <section className="agent-generation-support"/);
   assert.doesNotMatch(workspace.slice(workspace.indexOf("function AgentGenerationStep"), workspace.indexOf("function CandidatePreview")), /返回处理确认/);
+});
+
+test("Simple 已渲染草稿在保存落盘后进入 Step4，结果尚未入快照则继续轮询", () => {
+  const generation = workspace.slice(workspace.indexOf("function AgentGenerationStep"), workspace.indexOf("function CandidatePreview"));
+  const polling = workspace.slice(workspace.indexOf("const cancellationLocked"), workspace.indexOf("const persistAgentProject"));
+  assert.match(generation, /const waiting = agentProject\?\.status === "awaiting_confirmation"/);
+  assert.match(generation, /simpleRenderedEditorState\(snapshot\)/);
+  assert.match(polling, /const simpleEditorState = currentProject\.flowKind === "simple_skill_v1" \? simpleRenderedEditorState\(value\)/);
+  assert.match(polling, /await updateProject\(\{ \.\.\.currentProject, workflowStage, runtimeStatus, unresolvedCount \}, true\)/);
+  assert.match(polling, /saveState !== "saved"/);
+  assert.match(polling, /window\.location\.assign\(`\/simple\/projects\/\$\{currentProject\.agentProjectId\}`\)/);
+  assert.match(polling, /&& !value\.result\)\) timer = setTimeout\(refresh, 1000\)/);
+  assert.match(workspace, /onEdit=\{\(\) => currentProject\.flowKind === "simple_skill_v1" \? window\.location\.assign/);
 });

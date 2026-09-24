@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readAgentSnapshot,agentDisplayState,displayAgentStages,agentElapsed,agentFailurePresentation} from '../src/lib/agentConnection.js';
+import {readAgentSnapshot,simpleRenderedEditorState,agentDisplayState,displayAgentStages,agentElapsed,agentFailurePresentation} from '../src/lib/agentConnection.js';
 test('HTML gateway errors retain HTTP diagnostic, not HTML content',async()=>{
  await assert.rejects(readAgentSnapshot(new Response('<!DOCTYPE html><h1>gateway</h1>',{status:502,headers:{'content-type':'text/html','cf-ray':'test'}})),/HTTP 502.*text\/html.*HTML response/);
 });
@@ -28,4 +28,27 @@ test('completed generation freezes elapsed time and removes stale active stages'
 test('invalid JSON and JSON errors cannot masquerade as snapshots',async()=>{
  await assert.rejects(readAgentSnapshot(Response.json({error:'failure'},{status:500})),/HTTP 500/);
  await assert.rejects(readAgentSnapshot(Response.json({})),/missing project status/);
+});
+
+test('successful Simple draft is editable and freezes elapsed time without claiming formal completion',()=>{
+ const s={project:{flowKind:'simple_skill_v1',status:'awaiting_user_action',activeExecutionRunId:'run-1',createdAt:'2026-09-24T05:00:00Z',updatedAt:'2026-09-24T05:13:00Z'},executionRun:{executionRunId:'run-1',status:'awaiting_user_action',updatedAt:'2026-09-24T05:13:00Z'},activeJob:{status:'complete',imageSlotProgress:{completed:23,total:23}},result:{data:{title:'行程'},render:{status:'success'},outputPath:'draft.png',unresolvedItems:[{kind:'image'}]}};
+ assert.equal(simpleRenderedEditorState(s),'draft');
+ assert.deepEqual({draft:agentDisplayState(s).draft,completed:agentDisplayState(s).completed,frozen:agentDisplayState(s).frozen},{draft:true,completed:false,frozen:true});
+ assert.equal(agentElapsed(s,Date.parse('2026-09-24T06:00:00Z')),780);
+ assert.equal(simpleRenderedEditorState({...s,project:{...s.project,status:'partial'},executionRun:{...s.executionRun,status:'partial'}}),'draft');
+ assert.equal(simpleRenderedEditorState({...s,project:{...s.project,status:'complete'},executionRun:{...s.executionRun,status:'complete'}}),'complete');
+});
+
+test('Simple editor requires the current successful full render, not an old result or completed slot count',()=>{
+ const s={project:{flowKind:'simple_skill_v1',status:'awaiting_user_action'},executionRun:{status:'awaiting_user_action'},activeJob:{status:'complete',imageSlotProgress:{completed:23,total:23}},result:{data:{title:'行程'},render:{status:'success'},outputPath:'draft.png'}};
+ assert.equal(simpleRenderedEditorState({...s,result:null}),null);
+ assert.equal(simpleRenderedEditorState({...s,result:{...s.result,render:{status:'failed'}}}),null);
+ assert.equal(simpleRenderedEditorState({...s,result:{...s.result,outputPath:null}}),null);
+ assert.equal(simpleRenderedEditorState({...s,executionRun:{status:'running'}}),null);
+ assert.equal(simpleRenderedEditorState({...s,project:{...s.project,activeExecutionRunId:'another-run'}}),null);
+ assert.equal(simpleRenderedEditorState({...s,activeJob:{status:'failed'}}),null);
+ assert.equal(simpleRenderedEditorState({...s,activeJob:{status:'cancelled'}}),null);
+ assert.equal(simpleRenderedEditorState({...s,project:{...s.project,status:'cancelled'}}),null);
+ assert.equal(agentDisplayState({...s,result:null}).completed,false);
+ assert.equal(agentDisplayState({...s,result:{...s.result,render:{status:'failed'}}}).failed,true);
 });
