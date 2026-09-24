@@ -715,7 +715,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     copyTasks.push(copyTask({
       targetId: `copy:hotel:${hotel.id || index + 1}:fact-rows`, targetPath: `hotels.${index}.factRows`, moduleType: "hotel_fact_rows",
       facts,
-      plannerGoal: "将同一次酒店事实研究中已经逐页核验的位置、客房、设计、设施结果按固定四行保存；程序直接映射，不再次生成或改写事实。缺失字段保留状态并留空，不使用模型常识补齐。",
+      plannerGoal: "按位置、客房、设计、设施固定四行写给最终客户。若提供 hotelSearchSnippets，从当前酒店的搜索片段中选择每类最能体现独特住宿价值的具体信息，写成自然、直观的中文文案；每行通常20—60字，说明特色与住宿感受，不只罗列名词，四行之间不重复同一事实，也不要出现‘让客人’‘适合客人’等向内部解释价值的说法。每个非空行必须引用当前片段中的准确 sourceUrl；缺少依据的行留空并标为 not_found。公开客房信息不得写成此次已订房型，不保证动物出现、景观或未确认服务。不新增搜索片段与订单事实之外的具体设施、数量、奖项或承诺。若没有 hotelSearchSnippets，保持现有已核验事实的程序映射。",
       relevantContext: itineraryContext, layoutHints: { placement: "hotel_fact_rows", itemIndex: index }, outputSchema: hotelFactRowsSchema, researchRequest, required: false,
     }));
   });

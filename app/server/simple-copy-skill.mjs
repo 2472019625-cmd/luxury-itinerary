@@ -143,6 +143,27 @@ export function buildHotelFactRows(research = {}) {
   });
 }
 
+export function normalizeHotelSnippetRows(value, snippets = []) {
+  const sourceKey = (value) => {
+    try {
+      const url = new URL(clean(value));
+      url.hash = "";
+      url.pathname = url.pathname.replace(/\/+$/, "");
+      return url.href;
+    } catch { return clean(value); }
+  };
+  const evidenceByUrl = new Map(snippets.map((item) => [sourceKey(item?.sourceUrl), item]));
+  const submitted = new Map((Array.isArray(value) ? value : []).map((row) => [clean(row?.key), row]));
+  return HOTEL_FACT_ROW_DEFINITIONS.map(({ key, label }) => {
+    const row = submitted.get(key);
+    const source = evidenceByUrl.get(sourceKey(row?.sourceUrl));
+    if (!source || clean(row?.status) !== "success" || !clean(row?.text) || clean(row?.label) !== label) {
+      return { key, label, text: "", status: "not_found" };
+    }
+    return { key, label, text: clean(row.text), status: "success", sourceUrl: source.sourceUrl, sourceClass: "search_highlight", checkedAt: source.checkedAt };
+  });
+}
+
 function sourceIncludes(source, value) {
   return clean(source).toLowerCase().includes(clean(value).toLowerCase());
 }
@@ -365,7 +386,7 @@ export async function runCopyWriterSkill({
           });
           researchTransportAttempts += result.attemptUsages?.length || 1;
           researchMs += Date.now() - callStartedAt;
-          onCapabilityCall?.({ phase: "finished", capabilityId: "copy_facts_research", callId, batchId, researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, status: result.status, verifiedFactCount: result.verifiedFacts?.length || 0, durationMs: Date.now() - callStartedAt, usage: result.usage || null });
+          onCapabilityCall?.({ phase: "finished", capabilityId: "copy_facts_research", callId, batchId, researchType: task.researchRequest.researchType, entityName: task.researchRequest.entityName, status: result.status, provider: result.provider || null, verifiedFactCount: result.verifiedFacts?.length || 0, searchSnippetCount: result.searchSnippets?.length || 0, durationMs: Date.now() - callStartedAt, usage: result.usage || null });
           return result;
         } catch (error) {
           researchTransportAttempts += error?.attemptUsages?.length || 1;
@@ -380,22 +401,26 @@ export async function runCopyWriterSkill({
       const research = await researchPromise;
       const researchPolicy = researchFallbackPolicy(task);
       researchResultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, ...research });
+      const hotelSearchSnippets = task.researchRequest.entityKind === "hotel" ? research.searchSnippets || [] : [];
+      const evidenceCount = (research.verifiedFacts?.length || 0) + hotelSearchSnippets.length;
       const writerTask = {
         ...task,
         facts: {
           ...task.facts,
           verifiedFacts: research.verifiedFacts || [],
+          ...(hotelSearchSnippets.length ? { hotelSearchSnippets } : {}),
           factsResearchOutcome: {
             status: research.status,
             verifiedFactCount: research.verifiedFacts?.length || 0,
+            searchSnippetCount: hotelSearchSnippets.length,
             categoryOutcomes: research.categoryOutcomes || [],
-            zeroFactBoundary: research.verifiedFacts?.length ? null : researchPolicy.zeroFactBoundary,
+            zeroFactBoundary: evidenceCount ? null : researchPolicy.zeroFactBoundary,
           },
         },
-        factStatuses: { ...task.factStatuses, externalFacts: research.status, externalFactCount: research.verifiedFacts?.length || 0 },
+        factStatuses: { ...task.factStatuses, externalFacts: research.status, externalFactCount: evidenceCount },
         verifiedFacts: { researchType: research.researchType, entityName: research.entityName, verifiedFacts: research.verifiedFacts || [] },
       };
-      if (task.moduleType === "hotel_fact_rows") {
+      if (task.moduleType === "hotel_fact_rows" && !hotelSearchSnippets.length) {
         resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "success", value: buildHotelFactRows(research), warnings: [] });
       } else writerTaskById.set(task.targetId, writerTask);
       if (research.status !== "success") {
@@ -452,7 +477,7 @@ export async function runCopyWriterSkill({
         baseUrl,
         model,
         messages: [
-          { role: "system", content: `${skillPrompt}\n\n## Runtime response contract\n只处理输入 tasks，不新增、删除、重排或重新规划任务。只输出 JSON 对象：{"results":[{"targetId":"与输入一致","targetPath":"与输入一致","value":"严格符合该任务 outputSchema 的值","warnings":[]}]}；targetId 与 targetPath 必须和输入完全一致，一个任务无法完成时仍保留其他任务结果。\nverifiedFacts 只能支持实体客观事实，不能推断本订单房型、包含项、价格、保证车型、已预订服务或正式状态。\n固定钟点、保证性结果、明确人员资质等级、强制预约要求或期限、具体金额、订单包含或已预订状态，以及具体房型或车型履约，必须有当前 task 的订单事实或 verifiedFacts 支持。\n不得返回 Reviewer、finding、自动改写或 retry 决策。` },
+          { role: "system", content: `${skillPrompt}\n\n## Runtime response contract\n只处理输入 tasks，不新增、删除、重排或重新规划任务。只输出 JSON 对象：{"results":[{"targetId":"与输入一致","targetPath":"与输入一致","value":"严格符合该任务 outputSchema 的值","warnings":[]}]}；targetId 与 targetPath 必须和输入完全一致，一个任务无法完成时仍保留其他任务结果。\n酒店 task 的 hotelSearchSnippets 是当前酒店的搜索片段证据，可用于位置、客房、设计、设施的公开介绍；每个 hotel_fact_rows 非空行必须填写对应片段的准确 sourceUrl。不要从片段推断本次订单房型、包含项、价格或保证服务，不要把来源或审核措辞写入客户文案。酒店四行直接面向客户，不写“让客人”“适合客人”等内部讲解语气。其他模块仍只按原 verifiedFacts 与订单事实边界生成。\n固定钟点、保证性结果、明确人员资质等级、强制预约要求或期限、具体金额、订单包含或已预订状态，以及具体房型或车型履约，必须有当前 task 的订单事实或 verifiedFacts 支持。\n不得返回 Reviewer、finding、自动改写或 retry 决策。` },
           { role: "user", content: JSON.stringify({ itineraryContext, batchKind, tasks: batchTasks }) },
         ],
         reasoningEffort,
@@ -478,6 +503,9 @@ export async function runCopyWriterSkill({
           continue;
         }
         const normalized = normalizeCopyValueForSchema(item.value, task.outputSchema);
+        if (task.moduleType === "hotel_fact_rows" && task.facts.hotelSearchSnippets?.length) {
+          normalized.value = normalizeHotelSnippetRows(normalized.value, task.facts.hotelSearchSnippets);
+        }
         const resultWarnings = [...new Set([...(Array.isArray(item.warnings) ? item.warnings : []), ...normalized.warnings, researchWarningById.get(task.targetId)].filter(Boolean))];
         const schemaErrors = validateCopyValue(normalized.value, task.outputSchema);
         if (schemaErrors.length) {

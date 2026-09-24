@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import puppeteer from "puppeteer-core";
 import { assertPublicUrl, fetchPublicUrl } from "./page-images.mjs";
+import { searchHotelHighlights } from "./you-hotel-search.mjs";
 
 export const COPY_FACTS_RESEARCH_MODEL = "gemini-3.7-flash-search";
 export const COPY_FACTS_RESEARCH_TYPES = Object.freeze(["official_entity_facts", "authoritative_current_facts"]);
@@ -504,18 +505,30 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
   return { researchType: researchRequest.researchType, entityName: clean(researchRequest.entityName), verifiedFacts, rejected, categoryOutcomes, externalSourcePagesUsed: externalPagesUsed.size };
 }
 
-export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, model = COPY_FACTS_RESEARCH_MODEL, signal, requestResearch = requestCopyFactsResearch, fetchSource = fetchPublicUrl } = {}) {
+export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, model = COPY_FACTS_RESEARCH_MODEL, signal, requestResearch = requestCopyFactsResearch, fetchSource = fetchPublicUrl, hotelSearch = searchHotelHighlights, hotelSearchApiKey = process.env.YDC_API_KEY } = {}) {
   const errors = validateCopyResearchRequest(researchRequest);
   if (errors.length) throw Object.assign(new Error(errors.join("；")), { code: "invalid_copy_research_request", fields: errors });
   const startedAt = Date.now();
+  let hotelSearchFailure = null;
+  if (researchRequest.entityKind === "hotel" && clean(hotelSearchApiKey)) {
+    try {
+      const result = await hotelSearch({ researchRequest, apiKey: hotelSearchApiKey, signal });
+      return { ...result, durationMs: Date.now() - startedAt };
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      hotelSearchFailure = { code: error?.code || "you_hotel_search_failed", message: error?.message || String(error) };
+    }
+  }
   const response = await requestResearch({ apiKey, baseUrl, model, researchRequest, signal });
   const verified = await verifyCopyFactsResearch({ researchRequest, candidates: response.json?.facts, signal, fetchSource });
   return {
     ...verified,
     status: verified.verifiedFacts.length ? "success" : "not_found",
+    provider: hotelSearchFailure ? "legacy_facts_research_fallback" : "legacy_facts_research",
     model: response.model || model,
     usage: response.usage || null,
     attemptUsages: response.attemptUsages || [],
     durationMs: Date.now() - startedAt,
+    ...(hotelSearchFailure ? { hotelSearchFailure } : {}),
   };
 }

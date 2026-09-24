@@ -24,6 +24,42 @@ test("Copy Facts Research 只接受两类显式请求", () => {
   assert.match(prompt.messages[0].content, /1—3 个相互独立的候选页面/);
 });
 
+test("hotel uses You highlights when configured and leaves dining on the existing researcher", async () => {
+  const hotelRequest = { researchType: "official_entity_facts", entityKind: "hotel", entityName: "Example Lodge", categories: ["位置", "客房", "设计", "设施"] };
+  let hotelSearchCalls = 0;
+  const hotel = await runCopyFactsResearch({
+    researchRequest: hotelRequest,
+    hotelSearchApiKey: "test-you-key",
+    hotelSearch: async ({ researchRequest, apiKey }) => {
+      hotelSearchCalls += 1;
+      assert.equal(apiKey, "test-you-key");
+      assert.equal(researchRequest.entityName, "Example Lodge");
+      return { status: "success", provider: "you_web_search_highlights", searchSnippets: [{ sourceUrl: "https://example.com/lodge", sourceExcerpt: "Example Lodge has six suites." }], verifiedFacts: [] };
+    },
+    requestResearch: async () => { throw new Error("legacy researcher should not run"); },
+  });
+  assert.equal(hotelSearchCalls, 1);
+  assert.equal(hotel.provider, "you_web_search_highlights");
+  assert.equal(hotel.searchSnippets.length, 1);
+});
+
+test("hotel search technical failure preserves the previous researcher as fallback", async () => {
+  const researchRequest = { researchType: "official_entity_facts", entityKind: "hotel", entityName: "Example Lodge", categories: ["位置"] };
+  let legacyCalls = 0;
+  const result = await runCopyFactsResearch({
+    researchRequest,
+    hotelSearchApiKey: "test-you-key",
+    hotelSearch: async () => { throw Object.assign(new Error("upstream unavailable"), { code: "you_hotel_search_failed" }); },
+    requestResearch: async () => {
+      legacyCalls += 1;
+      return { json: { facts: [] }, attemptUsages: [{}] };
+    },
+  });
+  assert.equal(legacyCalls, 1);
+  assert.equal(result.provider, "legacy_facts_research_fallback");
+  assert.equal(result.hotelSearchFailure.code, "you_hotel_search_failed");
+});
+
 test("Dining Facts Research 只研究指定实体中的当前餐饮 focus", () => {
   const prompt = buildCopyFactsResearchRequest({
     researchRequest: {

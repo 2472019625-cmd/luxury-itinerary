@@ -200,6 +200,34 @@ test("hotel factRows 研究技术失败时保留四行状态且不调用 Copy Wr
   assert.deepEqual(result.results[0].value.map((row) => row.status), ["source_unavailable", "source_unavailable", "source_unavailable", "source_unavailable"]);
 });
 
+test("hotel search highlights become four customer-facing rows in the existing Writer batch", async () => {
+  const request = { researchType: "official_entity_facts", entityKind: "hotel", entityName: "Example Lodge", categories: ["位置", "客房", "设计", "设施"] };
+  const factRows = { ...task("snippet-rows", "hotels.0.factRows", "hotel_fact_rows"), researchRequest: request, outputSchema: { type: "array", minItems: 4, maxItems: 4, items: { type: "object", required: ["key", "label", "text", "status"], properties: { key: { type: "string" }, label: { type: "string" }, text: { type: "string" }, status: { type: "string" }, sourceUrl: { type: "string" }, sourceClass: { type: "string" }, checkedAt: { type: "string" } }, additionalProperties: false } } };
+  const sourceUrl = "https://example.com/lodge";
+  let modelCalls = 0;
+  const result = await runCopyWriterSkill({
+    tasks: [factRows],
+    researchFacts: async () => ({ researchType: request.researchType, entityName: request.entityName, status: "success", verifiedFacts: [], searchSnippets: [{ sourceUrl, sourceExcerpt: "Example Lodge has six riverside suites and a viewing deck.", sourceClass: "search_highlight", checkedAt: "2026-09-24T00:00:00.000Z" }] }),
+    requestJson: async ({ messages }) => {
+      modelCalls += 1;
+      const payload = JSON.parse(messages.at(-1).content);
+      assert.equal(payload.tasks.length, 1);
+      assert.equal(payload.tasks[0].facts.hotelSearchSnippets.length, 1);
+      return { json: { results: [{ targetId: "snippet-rows", targetPath: "hotels.0.factRows", value: [
+        { key: "location", label: "位置", text: "坐拥河岸景观，停留本身也有风景。", status: "success", sourceUrl },
+        { key: "rooms", label: "客房", text: "六间河畔套房保留了小型营地的私密感。", status: "success", sourceUrl },
+        { key: "design", label: "设计", text: "", status: "not_found" },
+        { key: "facilities", label: "设施", text: "观景平台延续了营地里的自然体验。", status: "success", sourceUrl: "https://wrong.example/lodge" },
+      ] }] }, attemptUsages: [{}] };
+    },
+  });
+  assert.equal(modelCalls, 1);
+  assert.equal(result.results[0].status, "success");
+  assert.deepEqual(result.results[0].value.map((row) => row.status), ["success", "success", "not_found", "not_found"]);
+  assert.equal(result.results[0].value[0].sourceClass, "search_highlight");
+  assert.equal(result.results[0].value[3].text, "");
+});
+
 test("buildHotelFactRows 固定顺序保存核验事实与缺失状态", () => {
   const rows = buildHotelFactRows({
     status: "success",
