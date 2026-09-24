@@ -50,9 +50,11 @@ description: 为奢游行程单批量生成封面、产品亮点、总览、酒�
 - `targetPath`
 - `outputSchema`
 
-`targetPath` 是当前客户行程数据根对象下的精确点路径，例如 `highlights.0`、`hotels.0.editorialCopy`、`hotels.0.proofPoints`、`hotels.0.factRows`、`days.2.theme`、`days.2.description` 或 `days.2.spots.0.description`。`outputSchema` 是与当前 itinerary schema 相容的 JSON Schema 片段，定义该路径所需的值结构。输入事实与状态是不可覆盖约束；状态不得在措辞过程中被抹去或升级。`hotel_fact_rows` 是同一次已核验研究结果的程序映射任务，不交给 Writer 再次生成或改写。
+`targetPath` 是当前客户行程数据根对象下的精确点路径，例如 `highlights.0`、`hotels.0.editorialCopy`、`hotels.0.proofPoints`、`hotels.0.factRows`、`days.2.theme`、`days.2.description` 或 `days.2.spots.0.description`。`outputSchema` 是与当前 itinerary schema 相容的 JSON Schema 片段，定义该路径所需的值结构。输入事实与状态是不可覆盖约束；状态不得在措辞过程中被抹去或升级。`hotel_fact_rows` 在酒店搜索片段模式下由现有 Copy Writer 批次生成四行客户文案；旧研究结果仍按原程序映射兼容。
 
 每个 task 可选包含 `researchRequest`。没有该字段时直接进入 Copy Writer，不得联网；存在时只允许 `official_entity_facts` 或 `authoritative_current_facts`，先由 Copy Skill内部完成事实研究，再把 `{researchType, entityName, verifiedFacts:[{category,fact,sourceUrl,sourceExcerpt,sourceClass,checkedAt}]}` 作为内部证据交给 Writer。研究不是新顶层阶段，失败只影响声明该请求的目标，证据不得进入客户文案。酒店实体事实优先采用实体/品牌/官方组织来源；官方不可用或对应字段缺失时，仅允许程序策略认可并逐页核验的品牌新闻稿/Fact Sheet、正式运营方或旅游主管机构、建筑/设计机构具体项目页、可信酒店行业媒体，以及仅用于位置/一般房型/设施的主流 OTA。明确命名餐厅或明确酒店专属餐饮可声明一次轻量 `official_entity_facts`，仅核实当前 `focus` 的餐饮形式和体验特色，最多两条事实；通用餐饮名称不因此自动联网。餐饮实体官网、品牌官网或正式运营方具体页面若仅因网络技术原因无法再次访问，可沿用现有 `verifiedFacts` 保存搜索返回的 URL、原文与非履约体验事实；明确404、原文冲突、身份不明和低可信来源仍拒绝，且该例外不适用于酒店、时效政策或订单事实。搜索摘要、图片、博客、论坛、用户评论、社交平台和百科不得成为 `verifiedFacts`。时效事实仍只采用政府、使领馆、正式组织或正式运营方来源。
+
+酒店公开介绍采用已确认的例外口径：`entityKind=hotel` 且已配置 You.com 时，优先用正式酒店名获取搜索片段，单独保存为 `hotelSearchSnippets`，不伪装成逐页核验的 `verifiedFacts`。它们只支持酒店位置、一般客房、设计、设施四类介绍，必须匹配当前酒店身份并保留 URL 与摘录；不得推断本次订单实际房型、景观、包含项、价格或服务保证。此例外不扩展到餐饮、交通、DAY、时效政策或其他公开事实。
 
 产品亮点任务必须已经由 Planner 逐项确定，并包含稳定 `targetId`、精确 `targetPath`、既定卖点事实与来源、写作目标及输出结构。如果亮点任务缺少这些责任信息或要求本 Skill 重新决定亮点集合，返回明确接口问题，不自行规划。
 
@@ -119,12 +121,12 @@ description: 为奢游行程单批量生成封面、产品亮点、总览、酒�
 - `editorialCopy` 使用 2—4 句直接陈述：先说明酒店是什么及位于哪里，再选择 1—2 个真实住宿特点并解释客户价值，最多用一句说明整程产品角色。每句话只承担一个主要功能，少用长并列句，不用比喻、拟人或情绪化收尾替代信息。
 - 不要求解释为什么路线安排住这里、对前后路线有何作用或如何承接某个 DAY。
 - 不写设施清单、供应商宣传、翻译腔和无依据奢华形容。
-- 酒店正常生成路径是：酒店名称 → Copy Facts Research 在一次请求中研究位置、客房、设计、设施 → 优先核验实体官网、品牌官网、官方 Fact Sheet 或品牌新闻稿 → 官方缺失字段再使用受控外部来源，且最多两个不同外部页面 → `verifiedFacts` → Copy 从中选择最有价值的 1—2 个事实 → 转换成客户住宿价值表达。`verifiedFacts` 是酒店外部客观事实的主要来源和候选素材池，不要求全部写进正文。公开客房事实只能描述酒店一般房型或景观选择，不能写成本次已订房型。
+- 酒店搜索片段模式的路径是：正式酒店名 → You.com 一次搜索并返回相关页面片段 → `hotelSearchSnippets` → 现有 Copy Writer 在同一批次写位置、客房、设计、设施四行。官网可优先但不是硬条件；每个非空行必须保留对应片段 URL，不能借其他酒店或单凭模型常识补写。旧逐页核验研究保留作缺少 You.com 配置或搜索故障时的回退。公开客房事实只能描述酒店一般房型或景观选择，不能写成本次已订房型。
 - `editorialCopy` 与 `proofPoints` 只使用当前酒店的订单事实、原始供应商资料中明确属于该酒店的事实和 `verifiedFacts`；游猎、向导、动物追踪、当天出门与归来不属于酒店总览，除非它们本身是当前酒店已有来源的正式服务或体验事实。
 - 研究结果按字段记录 `success/not_found/source_unavailable`，单个字段缺失不得拖垮整家酒店。存在 `researchRequest` 但最终 `verifiedFacts = 0` 时，必须记录“酒店事实研究未获得可核验结果”，不得依赖模型常识新增酒店设计、设施、景观、服务或房型事实。只能选择原始供应商资料已明确提供的酒店事实；如果原始资料也只有酒店名、地区、晚数等极少信息，正文保持非常克制或返回事实不足 warning，不能让产品角色取代真实酒店事实，也不能生成泛化酒店介绍。
 - `editorialCopy` 负责解释住宿价值，不做官网摘要或设施清单。
 - `proofPoints` 负责快速记忆：正常输出 2—3 个短标签，优先选择真实地点、保护区、景观、空间类型、明确数量或客户一眼能理解的住宿价值。每项只表达一个事实或价值，优先 4—10 个中文字，不写完整说明句，不以“位于、拥有、提供、配备”开头，不用抽象修辞包装事实，也不重复正文完整句。事实只支持 0—1 项时按真实数量返回并说明事实不足，不得凑满；最多可有一个轻量产品角色标签。
-- `factRows` 固定保存位置、客房、设计、设施四行。程序把同一次研究中的已核验 `fact` 原样映射到对应行；缺失项只保存空文本和 `not_found/source_unavailable` 内部状态，客户投影隐藏空行。该任务不消耗 Copy Writer 输出，不从 `editorialCopy` 拆句，不允许模型补齐。
+- `factRows` 固定保存位置、客房、设计、设施四行。搜索片段模式下，Copy Writer 按每类最值得展示的具体事实写成客户可读的价值表达，不写“让客人”“适合客人”等内部讲解句；程序只接受能对应到本次片段 URL 的非空行。缺失项留空并记录 `not_found/source_unavailable`，客户投影隐藏空行。旧逐页核验研究仍按原程序映射，不从 `editorialCopy` 拆句，不允许模型补齐。
 - 不设最小字数；体验锚点字数仅可作为模板适配参考。
 - 具体入住日、抵达情境和当天衔接由 DAY 表达。
 
@@ -175,8 +177,8 @@ description: 为奢游行程单批量生成封面、产品亮点、总览、酒�
 - `moduleType=visual_card` 是现有 DAY 批次中的独立文案任务，不是图片搜索指令，也不是可以省略的内部元数据。必须逐个返回原始 `targetId`、`targetPath` 和对象 `value:{cardTitle,cardDescription}`，即使视觉主题没有同名 Spot。旧任务若明确要求字符串则遵守该任务 outputSchema。
 - `simpleImageSlotBindings.<bindingKey>` 是合法的内部文案写回位置；不要因为它不以 `days.` 开头而忽略、改路径或把结果合并进 DAY/Spot 正文。
 - 只围绕该任务 `facts.visualSubject`，根据本日 `daySourceFacts` 和 `sourceEvidence` 写 1—2 句：怎样体验、为什么值得。不总结整日，不复制其他视觉卡或泛化 Spot 描述，不从相邻 DAY 借用事实。
-- cardTitle由本次Copy生成，第一职责是说明这张图展示的核心主体，必须保留 `facts.visualSubject/titleCoreSubject` 中最有辨识度的实体、动物、景点或体验。标题可以删去姿态、构图、光线等非核心画面描述，但不能在已有明确主体时退化成只有“清晨游猎、傍晚游猎、全天游猎”等泛化名称，也不能用泛标题掩盖图片不匹配。不得把英文 `searchIntent` 作为客户标题，不改视觉主题、不新增体验。任务 facts 提供 `entityDisplayName` 时，标题必须原样包含该名称，不得把同一实体重新翻译成另一种中文名；这不改变 `searchIntent`。
-- cardDescription写1—2句简短体验说明。客户卡片只显示图片、cardTitle和cardDescription，不输出单独的状态/费用标签。保留事实费用和可选边界，不暗示未购买的体验已包含，不把观察动物或天气写成保证。cardTitle和cardDescription不参与搜图，也不决定Image输入。
+- cardTitle由本次Copy生成，是客户看到的体验型短标题：优先表达客人如何参与、从什么角度感受或期待什么，不把图片主体、姿态和构图直接写成照片说明。仍须保留 `facts.visualSubject/titleCoreSubject` 中最有辨识度的真实实体、动物、景点或体验锚点；不得在已有明确主体时退化成只有“清晨游猎、傍晚游猎、全天游猎”等泛化名称，也不能用泛标题掩盖图片不匹配。不得把英文 `searchIntent` 作为客户标题，不改视觉主题、不新增体验或保证动物、天气结果。任务 facts 提供 `entityDisplayName` 时，标题必须原样包含该名称，不得把同一实体重新翻译成另一种中文名；这不改变 `searchIntent`。
+- cardDescription写1—2句简短体验说明。客户卡片只显示图片、cardTitle和cardDescription，不输出单独的状态/费用标签。保留事实费用和可选边界，不暗示未购买的体验已包含，不把观察动物或天气写成保证。匹配已有Spot时也只用cardTitle作为客户卡标题，不改Spot名称、状态或描述；编辑器卡片列表和客户预览显示同一标题。cardTitle和cardDescription不参与搜图，也不决定Image输入。
 - 输出前核对输入的每一个 visual_card target 都有独立结果；不能仅返回原有 DAY 和 Spot 文案。
 
 ### 5.10 其他模块与辅助检测

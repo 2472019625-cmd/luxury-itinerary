@@ -777,7 +777,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     copyTasks.push(copyTask({
       targetId: `copy:hotel:${hotel.id || index + 1}:fact-rows`, targetPath: `hotels.${index}.factRows`, moduleType: "hotel_fact_rows",
       facts,
-      plannerGoal: "将同一次酒店事实研究中已经逐页核验的位置、客房、设计、设施结果按固定四行保存；程序直接映射，不再次生成或改写事实。缺失字段保留状态并留空，不使用模型常识补齐。",
+      plannerGoal: "按位置、客房、设计、设施固定四行写给最终客户。若提供 hotelSearchSnippets，从当前酒店的搜索片段中选择每类最能体现独特住宿价值的具体信息，写成自然、直观的中文文案；每行通常20—60字，说明特色与住宿感受，不只罗列名词，四行之间不重复同一事实，也不要出现‘让客人’‘适合客人’等向内部解释价值的说法。每个非空行必须引用当前片段中的准确 sourceUrl；缺少依据的行留空并标为 not_found。公开客房信息不得写成此次已订房型，不保证动物出现、景观或未确认服务。不新增搜索片段与订单事实之外的具体设施、数量、奖项或承诺。若没有 hotelSearchSnippets，保持现有已核验事实的程序映射。",
       relevantContext: itineraryContext, layoutHints: { placement: "hotel_fact_rows", itemIndex: index }, outputSchema: hotelFactRowsSchema, researchRequest, required: false,
     }));
   });
@@ -1001,7 +1001,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     copyTasks.push(copyTask({
       targetId: `copy:visual:${slotId}`, targetPath: visualCopyPath, moduleType: 'visual_card',
       facts: { visualSubject: primarySubject, titleCoreSubject: primarySubject, ...resolvedEntityFacts, daySourceFacts: dayFactText(day), sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], experiences: (day.spots || []).map(spotCopyFacts), matchedSpot: matchedIndex >= 0 ? spotCopyFacts(primarySpot) : null, status, statusLabel, feeBoundary: primarySpot?.feeBoundary || '' },
-      plannerGoal: `为当前视觉体验返回{cardTitle,cardDescription}。cardTitle的第一职责是准确说出图片展示的核心主体：必须保留visualSubject/titleCoreSubject中最有辨识度的实体、动物、景点或体验，不得在已有明确主体时退化成“清晨游猎、傍晚游猎、全天游猎”等泛化标题。可以删去姿态、构图、光线等非核心画面描述，但不能丢失核心主体；图片不匹配时应由图片流程处理，不能用泛标题掩盖。不得把英文searchIntent当作客户标题，也不得新增事实。cardDescription写1—2句怎么体验、为什么值得，只使用本日真实事实，不总结整天，不复制泛化Spot全文，不新增事实或费用承诺。有准确匹配Spot时优先复用其适合本体验的短描述。卡片不显示状态标签，但描述不得暗示未购买体验已包含。${entityDisplay.entity ? `当前实体的客户展示名为“${entityDisplay.displayName}”，cardTitle必须原样使用，不得重译或展开官方名称。` : '当前视觉主题未解析为确定实体时，不得擅自创造新的实体译名。'}`,
+      plannerGoal: `为当前视觉体验返回{cardTitle,cardDescription}。cardTitle写给客户看，采用简短的体验型表达：先写客人如何参与、从什么角度感受或期待什么，而不是把照片主体和构图直接改写成图片说明。标题仍须保留visualSubject/titleCoreSubject中最有辨识度的真实实体、动物、景点或体验锚点，不能退化成“清晨游猎、傍晚游猎、全天游猎”等泛称；可以删去姿态、构图、光线等非核心画面描述，但不能用泛标题掩盖图片不匹配。比如“热气球俯瞰草原角马群”可写“乘热气球遇见草原迁徙”，“营地夜空下的银河”可写“在营地仰望非洲星河”；示例不构成行程事实。不得把英文searchIntent当客户标题，不改视觉主题、不新增体验或保证动物、天气结果。cardDescription写1—2句怎么体验、为什么值得，只使用本日真实事实，不总结整天，不复制泛化Spot全文，不新增事实或费用承诺。有准确匹配Spot时优先复用其适合本体验的短描述。卡片不显示状态标签，但描述不得暗示未购买体验已包含。${entityDisplay.entity ? `当前实体的客户展示名为“${entityDisplay.displayName}”，cardTitle必须原样包含该名称，不得重译或展开官方名称。` : '当前视觉主题未解析为确定实体时，不得擅自创造新的实体译名。'}`,
       relevantContext: { dayRole: role.role, visualSubject: primarySubject, otherVisualSubjects: ordered.map(item => item.primaryVisualSubject).filter(item => item !== primarySubject) },
       layoutHints: { placement: 'visual_card', slotId }, outputSchema: { type: 'object', required: ['cardTitle', 'cardDescription'], additionalProperties: false, properties: { cardTitle: { type: 'string', minLength: 2, maxLength: 48 }, cardDescription: { type: 'string', minLength: 12, maxLength: 160 } } }, required,
     }));

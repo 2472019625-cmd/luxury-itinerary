@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import puppeteer from "puppeteer-core";
 import { assertPublicUrl, fetchPublicUrl } from "./page-images.mjs";
 import { parseJsonWithSyntaxRepair } from "./json-syntax-repair.mjs";
+import { searchHotelHighlights } from "./you-hotel-search.mjs";
 
 export const COPY_FACTS_RESEARCH_MODEL = "gemini-3.7-flash-search";
 export const COPY_FACTS_RESEARCH_TYPES = Object.freeze(["official_entity_facts", "authoritative_current_facts"]);
@@ -662,7 +663,7 @@ function supplementDirections(researchRequest, mainResult, externalPagesUsed) {
   });
 }
 
-export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, model = COPY_FACTS_RESEARCH_MODEL, signal, requestResearch = requestCopyFactsResearch, fetchSource = fetchPublicUrl, fetchBrowserSource = fetchOfficialPageWithBrowser, researchStateStore } = {}) {
+export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, model = COPY_FACTS_RESEARCH_MODEL, signal, requestResearch = requestCopyFactsResearch, fetchSource = fetchPublicUrl, fetchBrowserSource = fetchOfficialPageWithBrowser, researchStateStore, hotelSearch = searchHotelHighlights, hotelSearchApiKey = process.env.YDC_API_KEY } = {}) {
   const errors = validateCopyResearchRequest(researchRequest);
   if (errors.length) throw Object.assign(new Error(errors.join("；")), { code: "invalid_copy_research_request", fields: errors });
   if (researchRequest.entityKind === "hotel") researchRequest = { ...researchRequest, categories: ["位置", "客房", "设计", "设施"] };
@@ -718,6 +719,18 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
       if (ownership.state?.mainResult) mainResult = ownership.state.mainResult;
       else return { researchType: researchRequest.researchType, entityName: researchRequest.entityName, status: "failed", verifiedFacts: [], rejected: [], categoryOutcomes: buildResearchCategoryOutcomes({ researchRequest, failureReason: "research_interrupted" }), businessCalls: 0, invocationBusinessCalls: 0, invocationTransportAttempts: 0, supplementStopReason: "main_claimed_without_result" };
     } else {
+      if (researchRequest.entityKind === "hotel" && clean(hotelSearchApiKey)) {
+        invocationBusinessCalls += 1;
+        try {
+          const hotelResult = await hotelSearch({ researchRequest, apiKey: hotelSearchApiKey, signal });
+          const result = { ...hotelResult, businessCalls: 1, invocationBusinessCalls, invocationTransportAttempts: 1, durationMs: Date.now() - startedAt };
+          await save({ result });
+          return result;
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          await save({ hotelSearchFailure: { code: error?.code || "you_hotel_search_failed", message: error?.message || String(error) } });
+        }
+      }
       try {
         const response = await dispatch(researchRequest, "main");
         const verified = await verifyCopyFactsResearch({ researchRequest, candidates: response.json?.facts, reportedOutcomes: response.json?.categoryOutcomes, signal, fetchSource, fetchBrowserSource, verificationContext, onExternalPage });
@@ -725,7 +738,7 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
         await save({ mainResult });
       } catch (error) {
         const detail = failure(error, "main");
-        const result = { researchType: researchRequest.researchType, entityName: researchRequest.entityName, status: "failed", verifiedFacts: [], rejected: [], categoryOutcomes: buildResearchCategoryOutcomes({ researchRequest, failureReason: detail.reason }), error: detail, model, attemptUsages: error?.attemptUsages || [], businessCalls: 1, invocationBusinessCalls, invocationTransportAttempts, transportAttempts, supplementStopReason: "main_failed", durationMs: Date.now() - startedAt };
+        const result = { researchType: researchRequest.researchType, entityName: researchRequest.entityName, status: "failed", verifiedFacts: [], rejected: [], categoryOutcomes: buildResearchCategoryOutcomes({ researchRequest, failureReason: detail.reason }), error: detail, model, attemptUsages: error?.attemptUsages || [], businessCalls: 1, invocationBusinessCalls, invocationTransportAttempts, transportAttempts, supplementStopReason: "main_failed", durationMs: Date.now() - startedAt, ...(state.hotelSearchFailure ? { hotelSearchFailure: state.hotelSearchFailure } : {}) };
         await save({ mainFailure: detail, result });
         return result;
       }
@@ -772,7 +785,7 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
       }
     }
   }
-  result = { ...result, status: result.verifiedFacts.length ? "success" : result.supplementFailure ? "failed" : "not_found", coverageComplete: result.categoryOutcomes.every((item) => item.status === "success"), externalSourcePagesUsed: verificationContext.externalPagesUsed.size, transportAttempts, invocationBusinessCalls, invocationTransportAttempts, durationMs: Date.now() - startedAt };
+  result = { ...result, status: result.verifiedFacts.length ? "success" : result.supplementFailure ? "failed" : "not_found", coverageComplete: result.categoryOutcomes.every((item) => item.status === "success"), externalSourcePagesUsed: verificationContext.externalPagesUsed.size, transportAttempts, invocationBusinessCalls, invocationTransportAttempts, durationMs: Date.now() - startedAt, ...(state.hotelSearchFailure ? { provider: "legacy_facts_research_fallback", hotelSearchFailure: state.hotelSearchFailure } : {}) };
   await save({ result });
   return result;
 }

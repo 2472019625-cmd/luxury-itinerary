@@ -26,7 +26,7 @@ export function buildLayoutImageSlots(data = {}) {
     return Object.entries(simpleImageSlotBindings).map(([slotId, binding]) => {
       const sourceSpot = binding.module === 'day' ? dayBindingSpot(data, binding) : null;
       const spotId = binding.module === 'day' && binding.useSpotCopy !== false ? String(binding.spotId || sourceSpot?.id || '') || null : null;
-      const title = binding.cardTitle || (binding.module === 'day' && binding.useSpotCopy === false ? '行程体验' : existing.get(binding.fieldPath)?.label) || '行程图片';
+      const title = binding.manualEditorCard === true ? sourceSpot?.name || binding.cardTitle || '新体验卡片' : binding.cardTitle || (binding.module === 'day' && binding.useSpotCopy === false ? '行程体验' : sourceSpot?.name || existing.get(binding.fieldPath)?.label) || '行程图片';
       const subject = binding.editorPrimaryVisualSubject || binding.visualSubject || existing.get(binding.fieldPath)?.purpose || '';
       const editorState = binding.editorImageStatus ? `${binding.editorImageStatus} · ${binding.editorImageRequired ? '必需' : '可选'}` : '';
       return {
