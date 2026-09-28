@@ -118,7 +118,9 @@ test("Step4人工换图允许未自动采用候选且结果提示自动消失", 
   assert.match(picker, /canManuallyChooseImageCandidate\(candidate\)/);
   assert.match(picker, /manualConfirmed:\s*true/);
   assert.match(picker, /可人工确认采用/);
-  assert.doesNotMatch(picker, /不适合当前位置/);
+  assert.match(picker, /candidateResolutionAllowsManualChoice\(candidate/);
+  assert.match(picker, /尺寸不适合当前位置 · 不可采用/);
+  assert.doesNotMatch(picker, /image_resolution_insufficient|minWidth|minHeight|originalWidth|originalHeight/);
   assert.match(editor, /setTimeout\(\(\) => setImageMessage/);
   assert.match(editor, /2800/);
   assert.match(editor, /if \(saved\) setPickerOpen\(false\)/);

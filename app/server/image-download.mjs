@@ -17,7 +17,33 @@ const cardDisplaySizes = {
 };
 export const MAX_CARD_IMAGE_UPSCALE = 1.35;
 
+// Mirrors the 2000px DAY gallery geometry in styles.css. The renderer checks
+// the actual DOM scale after optional cards are removed or rearranged.
+const DAY_GALLERY_WIDTH = 1780 - 186;
+const DAY_GALLERY_GAP = 42;
+const dayFrame = (count, index) => {
+  const groupCount = Math.max(1, Math.min(4, Number(count) || 1));
+  if (groupCount === 1) return [DAY_GALLERY_WIDTH, DAY_GALLERY_WIDTH * 9 / 16];
+  if (groupCount === 3 && index === 2) return [DAY_GALLERY_WIDTH * 0.56, 470];
+  const width = (DAY_GALLERY_WIDTH - DAY_GALLERY_GAP) / 2;
+  return [width, width * 2 / 3];
+};
+
+export function withDayGalleryLayout(slot, visibleSlots = []) {
+  if (String(slot?.moduleType || "").toLowerCase() !== "day") return slot;
+  const dayIndex = Number(slot.visualContext?.dayIndex);
+  const daySlots = visibleSlots.filter((item) => String(item?.moduleType || "").toLowerCase() === "day"
+    && Number(item.visualContext?.dayIndex) === dayIndex);
+  const position = Math.max(0, daySlots.findIndex((item) => item.slotId === slot.slotId));
+  const groupStart = Math.floor(position / 4) * 4;
+  return { ...slot, dayCardCount: Math.max(1, daySlots.slice(groupStart, groupStart + 4).length), dayCardIndex: position - groupStart };
+}
+
 export function imageResolutionPolicyForSlot(slot = {}) {
+  if (String(slot.moduleType || "").toLowerCase() === "day") {
+    const [displayWidth, displayHeight] = dayFrame(slot.dayCardCount, slot.dayCardIndex);
+    return { minWidth: Math.ceil(displayWidth / MAX_CARD_IMAGE_UPSCALE), minHeight: Math.ceil(displayHeight / MAX_CARD_IMAGE_UPSCALE) };
+  }
   const cards = cardDisplaySizes[String(slot.moduleType || "").toLowerCase()];
   if (!cards) return { minWidth: 900, minHeight: 500 };
   const [displayWidth, displayHeight] = slot.displayLayout === "wide" ? cards.wide : cards.standard;

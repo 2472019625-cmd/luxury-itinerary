@@ -1,6 +1,9 @@
 // Editor-only explanations. Never interpolate raw service errors, source URLs,
 // internal identifiers or resource budgets into user-facing text.
 export function imageSearchPresentation(review = {}, { searching = false } = {}) {
+  if (review.status === "provisional_pending_confirmation" && !searching) {
+    return { title: "已预填·待确认", detail: "图片已显示在可编辑草稿中，请确认使用或不使用；确认前不能正式下载。", active: false };
+  }
   const current = review.currentResult || {};
   const status = current.previousStatus || review.status || current.status || "";
   const technicalStatus = current.technicalStatus || review.technicalStatus || "";

@@ -234,6 +234,7 @@ test("人工采用只写回目标 slot，剩余 required 未清零时更新可�
 
 test("人工确认可采用非硬拒绝的待判断候选，跨位移动并保留证据", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  await writeFile(path.join(value.root, 'output/image-assets/test/hard.jpg'), await sharp({ create: { width: 1600, height: 900, channels: 3, background: '#61754b' } }).jpeg().toBuffer());
   const render = async ({ mode }) => ({ status: 'success', mode, outputPath: 'draft.png' });
   const uncertain = { ...value.hardCandidate, candidateId: 'candidate-uncertain', rejection: 'needs_user_judgment', autoRejected: false, hardJudgment: { ...value.hardCandidate.hardJudgment, activityMatch: true, subjectMatch: true } };
   const current = value.store.getFinalResult(value.projectId, value.executionRunId);
@@ -250,6 +251,35 @@ test("人工确认可采用非硬拒绝的待判断候选，跨位移动并保�
   assert.equal(saved.userSelected, true);
   assert.equal(saved.humanDecision.riskConfirmed, true);
   assert.deepEqual(saved.humanDecision.movedFrom, ['image:cover:primary']);
+});
+
+test("双列DAY接受850×550原件，移动成单列时拒绝且保持原选择", async (t) => {
+  const value = await fixture({ includeOptionalDay: true }); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const render = async ({ mode }) => ({ status: 'success', mode, outputPath: 'draft.png' });
+  const large = await sharp({ create: { width: 1600, height: 900, channels: 3, background: '#446644' } }).jpeg().toBuffer();
+  await uploadSimpleImage({ ...value, slotId: 'image:day:1:primary', dataUrl: `data:image/jpeg;base64,${large.toString('base64')}`, render });
+  const small = await sharp({ create: { width: 850, height: 550, channels: 3, background: '#665544' } }).jpeg().toBuffer();
+  await writeFile(path.join(value.root, 'output/image-assets/test/day-small.jpg'), small);
+  const candidate = { candidateId: 'candidate-day-small', localUrl: '/image-assets/test/day-small.jpg', sourceTitle: '本地测试原件', hardJudgment: { eligible: true, technicalUsable: true } };
+  const before = value.store.getFinalResult(value.projectId, value.executionRunId);
+  before.imageExecution.results.find((item) => item.slotId === 'image:day:1:supporting:1').candidates.push(candidate);
+  value.store.saveFinalResult(value.projectId, value.executionRunId, before);
+  const selected = await chooseSimpleImageCandidate({ ...value, slotId: 'image:day:1:supporting:1', candidateId: candidate.candidateId, manualConfirmed: true, render });
+  assert.equal(selected.project.data.days[0].spots[0].images[1].src, candidate.localUrl);
+  const primaryReview = selected.imageReview.slots.find((item) => item.slotId === 'image:day:1:primary');
+  assert.equal(primaryReview.resolutionPolicy.minWidth, 575);
+  assert.equal(primaryReview.resolutionPolicyByMovedSourceSlotId['image:day:1:supporting:1'].minWidth, 1181);
+  await assert.rejects(() => chooseSimpleImageCandidate({ ...value, slotId: 'image:day:1:primary', candidateId: candidate.candidateId, manualConfirmed: true, render }), (error) => error.code === 'image_resolution_insufficient' && error.actualWidth === 850 && error.minWidth === 1181);
+  const after = value.store.getFinalResult(value.projectId, value.executionRunId);
+  assert.equal(after.imageExecution.results.find((item) => item.slotId === 'image:day:1:primary').selected.localUrl, selected.project.data.days[0].spots[0].images[0].src);
+  assert.equal(after.imageExecution.results.find((item) => item.slotId === 'image:day:1:supporting:1').selected.localUrl, candidate.localUrl);
+});
+
+test("单列DAY上传小图被拒绝，原项目图片不改变", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const small = await sharp({ create: { width: 850, height: 550, channels: 3, background: '#665544' } }).jpeg().toBuffer();
+  await assert.rejects(() => uploadSimpleImage({ ...value, slotId: 'image:day:1:primary', dataUrl: `data:image/jpeg;base64,${small.toString('base64')}`, render: async () => assert.fail('尺寸拒绝后不可渲染') }), (error) => error.code === 'image_resolution_insufficient' && error.minWidth === 1181);
+  assert.deepEqual(value.store.getFinalResult(value.projectId, value.executionRunId).data.days[0].spots[0].images, []);
 });
 
 test("Step4 选择尚未下载原件的知识库 preview 时才下载 matched_file", async (t) => {

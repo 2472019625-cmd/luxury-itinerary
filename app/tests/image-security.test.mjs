@@ -5,7 +5,7 @@ import test from 'node:test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import sharp from 'sharp';
 import { assertPublicUrl, fetchPublicUrl } from '../server/page-images.mjs';
-import { downloadCandidate, fetchTrustedKnowledgeUrl, imageResolutionPolicyForSlot } from '../server/image-download.mjs';
+import { downloadCandidate, fetchTrustedKnowledgeUrl, imageResolutionPolicyForSlot, withDayGalleryLayout } from '../server/image-download.mjs';
 import { knowledgeOutputToCandidates } from '../server/knowledge-image-search.mjs';
 import { reviewCardImageUpscales } from '../server/simple-renderer.mjs';
 
@@ -105,7 +105,8 @@ test('hotel card resolution follows the rendered crop rather than a fixed 900px 
   const wide = imageResolutionPolicyForSlot({ moduleType: 'hotel', displayLayout: 'wide' });
   assert.deepEqual(standard, { minWidth: 723, minHeight: 423 });
   assert.deepEqual(wide, { minWidth: 875, minHeight: 460 });
-  assert.deepEqual(imageResolutionPolicyForSlot({ moduleType: 'day' }), { minWidth: 900, minHeight: 500 });
+  assert.deepEqual(imageResolutionPolicyForSlot({ moduleType: 'day', dayCardCount: 2, dayCardIndex: 1 }), { minWidth: 575, minHeight: 384 });
+  assert.deepEqual(imageResolutionPolicyForSlot({ moduleType: 'day', dayCardCount: 1, dayCardIndex: 0 }), { minWidth: 1181, minHeight: 665 });
   const buffer = await sharp({ create: { width: 750, height: 750, channels: 3, background: '#887766' } }).jpeg().toBuffer();
   const fetchImpl = async () => new Response(buffer, { status: 200, headers: { 'content-type': 'image/jpeg', 'content-length': String(buffer.length) } });
   const candidate = { sourceKind: 'knowledge_library', imageUrl: 'http://192.168.100.210:9000/original/hotel.jpg', title: 'hotel.jpg' };
@@ -116,14 +117,30 @@ test('hotel card resolution follows the rendered crop rather than a fixed 900px 
   await assert.rejects(downloadCandidate(candidate, { ...options, ...wide }), (error) => error.code === 'image_resolution_insufficient' && error.minWidth === 875);
 });
 
+test('automatic DAY download uses the planned paired frame and rejects the same original in a single frame', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'day-card-resolution-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const slots = ['primary', 'supporting:1'].map((role) => ({ slotId: `image:day:6:${role}`, moduleType: 'day', visualContext: { dayIndex: 5 } }));
+  const pairedPolicy = imageResolutionPolicyForSlot(withDayGalleryLayout(slots[1], slots));
+  const singlePolicy = imageResolutionPolicyForSlot(withDayGalleryLayout(slots[1], [slots[1]]));
+  const buffer = await sharp({ create: { width: 850, height: 550, channels: 3, background: '#887766' } }).jpeg().toBuffer();
+  const candidate = { sourceKind: 'knowledge_library', imageUrl: 'http://192.168.100.210:9000/original/day.jpg', title: 'day.jpg' };
+  const options = { directory, publicPrefix: '/test', trustedKnowledgeOrigins: ['http://192.168.100.210:9000'], fetchImpl: async () => new Response(buffer, { status: 200, headers: { 'content-type': 'image/jpeg' } }) };
+  assert.equal((await downloadCandidate(candidate, { ...options, ...pairedPolicy })).width, 850);
+  await assert.rejects(downloadCandidate(candidate, { ...options, ...singlePolicy }), (error) => error.code === 'image_resolution_insufficient' && error.actualWidth === 850 && error.minWidth === 1181);
+});
+
 test('the final 2000px layout blocks a card that becomes too enlarged', () => {
   const layout = { cardImageUpscales: [
     { selector: '[data-edit-path="hotels.0"]', scale: 976 / 750 },
     { selector: '[data-edit-path="hotels.1"]', scale: 1180 / 750 },
+    { selector: '[data-edit-path="days.5.spots.0"]', scale: 1594 / 850 },
   ] };
   const finalIssues = reviewCardImageUpscales(layout);
-  assert.equal(finalIssues.length, 1);
+  assert.equal(finalIssues.length, 2);
   assert.equal(finalIssues[0].selector, '[data-edit-path="hotels.1"]');
   assert.equal(finalIssues[0].severity, 'blocker');
+  assert.equal(finalIssues[1].selector, '[data-edit-path="days.5.spots.0"]');
+  assert.equal(finalIssues[1].severity, 'blocker');
   assert.equal(reviewCardImageUpscales(layout, 'draft')[0].severity, 'warning');
 });

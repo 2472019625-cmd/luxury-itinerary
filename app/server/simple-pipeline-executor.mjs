@@ -9,7 +9,7 @@ import { materializeSimpleSkillPlan } from "./simple-plan-adapter.mjs";
 import { runCopyWriterSkill } from "./simple-copy-skill.mjs";
 import { createCopyResearchStateStore } from "./simple-copy-research-state.mjs";
 import { runImageSearchSkill } from "./simple-image-skill.mjs";
-import { allocateCompatibleImageCandidates } from "./simple-image-allocation.mjs";
+import { allocateCompatibleImageCandidates, reconcileProvisionalImageSelections } from "./simple-image-allocation.mjs";
 import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
 import { applyApprovedFixedModules, SIMPLE_PIPELINE_DEFAULT_ORIGIN } from "./simple-fixed-modules.mjs";
@@ -268,12 +268,12 @@ export async function runSimplePipeline({
   timingsMs.copySkill = copySettled.status === "fulfilled" ? Number(copySettled.value?.metrics?.durationMs || copyFinishedAt - copyStartedAt) : copyFinishedAt - copyStartedAt;
   timingsMs.imageSkill = imageSettled.status === "fulfilled" ? Number(imageSettled.value?.metrics?.durationMs || imageFinishedAt - imageStartedAt) : imageFinishedAt - imageStartedAt;
   const copyExecution = copySettled.status === "fulfilled" ? copySettled.value : { status: "failed", results: simplePlan.copyTasks.map((task) => ({ targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: { code: "copy_batch_failed", message: copySettled.reason?.message || String(copySettled.reason) } })), metrics: { businessBatches: 1, modelCalls: 0, durationMs: timingsMs.copySkill } };
-  const imageExecution = allocateCompatibleImageCandidates({
+  const imageExecution = await reconcileProvisionalImageSelections({ slots: simplePlan.imageSlots, root, preparedData: simplePlan.preparedData, slotBindings: simplePlan.slotBindings, execution: allocateCompatibleImageCandidates({
     slots: simplePlan.imageSlots,
     preparedData: simplePlan.preparedData,
     execution: imageSettled.status === "fulfilled" ? imageSettled.value : { status: "failed", results: simplePlan.imageSlots.map((slot) => ({ slotId: slot.slotId, status: "failed", selected: null, technicalStatus: "image_batch_failed", warnings: [imageSettled.reason?.message || String(imageSettled.reason)] })), metrics: { businessBatches: 1, durationMs: timingsMs.imageSkill } },
     root,
-  });
+  }) });
   const parallelEvidence = {
     copyStartedAtMs: copyStartedAt,
     imageStartedAtMs: imageStartedAt,

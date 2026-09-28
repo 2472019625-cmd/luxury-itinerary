@@ -16,6 +16,7 @@ import { normalizeHighlightForDisplay } from './lib/highlightDisplay.js';
 import { buildConfirmationActionItems, currentPriceSelection, isChildCountConfirmed, listPriceOffers, matchingPriceOffers, priceOfferKey } from './lib/confirmationActionItems.js';
 import { createManualDayCard, daySpotIdentity, deleteDaySpotPreservingSlots, reorderDaySpots, resolveDayPreviewSpotIndex, resolveDaySpotIndex } from './lib/dayEditorState.js';
 import { imageReviewForSlot, imageSearchPresentation } from "./lib/imageSearchPresentation.js";
+import { candidateResolutionAllowsManualChoice, candidateResolutionForTarget, imageActionFailureMessage } from "./lib/imageActionFeedback.js";
 import { hotelFactPresentation, STRUCTURED_HOTEL_FACT_FORMAT } from "./lib/hotelFactPresentation.js";
 import { sha256File } from './lib/fileHash.js';
 
@@ -802,10 +803,16 @@ function ImageSearchNotice({ review, searching }) {
   return <div className="empty-image-state image-search-notice" role="status" aria-live="polite"><strong>{explanation.title}</strong><span>{explanation.detail}</span></div>;
 }
 
-function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, onClose, operation = {} }) {
+function provisionalCandidateForReview(review) {
+  if (review?.status !== "provisional_pending_confirmation" || !review.provisionalSelected?.candidateId) return null;
+  return { ...review.provisionalSelected, localPreviewUrl: review.provisionalSelected.localPreviewUrl || review.provisionalSelected.localUrl };
+}
+
+function ImagePickerModal({ data, targetSlot, onChoose, onReject, onUpload, onResearch, onClose, operation = {} }) {
   const [tab, setTab] = useState('recommended');
   const researching = operation.searching;
   const review = imageReviewForSlot(data, targetSlot);
+  const provisionalCandidate = provisionalCandidateForReview(review);
   const [pendingChoice, setPendingChoice] = useState(null);
   const [failedCandidates, setFailedCandidates] = useState(() => new Set());
   useEffect(() => {
@@ -815,22 +822,26 @@ function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, on
   }, [onClose]);
   const inputRef = useRef(null);
   const placements = listImagePlacements(data);
-  const usedBySrc = new Map(placements.map(({ slot, image }) => [image.src, slot]));
+  const usedBySrc = new Map(placements.map(({ slot, image }) => [typeof image === 'string' ? image : image.src, slot]));
   const savedCandidates = (data.imageCandidates || []).filter((item) => item.localPreviewUrl && canManuallyChooseImageCandidate(item));
   const uploaded = placements.filter(({ image }) => image.userProvided && !savedCandidates.some(candidate => candidate.localPreviewUrl === image.src)).map(({ slot, image }) => ({ candidateId: 'user-' + slot.slotId, localPreviewUrl: image.src, sourceTitle: '本地上传', slotId: slot.slotId, userProvided: true }));
   const all = [...savedCandidates, ...uploaded].filter((item, index, array) => array.findIndex((other) => other.localPreviewUrl === item.localPreviewUrl && other.pipelineSlotId === item.pipelineSlotId) === index);
-  const canChoose = (candidate) => canManuallyChooseImageCandidate(candidate) && !failedCandidates.has(candidate.candidateId);
+  const resolutionPolicyFor = (used) => used ? review?.resolutionPolicyByMovedSourceSlotId?.[used.slotId] || review?.resolutionPolicy : review?.resolutionPolicy;
+  const resolutionFor = (candidate, used) => candidateResolutionForTarget(candidate, resolutionPolicyFor(used));
+  const canChoose = (candidate) => canManuallyChooseImageCandidate(candidate) && !failedCandidates.has(candidate.candidateId)
+    && candidateResolutionAllowsManualChoice(candidate, resolutionPolicyFor(usedBySrc.get(candidate.localUrl) || usedBySrc.get(candidate.localPreviewUrl)));
   const visible = tab === 'recommended' ? all.filter((item) => canRecommendImageCandidateForSlot(item, targetSlot)) : all;
   return <div className="modal-backdrop image-picker-backdrop" role="dialog" aria-modal="true" aria-label="更换图片"><section className="image-picker-modal">
     <header><div><small>更换图片</small><h2>{targetSlot.label}</h2><p>选择已使用图片时会移动到这里，原位置自动留空。</p></div><button onClick={onClose}>关闭</button></header>
     <nav><button className={tab === 'recommended' ? 'active' : ''} onClick={() => setTab('recommended')}>适合当前位置</button><button className={tab === 'all' ? 'active' : ''} onClick={() => setTab('all')}>全部行程图片</button><button className={tab === 'upload' ? 'active' : ''} onClick={() => setTab('upload')}>本地上传</button></nav>
-    {tab === 'upload' ? <div className="image-picker-upload"><UiIcon name="included" size={42} /><strong>上传你确认可使用的图片</strong><p>上传后会保存在当前项目，并锁定这个位置，自动搜索不会覆盖。</p><Button tone="primary" disabled={operation.saving} onClick={() => inputRef.current?.click()}>选择本地图片</Button></div> : <div className="image-picker-grid"><ImageSearchNotice review={review} searching={researching} />{visible.length ? visible.map((candidate) => { const used = usedBySrc.get(candidate.localPreviewUrl); const previewFailed = failedCandidates.has(candidate.candidateId); const selectable = canChoose(candidate); const crossSlot = (candidate.pipelineSlotId || candidate.slotId) !== (targetSlot.pipelineSlotId || targetSlot.slotId); const needsManualConfirmation = selectable && (crossSlot || candidate.manualSelectable !== true && candidate.libraryEligible !== true) && !candidate.userProvided; return <button key={`${candidate.pipelineSlotId || candidate.slotId}-${candidate.candidateId}`} disabled={!selectable || operation.saving} className={selectable ? '' : 'image-picker-candidate-rejected'} onClick={() => selectable && setPendingChoice({ candidate, used })}><img src={candidate.localPreviewUrl} alt={candidate.actualSubject || '候选图片'} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add('thumbnail-load-failed'); setFailedCandidates((current) => new Set(current).add(candidate.candidateId)); }} /><span><strong>{candidate.sourceTitle || (candidate.userProvided ? '本地上传' : '已检查图片')}</strong><small>{previewFailed ? '图片加载失败 · 不可采用' : !selectable ? '明确拒绝 · 不可采用' : used ? '当前在：' + used.label : needsManualConfirmation ? '可人工确认采用' : '可人工采用'}</small>{candidate.actualSubject && <small>实际主体：{candidate.actualSubject}</small>}{candidate.reason && candidate.reason !== '暂无审核说明' && <small>判定：{candidate.reason}</small>}</span></button>; }) : null}</div>}
+    {provisionalCandidate && <div className="empty-image-state" role="status"><strong>已预填·待确认</strong><span>这张图已放入可编辑草稿，尚未正式采用。请核对画面与使用权，再决定是否使用。</span>{provisionalCandidate.localPreviewUrl && <div className="candidate-preview"><img src={provisionalCandidate.localPreviewUrl} alt="待确认的预填图片" /></div>}<div className="candidate-actions"><Button tone="primary" disabled={operation.saving} onClick={() => onChoose({ ...provisionalCandidate, manualConfirmed: true }, null)}>确认使用此图</Button>{onReject && <Button disabled={operation.saving} onClick={() => onReject(provisionalCandidate)}>不使用此图</Button>}</div></div>}
+    {tab === 'upload' ? <div className="image-picker-upload"><UiIcon name="included" size={42} /><strong>上传你确认可使用的图片</strong><p>上传后会保存在当前项目，并锁定这个位置，自动搜索不会覆盖。</p><Button tone="primary" disabled={operation.saving} onClick={() => inputRef.current?.click()}>选择本地图片</Button></div> : <div className="image-picker-grid"><ImageSearchNotice review={review} searching={researching} />{visible.length ? visible.map((candidate) => { const used = usedBySrc.get(candidate.localUrl) || usedBySrc.get(candidate.localPreviewUrl); const previewFailed = failedCandidates.has(candidate.candidateId); const selectable = canChoose(candidate); const crossSlot = (candidate.pipelineSlotId || candidate.slotId) !== (targetSlot.pipelineSlotId || targetSlot.slotId); const needsManualConfirmation = selectable && (crossSlot || candidate.manualSelectable !== true && candidate.libraryEligible !== true) && !candidate.userProvided; return <button key={`${candidate.pipelineSlotId || candidate.slotId}-${candidate.candidateId}`} disabled={!selectable || operation.saving} className={selectable ? '' : 'image-picker-candidate-rejected'} onClick={() => selectable && setPendingChoice({ candidate, used })}><img src={candidate.localPreviewUrl} alt={candidate.actualSubject || '候选图片'} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add('thumbnail-load-failed'); setFailedCandidates((current) => new Set(current).add(candidate.candidateId)); }} /><span><strong>{candidate.sourceTitle || (candidate.userProvided ? '本地上传' : '已检查图片')}</strong><small>{resolutionFor(candidate, used).label}</small><small>{previewFailed ? '图片加载失败 · 不可采用' : !selectable ? (resolutionFor(candidate, used).status === 'insufficient' ? '尺寸不适合当前位置 · 不可采用' : '明确拒绝 · 不可采用') : used ? '当前在：' + used.label : needsManualConfirmation ? '可人工确认采用' : '可人工采用'}</small>{candidate.actualSubject && <small>实际主体：{candidate.actualSubject}</small>}{candidate.reason && candidate.reason !== '暂无审核说明' && <small>判定：{candidate.reason}</small>}</span></button>; }) : null}</div>}
     <footer><div role="status" aria-live="polite">{operation.message}</div>{pendingChoice && <div className="empty-image-state"><strong>确认用于「{targetSlot.label}」？</strong><span>{pendingChoice.candidate.reason && pendingChoice.candidate.reason !== '暂无审核说明' ? pendingChoice.candidate.reason : '这张图片未被系统自动采用，请确认内容与使用权。'} 已使用的图片会移动到这里，原位置留空。</span><Button disabled={operation.saving} onClick={() => onChoose({ ...pendingChoice.candidate, manualConfirmed: true }, pendingChoice.used)}>确认替换</Button><Button onClick={() => setPendingChoice(null)}>取消选择</Button></div>}<Button disabled={researching || !onResearch} onClick={onResearch}>{researching ? '正在搜索…' : '为当前位置搜索更多'}</Button></footer>
     <input ref={inputRef} hidden type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload(file); event.target.value = ''; }} />
   </section></div>;
 }
 
-export function Editor({ project, ItineraryComponent, onProject, onPersistDayEditor, onVersions, onResearchSlot, onChooseImage, onOpenImagePicker, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, onRetryCopy, onRetryAllCopy, onRetryAllImages, onRetryRenderer, copyRepairState, issueActionState, blockingItems = [], defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
+export function Editor({ project, ItineraryComponent, onProject, onPersistDayEditor, onVersions, onResearchSlot, onChooseImage, onRejectImage, onOpenImagePicker, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, onRetryCopy, onRetryAllCopy, onRetryAllImages, onRetryRenderer, copyRepairState, issueActionState, blockingItems = [], defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
   const [selection, setSelection] = useState(initialSelection || { module: "days", itemIndex: Math.min(2, project.data.days.length - 1), subItemIndex: null, imageIndex: 0 });
   const [tab, setTab] = useState(initialTab);
   const [historyTick, setHistoryTick] = useState(0);
@@ -873,11 +884,11 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     try {
       const result = await perform();
       if (result === false) throw new Error('保存失败');
-      const message = kind === 'search' ? (result?.newCandidateCount > 0 ? `已找到 ${result.newCandidateCount} 张新候选` : '暂未找到更多合适图片') : kind === 'upload' ? '上传成功，图片已保存' : '图片替换成功';
+      const message = kind === 'search' ? (result?.newCandidateCount > 0 ? `已找到 ${result.newCandidateCount} 张新候选` : '暂未找到更多合适图片') : kind === 'upload' ? '上传成功，图片已保存' : kind === 'reject' ? (currentImageReview?.required ? '已移除预填图；此位置仍需补图' : '已移除可选预填图') : '图片替换成功';
       show(message, false);
       return true;
     } catch (error) {
-      show(`${kind === 'search' ? '搜索失败，请重试' : kind === 'upload' ? '上传或保存失败，请重试' : '图片替换失败，请重试'}${error?.message ? `：${error.message}` : ''}`, false);
+      show(imageActionFailureMessage(kind, error), false);
       return false;
     } finally { activeImageActions.current.delete(key); }
   };
@@ -1218,6 +1229,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     } catch (error) { setImageMessage(`上传或保存失败，请重试：${error?.message || ''}`); }
   };
   const deleteImage = () => {
+    if (currentProvisional && onRejectImage) { rejectProvisional(); return; }
     if (!currentSlot || selection.module === "cover" || !window.confirm("删除这张图片？可以立即撤销恢复。")) return;
     updateData((next) => { setSlotImage(next, currentSlot, null); next.imageLocks = { ...(next.imageLocks || {}), [currentSlot.slotId]: { source: "user_cleared", lockedAt: Date.now() } }; recordImageDecision(next, { slotId: currentSlot.slotId, action: 'clear', source: 'user_cleared' }); }, `delete-image-${Date.now()}`);
     setSelection({ ...selection, imageIndex: 0 });
@@ -1242,8 +1254,13 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   };
   const researchCurrentSlot = () => imageAction(currentSlot, 'search', () => onResearchSlot(currentSlot.pipelineSlotId || currentSlot.slotId));
   const currentImageReview = imageReviewForSlot(project.data, currentSlot || {});
+  const currentProvisional = provisionalCandidateForReview(currentImageReview);
+  const confirmProvisional = () => currentProvisional && chooseLibraryImage({ ...currentProvisional, manualConfirmed: true }, null);
+  const rejectProvisional = (candidate = currentProvisional) => candidate && currentSlot && onRejectImage
+    ? imageAction(currentSlot, 'reject', () => onRejectImage(candidate, currentSlot)) : Promise.resolve(false);
   const imageSearching = (slotId) => Boolean(imageOperations[slotId]?.searching || (issueActionState?.busy && (issueActionState.targetId === "image:all" || issueActionState.targetId === slotId)));
   const currentImageSearching = imageSearching(currentSlot?.slotId) || imageSearching(currentSlot?.pipelineSlotId);
+  const provisionalNotice = currentProvisional && <div className="empty-image-state" role="status" aria-live="polite"><strong>已预填·待确认</strong><span>图片目前只用于可编辑草稿，确认前不算完成，也不能正式下载。请核对画面与使用权。</span><div className="candidate-actions"><Button tone="primary" disabled={Boolean(imageOperations[currentSlot?.slotId]?.saving)} onClick={confirmProvisional}>确认使用此图</Button>{onRejectImage && <Button disabled={Boolean(imageOperations[currentSlot?.slotId]?.saving)} onClick={() => rejectProvisional()}>{currentImageReview.required ? "不使用此图（仍需补图）" : "不使用此图"}</Button>}</div></div>;
   const imagePanel = <div className="image-inspector"><div className="image-library"><header><strong>本模块图片位置</strong><span>{slots.filter((slot) => slot.src).length} / {slots.length}</span></header><div className="image-thumbnails">{slots.map((slot) => <button key={slot.key} className={currentSlot?.key === slot.key ? "active" : ""} onClick={() => selectSlot(slot)}>{slot.src ? <img src={slot.src} alt={slot.label} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add("thumbnail-load-failed"); }} /> : <span className="empty-slot-thumb">缺图</span>}<span>{slot.label}</span></button>)}</div>{!slots.some((slot) => slot.src) && <div className="empty-image-state"><strong>当前模块暂时缺图</strong><span>可以打开换图窗口，从本次行程图片中选择或本地上传。</span></div>}</div>{currentSlot && <>{currentSlot.src ? <><div className="focus-preview" onPointerDown={(event) => { const box = event.currentTarget.getBoundingClientRect(); event.currentTarget.setPointerCapture(event.pointerId); setFocus((event.clientX - box.left) / box.width * 100, (event.clientY - box.top) / box.height * 100); }} onPointerMove={(event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const box = event.currentTarget.getBoundingClientRect(); setFocus(Math.max(0, Math.min(100, (event.clientX - box.left) / box.width * 100)), Math.max(0, Math.min(100, (event.clientY - box.top) / box.height * 100))); }}><img src={currentSlot.src} alt="当前选中图片" style={{ objectPosition: currentSlot.focus }} /><span style={{ left: `${focusX}%`, top: `${focusY}%` }} /></div><div className="focus-controls"><label>横向焦点 <span>{Math.round(focusX)}%</span><input type="range" min="0" max="100" value={focusX} onChange={(event) => setFocus(Number(event.target.value), focusY)} /></label><label>纵向焦点 <span>{Math.round(focusY)}%</span><input type="range" min="0" max="100" value={focusY} onChange={(event) => setFocus(focusX, Number(event.target.value))} /></label></div></> : <ImageSearchNotice review={currentImageReview} searching={currentImageSearching} />}<div className="image-actions"><Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button>{currentSlot.src && <Button onClick={() => setFocus(50, 50)}>恢复居中</Button>}</div></>}<input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { uploadLocalImage(event.target.files?.[0]); event.target.value = ""; }} />{currentSlot?.src && selection.module !== "cover" && <button className="delete-image-button" onClick={deleteImage}>删除当前图片</button>}<p className="image-source">自动图片已经下载保存并检查；本地素材请确认使用权。</p></div>;
 
   const dayStatusOptions = [
@@ -1284,6 +1301,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   };
   const selectedDaySlotTools = currentSlot && <div className="day-slot-tools">
     {currentSlot.src ? <div className="day-slot-focus-preview"><img src={currentSlot.src} alt="当前图片" style={{ objectPosition: currentSlot.focus }} /></div> : <><div className="day-slot-empty"><UiIcon name="itinerary" /><span>上传真实图片后，这张卡片才会进入中间客户预览</span></div><ImageSearchNotice review={currentImageReview} searching={currentImageSearching} /></>}
+    {provisionalNotice}
     {selectedBinding && <div className="day-visual-copy">{selectedBinding.manualEditorCard !== true && <Field label="卡片标题" value={selectedBinding.cardTitle || (selectedBinding.useSpotCopy !== false ? selectedDay?.spots?.[resolveDaySpotIndex(selectedDay, { spotId: currentSlot.spotId, subItemIndex: currentSlot.subItemIndex })]?.name || "" : "")} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardTitle = value; }, `visual-title-${currentSlot.slotId}`)} />}{selectedBinding.useSpotCopy === false && <Field label="图片下方文字" rows={3} value={selectedBinding.cardDescription || ""} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardDescription = value; }, `visual-copy-${currentSlot.slotId}`)} />}</div>}
     <div className="day-inline-image-actions">{selectedBinding?.manualEditorCard ? <Button tone="primary" onClick={() => fileRef.current?.click()}>{currentSlot.src ? "更换上传图片" : "上传体验图片"}</Button> : <Button tone="primary" onClick={() => setPickerOpen(true)}>处理图片</Button>}{currentSlot.src && <Button onClick={() => setFocus(50, 50)}>恢复居中</Button>}{currentSlot.src && !selectedBinding?.manualEditorCard && <button className="day-image-danger" onClick={deleteImage}>删除图片</button>}</div>
   </div>;
@@ -1303,7 +1321,9 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
         const active = selection.slotId === slot.slotId && collapsedDaySlotId !== slot.slotId;
         const title = binding.manualEditorCard === true ? spot?.name || "新体验卡片" : binding.cardTitle || (binding.useSpotCopy === false ? "行程体验" : spot?.name || String(slot.label || "体验卡片").split("｜")[0]);
         const summary = binding.useSpotCopy === false ? binding.cardDescription || "暂无图片说明" : spot?.description || spot?.experience || "暂无体验介绍";
-        const status = spot ? dayStatusOptions.find(([value]) => value === (spot.status || "pending"))?.[1] || "待确认" : slot.src ? "已采用" : "待处理";
+        const provisional = provisionalCandidateForReview(imageReviewForSlot(project.data, slot));
+        const experienceStatus = spot ? dayStatusOptions.find(([value]) => value === (spot.status || "pending"))?.[1] || "待确认" : null;
+        const status = provisional ? `已预填·待确认${experienceStatus ? ` · ${experienceStatus}` : ""}` : experienceStatus || (slot.src ? "已采用" : "待处理");
         const draggable = Boolean(spot?.id);
         return <article key={slot.slotId} className={`day-card-editor-item ${active ? "is-active" : ""}`} data-day-slot-id={slot.slotId} data-day-spot-id={spot?.id || undefined} draggable={draggable} onDragStart={() => draggable && setDragSpotId(spot.id)} onDragEnd={() => setDragSpotId(null)} onDragOver={(event) => draggable && event.preventDefault()} onDrop={() => draggable && reorderExperience(spot, spotIndex)}>
           <button className="day-card-editor-summary" onClick={() => selectSlot(slot)} aria-expanded={active}><span className="day-drag-handle" title={draggable ? "拖动排序" : "独立视觉卡片"}><UiIcon name="process" /></span><span className="day-experience-thumb">{slot.src ? <img src={slot.src} alt="" /> : <UiIcon name="itinerary" />}</span><span className="day-experience-copy"><strong>{title}</strong><em>{status}</em><small>{summary.slice(0, 72)}</small><small className="day-card-visibility">{slot.src ? "正在中间预览显示" : binding.manualEditorCard ? "上传图片后显示" : `${slot.editorImageRequired || slot.required ? "必需" : "可选"}图片待处理`}</small></span><UiIcon name="return" /></button>
@@ -1352,10 +1372,10 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
       </section>}
       <header><div><small>编辑内容</small><h2>{title}</h2></div><div className="history-actions"><button disabled={!historyRef.current.undo.length} onClick={() => restore("undo")} title="撤销 Ctrl+Z"><UiIcon name="return" />撤销</button><button disabled={!historyRef.current.redo.length} onClick={() => restore("redo")} title="重做 Ctrl+Shift+Z"><UiIcon name="process" />重做</button>{selection.module === "days" && <button onClick={() => setDaySettingsOpen((value) => !value)} title="更多设置">更多</button>}</div></header>{selection.module === "days" ? <div className="inspector-body day-inspector-body">{dayPanel}</div> : <><div className="inspector-tabs"><button className={tab === "copy" ? "active" : ""} onClick={() => setTab("copy")}>文案</button>{hasImages && <button className={tab === "image" ? "active" : ""} onClick={() => setTab("image")}>图片</button>}</div>
       {tab === "copy" && <div className="inspector-body">{copyPanel}</div>}
-      {tab === "image" && <div className="inspector-body">{imagePanel}</div>}
+      {tab === "image" && <div className="inspector-body">{provisionalNotice}{imagePanel}</div>}
       <footer className="module-toggle"><div><UiIcon name="city" /><span><strong>模块显示</strong><small>{selectedModule.required ? "品牌固定模块" : "控制是否进入正式版本"}</small></span></div><label className="switch"><input type="checkbox" checked={selectedModule.required || visibility[selectedModule.id] !== false} disabled={selectedModule.required} onChange={(event) => updateVisibility(event.target.checked)} /><span /></label></footer></>}
     </aside>
-  </div>{imageMessage && !pickerOpen && <div className="manual-image-feedback" role="status" aria-live="polite">{imageMessage}</div>}{pickerOpen && currentSlot && <ImagePickerModal key={currentSlot.slotId} operation={{ ...imageOperations[currentSlot.slotId], searching: currentImageSearching }} data={project.data} targetSlot={currentSlot} onClose={() => setPickerOpen(false)} onChoose={chooseLibraryImage} onResearch={onResearchSlot ? researchCurrentSlot : undefined} onUpload={uploadLocalImage} />}</main>;
+  </div>{imageMessage && !pickerOpen && <div className="manual-image-feedback" role="status" aria-live="polite">{imageMessage}</div>}{pickerOpen && currentSlot && <ImagePickerModal key={currentSlot.slotId} operation={{ ...imageOperations[currentSlot.slotId], searching: currentImageSearching }} data={project.data} targetSlot={currentSlot} onClose={() => setPickerOpen(false)} onChoose={chooseLibraryImage} onReject={onRejectImage ? rejectProvisional : undefined} onResearch={onResearchSlot ? researchCurrentSlot : undefined} onUpload={uploadLocalImage} />}</main>;
 }
 
 export function VersionsStep({ project, exporting, exportError, onExport, onBack, onReviewDecision, existingOnly = false }) {

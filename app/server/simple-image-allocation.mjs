@@ -3,6 +3,8 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { candidateQualification, IMAGE_AUDIT_EVIDENCE_VERSION } from './image-candidate-eligibility.mjs';
 import { imageResolutionPolicyForSlot } from './image-download.mjs';
+import { differenceHash, ImageDeduper } from './image-dedupe.mjs';
+import { getSlotImage } from '../src/lib/imageSlots.js';
 
 const clean = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
 const stable = (value) => Array.isArray(value) ? value.map(stable)
@@ -40,14 +42,19 @@ function localOriginalUsable(root, candidate = {}, slot = {}) {
   if (!candidate.originalDownloaded || !candidate.localUrl?.startsWith('/image-assets/') || candidate.hardJudgment?.technicalUsable !== true) return false;
   const { minWidth, minHeight } = imageResolutionPolicyForSlot(slot);
   if (Number(candidate.width || 0) < minWidth || Number(candidate.height || 0) < minHeight) return false;
+  return Boolean(localAssetFile(root, candidate.localUrl));
+}
+
+function localAssetFile(root, localUrl) {
+  if (!localUrl?.startsWith('/image-assets/')) return null;
   try {
     const base = realpathSync(path.join(root, 'output', 'image-assets'));
-    const relativeUrl = decodeURIComponent(candidate.localUrl.slice('/image-assets/'.length));
+    const relativeUrl = decodeURIComponent(localUrl.slice('/image-assets/'.length));
     const file = realpathSync(path.resolve(base, relativeUrl));
     const relative = path.relative(base, file);
     const fileStat = statSync(file);
-    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative) && fileStat.isFile() && fileStat.size > 0 && fileStat.size <= 14 * 1024 * 1024;
-  } catch { return false; }
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative) && fileStat.isFile() && fileStat.size > 0 && fileStat.size <= 14 * 1024 * 1024 ? file : null;
+  } catch { return null; }
 }
 
 function assetKey(candidate) {
@@ -115,4 +122,50 @@ export function allocateCompatibleImageCandidates({ slots = [], execution = {}, 
   const statuses = new Set(results.map((item) => item.status));
   const status = allocations === 0 ? execution.status : statuses.size === 1 && statuses.has('success') ? 'success' : statuses.has('success') ? 'partial_success' : execution.status;
   return { ...execution, status, results, metrics: { ...(execution.metrics || {}), compatibleCandidateAllocations: allocations } };
+}
+
+// Run after formal compatible-candidate allocation and after any editor
+// research merge. Formal and user-locked images own their files first.
+export async function reconcileProvisionalImageSelections({ slots = [], execution = {}, root, preparedData = {}, slotBindings = {} } = {}) {
+  const results = (execution.results || []).map((item) => ({ ...item }));
+  const slotById = new Map(slots.map((slot) => [slot.slotId, slot]));
+  const deduper = new ImageDeduper();
+  const lockedUrls = new Set();
+  for (const slot of slots) {
+    if (!slot.userLocked && !preparedData.imageLocks?.[slot.slotId]) continue;
+    const binding = slotBindings[slot.slotId] || preparedData.simpleImageSlotBindings?.[slot.slotId];
+    const image = binding ? getSlotImage(preparedData, binding) : null;
+    const src = typeof image === 'string' ? image : image?.src;
+    if (!src) continue;
+    lockedUrls.add(src);
+    const file = localAssetFile(root, src);
+    if (file) { try { deduper.seed([{ dHash: await differenceHash(file), publicUrl: src }]); } catch { /* Missing lock file remains an output blocker. */ } }
+  }
+  const formal = results.filter((item) => item.status === 'success' && item.selected);
+  for (const item of formal) {
+    const selected = item.selected;
+    const file = localAssetFile(root, selected.localUrl);
+    let dHash = selected.dHash || null;
+    if (!dHash && file) { try { dHash = await differenceHash(file); } catch { /* Renderer will report an unusable formal file. */ } }
+    deduper.seed([{ ...selected, dHash }]);
+  }
+  let retained = 0;
+  let cleared = 0;
+  for (const slot of [...slots].sort((a, b) => Number(b.required) - Number(a.required) || a.slotId.localeCompare(b.slotId))) {
+    const result = results.find((item) => item.slotId === slot.slotId);
+    const provisional = result?.provisionalSelected;
+    if (!provisional) continue;
+    const file = localAssetFile(root, provisional.localUrl);
+    const valid = result.status !== 'success' && !result.selected && !slot.userLocked && slotById.has(result.slotId)
+      && provisional.originalDownloaded === true && provisional.hardJudgment?.technicalUsable === true && file && !lockedUrls.has(provisional.localUrl);
+    const duplicate = valid ? await deduper.accept({ ...provisional, filePath: file }) : { accepted: false };
+    if (!duplicate.accepted) {
+      result.provisionalSelected = null;
+      cleared += 1;
+    } else {
+      result.provisionalSelected = { ...provisional, dHash: duplicate.dHash };
+      retained += 1;
+    }
+  }
+  return { ...execution, results, metrics: { ...(execution.metrics || {}), provisionalRetained: retained, provisionalClearedByPriorityOrDedupe: cleared } };
 }

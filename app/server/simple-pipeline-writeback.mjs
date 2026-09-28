@@ -145,6 +145,27 @@ export function applySimpleSkillResults({ preparedData, copyTasks = [], copyExec
       imageWriteback.push({ slotId: slot.slotId, fieldPath: binding.fieldPath, status: "written", src, candidateId: result.selected.candidateId });
       continue;
     }
+    const provisional = result?.provisionalSelected;
+    if (result?.status === "needs_user_action" && !result.selected && provisional?.localUrl?.startsWith("/image-assets/")) {
+      setSlotImage(data, binding, {
+        src: provisional.localUrl,
+        label: provisional.actualSubject || result.actualSubject || slot.subject || slot.activity || slot.visualGoal,
+        candidateId: provisional.candidateId,
+        focus: provisional.focus || "50% 50%",
+        fit: provisional.fit || "cover",
+        sourcePage: provisional.sourcePage || null,
+        sourceTitle: provisional.sourceTitle || null,
+        officialSource: provisional.officialSource === true,
+        provisional: true,
+      });
+      unresolvedItems.push(unresolved("image", slot.slotId, "needs_user_action", true, {
+        technicalStatus: "identity_evidence_pending_confirmation",
+        requiredAction: "confirm_provisional_image",
+        provisionalCandidateId: provisional.candidateId,
+      }));
+      imageWriteback.push({ slotId: slot.slotId, fieldPath: binding.fieldPath, status: "provisional_written", src: provisional.localUrl, candidateId: provisional.candidateId });
+      continue;
+    }
     setSlotImage(data, binding, null);
     const status = result?.status || "failed";
     const plannerUnresolved = result?.technicalStatus === "planner_slot_unresolved" || slot.plannerSlotStatus === "unresolved" || slot.needsUserAction === true;

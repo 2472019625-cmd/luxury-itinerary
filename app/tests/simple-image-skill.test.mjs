@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { applyKnowledgeSourcePathEvidence, buildImageConstraints, buildImagePipelineStageTrace, buildImageQueries, buildKnowledgeQueryCacheKey, classifyTransportType, completeVisualJudgment, failedHardRequirement, runImageSearchSkill } from "../server/simple-image-skill.mjs";
+import { applyKnowledgeSourcePathEvidence, buildImageConstraints, buildImagePipelineStageTrace, buildImageQueries, buildKnowledgeQueryCacheKey, classifyTransportType, completeVisualJudgment, failedHardRequirement, provisionalIdentityOnly, runImageSearchSkill } from "../server/simple-image-skill.mjs";
 import { judgeCandidatesBatch } from "../server/image-audit.mjs";
 import { searchKnowledgeImages } from "../server/knowledge-image-search.mjs";
 import { searchWebBatch } from "../server/image-search.mjs";
@@ -381,6 +381,24 @@ const completeAudit = (candidateOrId, overrides = {}) => ({
   ...overrides,
 });
 
+test("only a complete Core-correct identity-insufficient judgment qualifies for draft prefill", () => {
+  const target = slot("identity-draft", { exactIdentityRequired: true, queryCore: { subject: "游客与动物", action: "近距离互动", identity: "指定场所" } });
+  const audit = completeAudit("identity-draft-candidate", {
+    auditEvidenceVersion: 2, auditContract: { complete: true },
+    actualSubject: "游客与动物近距离互动", eligible: false, matchLevel: "representative",
+    identityMatch: false, hotelIdentityMatch: false,
+    identityEvidence: { status: "insufficient", basis: "none" },
+  });
+  assert.equal(provisionalIdentityOnly(target, audit, {}, "needs_user_judgment"), true);
+  assert.equal(provisionalIdentityOnly(target, { ...audit, coreActionMatch: false }, {}, "needs_user_judgment"), false);
+  assert.equal(provisionalIdentityOnly(target, { ...audit, hardRejectCode: "wrong_hotel" }, {}, "needs_user_judgment"), false);
+  assert.equal(provisionalIdentityOnly(target, { ...audit, visibleLocationConflict: true }, {}, "needs_user_judgment"), false);
+  assert.equal(provisionalIdentityOnly(target, { ...audit, auditContract: { complete: false } }, {}, "needs_user_judgment"), false);
+  assert.equal(provisionalIdentityOnly(target, { ...audit, technicalUsable: false }, {}, "needs_user_judgment"), false);
+  assert.equal(provisionalIdentityOnly(target, audit, {}, "review_timeout"), false);
+  assert.equal(provisionalIdentityOnly({ ...target, exactIdentityRequired: false }, audit, {}, "needs_user_judgment"), false);
+});
+
 test("later size failure preserves an earlier wrong-subject candidate", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "image-reason-pool-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -412,7 +430,7 @@ test("父级补查同asset后续逐图路径可补齐身份，复用视觉且共
     { node_id: "country", formal_name: "Kenya", parent_node_id: "root" },
     { node_id: "region", formal_name: "Amboseli", parent_node_id: "country" },
   ]);
-  for (const mode of ["bound_path", "shared_only", "existing_path", "incomplete_audit"]) await t.test(mode, async (st) => {
+  for (const mode of ["bound_path", "shared_only", "shared_only_download_failed", "shared_only_size_failed", "existing_path", "incomplete_audit"]) await t.test(mode, async (st) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "entity-probe-evidence-refresh-"));
     st.after(() => rm(root, { recursive: true, force: true }));
     const identity = "Aurora Wilderness Lodge";
@@ -430,7 +448,7 @@ test("父级补查同asset后续逐图路径可补齐身份，复用视觉且共
           knowledgeCalls += 1;
           assert.deepEqual(scopeNodeIds, ["region"]);
           const descriptorPath = mode === "existing_path" && knowledgeCalls === 1 ? "Kenya/Amboseli/Unknown/hero.jpg"
-            : knowledgeCalls === 2 && mode !== "shared_only" ? `Kenya/Amboseli/${identity}/hero.jpg` : null;
+            : knowledgeCalls === 2 && !mode.startsWith("shared_only") ? `Kenya/Amboseli/${identity}/hero.jpg` : null;
           const candidate = {
             imageUrl: "https://knowledge.invalid/preview/hero.jpg", sourceKind: "knowledge_library", knowledgeAssetId: "same-real-asset",
             knowledgeRecordId: `record-${knowledgeCalls}`, title: "hero.jpg", alt: identity, knowledgeFragmentContent: identity,
@@ -443,6 +461,8 @@ test("父级补查同asset后续逐图路径可补齐身份，复用视觉且共
         downloadCandidate: async (candidate, { directory, publicPrefix }) => {
           const original = candidate.imageUrl.includes("/original/");
           if (original) originalDownloads += 1;
+          if (original && mode === "shared_only_download_failed") throw Object.assign(new Error("original unavailable"), { code: "download_failed" });
+          if (original && mode === "shared_only_size_failed") throw Object.assign(new Error("image resolution insufficient"), { code: "image_resolution_insufficient" });
           const filename = original ? "original.jpg" : "preview.jpg";
           const filePath = path.join(directory, filename);
           await sharp({ create: { width: 1400, height: 900, channels: 3, background: "#617347" } }).jpeg().toFile(filePath);
@@ -477,7 +497,10 @@ test("父级补查同asset后续逐图路径可补齐身份，复用视觉且共
     } else {
       assert.equal(output.selected, null);
       assert.equal(output.candidates[0].qualificationStatus, "unreviewed");
-      assert.equal(originalDownloads, 0);
+      assert.equal(originalDownloads, mode === "incomplete_audit" ? 0 : 1, "只有完整审核且唯一身份待确认的候选才尝试草稿原件");
+      if (["shared_only", "existing_path"].includes(mode)) assert.equal(output.provisionalSelected?.originalDownloaded, true);
+      if (mode.endsWith("failed")) assert.equal(output.provisionalSelected, undefined, "原件下载失败不得预填");
+      if (mode === "incomplete_audit") assert.equal(output.provisionalSelected, undefined);
       assert.equal(webCalls > 0, mode !== "incomplete_audit", "共享描述不能升权，审核缺字段也不能被路径补齐抹平");
     }
   });
@@ -632,7 +655,9 @@ test("父级补查保留完整实体查询，仅逐图证据可自动采用；�
       assert.equal(webCalls, 0);
     } else {
       assert.equal(result.results[0].selected, null);
-      assert.equal(downloaded.filter(url => url.includes("/original/")).length, 0);
+      assert.equal(downloaded.filter(url => url.includes("/original/")).length, result.results[0].provisionalSelected ? 1 : 0);
+      if (mode === "shared-only") assert.equal(result.results[0].provisionalSelected?.originalDownloaded, true);
+      if (mode === "incomplete") assert.equal(result.results[0].provisionalSelected, undefined);
       assert.equal(webCalls > 0, mode === "shared-only");
       if (mode === "incomplete") assert.equal(result.results[0].status, "needs_user_action");
     }

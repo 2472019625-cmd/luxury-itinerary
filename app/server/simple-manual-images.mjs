@@ -4,16 +4,55 @@ import path from "node:path";
 import sharp from "sharp";
 import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
-import { downloadCandidate } from "./image-download.mjs";
+import { downloadCandidate, imageResolutionPolicyForSlot, withDayGalleryLayout } from "./image-download.mjs";
 import { refreshKnowledgeMatchedFile } from "./knowledge-image-search.mjs";
 import { candidateQualification, isHardRejectedCandidate } from "./image-candidate-eligibility.mjs";
 import { getSlotImage, setSlotImage } from "../src/lib/imageSlots.js";
+import { dayVisualCards } from "../src/lib/dayVisualCards.js";
 import { imageSearchPresentation } from "../src/lib/imageSearchPresentation.js";
 import { buildImageSearchDiagnostic } from "./image-search-diagnostics.mjs";
-import { imageTargetFingerprint } from "./simple-image-allocation.mjs";
+import { imageTargetFingerprint, reconcileProvisionalImageSelections } from "./simple-image-allocation.mjs";
 
 const MIME_EXTENSIONS = Object.freeze({ "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" });
 const manualRenders = new Map();
+
+function projectedTargetSlot(context, slotId, removedSlotIds = []) {
+  const bindings = context.result.data?.simpleImageSlotBindings || context.plan.slotBindings || {};
+  const binding = bindings[slotId];
+  const planned = context.plan.imageSlots?.find((item) => item.slotId === slotId);
+  const target = planned
+    ? { ...planned, visualContext: { ...(planned.visualContext || {}), dayIndex: binding?.dayIndex ?? planned.visualContext?.dayIndex } }
+    : { slotId, moduleType: binding?.module, visualContext: { dayIndex: binding?.dayIndex }, displayLayout: binding?.displayLayout };
+  if (target.moduleType !== "day") return target;
+  const removed = new Set(removedSlotIds);
+  const dayIndex = Number(binding?.dayIndex ?? target.visualContext?.dayIndex);
+  const projectedDay = structuredClone(context.result.data?.days?.[dayIndex]);
+  if (!projectedDay) return target;
+  for (const [id, item] of Object.entries(bindings)) {
+    if (item.module !== "day" || item.dayIndex !== dayIndex || (id !== slotId && !removed.has(id))) continue;
+    const spotIndex = item.spotId
+      ? projectedDay.spots?.findIndex((spot) => String(spot.id || "") === String(item.spotId))
+      : Number(item.spotIndex);
+    const spot = projectedDay.spots?.[spotIndex];
+    if (!spot) continue;
+    spot.images ||= [];
+    spot.images[item.imageIndex] = id === slotId ? { src: "projected-target-image" } : null;
+  }
+  const visible = dayVisualCards(projectedDay, dayIndex, bindings).map((card) => ({
+    slotId: card.slotId, moduleType: "day", visualContext: { dayIndex },
+  }));
+  return withDayGalleryLayout(target, visible);
+}
+
+const targetResolutionPolicy = (context, slotId, removedSlotIds = []) => imageResolutionPolicyForSlot(projectedTargetSlot(context, slotId, removedSlotIds));
+
+function assertTargetResolution(width, height, policy) {
+  if (width >= policy.minWidth && height >= policy.minHeight) return;
+  throw Object.assign(new Error(`图片分辨率不足：实际 ${width}×${height}，当前位置至少需要 ${policy.minWidth}×${policy.minHeight}，请换用更清晰的原图`), {
+    code: "image_resolution_insufficient", actualWidth: width, actualHeight: height,
+    minWidth: policy.minWidth, minHeight: policy.minHeight,
+  });
+}
 const SLOT_LABELS = Object.freeze({
   "image:cover:primary": "封面主图 · 坦桑尼亚草原飞机",
   "image:hotel:imported-hotel-2:primary": "酒店主图 · Singita Sabora Tented Camp",
@@ -25,6 +64,7 @@ const SLOT_STATUS_LABELS = Object.freeze({
   auto_selected: "已自动选图",
   human_selected: "已人工采用",
   uploaded: "已上传",
+  provisional_pending_confirmation: "已预填·待确认",
   candidate_waiting: "有候选待选择",
   audit_pending: "候选审核中",
   auto_rejected: "候选审核未通过",
@@ -122,6 +162,7 @@ function blockingItems(items = [], data = {}, plan = {}, reviews = []) {
   return items.filter((item) => item.required).map((item) => {
     if (item.kind === "copy") return { kind: "copy", id: item.id, targetPath: item.targetPath || "", label: copyLocation(item.targetPath, data), message: "这段文案尚未生成完成，可以只重新生成这一项。", action: "retry_copy" };
     if (item.kind === "image") {
+      if (item.technicalStatus === "identity_evidence_pending_confirmation") return { kind: "image", id: item.id, slotId: item.id, label: imageLocation(item, data, plan), message: "图片已预填到草稿，具体实体身份尚未证实。请确认这张图，或为可选位置移除图片。", action: "handle_image" };
       const explanation = imageSearchPresentation(reviews.find(review => review.slotId === item.id));
       return { kind: "image", id: item.id, slotId: item.id, label: imageLocation(item, data, plan), message: `${explanation.title}。${explanation.detail}`, action: "handle_image" };
     }
@@ -140,6 +181,7 @@ function moduleName(slotId) {
 function candidatePool(imageResult = {}) {
   return uniqueCandidates([
     ...(imageResult.selected ? [imageResult.selected] : []),
+    ...(imageResult.provisionalSelected ? [imageResult.provisionalSelected] : []),
     ...(imageResult.manualAction?.rejectedCandidates || []),
     ...(imageResult.manualAction?.selectableCandidates || []),
     ...(imageResult.candidates || []),
@@ -151,6 +193,7 @@ function selectableIds(result, imageResult) {
   return new Set([
     ...(unresolved?.selectableCandidateIds || []),
     ...(imageResult.manualAction?.selectableCandidates || []).map((item) => item.candidateId),
+    imageResult.provisionalSelected?.candidateId,
   ].filter(Boolean));
 }
 
@@ -215,6 +258,7 @@ function candidateCanBeSelected(result, imageResult, candidate) {
 function slotReviewStatus(imageResult = {}, candidates = []) {
   if (["processing", "running", "queued", "pending"].includes(imageResult.status)) return "processing";
   if (imageResult.status === "success") return imageResult.selected?.userProvided ? "uploaded" : imageResult.selected?.userSelected ? "human_selected" : "auto_selected";
+  if (imageResult.provisionalSelected) return "provisional_pending_confirmation";
   const hardRejected = candidates.filter((candidate) => candidate.autoRejected || candidate.status === "hard_rejected");
   const auditPending = candidates.some((candidate) => ["processing", "audit_pending", "pending"].includes(candidate.autoReviewStatus));
   const reviewTimeout = candidates.some((candidate) => candidate.reviewTimeout || candidate.autoReviewStatus === "review_timeout") || /review.*timeout|audit.*timeout/i.test(`${imageResult.status || ""} ${imageResult.technicalStatus || ""}`);
@@ -243,6 +287,7 @@ function editableImageBinding(context, slotId) {
 
 export function buildSimpleManualImagePayload(store, projectId) {
   const { project, run, plan, result } = projectContext(store, projectId);
+  const context = { project, run, plan, result };
   const resultById = new Map((result.imageExecution?.results || []).map((item) => [item.slotId, item]));
   // Successful positions can also be searched again from the picker. Include
   // their latest search explanation without changing required/missing gates.
@@ -261,8 +306,13 @@ export function buildSimpleManualImagePayload(store, projectId) {
       module: moduleName(slotId),
       label: binding?.cardTitle || planned?.primaryVisualSubject || planned?.subject || SLOT_LABELS[slotId] || slotId,
       primaryVisualSubject: planned?.primaryVisualSubject || planned?.subject || planned?.activity || "",
+      resolutionPolicy: targetResolutionPolicy(context, slotId),
+      resolutionPolicyByMovedSourceSlotId: Object.fromEntries((result.imageExecution?.results || [])
+        .filter((item) => item.slotId !== slotId && (item.selected?.localUrl || item.provisionalSelected?.localUrl))
+        .map((item) => [item.slotId, targetResolutionPolicy(context, slotId, [item.slotId])])),
       targetFingerprint,
       status: slotReviewStatus(imageResult, candidates),
+      provisionalSelected: imageResult.provisionalSelected || null,
       required: planned ? planned.required !== false : binding?.required === true,
       originalVisualTarget: imageResult.manualAction?.originalVisualTarget || (planned ? { location: planned.location, hotel: planned.hotel, activity: planned.activity, subject: planned.subject, visualGoal: planned.visualGoal } : null),
       currentResult: { previousStatus: currentSearch.previousStatus, status: currentSearch.status, technicalStatus: currentSearch.technicalStatus, matchReason: currentSearch.matchReason },
@@ -340,8 +390,15 @@ function selectedCandidate(imageResult, candidateId) {
 
 async function persistResult({ store, root, project, run, plan, result, imageExecution, action, render = runSimpleRenderer, deferRender = false }) {
   const affected = new Set([...(action.slotIds || []), action.slotId, ...(action.humanDecision?.movedFrom || [])].filter(Boolean));
+  const beforeReconcile = new Map((imageExecution.results || []).map((item) => [item.slotId, item]));
+  imageExecution = await reconcileProvisionalImageSelections({ slots: plan.imageSlots, execution: imageExecution, root, preparedData: result.data, slotBindings: result.data?.simpleImageSlotBindings || plan.slotBindings });
+  for (const item of imageExecution.results || []) {
+    if (beforeReconcile.get(item.slotId)?.provisionalSelected && !item.provisionalSelected) affected.add(item.slotId);
+  }
+  const taskResultIds = new Set(affected);
   const explicitSearch = action.type === "explicit_single_slot_search" || action.type === "explicit_multi_slot_search";
-  if (action.type === "explicit_single_slot_search" && result.imageExecution?.results?.find(item => item.slotId === action.slotId)?.selected) affected.clear();
+  if (action.type === "explicit_single_slot_search" && result.imageExecution?.results?.find(item => item.slotId === action.slotId)?.selected) affected.delete(action.slotId);
+  for (const item of imageExecution.results || []) if (taskResultIds.has(item.slotId)) store.saveTaskResult(project.projectId, run.executionRunId, `image-${item.slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, item);
   const writeback = applySimpleSkillResults({
     preparedData: result.data || plan.preparedData,
     copyTasks: [],
@@ -434,7 +491,7 @@ function csvValues(value) {
 
 async function localizeKnowledgeCandidate({
   candidate, root, projectId, knowledgeImageConfig = {}, downloadImage = downloadCandidate,
-  refreshMatchedFile = refreshKnowledgeMatchedFile,
+  refreshMatchedFile = refreshKnowledgeMatchedFile, resolutionPolicy = {},
 } = {}) {
   if (candidate.localUrl?.startsWith("/image-assets/")) return { candidate, attempts: 0, success: 0, saved: 0, durationMs: 0 };
   if (candidate.sourceKind !== "knowledge_library" || !candidate.knowledgeMatchedFile) {
@@ -451,7 +508,7 @@ async function localizeKnowledgeCandidate({
   const publicPrefix = `/image-assets/simple-manual-${projectId}`;
   const download = async () => {
     attempts += 1;
-    const downloaded = await downloadImage({ ...candidate, imageUrl: matchedFile.url, title: matchedFile.filename || candidate.sourceTitle || candidate.title }, { directory, publicPrefix, trustedKnowledgeOrigins: trustedOrigins });
+    const downloaded = await downloadImage({ ...candidate, imageUrl: matchedFile.url, title: matchedFile.filename || candidate.sourceTitle || candidate.title }, { directory, publicPrefix, trustedKnowledgeOrigins: trustedOrigins, ...resolutionPolicy });
     return {
       ...candidate,
       filePath: downloaded.filePath,
@@ -491,9 +548,9 @@ async function localizeKnowledgeCandidate({
   }
 }
 
-async function localizeRemoteCandidate({ candidate, root, projectId, downloadImage = downloadCandidate } = {}) {
+async function localizeRemoteCandidate({ candidate, root, projectId, downloadImage = downloadCandidate, resolutionPolicy = {} } = {}) {
   if (candidate.localUrl?.startsWith("/image-assets/")) return { candidate, attempts: 0, success: 0, saved: 0, durationMs: 0 };
-  const existingAsset = [candidate.publicUrl, candidate.localPreviewUrl, candidate.previewUrl]
+  const existingAsset = [candidate.publicUrl]
     .find((value) => String(value || "").startsWith("/image-assets/"));
   if (existingAsset) return { candidate: { ...candidate, localUrl: existingAsset }, attempts: 0, success: 0, saved: 0, durationMs: 0 };
   const imageUrl = [candidate.imageUrl, candidate.publicUrl, candidate.previewUrl, candidate.localPreviewUrl]
@@ -503,7 +560,7 @@ async function localizeRemoteCandidate({ candidate, root, projectId, downloadIma
   const directory = path.join(root, "output", "image-assets", `simple-manual-${projectId}`);
   const publicPrefix = `/image-assets/simple-manual-${projectId}`;
   try {
-    const downloaded = await downloadImage({ ...candidate, imageUrl }, { directory, publicPrefix });
+    const downloaded = await downloadImage({ ...candidate, imageUrl }, { directory, publicPrefix, ...resolutionPolicy });
     return {
       candidate: {
         ...candidate,
@@ -548,7 +605,7 @@ function patchCandidateInImageResult(imageResult, candidateId, patch) {
   const update = (candidate) => candidate?.candidateId === candidateId ? { ...candidate, ...patch } : candidate;
   return {
     ...imageResult,
-    selected: imageResult.selected ? update(imageResult.selected) : imageResult.selected,
+    selected: imageResult.selected,
     candidates: (imageResult.candidates || []).map(update),
     manualAction: imageResult.manualAction ? {
       ...imageResult.manualAction,
@@ -568,14 +625,16 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
   let candidate = source && selectedCandidate(source, candidateId);
   if (!candidate) throw Object.assign(new Error("当前项目中找不到该候选"), { code: "candidate_not_found" });
   if (isHardRejectedCandidate(candidate)) throw Object.assign(new Error("该候选命中硬拒绝条件，不能采用"), { code: "candidate_hard_rejected" });
+  if (current.provisionalSelected?.candidateId === candidateId && !manualConfirmed) throw Object.assign(new Error("预填图片须明确确认具体实体身份"), { code: "manual_confirmation_required" });
   const overridesAutomaticJudgment = source.slotId !== slotId || !candidateCanBeSelected(context.result, current, candidate);
   if (overridesAutomaticJudgment && !manualConfirmed) throw Object.assign(new Error("未确认图片风险，不能采用"), { code: "manual_confirmation_required" });
+  const resolutionPolicy = targetResolutionPolicy(context, slotId, source.slotId !== slotId && (source.selected?.candidateId === candidateId || source.provisionalSelected?.candidateId === candidateId) ? [source.slotId] : []);
   let delayedOriginal = { attempts: 0, success: 0, saved: 0, durationMs: 0 };
   if (!candidate.localUrl?.startsWith("/image-assets/")) {
     try {
       delayedOriginal = candidate.sourceKind === "knowledge_library"
-        ? await localizeKnowledgeCandidate({ candidate, root, projectId, knowledgeImageConfig, downloadImage, refreshMatchedFile })
-        : await localizeRemoteCandidate({ candidate, root, projectId, downloadImage });
+        ? await localizeKnowledgeCandidate({ candidate, root, projectId, knowledgeImageConfig, downloadImage, refreshMatchedFile, resolutionPolicy })
+        : await localizeRemoteCandidate({ candidate, root, projectId, downloadImage, resolutionPolicy });
       candidate = delayedOriginal.candidate;
     } catch (error) {
       const failureCode = originalDownloadFailureCode(error);
@@ -612,16 +671,19 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
     const metadata = await sharp(file, options).metadata();
     if (!['jpeg', 'png', 'webp'].includes(metadata.format)) throw new Error('invalid format');
     await sharp(file, options).raw().toBuffer();
-  } catch {
+    assertTargetResolution(metadata.width || 0, metadata.height || 0, targetResolutionPolicy(context, slotId, imageResults.filter((item) => item.slotId !== slotId && (item.selected?.localUrl === candidate.localUrl || item.provisionalSelected?.localUrl === candidate.localUrl)).map((item) => item.slotId)));
+  } catch (error) {
+    if (error?.code === "image_resolution_insufficient") throw error;
     throw Object.assign(new Error('图片文件缺失、损坏或无法安全解码，请重新上传'), { code: 'candidate_file_unusable' });
   }
   context = projectContext(store, projectId);
   imageResults = context.result.imageExecution?.results || [];
   current = imageResults.find(item => item.slotId === slotId);
-  const movedFrom = imageResults.filter((item) => item.slotId !== slotId && item.selected?.localUrl === candidate.localUrl).map((item) => item.slotId);
+  const movedFrom = imageResults.filter((item) => item.slotId !== slotId && (item.selected?.localUrl === candidate.localUrl || item.provisionalSelected?.localUrl === candidate.localUrl)).map((item) => item.slotId);
   const humanDecision = { action: movedFrom.length ? 'move' : 'adopt', decidedAt: new Date().toISOString(), targetSlotId: slotId, sourceSlotId: source.slotId, movedFrom, riskConfirmed: manualConfirmed, overridesAutomaticJudgment, originalRejection: candidate.rejection || null, originalRisk: candidate.rejectionReason || candidate.matchReason || candidate.reason || '' };
+  const { provisionalSelected: _discardedProvisional, ...currentWithoutProvisional } = current;
   const nextCurrent = {
-    ...current,
+    ...currentWithoutProvisional,
     status: "success",
     matchLevel: "user_selected_candidate",
     selected: { ...candidate, localUrl: candidate.localUrl, userSelected: true, humanDecision, selectedAt: new Date().toISOString() },
@@ -630,7 +692,7 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
     technicalStatus: "user_selected_existing_candidate",
     manualAction: { ...(current.manualAction || {}), resolvedBy: "choose_existing_candidate", selectedCandidateId: candidateId, resolvedAt: new Date().toISOString() },
   };
-  const nextResults = imageResults.map((item) => item.slotId === slotId ? nextCurrent : movedFrom.includes(item.slotId) ? { ...item, status: 'needs_user_action', selected: null, candidates: candidatePool(item), matchReason: '图片已由用户移动至其他位置', manualAction: { ...item.manualAction, movedTo: slotId, humanDecision } } : item);
+  const nextResults = imageResults.map((item) => item.slotId === slotId ? nextCurrent : movedFrom.includes(item.slotId) ? { ...item, status: 'needs_user_action', selected: null, provisionalSelected: null, candidates: candidatePool(item), matchReason: '图片已由用户移动至其他位置', manualAction: { ...item.manualAction, movedTo: slotId, humanDecision } } : item);
   const previousMetrics = context.result.imageExecution?.metrics || {};
   const imageExecution = { ...context.result.imageExecution, results: nextResults, metrics: {
     ...previousMetrics,
@@ -654,7 +716,8 @@ export async function rejectSimpleImageCandidate({ store, root, projectId, slotI
   const manualAction = current.manualAction || {};
   const selectableCandidates = (manualAction.selectableCandidates || []).filter((item) => item.candidateId !== candidateId);
   const rejected = selectedCandidate(current, candidateId);
-  const nextCurrent = { ...current, manualAction: { ...manualAction, selectableCandidates, rejectedCandidates: uniqueCandidates([...(manualAction.rejectedCandidates || []), rejected ? { ...rejected, userDecision: "rejected", userDecidedAt: new Date().toISOString() } : null].filter(Boolean)) } };
+  const rejectedProvisional = current.provisionalSelected?.candidateId === candidateId;
+  const nextCurrent = { ...current, ...(rejectedProvisional ? { provisionalSelected: null, status: "needs_user_action", selected: null } : {}), manualAction: { ...manualAction, selectableCandidates, rejectedCandidates: uniqueCandidates([...(manualAction.rejectedCandidates || []), rejected ? { ...rejected, userDecision: "rejected", userDecidedAt: new Date().toISOString() } : null].filter(Boolean)) } };
   const imageExecution = { ...context.result.imageExecution, results: imageResults.map((item) => item.slotId === slotId ? nextCurrent : item), metrics: { ...(context.result.imageExecution?.metrics || {}), automaticFollowupRounds: 0 } };
   store.saveTaskResult(projectId, context.run.executionRunId, `image-${slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, nextCurrent);
   return persistResult({ ...context, store, root, imageExecution, render, action: { type: "reject_existing_candidate", slotId, candidateId } });
@@ -755,7 +818,7 @@ export async function uploadSimpleImage({ store, root, projectId, slotId, dataUr
   const metadata = await sharp(buffer, { failOn: "warning" }).metadata();
   const contentType = metadata.format === "jpeg" ? "image/jpeg" : metadata.format === "png" ? "image/png" : metadata.format === "webp" ? "image/webp" : "";
   if (!MIME_EXTENSIONS[contentType]) throw Object.assign(new Error("图片无法解码或格式不受支持"), { code: "upload_decode_failed" });
-  if ((metadata.width || 0) < 900 || (metadata.height || 0) < 500) throw Object.assign(new Error("图片分辨率不足，至少需要 900×500"), { code: "upload_resolution_low" });
+  assertTargetResolution(metadata.width || 0, metadata.height || 0, targetResolutionPolicy(context, slotId));
   const ratio = metadata.width / metadata.height;
   if (ratio < 0.65 || ratio > 3.2) throw Object.assign(new Error("图片比例不适合行程主图"), { code: "upload_ratio_invalid" });
   const sha256 = createHash("sha256").update(buffer).digest("hex");
@@ -782,6 +845,7 @@ export async function uploadSimpleImage({ store, root, projectId, slotId, dataUr
   if (!current) throw Object.assign(new Error("该图片位没有已保存结果"), { code: "slot_result_missing" });
   const nextCurrent = {
     ...current,
+    provisionalSelected: null,
     status: "success",
     matchLevel: "user_uploaded",
     selected: candidate,
@@ -803,8 +867,8 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
   const slot = assertPlannedImageSlot(context, slotId);
   if (typeof runImage !== "function") throw new Error("单槽图片搜索能力未配置");
   let previousResults = context.result.imageExecution?.results || [];
-  const existingImages = previousResults.filter((item) => item.slotId !== slotId && item.status === "success" && item.selected).map((item) => ({ ...item.selected, src: item.selected.localUrl, slotId: item.slotId }));
-  const searched = await runImage({ root, slots: [slot], existingImages, ...imageOptions });
+  const existingImages = previousResults.filter((item) => item.slotId !== slotId && (item.selected || item.provisionalSelected)).map((item) => { const image = item.selected || item.provisionalSelected; return { ...image, src: image.localUrl, slotId: item.slotId }; });
+  const searched = await runImage({ root, slots: [{ ...slot, ...projectedTargetSlot(context, slotId) }], existingImages, ...imageOptions });
   context = projectContext(store, projectId);
   previousResults = context.result.imageExecution?.results || [];
   if (searched.status === "failed" || searched.results?.some(item => item.slotId === slotId && item.status === "failed")) throw new Error("搜索失败，请重试");
@@ -816,6 +880,7 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
   const nextCurrent = returned.status === "success" && !preserveExistingSelection ? {
     ...previous,
     ...returned,
+    provisionalSelected: null,
     requestKind: "user_requested_single_slot_search",
     candidates: mergedCandidates,
     manualAction: { ...(previous.manualAction || {}), lastExplicitSearchAt: new Date().toISOString() },
@@ -852,7 +917,6 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
       automaticFollowupRounds: 0,
     },
   };
-  store.saveTaskResult(projectId, context.run.executionRunId, `image-${slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, nextCurrent);
   const payload = await persistResult({ ...context, store, root, imageExecution, render, deferRender, action: { type: "explicit_single_slot_search", slotId, requestId: randomUUID() } });
   payload.newCandidateCount = mergedCandidates.filter(item => (item.localUrl || item.publicUrl) && !priorCandidates.some(old => old.candidateId === item.candidateId || (old.localUrl || old.publicUrl) === (item.localUrl || item.publicUrl))).length;
   return payload;
@@ -866,8 +930,8 @@ export async function researchSimpleImageSlots({ store, root, projectId, slotIds
   const previousById = new Map((context.result.imageExecution?.results || []).map((item) => [item.slotId, item]));
   const retryIds = requestedIds.filter((slotId) => !(previousById.get(slotId)?.status === "success" && previousById.get(slotId)?.selected));
   if (!retryIds.length) throw Object.assign(new Error("当前没有需要重新搜索的缺图位置"), { code: "image_slots_not_unresolved" });
-  const slots = retryIds.map((slotId) => assertPlannedImageSlot(context, slotId));
-  const existingImages = (context.result.imageExecution?.results || []).filter((item) => !retryIds.includes(item.slotId) && item.status === "success" && item.selected).map((item) => ({ ...item.selected, src: item.selected.localUrl, slotId: item.slotId }));
+  const slots = retryIds.map((slotId) => ({ ...assertPlannedImageSlot(context, slotId), ...projectedTargetSlot(context, slotId) }));
+  const existingImages = (context.result.imageExecution?.results || []).filter((item) => !retryIds.includes(item.slotId) && (item.selected || item.provisionalSelected)).map((item) => { const image = item.selected || item.provisionalSelected; return { ...image, src: image.localUrl, slotId: item.slotId }; });
   const searched = await runImage({ root, slots, existingImages, ...imageOptions });
 
   context = projectContext(store, projectId);
@@ -884,6 +948,7 @@ export async function researchSimpleImageSlots({ store, root, projectId, slotIds
     const nextCurrent = returned.status === "success" && returned.selected && !preserveExistingSelection ? {
       ...previous,
       ...returned,
+      provisionalSelected: null,
       requestKind: "user_requested_multi_slot_search",
       candidates: mergedCandidates,
       manualAction: { ...(previous.manualAction || {}), lastExplicitSearchAt: now },
@@ -907,7 +972,6 @@ export async function researchSimpleImageSlots({ store, root, projectId, slotIds
       },
     };
     nextById.set(slotId, nextCurrent);
-    store.saveTaskResult(projectId, context.run.executionRunId, `image-${slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, nextCurrent);
   }
   const nextResults = [...previousResults.map((item) => nextById.get(item.slotId) || item), ...retryIds.filter((slotId) => !previousResults.some((item) => item.slotId === slotId)).map((slotId) => nextById.get(slotId))];
   const imageExecution = {

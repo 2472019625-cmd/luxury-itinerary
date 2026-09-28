@@ -6,7 +6,7 @@ import { judgeCandidatesBatch } from "./image-audit.mjs";
 import { completeVisualJudgment, visualSemanticConflict } from "./image-audit-contract.mjs";
 export { completeVisualJudgment } from "./image-audit-contract.mjs";
 import { ImageDeduper } from "./image-dedupe.mjs";
-import { downloadCandidate, imageResolutionPolicyForSlot } from "./image-download.mjs";
+import { downloadCandidate, imageResolutionPolicyForSlot, withDayGalleryLayout } from "./image-download.mjs";
 import { searchWebBatch } from "./image-search.mjs";
 import { normalizeImageSourceMode, searchKnowledgeImages } from "./knowledge-image-search.mjs";
 import { applyKnowledgeScopeToQueryPlan, buildKnowledgeQueryPlan, buildKnowledgeScopePlan, buildKnowledgeVisualTarget, classifyKnowledgeImagePurpose, explicitEntityRoute, createKnowledgeScopeResolver, knowledgeSourcePathMatches, knowledgeEntityProbeEvidence, knowledgeEntityProbeAuditCandidate, knowledgeTransportRootPathEvidence } from "./knowledge-scope-resolver.mjs";
@@ -668,6 +668,21 @@ export function failedHardRequirement(slot, audit, candidate = {}) {
   return null;
 }
 
+// This is a draft-only exception. The ordinary eligibility and selected gates
+// continue to reject an image whose exact entity has not been proven.
+export function provisionalIdentityOnly(slot, audit, candidate = {}, rejection = null) {
+  if (slot?.exactIdentityRequired !== true || rejection !== "needs_user_judgment"
+    || !completeVisualJudgment(audit) || !isIdentityEvidenceUnresolved(audit)
+    || audit.identityEvidence?.status !== "insufficient") return false;
+  const withoutMissingIdentity = {
+    ...audit,
+    identityEvidence: { ...audit.identityEvidence, status: "supported" },
+    identityMatch: true,
+    hotelIdentityMatch: true,
+  };
+  return failedHardRequirement(slot, withoutMissingIdentity, candidate) === null;
+}
+
 function finalizeAuditEligibility(audit, rejection = null) {
   if (!audit) return audit;
   const hardCode = isHardRejectionCode(rejection) ? normalizeHardRejectCode(rejection) : null;
@@ -839,6 +854,12 @@ export async function runImageSearchSkill({
   const visionQueue = new TaskQueue(concurrency.vision || 3);
   const deduper = new ImageDeduper();
   deduper.seed(existingImages);
+  const provisionalPool = new Map();
+  const rememberProvisional = (slotId, item) => {
+    const entries = provisionalPool.get(slotId) || [];
+    if (!entries.some((entry) => entry.candidate.candidateId === item.candidate.candidateId)) entries.push(item);
+    provisionalPool.set(slotId, entries);
+  };
   let dedupeTail = Promise.resolve();
   const withDedupeLock = (candidate) => { const operation = dedupeTail.then(() => deduper.accept(candidate)); dedupeTail = operation.catch(() => undefined); return operation; };
   const resolvedSourceMode = normalizeImageSourceMode(sourceMode);
@@ -933,7 +954,7 @@ export async function runImageSearchSkill({
     const contractErrors = validateImageSlot(slot);
     if (contractErrors.length) return { slotId: slot?.slotId || null, status: "failed", selected: null, candidates: [], queriesUsed: [], sourceEvidence: [], actualSubject: null, matchReason: null, technicalStatus: "invalid_slot_contract", warnings: contractErrors, constraints: null, durationMs: Date.now() - slotStartedAt };
     const constraints = buildImageConstraints(slot);
-    const resolutionPolicy = imageResolutionPolicyForSlot(slot);
+    const resolutionPolicy = imageResolutionPolicyForSlot(Number.isInteger(slot.dayCardCount) ? slot : withDayGalleryLayout(slot, slots));
     const resolutionCacheKey = `${resolutionPolicy.minWidth}x${resolutionPolicy.minHeight}`;
     const queriesUsed = buildImageQueries(slot, maxQueriesPerSlot);
     if (slot.userLocked) return { slotId: slot.slotId, status: "needs_user_action", selected: null, candidates: [], queriesUsed: [], sourceEvidence: [], actualSubject: null, matchReason: "图片位已由用户锁定，未执行自动搜索", technicalStatus: "user_locked", warnings: [], constraints, durationMs: Date.now() - slotStartedAt };
@@ -1204,7 +1225,12 @@ export async function runImageSearchSkill({
             continue;
           }
           const gateSlot = knowledgeCandidateGateSlot(layerSlot, candidate);
-          const rejection = failedHardRequirement(gateSlot, effectiveAudit, candidate) || (fallbackPlan ? controlledFallbackRejection(fallbackPlan, effectiveAudit) : null);
+          const hardRejection = failedHardRequirement(gateSlot, effectiveAudit, candidate);
+          const fallbackRejection = fallbackPlan ? controlledFallbackRejection(fallbackPlan, effectiveAudit) : null;
+          const rejection = hardRejection || fallbackRejection;
+          if (!fallbackRejection && pathDecision.match !== false && provisionalIdentityOnly(gateSlot, effectiveAudit, candidate, hardRejection)) {
+            rememberProvisional(slot.slotId, { candidate: { ...candidate, originalDownloaded: true }, audit: effectiveAudit, resolutionPolicy, sourceKind: "knowledge_library", remainingOriginalBudget: () => Math.max(0, downloadBudget - downloadsUsed) });
+          }
           const qualifiedAudit = finalizeAuditEligibility(effectiveAudit, rejection);
           if (rejection) {
             if (rejection === "needs_user_judgment") incompleteJudgment = true;
@@ -1791,6 +1817,9 @@ export async function runImageSearchSkill({
               }
               const gateSlot = knowledgeCandidateGateSlot(eligibilitySlot, candidate);
               const rejection = failedHardRequirement(gateSlot, effectiveAudit, candidate);
+              if (pathDecisionFor(candidate).match !== false && provisionalIdentityOnly(gateSlot, effectiveAudit, candidate, rejection)) {
+                rememberProvisional(slot.slotId, { candidate, audit: effectiveAudit, resolutionPolicy, sourceKind: "knowledge_library", remainingOriginalBudget: () => Math.max(0, originalDownloadBudget - originalDownloadsUsed) });
+              }
               const qualifiedAudit = finalizeAuditEligibility(effectiveAudit, rejection);
               if (record) {
                 record.judgmentStatus = rejection === "needs_user_judgment" ? "needs_user_judgment" : rejection ? "rejected" : qualifiedAudit.matchLevel === "representative" ? "representative" : "approved_not_selected";
@@ -2520,7 +2549,12 @@ export async function runImageSearchSkill({
         for (const candidate of wave) {
           const audit = applyWebImageIdentityEvidence(layerSlot, candidate, auditMap.get(candidate.candidateId));
           if (!completeVisualJudgment(audit)) { judged.push({ candidate, audit: audit || null, rejection: "needs_user_judgment" }); continue; }
-          const rejection = failedHardRequirement(layerSlot, audit, candidate) || (fallbackPlan ? controlledFallbackRejection(fallbackPlan, audit) : null);
+          const hardRejection = failedHardRequirement(layerSlot, audit, candidate);
+          const fallbackRejection = fallbackPlan ? controlledFallbackRejection(fallbackPlan, audit) : null;
+          const rejection = hardRejection || fallbackRejection;
+          if (!fallbackRejection && provisionalIdentityOnly(layerSlot, audit, candidate, hardRejection)) {
+            rememberProvisional(slot.slotId, { candidate, audit, resolutionPolicy, sourceKind: "web" });
+          }
           judged.push({ candidate, audit: finalizeAuditEligibility(audit, rejection), rejection });
         }
         const earlyStop = judged.some((item) => !item.rejection && item.audit?.eligible && (["exact", "exact_match"].includes(item.audit.matchLevel) || (Number(item.audit.score) >= 85 && Number(item.audit.relevance) >= 85)));
@@ -2640,6 +2674,57 @@ export async function runImageSearchSkill({
     }
     finally { completedSlots += 1; onCapabilityCall?.({ phase: "slot_progress", capabilityId: "image_slot_progress", completedSlots, totalSlots: slots.length, target: slot.slotId }); }
   })));
+  // Formal selections have already reserved their files in the deduper. Only
+  // now may a fully judged, identity-only unresolved image be used in a draft.
+  const resultById = new Map(results.map((result) => [result.slotId, result]));
+  for (const slot of [...slots].sort((a, b) => imageSlotPriority(a) - imageSlotPriority(b))) {
+    const result = resultById.get(slot.slotId);
+    if (!result || result.status === "success" || result.selected || slot.userLocked) continue;
+    const entries = [...(provisionalPool.get(slot.slotId) || [])]
+      .sort((a, b) => auditQualityScore(b.audit, b.candidate, slot) - auditQualityScore(a.audit, a.candidate, slot));
+    let originalAttempts = 0;
+    for (const entry of entries) {
+      let original = entry.candidate;
+      if (entry.sourceKind === "knowledge_library" && original.originalDownloaded !== true) {
+        if (originalAttempts >= Number(entry.remainingOriginalBudget?.() || 0)) continue;
+        const matched = original.knowledgeMatchedFile;
+        if (!matched?.url) continue;
+        originalAttempts += 1;
+        metrics.matchedFileDownloadAttempts += 1;
+        metrics.downloadAttempts += 1;
+        try {
+          const technical = await downloadQueue.add(() => measure("originalDownload", () => downloadFn({ ...original, imageUrl: matched.url, title: matched.filename || original.title }, { directory: assetDirectory, publicPrefix, signal, retrievalSession, ...entry.resolutionPolicy, trustedKnowledgeOrigins })));
+          metrics.matchedFileDownloadSuccess += 1;
+          metrics.originalDownloadSavedCount += 1;
+          original = { ...original, ...technical, originalDownloaded: true, originalDownloadStatus: "success" };
+        } catch (error) {
+          const failed = publicCandidate({ ...original, originalDownloadStatus: "failed", originalDownloadFailureCode: error?.code === "image_resolution_insufficient" ? "resolution_failed" : "preview_found_original_download_failed", originalDownloadFailureReason: error?.message || String(error) }, entry.audit, "preview_found_original_download_failed");
+          result.candidates = mergePublicCandidates(result.candidates, [failed]);
+          continue;
+        }
+      }
+      if (!original.filePath || !original.publicUrl || !original.sha256) continue;
+      const duplicate = await withDedupeLock(original);
+      if (!duplicate.accepted) continue;
+      const provisionalSelected = {
+        ...publicCandidate({ ...original, originalDownloaded: true }, entry.audit, "needs_user_judgment"),
+        localUrl: original.publicUrl,
+        originalDownloaded: true,
+        dHash: duplicate.dHash,
+        aspectRatio: slot.aspectRatio,
+        provisional: true,
+        selected: false,
+        candidateStatus: "provisional_pending_confirmation",
+        autoReviewStatus: "identity_pending_confirmation",
+      };
+      result.provisionalSelected = provisionalSelected;
+      result.status = "needs_user_action";
+      result.matchReason = "主体与必要动作已审核，具体实体身份仍待人工确认";
+      result.technicalStatus = "identity_evidence_pending_confirmation";
+      result.candidates = mergePublicCandidates(result.candidates, [provisionalSelected]);
+      break;
+    }
+  }
   const stageOutcomes = {
     plannerUnresolved: results.filter((item) => item.pipelineEvidence?.searchTrace?.planner.status === "unresolved").length,
     hierarchyUnavailable: results.filter((item) => ["failed", "timeout"].includes(item.pipelineEvidence?.searchTrace?.hierarchy.status)).length,

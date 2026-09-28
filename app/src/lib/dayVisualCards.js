@@ -1,5 +1,7 @@
 import { bindingSpotIdentity, daySpotIdentity } from './dayEditorState.js';
 
+const imageSrc = (image) => typeof image === 'string' ? image : image?.src;
+
 export function dayVisualCards(day, dayIndex, bindings, { includeUnboundSpots = false } = {}) {
   if (!bindings) return (day.spots || []).map((spot, spotIndex) => ({ spot, spotId: daySpotIdentity(spot, dayIndex, spotIndex), spotIndex, imageIndex: 0, cardKind: 'experience' }));
   const boundSpotIds = new Set();
@@ -9,7 +11,7 @@ export function dayVisualCards(day, dayIndex, bindings, { includeUnboundSpots = 
     const source = Number.isInteger(resolvedSpotIndex) ? day.spots?.[resolvedSpotIndex] : null;
     if (!source) return [];
     const image = source.images?.[binding.imageIndex];
-    if (!binding.required && !image?.src) return [];
+    if (!binding.required && !imageSrc(image)) return [];
     const usesExperience = binding.useSpotCopy !== false;
     if (usesExperience && spotId) boundSpotIds.add(spotId);
     return [{ slotId, spotId: usesExperience ? spotId : null, spotIndex: resolvedSpotIndex, imageIndex: binding.imageIndex, cardKind: usesExperience ? 'experience' : 'visual', spot: {
@@ -17,7 +19,7 @@ export function dayVisualCards(day, dayIndex, bindings, { includeUnboundSpots = 
       name: usesExperience && binding.manualEditorCard === true ? source.name : binding.cardTitle || (usesExperience ? source.name : '行程体验'),
       description: usesExperience ? source.experience || source.description || '' : binding.cardDescription || binding.description || '',
       experience: undefined,
-      images: image?.src ? [image] : [],
+      images: imageSrc(image) ? [image] : [],
       image: undefined,
     } }];
   });

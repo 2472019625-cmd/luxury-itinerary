@@ -89,6 +89,14 @@ test('manual experience card stays editor-only until it has an image and deletes
   assert.ok(data.simpleImageSlotBindings['slot-visual']);
 });
 
+test('legacy string image remains a visible optional DAY card', () => {
+  const data = fixture();
+  data.days[0].spots[1].images = ['/legacy-safari.jpg'];
+  const cards = dayVisualCards(data.days[0], 0, data.simpleImageSlotBindings);
+  assert.deepEqual(cards.map((card) => card.slotId), ['slot-sundowner', 'slot-visual']);
+  assert.equal(cards[1].spot.images[0], '/legacy-safari.jpg');
+});
+
 test('preview identity opens an experience by spotId and a visual-only card by slotId', () => {
   const cards = dayVisualCards(fixture().days[0], 0, fixture().simpleImageSlotBindings);
   const experience = cards.find((card) => card.slotId === 'slot-sundowner');

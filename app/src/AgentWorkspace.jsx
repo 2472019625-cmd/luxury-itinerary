@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { mergeManualImagePayload, mergeTargetedRepairPayload } from "./lib/manualImageState.js";
 import { AGENT_STORAGE, AgentModeStrip, AppHeader, Editor, VersionsStep, readStorage } from "./Workspace.jsx";
 
-async function readJson(response) { const value = await response.json(); if (!response.ok) throw Object.assign(new Error(value.error || "请求失败"), { payload:value }); return value; }
+async function readJson(response) { const value = await response.json(); if (!response.ok) throw Object.assign(new Error(value.error || "请求失败"), { code: value.code, payload:value }); return value; }
 
 function editorSelectionForSlot(project, slotId) {
   const binding = project.data.simpleImageSlotBindings?.[slotId];
@@ -60,6 +60,11 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     const slotId = targetSlot.pipelineSlotId;
     if (!slotId) throw new Error("当前位置没有对应的 Simple Pipeline 图片位");
     return request(slotId, "select", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ candidateId:candidate.candidateId, manualConfirmed:candidate.manualConfirmed === true }) });
+  };
+  const reject = async (candidate, targetSlot) => {
+    const slotId = targetSlot.pipelineSlotId;
+    if (!slotId) throw new Error("当前位置没有对应的 Simple Pipeline 图片位");
+    return request(slotId, "reject", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ candidateId:candidate.candidateId }) });
   };
   const upload = async (slotId, file) => request(slotId, "upload", { method:"POST", headers:{ "content-type":file.type || "application/octet-stream", "x-file-name":encodeURIComponent(file.name) }, body:file });
   const uploadFromEditor = async (file, targetSlot) => {
@@ -138,12 +143,14 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   if (screen === "versions" && payload.canEnterFinal) return <div className="workspace-shell workspace-agent-mode"><AppHeader user={workspaceUser} project={headerProject} saved="saved" canGenerate={false} onHome={goHome} onLogout={logout} /><AgentModeStrip showHome onHome={goHome} /><VersionsStep project={payload.project} existingOnly onBack={() => setScreen("editor")} /></div>;
   const firstUnresolved = payload.unresolvedRequiredSlotIds?.[0] || "image:cover:primary";
   const pendingSummary = payload.unresolvedNotices?.map((item) => item.message) || [];
+  const provisionalCount = payload.project.data.imageReview?.slots?.filter((slot) => slot.status === "provisional_pending_confirmation").length || 0;
   return <div className="workspace-shell workspace-agent-mode"><AppHeader user={workspaceUser} project={headerProject} saved="saved" canGenerate={false} onHome={goHome} onLogout={logout} /><AgentModeStrip showHome onHome={goHome} /><Editor
     project={payload.project}
     ItineraryComponent={ItineraryComponent}
     onProject={(project) => setPayload((current) => ({ ...current, project }))}
     onPersistDayEditor={persistDayEditor}
     onChooseImage={choose}
+    onRejectImage={reject}
     onUploadImage={uploadFromEditor}
     onResearchSlot={research}
     onRetryCopy={(targetId) => targetedRepair("copy", targetId)}
@@ -161,7 +168,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     defaultDesigner={payload.project.data.designer || { avatar:"", name:"", role:"", bio:"" }}
     statusNotice={payload.canEnterFinal
       ? { title:"内容已经补齐", message:"正式成品已通过检查，可以进入 Step 5 查看和下载。" }
-      : { title:"可编辑草稿已生成", message:payload.draftRendered ? "未完成项目已在对应位置保留提醒；你可以先编辑文案、补图和检查版面，正式下载会在问题补齐后开放。" : "可以先在编辑器处理未完成项目；草稿长图生成未通过时，请按下方提醒检查对应模块。", items:pendingSummary }}
+      : { title:"可编辑草稿已生成", message:provisionalCount ? `有 ${provisionalCount} 张图片已预填·待确认。请逐张确认使用，或不使用并换图；确认前仍属于未完成草稿，不能正式下载。` : payload.draftRendered ? "未完成项目已在对应位置保留提醒；你可以先编辑文案、补图和检查版面，正式下载会在问题补齐后开放。" : "可以先在编辑器处理未完成项目；草稿长图生成未通过时，请按下方提醒检查对应模块。", items:pendingSummary }}
   />{busy && <div className="agent-execution-notice">{busy.endsWith(":research") ? "正在为当前图片位置搜索并检查候选。" : "正在保存当前图片位置的修改。"}</div>}{error && <div className="agent-error">{error}</div>}</div>;
 }
 
