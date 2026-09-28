@@ -492,7 +492,29 @@
 .project-designer-avatar img { width: 56px; height: 56px; flex: 0 0 auto; border-radius: 50%; object-fit: cover; }
 .project-designer-avatar .ws-button { min-height: 34px; }
 .field-grid-compact { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.hotel-stay-warning { margin: 0 0 10px; color: #916022; font-size: 12px; line-height: 1.65; }
+.hotel-stay-input input { width: 100%; min-height: 42px; box-sizing: border-box; }
+.hotel-stay-plan { display: grid; gap: 8px; margin: 0 0 18px; padding: 14px; border: 1px solid #e5d2aa; border-radius: 8px; background: #fffaf1; font-size: 13px; line-height: 1.55; }
+.hotel-stay-plan p { margin: 0; }
+.hotel-stay-plan small { color: #776b5e; }
+.hotel-stay-plan button { justify-self: start; padding: 8px 14px; border: 0; border-radius: 6px; background: var(--ws-gold-deep); color: #fff; cursor: pointer; }
+.hotel-stay-plan button:disabled { opacity: .6; cursor: wait; }
 .hotel-fact-editor { margin-top: 4px; }
+.hotel-fact-heading, .hotel-fact-row-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.hotel-fact-heading .inspector-divider { flex: 1; }
+.hotel-fact-row { margin: 0 0 15px; }
+.hotel-fact-row-heading { margin-bottom: 6px; color: var(--ws-muted); font-size: 11px; }
+.hotel-fact-row textarea { width: 100%; min-height: 82px; padding: 10px; border: 1px solid var(--ws-line); border-radius: 5px; color: var(--ws-ink); background: white; resize: vertical; font: inherit; }
+.hotel-fact-action { flex: 0 0 auto; padding: 4px 7px; border: 1px solid #dfcda9; border-radius: 5px; background: #fffaf2; color: var(--ws-gold-deep); font-size: 11px; cursor: pointer; }
+.hotel-fact-action:disabled { opacity: .6; cursor: wait; }
+.hotel-fact-spinner { display: inline-block; width: 11px; height: 11px; margin-right: 5px; border: 2px solid #d7c5a6; border-top-color: var(--ws-gold-deep); border-radius: 50%; vertical-align: -2px; animation: hotel-fact-spin .8s linear infinite; }
+@keyframes hotel-fact-spin { to { transform: rotate(360deg); } }
+.hotel-fact-message { margin: 5px 0 10px; color: var(--ws-gold-deep); font-size: 11px; }
+.hotel-fact-proposal { margin-top: 7px; padding: 11px; border: 1px solid #dfcda9; border-radius: 6px; background: #fffaf2; font-size: 11px; line-height: 1.6; }
+.hotel-fact-proposal p { margin: 6px 0; color: var(--ws-ink); }
+.hotel-fact-proposal a { color: var(--ws-gold-deep); }
+.hotel-fact-proposal > div { display: flex; gap: 8px; margin-top: 9px; }
+.hotel-fact-proposal button { padding: 5px 9px; border: 1px solid #dfcda9; border-radius: 4px; background: white; color: var(--ws-gold-deep); cursor: pointer; }
 .hotel-fact-editor .inspector-divider, .hotel-legacy-copy .inspector-divider { margin-top: 18px; }
 .hotel-legacy-copy { margin-top: 8px; padding-top: 4px; border-top: 1px dashed var(--ws-line); }
 .item-picker { margin: 0 0 20px; padding: 12px; border: 1px solid #e5d9c7; border-radius: 6px; background: #fffaf3; }
@@ -692,8 +714,22 @@ body:has(.editor-page) { overflow: hidden; }
 .day-slot-state.is-done { color: #8b6a29; border-color: #c8a45c; background: #fff9ec; }
 .day-slot-state .ui-icon { width: 12px !important; height: 12px !important; }
 .day-slot-tools { display: grid; gap: 10px; padding: 12px; border-top: 1px solid #eee7dc; background: #fffdf9; }
-.day-slot-focus-preview { height: 126px; overflow: hidden; border-radius: 6px; background: #eee8df; }
+.day-slot-focus-preview { position: relative; height: 126px; overflow: hidden; border-radius: 6px; background: #eee8df; }
 .day-slot-focus-preview img { width: 100%; height: 100%; object-fit: cover; }
+.crop-editor { padding: 12px; border: 1px solid #eadcc7; border-radius: 8px; background: #fffaf2; }
+.crop-editor p { margin: 0 0 10px; color: #776958; font-size: 12px; line-height: 1.5; }
+.crop-editor-source { position: relative; max-width: 100%; margin: 0 auto; overflow: hidden; touch-action: none; user-select: none; }
+.crop-editor-source > img { width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+.crop-editor-shade { position: absolute; inset: 0; background: rgba(35, 30, 24, .42); pointer-events: none; }
+.crop-editor-selection { position: absolute; border: 2px solid #fff; box-shadow: 0 0 0 1px #a88031, 0 0 16px #0008; background: transparent; cursor: move; touch-action: none; }
+.crop-editor-selection::after { content: ''; position: absolute; inset: 0; box-shadow: 0 0 0 200px rgba(35,30,24,.42); pointer-events: none; }
+.crop-editor-shade { display: none; }
+.crop-handle { position: absolute; z-index: 1; width: 13px; height: 13px; border: 2px solid #a88031; border-radius: 3px; background: white; }
+.crop-handle-top-left { top: -7px; left: -7px; cursor: nwse-resize; }
+.crop-handle-top-right { top: -7px; right: -7px; cursor: nesw-resize; }
+.crop-handle-bottom-left { bottom: -7px; left: -7px; cursor: nesw-resize; }
+.crop-handle-bottom-right { bottom: -7px; right: -7px; cursor: nwse-resize; }
+.crop-editor-loading { padding: 24px; text-align: center; color: #887a67; }
 .day-slot-empty { min-height: 74px; display: grid; place-items: center; gap: 6px; color: var(--ws-muted); border: 1px dashed #d9cdbb; border-radius: 6px; font-size: 10px; }
 .day-inline-image-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .day-inline-image-actions .ws-button { width: auto; min-height: 32px; padding: 0 10px; font-size: 10px; }
@@ -1129,7 +1165,7 @@ body:has(.editor-page) { overflow: hidden; }
 .preview-zoom-controls button:disabled { color: #b7b0a6; cursor: not-allowed; }
 .preview-zoom-controls span { min-width: 34px; text-align: center; font-size: 11px; font-weight: 700; }
 .editor-grid .workspace-itinerary .workspace-selected-node { outline: 4px solid rgba(178,139,51,.72); outline-offset: -4px; }
-.editor-grid .inspector-panel { background: #fffefa; }
+.editor-grid .inspector-panel { background: #fffefa; font-family: "Source Han Serif CN", serif; }
 .editor-inspector-toolbar { min-height: 56px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 22px; border-bottom: 1px solid var(--ws-line); }
 .editor-inspector-toolbar > span { min-width: 0; overflow: hidden; color: var(--ws-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .editor-inspector-toolbar .ws-button { min-height: 34px; flex: 0 0 auto; padding: 0 14px; font-size: 12px; }

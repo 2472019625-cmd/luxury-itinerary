@@ -7,6 +7,7 @@ import {
   validateCopyResearchRequest,
   verifyCopyFactsResearch,
 } from "../server/simple-copy-facts-research.mjs";
+import { searchDiningHighlights } from "../server/you-dining-search.mjs";
 
 function textResponse(body, contentType = "text/html; charset=utf-8", url = "https://example.com/") {
   return { ok: true, status: 200, url, headers: { get: (name) => name.toLowerCase() === "content-type" ? contentType : null }, text: async () => body };
@@ -24,7 +25,7 @@ test("Copy Facts Research 只接受两类显式请求", () => {
   assert.match(prompt.messages[0].content, /1—3 个相互独立的候选页面/);
 });
 
-test("hotel uses You highlights when configured and leaves dining on the existing researcher", async () => {
+test("hotel uses You highlights when configured", async () => {
   const hotelRequest = { researchType: "official_entity_facts", entityKind: "hotel", entityName: "Example Lodge", categories: ["位置", "客房", "设计", "设施"] };
   let hotelSearchCalls = 0;
   const hotel = await runCopyFactsResearch({
@@ -41,6 +42,81 @@ test("hotel uses You highlights when configured and leaves dining on the existin
   assert.equal(hotelSearchCalls, 1);
   assert.equal(hotel.provider, "you_web_search_highlights");
   assert.equal(hotel.searchSnippets.length, 1);
+});
+
+test("dining You search uses entity and focus and keeps only current-experience excerpts", async () => {
+  let requestBody;
+  const result = await searchDiningHighlights({
+    researchRequest: { researchType: "official_entity_facts", entityKind: "dining", entityName: "Example Safari Camp", focus: "Sundowner" },
+    apiKey: "test-key",
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return { ok: true, json: async () => ({ results: { web: [
+        { title: "Example Safari Camp Dining", url: "https://example.test/camp/dining", contents: { highlights: ["Our Sundowner includes drinks at the terrace at sunset.", "The camp also offers suites with private decks."] } },
+        { title: "Other Camp Sundowner", url: "https://other.test/sundowner", contents: { highlights: ["Sundowner drinks at a different camp."] } },
+        { title: "Example Safari Camp Sundowner", url: "https://tripadvisor.com/example-safari-camp", contents: { highlights: ["Sundowner from a user review."] } },
+      ] } }) };
+    },
+  });
+  assert.equal(requestBody.query, "Example Safari Camp Sundowner");
+  assert.equal(requestBody.extraction.extraction_mode, "highlights");
+  assert.equal(result.provider, "you_web_search_highlights");
+  assert.equal(result.searchSnippets.length, 1);
+  assert.match(result.searchSnippets[0].sourceExcerpt, /Sundowner/);
+  assert.deepEqual(result.verifiedFacts, []);
+});
+
+test("dining focus already containing the entity is not repeated in the You query", async () => {
+  let query;
+  const result = await searchDiningHighlights({
+    researchRequest: { researchType: "official_entity_facts", entityKind: "dining", entityName: "Example Safari Camp", focus: "Example Safari Camp private wine cellar" },
+    apiKey: "test-key",
+    fetchImpl: async (_url, options) => {
+      query = JSON.parse(options.body).query;
+      return { ok: true, json: async () => ({ results: { web: [
+        { title: "Example Safari Camp private wine cellar", url: "https://example.test/camp/wine-cellar", contents: { highlights: ["The private wine cellar hosts a tasting experience for guests."] } },
+      ] } }) };
+    },
+  });
+  assert.equal(query, "Example Safari Camp private wine cellar");
+  assert.equal(result.searchSnippets.length, 1);
+});
+
+test("dining search ranks a relevant official page before a third-party result without discarding either", async () => {
+  const result = await searchDiningHighlights({
+    researchRequest: { researchType: "official_entity_facts", entityKind: "dining", entityName: "Example Safari Camp", focus: "Sundowner", officialDomains: ["example.test"] },
+    apiKey: "test-key",
+    fetchImpl: async () => ({ ok: true, json: async () => ({ results: { web: [
+      { title: "Example Safari Camp Sundowner review", url: "https://travel.test/sundowner", contents: { highlights: ["Example Safari Camp Sundowner drinks are offered at sunset."] } },
+      { title: "Example Safari Camp Dining", url: "https://example.test/dining", contents: { highlights: ["Example Safari Camp Sundowner takes place on a terrace."] } },
+    ] } }) }),
+  });
+  assert.equal(result.searchSnippets.length, 2);
+  assert.equal(result.searchSnippets[0].sourceUrl, "https://example.test/dining");
+  assert.equal(result.searchSnippets[1].sourceUrl, "https://travel.test/sundowner");
+});
+
+test("dining facts research chooses You when configured and preserves legacy on technical failure", async () => {
+  const researchRequest = { researchType: "official_entity_facts", entityKind: "dining", entityName: "Example Safari Camp", focus: "Sundowner", categories: ["体验特色"] };
+  let legacyCalls = 0;
+  const result = await runCopyFactsResearch({
+    researchRequest,
+    hotelSearchApiKey: "test-key",
+    diningSearch: async () => ({ researchType: researchRequest.researchType, entityName: researchRequest.entityName, status: "success", provider: "you_web_search_highlights", searchSnippets: [{ sourceUrl: "https://example.test/sundowner", sourceExcerpt: "Sundowner drinks on the terrace." }], verifiedFacts: [] }),
+    requestResearch: async () => { legacyCalls += 1; throw new Error("legacy researcher should not run"); },
+  });
+  assert.equal(result.searchSnippets.length, 1);
+  assert.equal(legacyCalls, 0);
+
+  const fallback = await runCopyFactsResearch({
+    researchRequest,
+    hotelSearchApiKey: "test-key",
+    diningSearch: async () => { throw Object.assign(new Error("upstream unavailable"), { code: "you_dining_search_failed" }); },
+    requestResearch: async () => { legacyCalls += 1; return { json: { facts: [] }, attemptUsages: [{}] }; },
+  });
+  assert.equal(legacyCalls, 1);
+  assert.equal(fallback.provider, "legacy_facts_research_fallback");
+  assert.equal(fallback.diningSearchFailure.code, "you_dining_search_failed");
 });
 
 test("hotel search technical failure preserves the previous researcher as fallback", async () => {

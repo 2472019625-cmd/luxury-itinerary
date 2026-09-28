@@ -8,6 +8,8 @@ import { downloadCandidate } from "./image-download.mjs";
 import { refreshKnowledgeMatchedFile } from "./knowledge-image-search.mjs";
 import { candidateQualification, isHardRejectedCandidate } from "./image-candidate-eligibility.mjs";
 import { getSlotImage, setSlotImage } from "../src/lib/imageSlots.js";
+import { hotelStayDetails } from "../src/lib/hotelStayPresentation.js";
+import { applyHotelNightChange, planHotelNightChange } from "../src/lib/hotelStayEditing.js";
 
 const MIME_EXTENSIONS = Object.freeze({ "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" });
 const manualRenders = new Map();
@@ -271,7 +273,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
       status: project.status,
       currentStage: project.currentStage,
       progress: project.progress,
-      versions: outputUrl ? [{ id: `simple-${run.executionRunId}`, name: `${result.data?.title || "行程"} · 2000px 正式成品`, createdAt: Date.parse(result.completedAt || result.updatedAt || project.updatedAt || new Date().toISOString()), downloadUrl: outputUrl }] : [],
+      versions: outputUrl ? [{ id: `simple-${run.executionRunId}`, name: `${result.data?.title || "行程"} · 正式版本`, createdAt: Date.parse(result.completedAt || result.updatedAt || project.updatedAt || new Date().toISOString()), downloadUrl: outputUrl }] : [],
       data: { ...result.data, imageCandidates, imageReview: { slots }, simpleImageSlotBindings: editorBindings, generationIssues: result.unresolvedItems || [], requiredImageGate: { unresolvedSlotIds: unresolvedRequired.filter((item) => item.kind === "image").map((item) => item.id), passed: unresolvedRequired.filter((item) => item.kind === "image").length === 0 } },
     },
     executionRunId: run.executionRunId,
@@ -682,6 +684,9 @@ export async function saveSimpleDayEditor({ store, root, projectId, dayIndex, da
 
   const nextData = structuredClone(currentData);
   nextData.days[index] = { ...currentDay, ...day, spots };
+  const stayChanged = ["hotel", "hotelShortName", "hotelOfficialName", "overnightType"]
+    .some((key) => String(currentDay[key] ?? "") !== String(nextData.days[index][key] ?? ""));
+  if (stayChanged) throw Object.assign(new Error("请在酒店模块调整入住安排"), { code: "hotel_stay_hotel_module_only" });
   nextData.simpleImageSlotBindings = {
     ...Object.fromEntries(Object.entries(allCurrentBindings).filter(([, binding]) => !(binding.module === "day" && binding.dayIndex === index))),
     ...nextDayBindings,
@@ -698,6 +703,54 @@ export async function saveSimpleDayEditor({ store, root, projectId, dayIndex, da
   }
   const imageExecution = { ...context.result.imageExecution, results: imageResults };
   return persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution, render, deferRender, action: { type: "editor_day_update", slotId: `editor:day:${index + 1}`, dayIndex: index } });
+}
+
+const HOTEL_FACT_LABELS = Object.freeze({ location: "位置", rooms: "客房", design: "设计", facilities: "设施" });
+
+export async function saveSimpleHotelStay({ store, root, projectId, hotelIndex, hotelId, desiredNights, expectedSignature, render, deferRender = true } = {}) {
+  const context = projectContext(store, projectId);
+  const hotel = context.result.data?.hotels?.[Number(hotelIndex)];
+  if (!hotel || String(hotel.id) !== String(hotelId)) throw Object.assign(new Error("酒店已变化，请重新选择"), { code: "hotel_changed" });
+  const plan = planHotelNightChange(context.result.data, hotelIndex, desiredNights);
+  if (!plan.ok) throw Object.assign(new Error(plan.reason), { code: "hotel_stay_invalid" });
+  if (plan.signature !== expectedSignature) throw Object.assign(new Error("住宿安排已变化，请重新预览"), { code: "hotel_stay_changed" });
+  const nextData = applyHotelNightChange(context.result.data, plan);
+  nextData.copyQuality = { ...(nextData.copyQuality || {}), passed: false, status: "needs_copy_revision", needsReview: true, blocked: false, checkedAt: null, manualEditPendingRecheck: true };
+  nextData.humanReview = { ...(nextData.humanReview || {}), exportWithCopyWarningsConfirmed: false };
+  const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_hotel_stay_update", hotelId, hotelIndex: plan.hotelIndex, desiredNights: plan.desiredNights, changedDayIndexes: plan.changedDayIndexes } });
+  return { manualRevision: payload.manualRevision, renderPending: payload.renderPending, changedDayIndexes: plan.changedDayIndexes };
+}
+
+export async function saveSimpleHotelRegion({ store, root, projectId, hotelIndex, hotelId, region, render, deferRender = true } = {}) {
+  const context = projectContext(store, projectId);
+  const index = Number(hotelIndex);
+  const hotel = context.result.data?.hotels?.[index];
+  if (!hotel || String(hotel.id) !== String(hotelId)) throw Object.assign(new Error("酒店已变化，请重新选择"), { code: "hotel_changed" });
+  const nextData = structuredClone(context.result.data);
+  nextData.hotels[index].region = String(region || "").trim().slice(0, 200);
+  const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_hotel_region_update", hotelId, hotelIndex: index } });
+  return { region: nextData.hotels[index].region, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
+}
+
+export async function saveSimpleHotelFactRow({ store, root, projectId, hotelIndex, hotelId, key, text, mode = "manual", expectedText, source, render, deferRender = true } = {}) {
+  const context = projectContext(store, projectId);
+  const index = Number(hotelIndex);
+  const hotel = context.result.data?.hotels?.[index];
+  if (!hotel || String(hotel.id) !== String(hotelId)) throw Object.assign(new Error("酒店已变化，请重新选择"), { code: "hotel_changed" });
+  if (!HOTEL_FACT_LABELS[key]) throw Object.assign(new Error("酒店信息字段无效"), { code: "hotel_fact_key_invalid" });
+  const current = (hotel.factRows || []).find((row) => row?.key === key);
+  const currentText = String(current?.text || "");
+  if (mode === "fill" && currentText.trim()) return { applied: false, row: current || null };
+  if (mode === "replace" && currentText !== String(expectedText ?? "")) throw Object.assign(new Error("这项文字已被修改，请重新查找后再替换"), { code: "hotel_fact_changed" });
+  if (!["manual", "fill", "replace"].includes(mode)) throw Object.assign(new Error("保存方式无效"), { code: "hotel_fact_mode_invalid" });
+  const value = String(text || "").trim().slice(0, 2000);
+  if (mode !== "manual" && (!value || !source?.sourceUrl)) throw Object.assign(new Error("没有可核验的候选文字"), { code: "hotel_fact_evidence_missing" });
+  const row = { key, label: HOTEL_FACT_LABELS[key], text: value, status: value ? "success" : "not_found", ...(mode === "manual" ? { confirmedByUser: true } : { sourceUrl: source.sourceUrl, sourceClass: source.sourceClass || "search_highlight", sourceExcerpt: source.sourceExcerpt || "", checkedAt: source.checkedAt || new Date().toISOString(), ...(mode === "replace" ? { confirmedByUser: true } : {}) }) };
+  const nextData = structuredClone(context.result.data);
+  const nextHotel = nextData.hotels[index];
+  nextHotel.factRows = [...(nextHotel.factRows || []).filter((item) => item?.key !== key), row];
+  const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_hotel_fact_update", hotelId, hotelIndex: index, key, mode } });
+  return { applied: true, row, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
 }
 
 export async function uploadSimpleImage({ store, root, projectId, slotId, dataUrl, fileName, render, deferRender = false } = {}) {

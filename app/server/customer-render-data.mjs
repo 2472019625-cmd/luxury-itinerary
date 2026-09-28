@@ -3,7 +3,7 @@ import { buildCustomerTravelEntityData } from '../src/lib/travelEntityDisplay.js
 import { normalizeHighlightsForDisplay } from '../src/lib/highlightDisplay.js';
 
 const ROOT_FIELDS = new Set([
-  'title','subtitle','destination','travelers','adults','children','startDate','endDate','dayCount','heroImage','heroFocus',
+  'title','subtitle','destination','travelers','adults','children','startDate','endDate','dayCount','heroImage','heroFocus','heroCrop',
   'travelStyle','serviceMode','tripRhythm','hotelReplacementPolicy','transportDisclaimer','sourcePosterHighlights','highlights',
   'highlightsSectionTitle','overviewSectionTitle','showOverviewSection','hotels','hotelSectionTitle','hotelIntroTitle','hotelIntroCopy',
   'diningSectionTitle','diningIntroTitle','diningIntroCopy','diningPolicy','diningExperiences','transportSectionTitle','transportIntroTitle',

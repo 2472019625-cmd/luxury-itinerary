@@ -17,20 +17,25 @@ const days = [
   { hotel: "Saruni Leopard Hill", hotelShortName: "Saruni豹山营地", routeNodes: ["Saruni豹山营地", "全天游猎"] },
 ];
 
-test("酒店卡生成单行入住日期与精简起讫地", () => {
-  assert.equal(deriveHotelStayLine(hotels[0], days, hotels, "肯尼亚"), "D1入住 → D3退房 · 连住2晚｜内罗毕 → 安博塞利");
-  assert.equal(deriveHotelStayLine(hotels[1], days, hotels, "肯尼亚"), "D3入住 → D5退房 · 连住2晚｜安博塞利 → 马赛马拉");
-  assert.equal(deriveHotelStayLine(hotels[2], days, hotels, "肯尼亚"), "D5入住 → D7退房 · 连住2晚｜马赛马拉 → Naboisho");
+test("酒店卡只显示入住日期与晚数", () => {
+  assert.equal(deriveHotelStayLine(hotels[0], days, hotels, "肯尼亚"), "D1入住 → D3退房 · 连住2晚");
+  assert.equal(deriveHotelStayLine(hotels[1], days, hotels, "肯尼亚"), "D3入住 → D5退房 · 连住2晚");
+  assert.equal(deriveHotelStayLine(hotels[2], days, hotels, "肯尼亚"), "D5入住 → D7退房 · 连住2晚");
 });
 
 test("单晚住宿显示1晚而不是连住", () => {
   const hotel = { officialName: "JW Marriott Hotel Nairobi", shortName: "内罗毕JW万豪", region: "内罗毕", nights: 1 };
   const singleDay = [{ hotel: "JW Marriott Hotel Nairobi", hotelShortName: "内罗毕JW万豪", routeNodes: ["马赛马拉", "内罗毕", "内罗毕JW万豪"] }];
-  assert.equal(deriveHotelStayLine(hotel, singleDay, [hotel], "肯尼亚"), "D1入住 → D2退房 · 1晚｜马赛马拉 → 内罗毕");
+  assert.equal(deriveHotelStayLine(hotel, singleDay, [hotel], "肯尼亚"), "D1入住 → D2退房 · 1晚");
 });
 
-test("晚数冲突或非连续入住时不猜测展示", () => {
-  assert.equal(deriveHotelStayLine({ ...hotels[0], nights: 3 }, days, hotels, "肯尼亚"), "");
+test("入住晚数以每日住宿为准，酒店所在地不改写行程路线", () => {
+  const expected = "D1入住 → D3退房 · 连住2晚";
+  assert.equal(deriveHotelStayLine({ ...hotels[0], nights: 3 }, days, hotels, "肯尼亚"), expected);
+  assert.equal(deriveHotelStayLine({ ...hotels[0], region: "肯尼亚22" }, days, hotels, "肯尼亚"), expected);
+});
+
+test("非连续入住时不猜测单段入住动线", () => {
   const splitDays = [days[0], { hotel: "Other Hotel", routeNodes: [] }, days[1]];
   assert.equal(deriveHotelStayLine(hotels[0], splitDays, hotels, "肯尼亚"), "");
 });

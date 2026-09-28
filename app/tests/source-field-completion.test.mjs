@@ -190,6 +190,25 @@ test("Dining 状态判断整项体验，局部升级酒水收费不把私人酒�
   assert.match(dining.sourceEvidence.join("\n"), /高档酒水额外收费/);
   const candidate = result.data.sourceImportCoverage.diningCandidates[0];
   assert.match(candidate.partialFeeEvidence.join("\n"), /高档酒水额外收费/);
+  const plan = materializeSimpleSkillPlan({ data: result.data, agentPlan: agentPlanFor(result.data) });
+  const diningTask = plan.copyTasks.find((item) => item.moduleType === "dining");
+  assert.equal(diningTask.facts.feeDisclosure, "高档酒水额外收费");
+  assert.equal(diningTask.facts.status, "included");
+  assert.match(diningTask.plannerGoal, /收费对象和边界/);
+  const dayTask = plan.copyTasks.find((item) => item.moduleType === "day");
+  assert.match(dayTask.plannerGoal, /收费对象和边界/);
+  assert.deepEqual(dayTask.facts.feeDisclosures, ["高档酒水额外收费"]);
+});
+
+test("收费提示由当前原始体验证据生成，不依赖酒窖或酒水名称", () => {
+  const data = {
+    title: "特色餐饮测试", destination: "测试目的地", highlights: [], hotels: [], transportSummary: [], notes: [],
+    diningExperiences: [{ id: "paid-upgrade", title: "露台晚餐", status: "included", feeBoundary: "included", dayRefs: [1], sourceEvidence: ["DAY 1 详细行程：露台晚餐（升级配餐另行收费）"], editorialCopy: "", images: [] }],
+    days: [{ theme: "晚餐体验", description: "露台晚餐（升级配餐另行收费）", routeNodes: [], spots: [], mealPlan: {} }],
+  };
+  const plan = materializeSimpleSkillPlan({ data, agentPlan: agentPlanFor(data) });
+  assert.equal(plan.copyTasks.find((item) => item.moduleType === "dining").facts.feeDisclosure, "升级配餐另行收费");
+  assert.deepEqual(plan.copyTasks.find((item) => item.moduleType === "day").facts.feeDisclosures, ["升级配餐另行收费"]);
 });
 
 test("普通酒店早餐、午餐盒和酒店晚餐不进入 Dining 候选", async () => {
@@ -290,11 +309,12 @@ test("Dining Copy 任务使用写作约束而非可照抄参考句，通用体�
   };
   const plan = materializeSimpleSkillPlan({ data, agentPlan: agentPlanFor(data) });
   const task = plan.copyTasks.find((item) => item.moduleType === "dining");
-  assert.deepEqual(Object.keys(task.facts).sort(), ["copyGuidance", "id", "location", "officialName", "sourceEvidence", "title"]);
+  assert.deepEqual(Object.keys(task.facts).sort(), ["copyGuidance", "feeBoundary", "feeDisclosure", "id", "location", "officialName", "sourceEvidence", "status", "title"]);
   assert.match(task.plannerGoal, /独立的特色餐饮总览卡/);
   assert.match(task.plannerGoal, /最有辨识度的餐饮锚点/);
   assert.match(task.plannerGoal, /不重复 DAY 编号/);
-  assert.match(task.plannerGoal, /完整 title、officialName、地点名和状态标签/);
+  assert.match(task.plannerGoal, /完整 title、officialName 和地点名/);
+  assert.equal(task.facts.feeDisclosure, "");
   assert.match(task.plannerGoal, /不强制写“与普通用餐不同”/);
   assert.match(task.plannerGoal, /不追加抽象客户价值总结/);
   assert.match(task.plannerGoal, /不得写具体 DAY、当天、随后、游猎归来、开启一天、结束一天/);

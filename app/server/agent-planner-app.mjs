@@ -19,7 +19,9 @@ import { evaluateAgentImageCompletion } from "./agent-image-plan.mjs";
 import { runImageSearchSkill } from "./simple-image-skill.mjs";
 import { runSimplePipeline } from "./simple-pipeline-executor.mjs";
 import { calculateSimplePipelineProgress } from "./simple-pipeline-progress.mjs";
-import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, uploadSimpleImage } from "./simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, saveSimpleHotelFactRow, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "./simple-manual-images.mjs";
+import { searchSimpleHotelFacts } from "./simple-hotel-fact-search.mjs";
+import { deliveryContentDisposition } from "../src/lib/deliveryFilename.js";
 import { retrySimpleCopyTarget, retrySimpleCopyTargets, retrySimpleRenderer } from "./simple-targeted-repair.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -575,6 +577,38 @@ export function createAgentPlannerServer(options = {}) {
         return json(response, 200, result);
       } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "day_editor_save_failed" }); }
     }
+    const simpleHotelSearchMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/hotel-facts\/(\d+)\/search$/);
+    if (request.method === "POST" && simpleHotelSearchMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await searchSimpleHotelFacts({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelSearchMatch[1]), hotelIndex: Number(simpleHotelSearchMatch[2]), hotelId: payload.hotelId, keys: payload.keys, mode: payload.mode, copyOptions: { ...modelConfig, researchApiKey: searchModelConfig.apiKey, researchBaseUrl: searchModelConfig.baseUrl, researchModel: searchModelConfig.model } });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "hotel_changed" ? 409 : 400, { error: failure.message, code: failure.code || "hotel_fact_search_failed" }); }
+    }
+    const simpleHotelFactMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/hotel-facts\/(\d+)\/([^/]+)$/);
+    if (request.method === "PUT" && simpleHotelFactMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await saveSimpleHotelFactRow({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelFactMatch[1]), hotelIndex: Number(simpleHotelFactMatch[2]), key: decodeURIComponent(simpleHotelFactMatch[3]), hotelId: payload.hotelId, text: payload.text, mode: payload.mode || "manual", expectedText: payload.expectedText, source: payload.source, deferRender: true });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "hotel_fact_changed" || failure.code === "hotel_changed" ? 409 : 400, { error: failure.message, code: failure.code || "hotel_fact_save_failed" }); }
+    }
+    const simpleHotelRegionMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/hotels\/(\d+)\/region$/);
+    if (request.method === "PUT" && simpleHotelRegionMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await saveSimpleHotelRegion({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelRegionMatch[1]), hotelIndex: Number(simpleHotelRegionMatch[2]), hotelId: payload.hotelId, region: payload.region, deferRender: true });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "hotel_changed" ? 409 : 400, { error: failure.message, code: failure.code || "hotel_region_save_failed" }); }
+    }
+    const simpleHotelStayMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/hotels\/(\d+)\/stay$/);
+    if (request.method === "PUT" && simpleHotelStayMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await saveSimpleHotelStay({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelStayMatch[1]), hotelIndex: Number(simpleHotelStayMatch[2]), hotelId: payload.hotelId, desiredNights: payload.desiredNights, expectedSignature: payload.expectedSignature, deferRender: true });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "hotel_changed" || failure.code === "hotel_stay_changed" ? 409 : 400, { error: failure.message, code: failure.code || "hotel_stay_save_failed" }); }
+    }
     const simpleCandidateMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images\/([^/]+)\/(select|reject)$/);
     if (request.method === "POST" && simpleCandidateMatch) {
       try {
@@ -705,7 +739,7 @@ export function createAgentPlannerServer(options = {}) {
         const outputRoot = path.resolve(root, "output");
         const file = result?.pipelineStatus === "complete" && result.outputPath ? path.resolve(result.outputPath) : null;
         if (!file || !file.startsWith(`${outputRoot}${path.sep}`) || !existsSync(file)) return json(response, 404, { error: "正式成品文件不存在" });
-        response.writeHead(200, { "content-type": "image/png", "content-disposition": `attachment; filename="itinerary-${projectId}.png"` });
+        response.writeHead(200, { "content-type": "image/png", "content-disposition": deliveryContentDisposition(url.searchParams.get("downloadName") || result.data?.title || "客户行程_行程方案") });
         if (request.method === "HEAD") return response.end();
         return createReadStream(file).pipe(response);
       } catch (failure) { return json(response, 404, { error: failure.message || "正式成品文件不存在" }); }
@@ -935,7 +969,7 @@ export function createAgentPlannerServer(options = {}) {
       const outputRoot = path.resolve(root, "output");
       const file = result?.outputFile ? path.resolve(result.outputFile) : null;
       if (!file || !file.startsWith(`${outputRoot}${path.sep}`) || !existsSync(file)) return json(response, 404, { error: "正式成品文件不存在" });
-      response.writeHead(200, { "content-type": "image/png", "content-disposition": `attachment; filename="itinerary-${outputMatch[1]}.png"` });
+      response.writeHead(200, { "content-type": "image/png", "content-disposition": deliveryContentDisposition(url.searchParams.get("downloadName") || "客户行程_行程方案") });
       if (request.method === "HEAD") return response.end();
       return createReadStream(file).pipe(response);
     }

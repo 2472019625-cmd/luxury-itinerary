@@ -8,6 +8,16 @@ const diagnostic = readFileSync(new URL("../src/AgentWorkspace.jsx", import.meta
 const workspaceCss = readFileSync(new URL("../src/workspace.css", import.meta.url), "utf8");
 const confirmationActions = readFileSync(new URL("../src/lib/confirmationActionItems.js", import.meta.url), "utf8");
 
+test("Step5直接下载客户行程方案且所有入口使用自动名称", () => {
+  const versions = workspace.slice(workspace.indexOf("export function VersionsStep"), workspace.indexOf("function ProfilePanel"));
+  assert.match(versions, /const deliveryBase = defaultDeliveryFilenameBase\(project\)/);
+  assert.doesNotMatch(versions, /交付文件名|filenameInput/);
+  assert.match(versions, /deliveryDownloadUrl\(version\.downloadUrl, deliveryBase\)/);
+  assert.match(versions, /download=\{`\$\{deliveryBase\}\.png`\}/);
+  assert.match(versions, /downloadLink\(latestVersion, "下载客户行程方案"/);
+  assert.match(versions, /downloadLink\(version, "下载客户行程方案"\)/);
+});
+
 test("Step4预览缩放仅作用于编辑器，结构栏默认展开且体验卡可收起", () => {
   assert.match(workspace, /setStructureExpanded\] = useState\(\(\) => window\.innerWidth > 900\)/);
   assert.match(workspace, /setFitPreviewZoom\(Math\.min\(0\.4, Math\.max\(0\.15,/);
@@ -17,6 +27,12 @@ test("Step4预览缩放仅作用于编辑器，结构栏默认展开且体验卡
   assert.match(workspace, /setCollapsedDaySlotId\(slot\.slotId\)/);
   assert.match(workspaceCss, /\.editor-grid \.workspace-itinerary \.export-frame \{ zoom: var\(--preview-zoom, \.4\); \}/);
   assert.doesNotMatch(workspaceCss, /^\.workspace-itinerary \.export-frame \{ zoom: var\(--preview-zoom/m);
+});
+
+test("每日图片可直接打开换图弹窗，右侧字体只作用于编辑器", () => {
+  assert.match(workspace, /if \(imageNode && openPickerOnImageClick\) \{\s*requestAnimationFrame\(\(\) => setPickerOpen\(true\)\)/);
+  assert.doesNotMatch(workspace, /imageNode && openPickerOnImageClick && module !== "days"/);
+  assert.match(workspaceCss, /\.editor-grid \.inspector-panel \{[^}]*font-family: "Source Han Serif CN", serif;/);
 });
 
 test("4174正式入口复用原Workspace五步前端而非简化项目页", () => {

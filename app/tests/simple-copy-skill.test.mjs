@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildHotelFactRows, normalizeCopyValueForSchema, runCopyWriterSkill, validateCopyCommitments, validateCopyValue } from "../server/simple-copy-skill.mjs";
+import { buildHotelFactRows, ensureCopyFeeDisclosures, normalizeCopyValueForSchema, runCopyWriterSkill, validateCopyCommitments, validateCopyValue } from "../server/simple-copy-skill.mjs";
 
 const task = (targetId, targetPath, moduleType = "day") => ({
   targetId,
@@ -123,6 +123,28 @@ test("研究结果只注入当前 target，研究技术失败时酒店使用供�
   assert.equal(result.metrics.modelCalls, 1);
 });
 
+test("餐饮收费提示取自当前产品事实，不为未收费项目添加，也不把局部收费写成整项自费", () => {
+  const schema = { type: "string", maxLength: 96 };
+  const base = { moduleType: "dining", outputSchema: schema };
+  assert.equal(ensureCopyFeeDisclosures("在露台享用季节菜单。", { ...base, facts: { feeDisclosure: "升级配餐另行收费" } }), "在露台享用季节菜单；升级配餐另行收费。");
+  assert.equal(ensureCopyFeeDisclosures("在酒窖品尝佳酿，高档酒水需另付费。", { ...base, facts: { feeDisclosure: "高档酒水额外收费" } }), "在酒窖品尝佳酿，高档酒水需另付费。");
+  assert.equal(ensureCopyFeeDisclosures("在露台享用季节菜单。", { ...base, facts: { feeDisclosure: "" } }), "在露台享用季节菜单。");
+  assert.equal(ensureCopyFeeDisclosures("在露台享用季节菜单。", { ...base, facts: { feeDisclosure: "本项自费，费用另计" } }), "在露台享用季节菜单；本项自费，费用另计。");
+  assert.equal(ensureCopyFeeDisclosures("午后抵达露台，享用一顿特色晚餐。", { moduleType: "day", facts: { feeDisclosures: ["升级配餐另行收费"] }, outputSchema: { type: "string" } }), "午后抵达露台，享用一顿特色晚餐；升级配餐另行收费。");
+});
+
+test("模型遗漏原始局部收费时，仅给当前餐饮结果补明收费边界", async () => {
+  const charged = { ...task("charged", "diningExperiences.0.editorialCopy", "dining"), facts: { sourceEvidence: ["当日安排品鉴（升级配餐另行收费）"], feeDisclosure: "升级配餐另行收费" } };
+  const ordinary = { ...task("ordinary", "diningExperiences.1.editorialCopy", "dining"), facts: { sourceEvidence: ["当日安排露台晚餐"], feeDisclosure: "" } };
+  const result = await runCopyWriterSkill({ tasks: [charged, ordinary], requestJson: async ({ messages }) => {
+    const payload = JSON.parse(messages.at(-1).content);
+    return { json: { results: payload.tasks.map((item) => ({ targetId: item.targetId, targetPath: item.targetPath, value: "在露台享用有来源的特色餐饮。" })) }, attemptUsages: [{}] };
+  } });
+  assert.equal(result.results[0].status, "success");
+  assert.match(result.results[0].value, /升级配餐另行收费/);
+  assert.equal(result.results[1].value, "在露台享用有来源的特色餐饮。");
+});
+
 test("餐饮轻量事实研究失败时继续调用 Copy，并使用餐饮专属安全边界", async () => {
   const dining = {
     ...task("dining", "diningExperiences.0.editorialCopy", "dining"),
@@ -145,6 +167,35 @@ test("餐饮轻量事实研究失败时继续调用 Copy，并使用餐饮专属
   assert.ok(result.results[0].warnings.some((warning) => /餐饮事实研究发生技术故障/.test(warning)));
   assert.equal(result.metrics.researchCalls, 1);
   assert.equal(result.metrics.modelCalls, 1);
+});
+
+test("You.com 餐饮片段只交给当前体验，且不冒充 verifiedFacts 或订单收费依据", async () => {
+  const researched = {
+    ...task("sundowner", "diningExperiences.0.editorialCopy", "dining"),
+    facts: { sourceEvidence: ["原始资料确认 Sundowner，升级酒水另收费"], feeDisclosure: "升级酒水另收费" },
+    researchRequest: { researchType: "official_entity_facts", entityKind: "dining", entityName: "Example Safari Camp", focus: "Sundowner", categories: ["体验特色"] },
+  };
+  const ordinary = task("other-dining", "diningExperiences.1.editorialCopy", "dining");
+  const sourceUrl = "https://example.test/camp/sundowner";
+  const result = await runCopyWriterSkill({
+    tasks: [researched, ordinary],
+    researchFacts: async () => ({ researchType: researched.researchRequest.researchType, entityName: researched.researchRequest.entityName, status: "success", provider: "you_web_search_highlights", searchSnippets: [{ sourceUrl, sourceExcerpt: "Sundowner drinks are served on a terrace at sunset." }], verifiedFacts: [], attemptUsages: [{}] }),
+    requestJson: async ({ messages }) => {
+      const payload = JSON.parse(messages.at(-1).content);
+      const current = payload.tasks.find((item) => item.targetId === "sundowner");
+      const other = payload.tasks.find((item) => item.targetId === "other-dining");
+      assert.equal(current.facts.diningSearchSnippets[0].sourceUrl, sourceUrl);
+      assert.deepEqual(current.facts.verifiedFacts, []);
+      assert.equal(current.facts.factsResearchOutcome.searchSnippetCount, 1);
+      assert.equal(other.facts.diningSearchSnippets, undefined);
+      assert.match(messages[0].content, /不能证明本次订单/);
+      return { json: { results: payload.tasks.map((item) => ({ targetId: item.targetId, targetPath: item.targetPath, value: item.targetId === "sundowner" ? "在露台举杯，欣赏日落时的草原景色。" : "享用另一项已确认的餐饮体验。" })) }, attemptUsages: [{}] };
+    },
+  });
+  assert.equal(result.results[0].status, "success");
+  assert.match(result.results[0].value, /升级酒水另收费/);
+  assert.equal(result.results[1].value, "享用另一项已确认的餐饮体验。");
+  assert.equal(result.researchResults[0].searchSnippets[0].sourceUrl, sourceUrl);
 });
 
 test("hotel editorialCopy、proofPoints 和 factRows 共用一次研究，factRows 不增加 Writer 输出", async () => {

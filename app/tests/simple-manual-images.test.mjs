@@ -3,7 +3,8 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import sharp from "sharp";
-import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, researchSimpleImageSlot, saveSimpleDayEditor, uploadSimpleImage } from "../server/simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, researchSimpleImageSlot, saveSimpleDayEditor, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "../server/simple-manual-images.mjs";
+import { planHotelNightChange } from "../src/lib/hotelStayEditing.js";
 import { mergeManualImagePayload } from '../src/lib/manualImageState.js';
 import { buildLayoutImageSlots } from '../src/lib/imageSlots.js';
 import { createManualDayCard } from '../src/lib/dayEditorState.js';
@@ -362,6 +363,61 @@ test("人工新增体验卡片先保存为空草稿，上传后才进入客户�
   const manualSpot = payload.project.data.days[0].spots.find((spot) => spot.id === "spot-manual");
   assert.match(manualSpot.images[0].src, /^\/image-assets\/simple-manual-/);
   assert.equal(payload.project.data.simpleImageSlotBindings[slotId].manualEditorCard, true);
+});
+
+test("每日编辑不能绕过酒店模块直接修改住宿", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId);
+  saved.data.hotels = [
+    { id: "hotel-a", officialName: "Hotel A", shortName: "甲酒店", nights: 1 },
+    { id: "hotel-b", officialName: "Hotel B", shortName: "乙酒店", nights: 0 },
+  ];
+  saved.data.days[0].hotel = "Hotel A";
+  saved.data.days[0].hotelShortName = "甲酒店";
+  saved.data.days[0].overnightType = "hotel";
+  value.store.saveFinalResult(value.projectId, value.executionRunId, saved);
+  const data = structuredClone(buildSimpleManualImagePayload(value.store, value.projectId).project.data);
+  const day = { ...data.days[0], hotel: "Hotel B", hotelOfficialName: "Hotel B", hotelShortName: "乙酒店" };
+  const bindings = Object.fromEntries(Object.entries(data.simpleImageSlotBindings || {}).filter(([, binding]) => binding.module === "day" && binding.dayIndex === 0));
+  await assert.rejects(saveSimpleDayEditor({ ...value, dayIndex: 0, day, bindings, render: async ({ mode }) => ({ status: "success", mode, outputPath: "stay-edit.png", rendererCalls: 1 }) }), { code: "hotel_stay_hotel_module_only" });
+});
+
+test("酒店所在地单独保存，不改动住宿晚数与每日路线", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId);
+  saved.data.hotels = [{ id: "hotel-a", officialName: "Hotel A", shortName: "甲酒店", region: "旧地区", nights: 2 }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, saved);
+  const previousRoute = structuredClone(saved.data.days[0].routeNodes);
+  const result = await saveSimpleHotelRegion({ ...value, hotelIndex: 0, hotelId: "hotel-a", region: "新地区", render: async ({ mode }) => ({ status: "success", mode, outputPath: "hotel-region.png", rendererCalls: 1 }) });
+  const after = value.store.getFinalResult(value.projectId, value.executionRunId).data;
+  assert.equal(result.region, "新地区");
+  assert.equal(after.hotels[0].region, "新地区");
+  assert.equal(after.hotels[0].nights, 2);
+  assert.deepEqual(after.days[0].routeNodes, previousRoute);
+});
+
+test("酒店模块调整晚数前核对版本，确认后一次保存受影响住宿日", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId);
+  saved.data.hotels = [
+    { id: "hotel-a", officialName: "Hotel A", shortName: "甲酒店", nights: 1 },
+    { id: "hotel-b", officialName: "Hotel B", shortName: "乙酒店", nights: 2 },
+  ];
+  saved.data.days = [
+    { ...saved.data.days[0], hotel: "Hotel A", hotelOfficialName: "Hotel A", hotelShortName: "甲酒店", overnightType: "hotel", description: "第一天文案" },
+    { ...saved.data.days[0], hotel: "Hotel B", hotelOfficialName: "Hotel B", hotelShortName: "乙酒店", overnightType: "hotel", description: "第二天文案" },
+    { ...saved.data.days[0], hotel: "Hotel B", hotelOfficialName: "Hotel B", hotelShortName: "乙酒店", overnightType: "hotel", description: "第三天文案" },
+  ];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, saved);
+  const plan = planHotelNightChange(saved.data, 0, 2);
+  assert.equal(plan.ok, true);
+  await assert.rejects(saveSimpleHotelStay({ ...value, hotelIndex: 0, hotelId: "hotel-a", desiredNights: 2, expectedSignature: "old", deferRender: true }), { code: "hotel_stay_changed" });
+  const result = await saveSimpleHotelStay({ ...value, hotelIndex: 0, hotelId: "hotel-a", desiredNights: 2, expectedSignature: plan.signature, deferRender: true });
+  const after = value.store.getFinalResult(value.projectId, value.executionRunId).data;
+  assert.deepEqual(result.changedDayIndexes, [1]);
+  assert.deepEqual(after.hotels.map((hotel) => hotel.nights), [2, 1]);
+  assert.equal(after.days[1].hotel, "Hotel A");
+  assert.equal(after.days[1].description, "第二天文案");
 });
 
 test("用户主动单槽重搜只调用一个 slot，automaticFollowupRounds 保持 0", async (t) => {
