@@ -286,7 +286,8 @@ test("取消生成停留在进度页、冻结本地项目且不开放编辑入�
   const cancellation = workspace.slice(workspace.indexOf("const cancelAgent"), workspace.indexOf("const createProject"));
   const polling = workspace.slice(workspace.indexOf("const cancellationLocked"), workspace.indexOf("const commitProjects"));
   assert.match(workspace, /stage === "cancelled"[^\n]+label: "已停止"/);
-  assert.match(generation, /const canEdit = ready \|\| draft/);
+  assert.match(generation, /const canEdit = project\.flowKind === "simple_skill_v1" \? Boolean\(simpleRenderedEditorState\(snapshot\)\)/);
+  assert.match(generation, /\(ready \|\| draft\) && !failed && !cancelled/);
   assert.match(generation, /const canCancel = !waiting && !canEdit && !cancelled && !failed/);
   assert.match(generation, /<StepRail active=\{2\} stopped=\{cancelled\}/);
   assert.match(workspace, /state === "stopped" \? "本次制作已停止"/);
@@ -295,6 +296,16 @@ test("取消生成停留在进度页、冻结本地项目且不开放编辑入�
   assert.match(cancellation, /setScreen\("generate"\)/);
   assert.match(polling, /currentProject\.workflowStage === "cancelled"/);
   assert.match(polling, /cancelledAgentIdsRef\.current\.has/);
+});
+
+test("已形成草稿的最近项目直接进入编辑器且历史进度不重播", () => {
+  const openProject = workspace.slice(workspace.indexOf("const openProject"), workspace.indexOf("const generateProject"));
+  const progressView = workspace.slice(workspace.indexOf("function AgentProgressOverview"), workspace.indexOf("function AgentGenerationStep"));
+  assert.match(openProject, /project\.workflowStage === "partial"/);
+  assert.match(openProject, /window\.location\.assign\(`\/simple\/projects\/\$\{project\.agentProjectId\}`\)/);
+  assert.match(progressView, /useAnimatedProgress\(safeProgress, !display\.frozen\)/);
+  assert.match(progressView, /useAnimatedProgress\(routeTarget, !display\.frozen\)/);
+  assert.match(progressView, /display\.draft \? "可编辑草稿已生成"/);
 });
 
 test("非首页提供明确返回入口且返回首页不会取消后台制作", () => {

@@ -10,6 +10,7 @@ import { runCopyWriterSkill } from "./simple-copy-skill.mjs";
 import { runImageSearchSkill } from "./simple-image-skill.mjs";
 import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
+import { buildRendererUnresolvedItem } from "./simple-render-issues.mjs";
 import { applyApprovedFixedModules, SIMPLE_PIPELINE_DEFAULT_ORIGIN } from "./simple-fixed-modules.mjs";
 import { SIMPLE_PIPELINE_PROGRESS } from "./simple-pipeline-progress.mjs";
 
@@ -369,5 +370,5 @@ export async function runSimplePipeline({
 }
 
 function unresolvedRender(renderExecution) {
-  return { kind: "renderer", id: "renderer:2000", status: renderExecution.status || "failed", required: true, error: renderExecution.error || { code: "render_blocked", message: "2000px 渲染或确定性版面检查未通过" } };
+  return buildRendererUnresolvedItem(renderExecution, "2000px 渲染或确定性版面检查未通过");
 }

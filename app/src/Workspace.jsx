@@ -11,7 +11,7 @@ import { humanReviewReady, recordHumanReview } from './lib/humanReview.js';
 import { collectCopyIssues, copyExportEligibility, generationStateLabel, groupCopyIssueTargets, groupCopyIssues } from './lib/copyIssuePresentation.js';
 import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
 import { AGENT_DESIGNER_STAGES, SIMPLE_DESIGNER_STAGES, getDesignerCurrentAction } from './lib/agentProgressView.js';
-import { readAgentSnapshot, agentDisplayState, displayAgentStages, agentElapsed, agentFailurePresentation } from './lib/agentConnection.js';
+import { readAgentSnapshot, simpleRenderedEditorState, agentDisplayState, displayAgentStages, agentElapsed, agentFailurePresentation } from './lib/agentConnection.js';
 import { buildCustomerTravelEntityData } from './lib/travelEntityDisplay.js';
 import { normalizeHighlightForDisplay } from './lib/highlightDisplay.js';
 import { buildConfirmationActionItems, currentPriceSelection, isChildCountConfirmed, listPriceOffers, matchingPriceOffers, priceOfferKey } from './lib/confirmationActionItems.js';
@@ -629,9 +629,9 @@ function AgentProgressOverview({ snapshot, elapsed, action }) {
   const display = agentDisplayState(snapshot);
   progress.stages = displayAgentStages(progress.stages, display);
   const safeProgress = Math.max(0, Math.min(100, Number(progress.percent) || 0));
-  const animatedProgress = useAnimatedProgress(safeProgress, !display.failed && !display.cancelled && !display.disconnected);
+  const animatedProgress = useAnimatedProgress(safeProgress, !display.frozen);
   const routeTarget = agentRouteProgress(progress.stages, display.completed);
-  const animatedRouteProgress = useAnimatedProgress(routeTarget, !display.failed && !display.cancelled && !display.disconnected);
+  const animatedRouteProgress = useAnimatedProgress(routeTarget, !display.frozen);
   const labels = { complete: "已完成", active: display.disconnected ? "上次状态" : "进行中", waiting: "等待确认", failed: "失败", cancelled: "已停止", pending: display.failed || display.cancelled ? "未执行" : "等待处理", unknown: "状态待确认" };
   const latestEvent = snapshot?.executionRun?.events?.at(-1);
   const waitingReason = latestEvent?.waitingReason ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_confirmation" ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : snapshot?.project?.status === "awaiting_user_action" ? "部分内容需要在编辑页补充或确认，不影响你先查看和调整草稿。" : "";
@@ -655,7 +655,7 @@ function AgentProgressOverview({ snapshot, elapsed, action }) {
   const mascotProgress = animatedRouteProgress;
   const failure = agentFailurePresentation(snapshot, failedStage?.label);
   const contentHeadline = imageActive && !copyActive ? "正在为这份客户行程挑选合适的视觉素材" : imageActive && copyActive ? "正在完善客户文案与视觉素材" : copyActive ? "正在把确认资料整理成客户可读的行程内容" : "";
-  const primaryStatus = display.cancelled ? "制作已停止" : display.failed ? "本次生成已停止" : display.completed ? "生成完成" : contentHeadline || (actionStage ? `${actionStage.state === "waiting" ? "等待确认：" : "正在"}${actionStage.label}` : detailedAction);
+  const primaryStatus = display.cancelled ? "制作已停止" : display.failed ? "本次生成已停止" : display.completed ? "生成完成" : display.draft ? "可编辑草稿已生成" : contentHeadline || (actionStage ? `${actionStage.state === "waiting" ? "等待确认：" : "正在"}${actionStage.label}` : detailedAction);
   const runningDetails = [
     copyTasks?.total > 0 ? copyComplete ? "客户文案已整理完成" : `正在完善客户文案 ${copyTasks.completed} / ${copyTasks.total}` : "",
     imageSlots?.total > 0 ? imageComplete ? `图片位已完成匹配 ${imageSlots.completed} / ${imageSlots.total}` : `已完成 ${imageSlots.completed} / ${imageSlots.total} 个图片位` : "",
@@ -695,11 +695,11 @@ function AgentGenerationStep({ project, snapshot, error, onCancel, onEdit, onRes
   const display = agentDisplayState(snapshot);
   const elapsed = agentProject?.createdAt ? agentElapsed(snapshot) : 0;
   const waiting = ["awaiting_confirmation", "awaiting_user_action"].includes(agentProject?.status);
-  const draft = agentProject?.status === "partial";
+  const draft = project.flowKind === "simple_skill_v1" ? simpleRenderedEditorState(snapshot) === "draft" : agentProject?.status === "partial";
   const failed = display.failed;
   const cancelled = agentProject?.status === "cancelled" || project.workflowStage === "cancelled";
   const ready = ["ready_for_editor", "complete"].includes(agentProject?.status);
-  const canEdit = ready || draft;
+  const canEdit = project.flowKind === "simple_skill_v1" ? Boolean(simpleRenderedEditorState(snapshot)) && !failed && !cancelled : (ready || draft) && !failed && !cancelled;
   const canCancel = !waiting && !canEdit && !cancelled && !failed;
   return <main className="flow-page"><StepRail active={2} stopped={cancelled} /><section className="generation-page agent-workspace-generation">
     <AgentProgressOverview snapshot={snapshot} elapsed={elapsed} action={(cancelled || failed) ? <Button tone="primary" onClick={() => onRestart(failed ? "failed" : "cancelled")}>{failed ? "重新尝试" : "重新制作"}</Button> : null} />
@@ -1107,7 +1107,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     if (match) return selectModule('highlights', Number(match[1]));
     if (targetPath === 'highlights') return selectModule('highlights');
     if (targetPath === 'expenses') return selectModule('expenses');
-    return selectModule('cover');
+    return false;
   };
   useEffect(() => {
     const editorPage = previewRef.current?.closest(".editor-page");
@@ -1427,8 +1427,14 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     setFinalIssuesOpen(false);
     if (item.kind === "image") return selectBlockingImage(item);
     if (item.kind === "copy") {
+      const visualSlotId = item.slotId || (item.id?.startsWith("copy:visual:") ? item.id.slice("copy:visual:".length) : "");
+      if (visualSlotId) {
+        const binding = project.data.simpleImageSlotBindings?.[visualSlotId] || {};
+        pendingIssueFocusRef.current = binding.useSpotCopy === false ? "卡片标题" : "图片下方文字";
+        return selectBlockingImage({ slotId: visualSlotId });
+      }
       if (/^days\.\d+/.test(item.targetPath || "")) setDayInfoOpen(true);
-      pendingIssueFocusRef.current = /^days\.\d+\.spots\./.test(item.targetPath || "") ? "图片下方文字" : /^days\.\d+/.test(item.targetPath || "") ? "当日行程" : null;
+      pendingIssueFocusRef.current = /^days\.\d+\.spots\./.test(item.targetPath || "") ? "图片下方文字" : /^days\.\d+\.theme$/.test(item.targetPath || "") ? "每日主题" : /^days\.\d+/.test(item.targetPath || "") ? "当日行程" : null;
       return selectIssueTarget(item.targetPath);
     }
     if (item.action === "retry_renderer") return onRetryRenderer?.().catch(() => {});
@@ -1931,7 +1937,8 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
       setProjectId(project.id);
       setAgentSnapshot(null);
       const simpleRunStarted = project.flowKind === "simple_skill_v1" && Boolean(project.agentProjectId);
-      if (simpleRunStarted && (project.workflowStage === "generated" || project.revisionMode)) {
+      const simpleEditorReady = simpleRunStarted && (project.workflowStage === "generated" || project.workflowStage === "partial" || project.revisionMode || ["complete", "ready_for_editor", "partial", "awaiting_user_action", "ready_to_render"].includes(project.runtimeStatus));
+      if (simpleEditorReady) {
         window.location.assign(`/simple/projects/${project.agentProjectId}`);
         return;
       }

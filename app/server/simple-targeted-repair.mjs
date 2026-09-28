@@ -3,6 +3,7 @@ import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runCopyWriterSkill } from "./simple-copy-skill.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
 import { buildSimpleManualImagePayload } from "./simple-manual-images.mjs";
+import { buildRendererUnresolvedItem } from "./simple-render-issues.mjs";
 
 const activeRepairs = new Map();
 
@@ -29,13 +30,7 @@ function aggregateCopyStatus(results = []) {
 }
 
 function rendererIssue(renderResult = {}) {
-  return {
-    kind: "renderer",
-    id: "renderer:2000",
-    status: renderResult.status || "failed",
-    required: true,
-    error: renderResult.error || { code: "renderer_failed", message: "正式成品版面检查未通过" },
-  };
+  return buildRendererUnresolvedItem(renderResult);
 }
 
 async function safeRender(render, input) {

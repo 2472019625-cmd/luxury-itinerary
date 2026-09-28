@@ -10,13 +10,27 @@ export async function readAgentSnapshot(response) {
   return { ...value, _observedAt: Date.now() };
 }
 
+export function simpleRenderedEditorState(snapshot) {
+  if (snapshot?.project?.flowKind !== 'simple_skill_v1') return null;
+  const status = snapshot.project.status;
+  if (!['complete', 'ready_for_editor', 'partial', 'awaiting_user_action', 'ready_to_render'].includes(status)) return null;
+  if (snapshot.project.activeExecutionRunId && snapshot.project.activeExecutionRunId !== snapshot?.executionRun?.executionRunId) return null;
+  if (['cancelled', 'failed', 'planning_failed', 'execution_failed', 'terminated'].includes(snapshot?.activeJob?.status)) return null;
+  const result = snapshot?.result;
+  const renderedOutput = result?.outputPath || result?.render?.outputPath;
+  if (!result?.data || !renderedOutput || result?.render?.status !== 'success') return null;
+  return ['complete', 'ready_for_editor'].includes(status) ? 'complete' : 'draft';
+}
+
 export function agentDisplayState(snapshot) {
   const statuses = [snapshot?.project?.status, snapshot?.activeJob?.status, snapshot?.executionRun?.status];
-  const failed = statuses.some(s => ['failed', 'planning_failed', 'execution_failed', 'terminated'].includes(s));
+  const simple = snapshot?.project?.flowKind === 'simple_skill_v1';
+  const draft = simpleRenderedEditorState(snapshot) === 'draft';
+  const failed = statuses.some(s => ['failed', 'planning_failed', 'execution_failed', 'terminated'].includes(s)) || (simple && !draft && ['partial', 'awaiting_user_action', 'ready_to_render'].includes(snapshot?.project?.status) && ['failed', 'blocked'].includes(snapshot?.result?.render?.status));
   const cancelled = statuses.includes('cancelled');
-  const completed = !failed && !cancelled && statuses.some(s => ['complete', 'completed', 'ready_for_editor'].includes(s));
-  const disconnected = Boolean(snapshot?._connectionError) && !failed && !cancelled && !completed;
-  return { failed, cancelled, completed, disconnected, frozen: failed || cancelled || completed || disconnected };
+  const completed = !failed && !cancelled && (simple ? simpleRenderedEditorState(snapshot) === 'complete' : statuses.some(s => ['complete', 'completed', 'ready_for_editor'].includes(s)));
+  const disconnected = Boolean(snapshot?._connectionError) && !failed && !cancelled && !completed && !draft;
+  return { failed, cancelled, completed, draft, disconnected, frozen: failed || cancelled || completed || draft || disconnected };
 }
 
 export function displayAgentStages(stages, state) {
@@ -33,9 +47,12 @@ export function displayAgentStages(stages, state) {
 
 export function agentElapsed(snapshot, now = Date.now()) {
   const state = agentDisplayState(snapshot);
-  const terminalTime = snapshot?.executionRun?.updatedAt || snapshot?.activeJob?.updatedAt || snapshot?.project?.updatedAt;
+  const terminalTime = state.draft
+    ? snapshot?.activeJob?.completedAt || snapshot?.activeJob?.finishedAt || snapshot?.activeJob?.updatedAt || snapshot?.executionRun?.updatedAt || snapshot?.project?.updatedAt
+    : snapshot?.executionRun?.updatedAt || snapshot?.activeJob?.updatedAt || snapshot?.project?.updatedAt;
+  const startedAt = snapshot?.executionRun?.startedAt || snapshot?.activeJob?.startedAt || snapshot?.executionRun?.createdAt || snapshot?.activeJob?.createdAt || snapshot?.project?.createdAt;
   const end = state.disconnected ? snapshot?._observedAt : state.frozen ? Date.parse(terminalTime) : now;
-  return Math.max(0, Math.floor(((end || snapshot?._observedAt || now) - Date.parse(snapshot?.project?.createdAt || now)) / 1000));
+  return Math.max(0, Math.floor(((end || snapshot?._observedAt || now) - Date.parse(startedAt || now)) / 1000));
 }
 
 function errorText(value) {

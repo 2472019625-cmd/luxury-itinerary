@@ -294,6 +294,95 @@ test("人工选择不能使用损坏文件且不修改项目", async (t) => {
   assert.equal(value.store.getFinalResult(value.projectId, value.executionRunId).imageExecution.results[0].selected, null);
 });
 
+test("待处理事项透传 Renderer 的具体阻断原因", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.unresolvedItems = [{ kind:"renderer", id:"renderer:2000", required:true, status:"blocked", error:{ code:"renderer_failed", message:"成品检查未通过：DAY 4 正文溢出", details:["DAY 4 正文溢出"] }, qa:{ issues:[{ severity:"blocker", code:"text_overflow", message:"DAY 4 正文溢出" }] } }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const payload = buildSimpleManualImagePayload(value.store, value.projectId);
+  const renderer = payload.blockingItems.find((item) => item.kind === "renderer");
+  assert.equal(renderer.label, "2000px 成品检查");
+  assert.match(renderer.message, /未通过原因：DAY 4 正文溢出/);
+});
+
+test("视觉卡文案失败标明 DAY 和图片主题，并指向对应体验卡片", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const existingPlan = value.store.getPlan(value.projectId, "plan-manual-images");
+  const slotId = "image:day:1:primary";
+  const targetId = `copy:visual:${slotId}`;
+  const targetPath = "simpleImageSlotBindings.image_day_1_primary";
+  value.store.activatePlan(value.projectId, {
+    ...existingPlan,
+    planId: "plan-visual-copy-location",
+    copyTasks: [{ targetId, targetPath, moduleType: "visual_card", layoutHints: { placement: "visual_card", slotId }, required: true }],
+    imageSlots: existingPlan.imageSlots.map((slot) => slot.slotId === slotId ? { ...slot, primaryVisualSubject: "花豹追踪" } : slot),
+  });
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.data.simpleImageSlotBindings = { ...existingPlan.slotBindings, [slotId]: { ...existingPlan.slotBindings[slotId], visualSubject: "花豹追踪" } };
+  result.unresolvedItems = [{ kind: "copy", id: targetId, required: true, status: "failed", error: { code: "copy_request_failed" } }];
+  result.copyExecution.results = [{ targetId, targetPath, status: "failed", error: { code: "copy_request_failed" } }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+
+  const payload = buildSimpleManualImagePayload(value.store, value.projectId);
+  assert.deepEqual(payload.blockingItems.map(({ id, slotId: itemSlotId, targetPath: path, label }) => ({ id, slotId: itemSlotId, targetPath: path, label })), [
+    { id: targetId, slotId, targetPath, label: "DAY 01 · 花豹追踪 · 体验卡片文案" },
+  ]);
+
+  const editedDay = structuredClone(result.data.days[0]);
+  editedDay.spots[0].description = "在向导带领下观察草原野生动物的真实活动。";
+  const afterEdit = await saveSimpleDayEditor({
+    ...value,
+    dayIndex: 0,
+    day: editedDay,
+    bindings: { [slotId]: result.data.simpleImageSlotBindings[slotId] },
+    render: async ({ mode }) => ({ status: "success", mode, outputPath: path.join(value.root, "draft-2000.png"), rendererCalls: 1 }),
+  });
+  assert.equal(afterEdit.blockingItems.some((item) => item.id === targetId), false);
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId);
+  assert.equal(saved.copyExecution.results.find((item) => item.targetId === targetId).resolution, "manual_editor");
+  assert.equal(saved.data.simpleImageSlotBindings[slotId].cardDescription, editedDay.spots[0].description);
+
+  saved.data.simpleImageSlotBindings[slotId].useSpotCopy = false;
+  saved.unresolvedItems.push({ kind: "copy", id: targetId, required: true, status: "failed" });
+  saved.copyExecution.results = [{ targetId, targetPath, status: "failed" }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, saved);
+  const independentCard = { ...saved.data.simpleImageSlotBindings[slotId], cardTitle: "花豹追踪", cardDescription: "跟随向导观察花豹，了解它在草原上的活动方式。" };
+  const afterIndependentEdit = await saveSimpleDayEditor({
+    ...value,
+    dayIndex: 0,
+    day: saved.data.days[0],
+    bindings: { [slotId]: independentCard },
+    render: async ({ mode }) => ({ status: "success", mode, outputPath: path.join(value.root, "draft-2000.png"), rendererCalls: 1 }),
+  });
+  assert.equal(afterIndependentEdit.blockingItems.some((item) => item.id === targetId), false);
+});
+
+test("旧项目即使只保存通用 Renderer 文案，也从 render QA 恢复具体原因", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.unresolvedItems = [{ kind:"renderer", id:"renderer:2000", required:true, status:"blocked", error:{ code:"renderer_failed", message:"正式成品版面检查未通过" } }];
+  result.render = { status:"success", mode:"draft", outputPath:"draft.png", finalAttempt:{ status:"blocked", qa:{ issues:[{ severity:"blocker", code:"image_upscale_excessive", message:"图片放大过多" }, { severity:"blocker", code:"footer_missing", message:"固定品牌页脚缺失" }] } } };
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const renderer = buildSimpleManualImagePayload(value.store, value.projectId).blockingItems.find((item) => item.kind === "renderer");
+  assert.match(renderer.message, /固定品牌页脚缺失/);
+  assert.doesNotMatch(renderer.message, /图片放大过多/);
+});
+
+test("旧项目只有清晰度历史阻断时按新规则直接解除", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.outputPath = path.join(value.root, "draft-2000.png");
+  result.renderStatus = "success";
+  result.unresolvedItems = [{ kind:"renderer", id:"renderer:2000", required:true, status:"blocked", error:{ code:"renderer_failed", message:"正式成品版面检查未通过" } }];
+  result.render = { status:"success", mode:"draft", outputPath:result.outputPath, finalAttempt:{ status:"blocked", qa:{ issues:[{ severity:"blocker", code:"image_upscale_excessive", message:"图片放大倍数 1.61，可能不够清晰" }] } } };
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const payload = buildSimpleManualImagePayload(value.store, value.projectId);
+  assert.equal(payload.blockingItems.length, 0);
+  assert.equal(payload.unresolvedRequiredCount, 0);
+  assert.equal(payload.canEnterFinal, true);
+  assert.ok(payload.outputUrl);
+});
+
 test("只有远程预览的人工候选会在确认时下载原图再替换", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
   const result = value.store.getFinalResult(value.projectId, value.executionRunId);

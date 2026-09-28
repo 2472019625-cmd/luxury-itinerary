@@ -40,6 +40,12 @@ test('generation preview may carry copy issues into editor but formal export sti
   assert.ok(formal.issues.some((item) => item.severity === 'blocker' && item.code.startsWith('brand_')));
 });
 
+test('final output QA reports image clarity as warning without blocking delivery', () => {
+  const result = reviewFinalOutputData(data, { width: 2000, overflows: [], brokenImages: [], largeGaps: [], footerPresent: true, issues: [{ severity:'blocker', code:'image_upscale_excessive', message:'图片放大 1.61 倍' }] });
+  assert.equal(result.passed, true);
+  assert.ok(result.issues.some((item) => item.code === 'image_upscale_excessive' && item.severity === 'warning'));
+});
+
 test('agent final gate preserves accepted optimization suggestions as warnings', () => {
   const reviewed = {
     ...data,

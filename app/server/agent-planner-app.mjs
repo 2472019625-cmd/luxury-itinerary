@@ -736,8 +736,9 @@ export function createAgentPlannerServer(options = {}) {
         const project = simpleStore.getProject(projectId);
         const activeRun = project?.activeExecutionRunId ? simpleStore.getExecutionRun(projectId, project.activeExecutionRunId) : null;
         const result = activeRun ? simpleStore.getFinalResult(projectId, activeRun.executionRunId) : null;
+        const manualPayload = result ? buildSimpleManualImagePayload(simpleStore, projectId) : null;
         const outputRoot = path.resolve(root, "output");
-        const file = result?.pipelineStatus === "complete" && result.outputPath ? path.resolve(result.outputPath) : null;
+        const file = manualPayload?.canEnterFinal && result?.outputPath ? path.resolve(result.outputPath) : null;
         if (!file || !file.startsWith(`${outputRoot}${path.sep}`) || !existsSync(file)) return json(response, 404, { error: "正式成品文件不存在" });
         response.writeHead(200, { "content-type": "image/png", "content-disposition": deliveryContentDisposition(url.searchParams.get("downloadName") || result.data?.title || "客户行程_行程方案") });
         if (request.method === "HEAD") return response.end();
