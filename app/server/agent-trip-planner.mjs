@@ -914,6 +914,24 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
   return { plan: next, repairs, unresolvedSlotRoles: [...unresolvedRoles] };
 }
 
+// Used by the isolated slot-repair POC to run the exact same deterministic
+// validation and local repairs as the normal single-pass Planner output.
+// It does not call a model or persist a plan.
+export function materializeAgentPlanForSlotRepair(raw, project) {
+  const factBasis = project.factBasis;
+  const context = { projectId: project.projectId, inputFingerprint: project.inputFingerprint, factBasis, previousPlanVersion: project.planIds?.length || 0 };
+  const plan = assemblePlan(raw, context, project.activePlanId, { source_parser: 1, trip_planner: 1 });
+  const validation = validateAgentPlan(plan, context);
+  validation.errors.push(...validateSimpleHighlightSelection(raw, factBasis));
+  validation.errors.push(...validateSimpleDayVisuals(plan, factBasis));
+  validation.valid = validation.errors.length === 0;
+  const failOpen = applyPlannerFailOpen(plan, validation.errors, factBasis);
+  return {
+    plan: { ...failOpen.plan, validation: { passed: validation.valid, failOpen: !validation.valid, errors: compactPlannerErrors(validation.errors), unresolvedSlotRoles: failOpen.unresolvedSlotRoles, localRepairs: failOpen.repairs } },
+    validation,
+  };
+}
+
 export async function generateAgentPlan({ project, apiKey, baseUrl, model, requestJson = requestDeepSeekJson, onStatus, onModelAttempt, signal, simpleSkillContract = false }) {
   const factBasis = project.factBasis;
   const context = { projectId: project.projectId, inputFingerprint: project.inputFingerprint, factBasis, previousPlanVersion: project.planIds?.length || 0 };

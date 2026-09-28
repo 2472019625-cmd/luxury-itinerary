@@ -13,6 +13,66 @@ import { buildKnowledgeHierarchy, explicitEntityRoute } from "../server/knowledg
 
 const slot = (id, overrides = {}) => ({ slotId: id, moduleType: "day", required: true, location: "塞伦盖蒂", activity: "全天游猎", subject: "草原环境与游猎行动", searchIntent: ["草原游猎", "野生动物观察"], visualGoal: "表现进入草原后的环境建立", visualContext: { dayRole: "环境建立", avoid: ["与相邻 DAY 相同机位"] }, copyTargetId: `copy-${id}`, aspectRatio: "16:9", userLocked: false, ...overrides });
 
+for (const mode of ["empty", "terminal_failed", "poll_transport", "poll_timeout"]) {
+  test(`transport knowledge-first ${mode} preserves the real adapter outcome before bounded Web fallback`, async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "transport-knowledge-fallback-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const events = [];
+    let submits = 0;
+    let polls = 0;
+    const target = slot(`transport-${mode}`, {
+      moduleType: "transport", location: "Nairobi", country: "Kenya", locationRole: "scope_only",
+      activity: "草原飞机", subject: "草原飞机", primaryVisualSubject: "草原飞机", exactIdentityRequired: false,
+      queryCore: { subject: "草原飞机", subjectEn: "bush plane" }, fidelityQuery: "草原飞机", alternateQueries: ["bush plane"],
+    });
+    const batch = await runImageSearchSkill({
+      root, sourceMode: "knowledge_first", knowledgeBaseUrl: "https://knowledge.example",
+      knowledgeScopeNodeIds: ["test-transport-scope"], knowledgeQueriesPerSlot: 1, slots: [target],
+      adapters: {
+        searchKnowledgeImages: (options) => searchKnowledgeImages({ ...options, requestTimeoutMs: 20, timeoutMs: 40,
+          fetchImpl: async (_url, request) => {
+            if (request.method === "POST") {
+              events.push("submit"); submits += 1;
+              return new Response(JSON.stringify({ data: { query_id: "qry-transport-contract" } }), { status: 202 });
+            }
+            events.push("poll"); polls += 1;
+            if (mode === "poll_transport") throw new Error("synthetic connection failure");
+            if (mode === "poll_timeout") return new Promise((_resolve, reject) => {
+              const abort = () => reject(request.signal.reason);
+              if (request.signal.aborted) abort(); else request.signal.addEventListener("abort", abort, { once: true });
+            });
+            return new Response(JSON.stringify({ data: mode === "terminal_failed"
+              ? { status: "failed", error_id: "err-transport-contract" }
+              : { status: "completed", scope_state: "empty", results: [] } }), { status: 200 });
+          },
+        }),
+        searchWebBatch: async () => { events.push("web"); return []; },
+        searchCommonsImages: async () => [],
+      },
+    });
+    assert.equal(submits, 1);
+    assert.equal(polls, 1);
+    assert.deepEqual(events.slice(0, 2), ["submit", "poll"]);
+    assert.ok(events.indexOf("web") > 1);
+    const image = batch.results[0];
+    const attempt = image.pipelineEvidence.knowledgeSearch.attempts[0];
+    assert.equal(attempt.queryId, "qry-transport-contract");
+    assert.equal(image.pipelineEvidence.sourceFallback.from, "knowledge_library");
+    assert.equal(image.pipelineEvidence.sourceFallback.to, "web");
+    assert.equal(batch.metrics.knowledgeFirstWebFallbacks, 1);
+    if (mode === "empty") {
+      assert.equal(attempt.status, "completed");
+      assert.equal(attempt.scopeState, "empty");
+      assert.equal(batch.metrics.knowledgeFailed, 0);
+    } else {
+      assert.equal(attempt.status, mode === "poll_timeout" ? "timeout" : "failed");
+      assert.equal(attempt.knowledgeStage, mode === "terminal_failed" ? "terminal" : "poll");
+      assert.equal(attempt.knowledgeFailureKind, { terminal_failed: "terminal_failure", poll_transport: "transport", poll_timeout: "timeout" }[mode]);
+      assert.equal(image.pipelineEvidence.searchTrace.web.fallbackReason, "knowledge_service_degraded_fallback");
+    }
+  });
+}
+
 test("Web provider rejection is not concealed by an empty Commons response", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "image-source-outcome-"));
   t.after(() => rm(root, { recursive: true, force: true }));
