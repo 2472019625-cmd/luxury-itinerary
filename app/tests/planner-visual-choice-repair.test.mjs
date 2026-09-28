@@ -520,8 +520,8 @@ test("Planner事实基座把对象亮点转换为显示文本", () => {
   assert.deepEqual(facts.coreExperiences, ["私家行程：按专属节奏深入", "自然观察"]);
 });
 
-async function planDaySubject(visual, queries, { dayDescription = "在草原观察羚羊与斑马", queryCore = null } = {}) {
-  const data = { destination: "测试保护区", days: [{ route: "测试保护区", description: dayDescription, spots: [{ name: "草原观察", description: dayDescription, status: "included" }] }] };
+async function planDaySubject(visual, queries, { dayDescription = "在草原观察羚羊与斑马", queryCore = null, location = "测试保护区" } = {}) {
+  const data = { destination: location, days: [{ route: location, description: dayDescription, spots: [{ name: "草原观察", description: dayDescription, status: "included" }] }] };
   const factBasis = buildAgentFactBasis(data);
   let calls = 0;
   let systemPrompt = "";
@@ -533,7 +533,7 @@ async function planDaySubject(visual, queries, { dayDescription = "在草原观�
       systemPrompt = options.messages[0].content;
       const response = await plannerRequestJson({ delayMs: 0 })(options);
       const day = response.json.imagePlan.slots.find((item) => item.role === "day:1");
-      Object.assign(day, { primaryVisualSubject: visual, queryCore: queryCore || { subject: "羚羊", action: "行走", identity: "", subjectEn: "antelope", actionEn: "walking", identityEn: "" }, fidelityQuery: queries[0], alternateQueries: queries.slice(1), location: "测试保护区", locationRole: "scope_only", exactIdentityRequired: false, sourceRefs: ["days.0.spots.0"] });
+      Object.assign(day, { primaryVisualSubject: visual, queryCore: queryCore || { subject: "羚羊", action: "行走", identity: "", subjectEn: "antelope", actionEn: "walking", identityEn: "" }, fidelityQuery: queries[0], alternateQueries: queries.slice(1), location, locationRole: "scope_only", exactIdentityRequired: false, sourceRefs: ["days.0.spots.0"] });
       response.json.dayRoles[0].primaryVisualSubject = "草原羚羊行走";
       return response;
     },
@@ -564,4 +564,38 @@ test("DAY不同主体二选一与跨分支Query保留未解决并记录冲突", 
   const sameQueries = await planDaySubject("草原上羚羊或斑马的游猎画面", ["羚羊行走", "antelope walking"]);
   assert.equal(sameQueries.slot.plannerSlotStatus, "unresolved", "没有跨分支Query也不能由程序替Planner选羚羊");
   assert.ok(!sameQueries.slot.plannerValidationIssues.some((issue) => issue.code === "visual_query_branch_conflict"));
+});
+
+test("D3跨主体alternate清洗Scope后仍挂起该位，其他图片位与Copy继续", async () => {
+  const { slot, plan, data, attempts } = await planDaySubject(
+    "狮群或花豹",
+    ["马赛马拉 草原狮群", "马赛马拉 草原行进", "马拉草原 花豹游猎"],
+    { location: "马赛马拉", dayDescription: "在马赛马拉草原观察狮群或花豹", queryCore: { subject: "草原狮群", action: "草原行进", identity: "" } },
+  );
+  assert.equal(attempts.length, 1);
+  assert.equal(plan.validation.plannerBusinessRuns, 1);
+  assert.equal(slot.exactIdentityRequired, false);
+  assert.equal(slot.plannerSlotStatus, "unresolved");
+  assert.equal(slot.needsUserAction, true);
+  assert.ok(slot.plannerValidationIssues.some((issue) => issue.code === "ambiguous_visual_subject"));
+  assert.equal(slot.alternateQueries.some((query) => /花豹/.test(query)), true, "不能丢掉另一主体以伪造同一Core");
+  assert.ok(!slot.plannerLocalRepairs.some((repair) => repair.code === "equivalent_visual_choice_resolved"));
+  const runtime = materializeSimpleSkillPlan({ data, agentPlan: plan });
+  assert.equal(runtime.imageSlots.find((item) => item.slotId === "image:day:1:primary").needsUserAction, true);
+  assert.ok(runtime.imageSlots.some((item) => item.moduleType === "cover" && !item.needsUserAction));
+  assert.ok(runtime.copyTasks.length > 0);
+});
+
+test("同一Core的Scope词可局部清洗，保留主体动作并允许搜索", async () => {
+  const core = { subject: "草原狮群", action: "行进", identity: "" };
+  const { slot } = await planDaySubject(
+    "草原狮群行进",
+    ["马赛马拉 草原狮群行进", "马赛马拉 狮群行进"],
+    { location: "马赛马拉", dayDescription: "在马赛马拉草原观察行进的狮群", queryCore: core },
+  );
+  assert.equal(slot.plannerSlotStatus, "locally_repaired");
+  assert.equal(slot.needsUserAction, false);
+  assert.deepEqual(slot.queryCore, core);
+  assert.ok([slot.fidelityQuery, ...slot.alternateQueries].every((query) => !query.includes("马赛马拉")));
+  assert.ok([slot.fidelityQuery, ...slot.alternateQueries].length >= 2);
 });

@@ -13,7 +13,7 @@ import { buildKnowledgeQueryPlan, cleanupPlannerQueryScope, validatePlannerSearc
 import { visualSubjectPolicyIssue } from "./visual-subject-policy.mjs";
 import { highlightToText } from "../src/lib/highlightDisplay.js";
 
-export const AGENT_PROMPT_VERSION = "agent-trip-planner-v11-single-subject-source-grounding";
+export const AGENT_PROMPT_VERSION = "agent-trip-planner-v12-day-coverage-core-consistency";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const prompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-trip-planner-v1.md"), "utf8");
 const reviewDecisionPrompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-review-decision-v1.md"), "utf8");
@@ -385,6 +385,24 @@ export function reconcilePlannerImageCandidates(plan = {}, factBasis = {}) {
     unexpectedRoles: slots.map((slot) => cleanText(slot.role)).filter((role) => !knownRoles.has(role) && !isAllowedSupporting(role)),
     invalidOmissions: omissions.filter((role) => !candidates.some((candidate) => candidate.role === role && !candidate.required)),
   };
+}
+
+function dayVisualCoverage(plan = {}, factBasis = {}) {
+  const slots = Array.isArray(plan.imagePlan?.slots) ? plan.imagePlan.slots : [];
+  return (factBasis.days || []).map((_, dayIndex) => {
+    const prefix = `day:${dayIndex + 1}`;
+    const planned = slots.filter((slot) => slot.role === prefix || slot.role?.startsWith(`${prefix}:supporting:`));
+    const unresolved = planned.filter((slot) => slot.plannerSlotStatus === "unresolved" || slot.needsUserAction === true);
+    return {
+      dayIndex,
+      roles: planned.map((slot) => slot.role),
+      plannedCount: planned.length,
+      searchableCount: planned.length - unresolved.length,
+      unresolvedRoles: unresolved.map((slot) => slot.role),
+      sourceRefs: planned.map((slot) => ({ role: slot.role, refs: Array.isArray(slot.sourceRefs) ? slot.sourceRefs : [] })),
+      visualDuties: planned.map((slot) => ({ role: slot.role, duty: cleanText(slot.visualDuty), differentiation: cleanText(slot.differentiation) })),
+    };
+  });
 }
 
 const visualChoicePattern = /或者|或|二选一|\bor\b|\//i;
@@ -912,9 +930,9 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   const callStats = { source_parser: 1, trip_planner: 0 };
   const attempts = [];
   const simpleContractPrompt = "simple-skill-pipeline 额外接口：在原有 JSON 字段之外返回 selectedHighlights 数组。每项只含 sourceText、sourceType(source_designated|official_product|planner_derived)、sourceRefs、selectionReason，不写最终客户文案。你必须在本次规划中最终确定实际采用的亮点集合：第一优先逐条读取 factBasis.sourcePosterHighlights；第二优先只能从 factBasis.officialProductValues 选择奢游已确认服务/产品价值，sourceText 必须原样引用对应候选；前两类仍不足5条时才补充整程级购买理由。目标5—7条，真实事实不足时允许少于5条并在 selectionReason 说明素材不足。不得把普通DAY细节拔高，也不得把 DAY 中的自费热气球标成 official_product。图片规划必须读取封面、每个酒店、每个独立餐饮、每种交通和每个 DAY 的完整事实；对应role使用cover、hotel:N、dining:N、transport:N、day:N。Planner是图片画面的唯一决定者；每个图片位在同一次Planner调用内必须返回primaryVisualSubject、location、locationRole、queryCore、fidelityQuery和alternateQueries。locationRole只能是scope_only或visual_identity。queryCore只用subject/action/identity/subjectEn/actionEn/identityEn：subject是真正必须入镜的通用可见主体，action是定义画面的关键动作且静态画面可为空，identity只供Scope和身份审核。fidelityQuery是一条简短可搜索的第一条画面保真Query，alternateQueries是1—3条同画面的补充Query，合计2—4条；第一条不要求与queryCore逐字相同，同义表达不得因文字差异被改写。locationRole=scope_only时地点和目录身份不得进入任何Query；若地标、实体或命名身份本身必须入镜，必须改成locationRole=visual_identity，而不是一边写scope_only一边把身份留在Query。普通时间、氛围、构图和费用状态不得进入Query。两条准确Query已经足够，不得凑满四条。以上按字段语义通用执行，不得针对国家、动物、酒店、景点或当前案例建立专用词表。dayRoles.primaryVisualSubject只能选已有真实活动并结合differenceFromAdjacent，不能机械取spots[0]或虚构差异；徒步/夜游、文化体验和真实存在的可选活动都可以承担DAY主视觉，自费/可选/待确认体验成为视觉重点时必须保留状态。封面只能有一个核心焦点。DAY、酒店、餐饮、交通和封面每个slot都只能是一张具体可拍画面，禁止A或B、抽象抵达/离境/用餐概念或两个独立体验。输出前以queryCore.identity+subject+action为每个slot生成视觉职责键并全量去重；封面与DAY、独立模块与DAY也不能重复。同一体验跨模块存在时，必须选择不同的可见主体或动作，若DAY已有其他真实高价值画面则优先改用该画面，不能只改primaryVisualSubject或Query措辞。原始资料明确写有游猎时不得判断为无游猎。";
-  const dayVisualPrompt = "DAY 图片继续只使用 imagePlan.slots。每个 DAY 保留一个role为day:N的主视觉；允许0—3个role为day:N:supporting:1等的辅助视觉。不要输出slotId、label、required或removable，这些属性由程序根据role补齐。普通体验日根据真实视觉价值选择2—4个不同视觉点，内容少则1—2个，纯返程日只保留一个具体可拍的收尾主视觉；不得用抽象的抵达、送机离境、入住、用餐体验或自由活动充当画面。有限图片位内按以下顺序选择：独家或稀缺体验；来源明确的景点、设施或活动；有强视觉主体的动物、地标、自然事件或特色体验；能够与同日其他画面形成真实差异的场景；普通全天、清晨、傍晚游猎只在没有更高价值真实视觉时作为兜底。此顺序按字段语义通用判断，不绑定国家、项目或DAY。每个slot必须选定一个明确场景，禁止A或B、A/B和两个独立体验；同一真实画面可以包含多个自然共现主体。两个不同场景值得展示时拆成两个slot，每天最多4张。primaryVisualSubject只写真正需要入镜的主体和动作。命名地点只是搜索范围时写入location并设locationRole=scope_only；只有地点、地标、建筑、入口、标牌或实体本身必须入镜时才设locationRole=visual_identity并允许Query保留名称。主题可以来自完整experience，不要求与Spot同名。主视觉与dayRoles主线一致，辅助图只能补充主线。每个slot分别输出fidelityQuery和1—3条alternateQueries，中文精准词在前，必要英文同义表达在后；不能照抄primaryVisualSubject长句，不能写时间氛围、姿态构图、图片职责或泛词。两条准确Query已经足够；sourceRefs指向当天原始事实。";
+  const dayVisualPrompt = "DAY 图片继续只使用 imagePlan.slots。每个 DAY 保留一个role为day:N的主视觉；结构上允许0—3个role为day:N:supporting:1等的辅助视觉；0只适用于事实确无第二个合理画面，不是普通日默认值。不要输出slotId、label、required或removable，这些属性由程序根据role补齐。普通核心体验日默认规划2张不同职责的图，事实丰富且职责不同可规划3—4张；转场、返程日规划1—2张，资料确实只有一个合理画面时可只保留主图；不得用抽象的抵达、送机离境、入住、用餐体验或自由活动充当画面。有限图片位内按以下顺序选择：独家或稀缺体验；来源明确的景点、设施或活动；有强视觉主体的动物、地标、自然事件或特色体验；能够与同日其他画面形成真实差异的场景；普通全天、清晨、傍晚游猎只在没有更高价值真实视觉时作为兜底。此顺序按字段语义通用判断，不绑定国家、项目或DAY。每个slot必须选定一个明确场景，禁止A或B、A/B和两个独立体验；同一真实画面可以包含多个自然共现主体。两个不同场景值得展示时拆成两个slot，每天最多4张。primaryVisualSubject只写真正需要入镜的主体和动作。命名地点只是搜索范围时写入location并设locationRole=scope_only；只有地点、地标、建筑、入口、标牌或实体本身必须入镜时才设locationRole=visual_identity并允许Query保留名称。主题可以来自完整experience，不要求与Spot同名。主视觉与dayRoles主线一致，辅助图只能补充主线。每个slot分别输出fidelityQuery和1—3条alternateQueries，中文精准词在前，必要英文同义表达在后；不能照抄primaryVisualSubject长句，不能写时间氛围、姿态构图、图片职责或泛词。两条准确Query已经足够；sourceRefs指向当天原始事实。";
   const visualSelectionChecklist = "单次规划的逐位最终检查：先从该图片位的原始事实选定唯一一个Core主体、必要动作及身份，再写primaryVisualSubject、queryCore和全部Query；这几处必须始终指向同一张画面。若原文列举多个可选主体或活动，只选其中一个作为本位目标；另一个只有具备独立来源和不同职责时才可另建辅助位。图片里的设备、光源、特定设施或动物必须能由sourceRefs指向的原始事实支持，不凭常识添加。alternateQueries只能改用同一目标的同义搜索表达，绝不可切换成另一主体或动作。dayRoles的主视觉与对应day:N主图必须一致。输出前发现任一视觉句保留二选一，或任一Query跨到另一分支，就在本次规划内部按事实重新确定目标并改正整个位；不要把矛盾留给搜索，也不要增加第二次规划调用。";
-  const visualCoveragePrompt = '输出前逐日复核视觉覆盖，不得把允许辅助图误解为默认每天仅一个主图。只有一个真正高价值视觉点可选1个；普通体验日通常1—2个；完整experience中存在多个明确、差异化、高价值体验时必须选择2—4个，分别写成primary与supporting，而非合并进一个泛化游猎主题。若当日真实资料同时有象群与雪山、Observation Hill、步行Safari、夜间游猎，这四种画面应分别规划；示例不是事实，其他线路不得照搬。纯返程或简单送机只需一个收尾视觉，不强迫补足。禁止以接送、入住或重复场景凑数。用现有visualDuty/differentiation说明选择价值和覆盖范围；sourceRefs优先精确引用对应days.N.spots.M或当日事实摘录，便于保留原费用状态，不新增schema。';
+  const visualCoveragePrompt = '输出前逐日复核视觉覆盖，不得把允许辅助图误解为默认每天仅一个主图。资料确实只有一个合理画面时可选1个；普通核心体验日默认2个；事实丰富且有3—4个独立合理视觉职责时可规划3—4个；只有2个合理画面时规划2个；转场、返程日按真实内容选择1—2个，分别写成primary与supporting，而非合并进一个泛化游猎主题。不同主体、必要动作或可见场景具有独立职责时分别规划，不把多个真实画面压成泛化主题。纯返程或简单送机只需一个收尾视觉，不强迫补足。禁止以接送、入住或重复场景凑数。用现有visualDuty/differentiation说明选择价值和覆盖范围；只保留单图时在这两个既有字段中简述事实限制；sourceRefs优先精确引用对应days.N.spots.M或当日事实摘录，便于保留原费用状态，不新增schema。';
   callStats.trip_planner = 1;
   onStatus?.({ status: "planning", message: "正在制定单次轻量业务规划" });
   const dayNumbering = (project.factBasis?.days || []).map((day, i) => `DAY${i + 1}: dayRoles.index=${i}; imagePlan主图role=day:${i + 1}; 辅助role=day:${i + 1}:supporting:1等；只消费factBasis.days[${i}]。`).join('\n');
@@ -922,9 +940,10 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   const identityDecisionPrompt = "填写exactIdentityRequired前，先在本次规划内区分两个独立问题（不输出推理或新增字段）：①主体与必要动作必须正确，这要求同一种画面/体验，不要求唯一地点身份；②具体实体是否不可替代，这才决定该boolean。事件、自然现象、活动场面及其营销名称不是唯一实体身份；不得把行程主卖点的重要程度当成身份必需性。若主体动作仍正确，只是照片无法证明发生在那个命名地点，不能据此填true。独立酒店模块展示的就是预订的具体酒店，换成另一家会造成事实错误，因此必须true并填写该酒店正式identity。实体专属体验按是否必须属于该实体判断，不能仅因发生于酒店就设true。完成后逐图片位复核这两个问题，保持主体/动作、地点和身份分开；不按国家、动物、活动或品牌词表判断。";
   const identityOutputChecklist = '最终输出 JSON 前逐个遍历 imagePlan.slots，包含 cover、每个 hotel/dining/transport、每个 day:N 主图和每个 supporting：每一个 slot 对象都必须显式写出 "exactIdentityRequired": true 或 "exactIdentityRequired": false。不得省略、使用 null/字符串，也不得只在前几个 slot 输出该字段。先按上面的反事实判断决定每个值，不按 role、locationRole 或 identity 是否非空机械填充；输出完成后再次检查 imagePlan.slots.length 与此布尔字段出现次数完全相同。';
   const visualTargetPrompt = '视觉目标契约澄清：前文单一画面与禁止A或B约束的是Core主体、必要动作和不可替代身份，不能把理想描述的背景、光线、构图选择提升为硬条件。请在本次输出中直接保持queryCore明确，非核心背景只作表现偏好。独立hotel:N代表图已有外观、套房、泳池、公共空间候选池：若职责是展示这家酒店的真实代表空间，queryCore.subject写酒店代表性空间，action为空，identity是正式酒店身份且exactIdentityRequired=true；primaryVisualSubject可表达代表空间偏好，不能要求每种空间同框。只有客户文案明确承诺并需要图片证明某一特定房型、专属设施或体验时，Core才保留该具体主体与动作，不能归为代表图；DAY、餐饮和交通不得借酒店代表图规则放宽。真正不同Core主体、动作或身份的二选一仍不得输出，不能靠选第一个或删掉限定来解决。此澄清只使用现有字段，不新增输出字段、模型调用或备用画面。';
-  const candidateSlotPrompt = '图片位置契约：用户输入的imageCandidateSlots由原始事实和版面预先确定，每项有稳定role、sourceKey、slotId及required/removable。你只决定画面，不改编号、来源或必要性；每个required=true候选必须在imagePlan.slots中恰好规划一次。sourceRefs必须引用候选的原始sourceKey，不能在事实数组过滤空行后自行重编号。可选的dining:N、transport:N只有确实无独立展示价值时才可不规划，并把对应role明确写入imagePlan.omittedOptionalRoles；没有省略时也输出空数组。不能同时规划又省略同一role，不能省略必需位。未写在omittedOptionalRoles的可选候选也须规划，遗漏不能冒充主动取舍。DAY辅助视觉可从当天真实事实另外选择0—3个，不机械为每个Spot创建图片位。';
+  const candidateSlotPrompt = '图片位置契约：用户输入的imageCandidateSlots由原始事实和版面预先确定，每项有稳定role、sourceKey、slotId及required/removable。你只决定画面，不改编号、来源或必要性；每个required=true候选必须在imagePlan.slots中恰好规划一次。sourceRefs必须引用候选的原始sourceKey，不能在事实数组过滤空行后自行重编号。可选的dining:N、transport:N只有确实无独立展示价值时才可不规划，并把对应role明确写入imagePlan.omittedOptionalRoles；没有省略时也输出空数组。不能同时规划又省略同一role，不能省略必需位。未写在omittedOptionalRoles的可选候选也须规划，遗漏不能冒充主动取舍。DAY辅助视觉可从当天真实事实另外选择0—3个；0—3是结构范围，普通核心体验日默认另选一个有独立职责的辅助位，不机械为每个Spot创建图片位。';
   const compactOutputPrompt = '只输出一个完整、紧凑的 JSON 对象，顶层先写 imagePlan，再写其他字段；不加 Markdown、解释、重复事实、冗长 rationale 或未定义字段。保留契约要求的所有字段和全部图片位；每个说明字段只写必要短句，sourceRefs只写可追溯路径。不要靠省略 slot、queryCore、Query 或 exactIdentityRequired 缩短输出。输出结束前确认整个对象闭合。';
   const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, visualTargetPrompt, candidateSlotPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist, visualSelectionChecklist] : []), compactOutputPrompt].join('\n\n') }];
+  const plannerPromptFingerprint = createHash("sha256").update(systemMessages[0].content).digest("hex");
   const messages = [...systemMessages, { role: "user", content: JSON.stringify(sharedInput) }];
   const retryMessages = [...systemMessages, { role: "user", content: `${JSON.stringify(sharedInput)}\n\n技术补救：上次响应没有形成完整合法JSON。本次直接输出完整紧凑JSON对象，不写推理、前言或代码块；优先保证全部必需图片位及其完整字段，非图片说明简短。` }];
   const attemptStartedAt = new Date().toISOString();
@@ -971,6 +990,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
       errors: compactErrors,
       unresolvedSlotRoles: failOpen.unresolvedSlotRoles,
       ...(simpleSkillContract ? { imagePositionCoverage: reconcilePlannerImageCandidates(failOpen.plan, factBasis) } : {}),
+      ...(simpleSkillContract ? { dayVisualCoverage: dayVisualCoverage(failOpen.plan, factBasis), plannerPromptFingerprint } : {}),
       localRepairs: failOpen.repairs,
       ...(plannerSystemError ? { plannerSystemError } : {}),
     },

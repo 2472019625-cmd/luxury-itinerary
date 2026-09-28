@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { buildAgentFactBasis, buildPlannerImageCandidates, fillPlannerImageDeterministicFields, validateSimpleHighlightSelection, generateAgentPlan } from "../server/agent-trip-planner.mjs";
 import { materializeSimpleSkillPlan, normalizeNonDayPlannerImageRoles } from "../server/simple-plan-adapter.mjs";
 import { STRUCTURED_HOTEL_FACT_FORMAT } from "../src/lib/hotelFactPresentation.js";
@@ -10,7 +11,10 @@ test('Planner请求统一视觉覆盖规则和一基DAY编号，保留丰富日�
   const result = await generateAgentPlan({ project: { projectId: 'visual-contract', inputFingerprint: 'test', factBasis }, simpleSkillContract: true, requestJson: async options => {
     const system = options.messages.filter(m => m.role === 'system');
     assert.equal(system.length, 1);
-    assert.match(system[0].content, /多个明确、差异化、高价值体验时必须选择2—4个/);
+    assert.match(system[0].content, /普通核心体验日默认规划2张不同职责的图/);
+    assert.match(system[0].content, /事实丰富且职责不同可规划3—4张/);
+    assert.match(system[0].content, /资料确实只有一个合理画面时可只保留主图/);
+    assert.match(system[0].content, /转场、返程日规划1—2张/);
     assert.match(system[0].content, /独家或稀缺体验/);
     assert.match(system[0].content, /普通全天、清晨、傍晚游猎只在没有更高价值真实视觉时作为兜底/);
     assert.match(system[0].content, /不绑定国家、项目或DAY/);
@@ -47,6 +51,86 @@ test('Planner请求统一视觉覆盖规则和一基DAY编号，保留丰富日�
   } });
   assert.equal(result.plan.imagePlan.slots.filter(s => /^day:1(?:$|:)/.test(s.role)).length, 4);
   assert.equal(result.plan.imagePlan.slots.filter(s => /^day:2(?:$|:)/.test(s.role)).length, 1);
+});
+
+test("逐日覆盖诊断只记录模型实际规划和局部未决，不按事实数量补辅助位", async () => {
+  const data = { destination: "测试草原", days: [
+    { route: "保护区甲", description: "只观察象群", spots: [{ name: "象群观察" }] },
+    { route: "保护区乙", description: "步行、观景台、夜间观察与草原游猎", spots: [
+      { name: "步行观察" }, { name: "观景台" }, { name: "夜间观察" }, { name: "草原游猎" },
+    ] },
+    { route: "返程", description: "返程途中观察飞鸟", spots: [{ name: "飞鸟观察" }] },
+  ] };
+  const factBasis = buildAgentFactBasis(data);
+  const result = await generateAgentPlan({
+    project: { projectId: "day-coverage-diagnostic", inputFingerprint: "fixture", factBasis, planIds: [] },
+    simpleSkillContract: true,
+    requestJson: async (options) => {
+      const response = await plannerRequestJson({ delayMs: 0 })(options);
+      const byRole = new Map(response.json.imagePlan.slots.map((slot) => [slot.role, slot]));
+      byRole.get("day:1").sourceRefs = ["days.0.spots.0"];
+      byRole.get("day:1").visualDuty = "唯一的象群观察";
+      byRole.get("day:1").differentiation = "当天仅有一个合理画面";
+      byRole.get("day:2").sourceRefs = ["days.1.spots.3"];
+      byRole.get("day:3").sourceRefs = ["days.2.spots.0"];
+      const supporting = [
+        ["步行观察", "days.1.spots.0"],
+        ["观景台", "days.1.spots.1"],
+        ["夜间观察或草原游猎", "days.1.spots.2"],
+      ].map(([subject, sourceRef], index) => ({
+        role: `day:2:supporting:${index + 1}`, primaryVisualSubject: subject,
+        visualDuty: `展示${subject}`, differentiation: `独立职责${index + 1}`,
+        location: "保护区乙", locationRole: "scope_only", exactIdentityRequired: false,
+        queryCore: { subject, action: "", identity: "" },
+        fidelityQuery: subject, alternateQueries: [`${subject}画面`], sourceRefs: [sourceRef],
+      }));
+      response.json.imagePlan.slots.push(...supporting);
+      return response;
+    },
+  });
+  const coverage = result.plan.validation.dayVisualCoverage;
+  assert.deepEqual(coverage.map(({ dayIndex, roles, plannedCount, searchableCount, unresolvedRoles }) =>
+    ({ dayIndex, roles, plannedCount, searchableCount, unresolvedRoles })), [
+    { dayIndex: 0, roles: ["day:1"], plannedCount: 1, searchableCount: 1, unresolvedRoles: [] },
+    { dayIndex: 1, roles: ["day:2", "day:2:supporting:1", "day:2:supporting:2", "day:2:supporting:3"], plannedCount: 4, searchableCount: 3, unresolvedRoles: ["day:2:supporting:3"] },
+    { dayIndex: 2, roles: ["day:3"], plannedCount: 1, searchableCount: 1, unresolvedRoles: [] },
+  ]);
+  assert.deepEqual(coverage[0].sourceRefs, [{ role: "day:1", refs: ["days.0.spots.0"] }]);
+  assert.deepEqual(coverage[1].sourceRefs.map(({ refs }) => refs[0]), ["days.1.spots.3", "days.1.spots.0", "days.1.spots.1", "days.1.spots.2"]);
+  assert.equal(coverage[0].visualDuties[0].differentiation, "当天仅有一个合理画面");
+  assert.equal(result.plan.imagePlan.slots.filter((slot) => slot.role.startsWith("day:")).length, 6);
+  const unresolved = result.plan.imagePlan.slots.find((slot) => slot.role === "day:2:supporting:3");
+  assert.equal(unresolved.plannerSlotStatus, "unresolved");
+  assert.equal(unresolved.required, false);
+  assert.equal(unresolved.removable, true);
+  assert.equal(result.plan.imagePlan.slots.find((slot) => slot.role === "day:1").required, true);
+  const legacy = structuredClone(result.plan);
+  delete legacy.validation.dayVisualCoverage;
+  delete legacy.validation.plannerPromptFingerprint;
+  assert.deepEqual(materializeSimpleSkillPlan({ data, agentPlan: legacy }).imageSlots.map((slot) => slot.slotId),
+    materializeSimpleSkillPlan({ data, agentPlan: result.plan }).imageSlots.map((slot) => slot.slotId));
+});
+
+test("Planner提示指纹等于实际发送的system文本SHA-256，同一有效提示保持一致", async () => {
+  const factBasis = buildAgentFactBasis({ destination: "测试草原", days: [{ description: "飞鸟观察" }] });
+  const fingerprints = [];
+  for (let index = 0; index < 2; index += 1) {
+    let sentSystem = "";
+    const { plan } = await generateAgentPlan({
+      project: { projectId: `fingerprint-${index}`, inputFingerprint: `input-${index}`, factBasis, planIds: [] },
+      simpleSkillContract: true,
+      requestJson: async (options) => {
+        const systems = options.messages.filter((message) => message.role === "system");
+        assert.equal(systems.length, 1);
+        sentSystem = systems[0].content;
+        return plannerRequestJson({ delayMs: 0 })(options);
+      },
+    });
+    assert.match(plan.validation.plannerPromptFingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(plan.validation.plannerPromptFingerprint, createHash("sha256").update(sentSystem).digest("hex"));
+    fingerprints.push(plan.validation.plannerPromptFingerprint);
+  }
+  assert.equal(fingerprints[0], fingerprints[1]);
 });
 
 test("Planner不写图片位确定性字段时程序按role补齐，视觉、Query和来源不变", () => {

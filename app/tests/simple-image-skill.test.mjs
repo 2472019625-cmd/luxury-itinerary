@@ -421,7 +421,44 @@ test("later size failure preserves an earlier wrong-subject candidate", async (t
   assert.equal(image.technicalStatus, "no_eligible_candidate");
   assert.ok(image.candidates.some((candidate) => candidate.rejection === "wrong_subject"));
   assert.ok(image.pipelineEvidence.downloadFailures.some((failure) => failure.layer === "size"));
+  assert.equal(image.pipelineEvidence.webExecution.candidateReasons.wrong_subject, 1);
+  assert.equal(image.pipelineEvidence.webExecution.candidateReasons.resolution_failed, 1);
   assert.notEqual(image.technicalStatus, "all_candidates_too_small");
+});
+
+test("whole-slot diagnosis distinguishes size-only from mixed or unreviewed pools", async (t) => {
+  for (const mode of ["size_then_wrong_action", "size_only", "size_with_deferred", "empty"]) await t.test(mode, async (st) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "image-reason-order-"));
+    st.after(() => rm(root, { recursive: true, force: true }));
+    let queryNumber = 0;
+    const result = await runImageSearchSkill({ root, sourceMode: "web_only", sourcePagesPerSlot: 2, downloadsPerSlot: mode === "size_with_deferred" ? 1 : 2,
+      visionApiKey: "fixture", visionBaseUrl: "https://vision.invalid", visionModel: "fixture",
+      slots: [slot(`reason-${mode}`, { subject: "步行游猎", activity: "walking safari", queryCore: { subject: "步行队伍", action: "步行" }, searchIntent: ["walking safari group", "步行游猎队伍"] })], adapters: {
+        searchWebBatch: async () => mode === "empty" ? [] : [{ pageUrl: `https://example.test/q${++queryNumber}`, title: "walking safari group" }],
+        searchCommonsImages: async () => [],
+        extractPageImages: async (page) => [{ ...page, imageUrl: `${page.pageUrl}/safari.jpg`, alt: "walking safari group", pagePosition: "content" }, ...(mode === "size_with_deferred" ? [{ ...page, imageUrl: `${page.pageUrl}/safari-second.jpg`, alt: "walking safari group", pagePosition: "content" }] : [])],
+        downloadCandidate: async (candidate, { directory, publicPrefix }) => {
+          if (["size_only", "size_with_deferred"].includes(mode) || candidate.pageUrl.endsWith("q1")) throw Object.assign(new Error("分辨率不足"), { code: "image_resolution_insufficient" });
+          const filePath = path.join(directory, "second.jpg");
+          await sharp({ create: { width: 1280, height: 720, channels: 3, background: "#7b8c6d" } }).jpeg().toFile(filePath);
+          return { filePath, publicUrl: `${publicPrefix}/second.jpg`, sha256: "second-candidate", width: 1280, height: 720 };
+        },
+        judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate) => completeAudit(candidate, { actualSubject: "车内游猎", coreActionMatch: false, eligible: false, hardRejectCode: "wrong_activity", matchLevel: "mismatch" })),
+      } });
+    const image = result.results[0];
+    if (mode === "size_then_wrong_action") {
+      assert.equal(image.technicalStatus, "no_eligible_candidate");
+      assert.equal(image.pipelineEvidence.webExecution.candidateReasons.wrong_activity, 1);
+      assert.equal(image.pipelineEvidence.webExecution.candidateReasons.resolution_failed, 1);
+    } else if (mode === "size_only") {
+      assert.equal(image.technicalStatus, "all_candidates_too_small");
+    } else if (mode === "size_with_deferred") {
+      assert.ok(image.candidates.some((candidate) => candidate.originalDownloadStatus === "not_requested"));
+      assert.notEqual(image.technicalStatus, "all_candidates_too_small");
+    } else {
+      assert.notEqual(image.technicalStatus, "all_candidates_too_small");
+    }
+  });
 });
 
 test("父级补查同asset后续逐图路径可补齐身份，复用视觉且共享说明不能升级", async (t) => {
@@ -1871,7 +1908,7 @@ test("knowledge_first 仅在知识库产生最终合格图时停止，否则进�
     t.after(() => rm(root, { recursive: true, force: true }));
     let webCalls = 0;
     const candidate = { imageUrl: "http://192.168.100.210:9000/signed/hotel.jpg", pageUrl: "http://192.168.100.210:8020/api/knowledge/output?query_id=qry-first", title: "hotel.jpg", alt: "测试酒店外观", sourceKind: "knowledge_library", knowledgeRecordId: "knowledge-first-1", knowledgeQueryId: "qry-first" };
-    await runImageSearchSkill({
+    const batch = await runImageSearchSkill({
       root, sourceMode: "knowledge_first", knowledgeBaseUrl: "http://192.168.100.210:8020",
       visionApiKey: "vision", visionBaseUrl: "https://vision.invalid", visionModel: "model",
       slots: [slot("hotel-first", { moduleType: "hotel", hotel: "测试酒店", activity: "", subject: "酒店外观" })],
@@ -1890,6 +1927,13 @@ test("knowledge_first 仅在知识库产生最终合格图时停止，否则进�
       },
     });
     assert.equal(webCalls, expectedWebCalls, name);
+    if (name === "failed") {
+      const image = batch.results[0];
+      assert.equal(image.knowledgeFallbackReason, "knowledge_failed");
+      assert.equal(image.pipelineEvidence.knowledgeSearch.status, "failed");
+      assert.equal(image.pipelineEvidence.sourceFallback.knowledgeStatus, "knowledge_failed");
+      assert.ok(image.pipelineEvidence.knowledgeSearch.attempts.some((attempt) => attempt.status === "failed"));
+    }
   }
 });
 

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { candidateQualification, IMAGE_AUDIT_EVIDENCE_VERSION } from './image-candidate-eligibility.mjs';
-import { imageResolutionPolicyForSlot } from './image-download.mjs';
+import { imageResolutionPolicyForSlot, withDayGalleryLayout } from './image-download.mjs';
 import { differenceHash, ImageDeduper } from './image-dedupe.mjs';
 import { getSlotImage } from '../src/lib/imageSlots.js';
 
@@ -77,9 +77,12 @@ function occupiedImageUrls(data = {}) {
 // before another slot can be filled.
 export function allocateCompatibleImageCandidates({ slots = [], execution = {}, root, preparedData = {} } = {}) {
   if (!root || !existsSync(path.join(root, 'output', 'image-assets'))) return execution;
+  // A DAY original is judged against its source frame, then against the
+  // destination frame. Both frames come from the same visible batch layout.
+  const layoutSlots = slots.map((slot) => withDayGalleryLayout(slot, slots));
   const results = (execution.results || []).map((result) => ({ ...result, candidates: [...(result.candidates || [])] }));
   const resultById = new Map(results.map((result) => [result.slotId, result]));
-  const slotById = new Map(slots.map((slot) => [slot.slotId, slot]));
+  const slotById = new Map(layoutSlots.map((slot) => [slot.slotId, slot]));
   const selectedKeys = new Set(results.filter((result) => result.status === 'success' && result.selected).map((result) => assetKey(result.selected)).filter(Boolean));
   const occupiedUrls = occupiedImageUrls(preparedData);
   const available = new Map();
@@ -98,7 +101,7 @@ export function allocateCompatibleImageCandidates({ slots = [], execution = {}, 
   }
   for (const list of available.values()) list.sort((a, b) => Number(b.candidate.semanticScore || 0) - Number(a.candidate.semanticScore || 0) || Number(b.candidate.width || 0) - Number(a.candidate.width || 0) || a.key.localeCompare(b.key) || a.sourceSlotId.localeCompare(b.sourceSlotId));
   let allocations = 0;
-  const targets = slots.filter((slot) => !slot.userLocked && resultById.has(slot.slotId)).sort((a, b) => Number(b.required) - Number(a.required) || a.slotId.localeCompare(b.slotId));
+  const targets = layoutSlots.filter((slot) => !slot.userLocked && resultById.has(slot.slotId)).sort((a, b) => Number(b.required) - Number(a.required) || a.slotId.localeCompare(b.slotId));
   for (const slot of targets) {
     const target = resultById.get(slot.slotId);
     if (target.status === 'success') continue;

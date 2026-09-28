@@ -2228,6 +2228,39 @@ export async function runImageSearchSkill({
 
     const webBudget = { pages: 0, effectivePages: new Set(), downloads: 0, commonsCalled: false, pageUrls: new Set(), assets: new Set(), hashes: new Set() };
     const networkPageLimit = sourcePagesPerSlot * 2;
+    const summarizeWebCandidatePool = (result, evidence) => {
+      if (!["no_candidate", "no_eligible"].includes(result.kind)) return result;
+      const candidates = result.candidates || [];
+      const reasons = {};
+      for (const candidate of candidates) {
+        const reason = candidate.rejection && candidate.rejection !== "not_auto_selected" ? candidate.rejection
+          : candidate.originalDownloadFailureCode === "size" ? "resolution_failed"
+            : candidate.originalDownloadFailureCode || candidate.hardJudgment?.hardRejectCode || "unreviewed";
+        reasons[reason] = (reasons[reason] || 0) + 1;
+      }
+      evidence.webExecution.candidateReasons = reasons;
+      // An explicit hard rejection is final even if other audit fields are
+      // absent. Only undecided candidates should make the pool inconclusive.
+      const hardRejected = (candidate) => candidate.autoReviewStatus === "hard_reject"
+        || isHardRejectionCode(candidate.rejection)
+        || isHardRejectionCode(candidate.hardJudgment?.hardRejectCode);
+      const incomplete = candidates.some((candidate) => !hardRejected(candidate) && (
+        ["needs_user_judgment", "hotel_identity_unconfirmed", "review_timeout"].includes(candidate.rejection)
+        || candidate.hardJudgment?.auditContract?.complete === false
+        || candidate.originalDownloadStatus === "success" && candidate.hardJudgment?.auditContract?.complete !== true));
+      if (incomplete) return { ...result, kind: "inconclusive", technicalStatus: "visual_judgment_inconclusive" };
+      const reviewed = candidates.some((candidate) => hardRejected(candidate) || candidate.hardJudgment?.auditContract?.complete === true);
+      if (reviewed) return { ...result, kind: "no_eligible", technicalStatus: "no_eligible_candidate" };
+      const failures = evidence.downloadFailures || [];
+      const allCandidateFailuresAreSize = candidates.length > 0 && candidates.every((candidate) => candidate.originalDownloadStatus === "failed" && candidate.originalDownloadFailureCode === "size");
+      if (allCandidateFailuresAreSize && failures.length && failures.every((item) => item.layer === "size")) {
+        return { ...result, technicalStatus: "all_candidates_too_small" };
+      }
+      if (failures.some((item) => item.layer === "decode")) return { ...result, technicalStatus: "candidate_decode_failed" };
+      if (failures.some((item) => ["download", "page_access"].includes(item.layer))) return { ...result, technicalStatus: "candidate_download_failed" };
+      if (result.technicalStatus === "all_candidates_too_small") return { ...result, technicalStatus: "no_technical_candidate" };
+      return result;
+    };
     async function runSourceLayer(layerSlot, layerConstraints, layerQueries, evidence, layerName, fallbackPlan = null, sourceChoice = "web") {
       if (sourceChoice === "knowledge") return runKnowledgePreviewFirstLayer(layerSlot, layerConstraints, layerQueries, evidence, layerName);
       const started = Date.now();
@@ -2298,7 +2331,7 @@ export async function runImageSearchSkill({
       evidence.webExecution.networkPageLimit = networkPageLimit;
       evidence.webExecution.downloadsUsed = webBudget.downloads;
       evidence.webExecution.stopReason ||= queries.length ? "queries_exhausted" : "target_identity_or_query_empty";
-      return result;
+      return summarizeWebCandidatePool(result, evidence);
     }
     async function runWebQueryLayer(layerSlot, layerConstraints, layerQueries, evidence, layerName, fallbackPlan = null, { pendingPages = new Map(), pages: resumedPages = null } = {}) {
       const sourceChoice = "web";
@@ -2504,7 +2537,7 @@ export async function runImageSearchSkill({
           : pagesResult.status === "rejected" && !allPages.length && !directCandidates.length;
         const layers = evidence.downloadFailures.map((item) => item.layer);
         const knowledgeTechnicalStatus = knowledgeOnlyStatus === "needs_clarification" ? "knowledge_needs_clarification" : knowledgeOnlyStatus === "timeout" ? "knowledge_timeout" : knowledgeOnlyStatus === "failed" ? "knowledge_failed" : knowledgeOnlyStatus === "completed" && knowledgeRawCandidates.length && !knowledgeCandidates.length ? "knowledge_no_valid_candidate" : knowledgeOnlyStatus === "completed" && !directCandidates.length ? "knowledge_not_found" : null;
-        const technicalStatus = knowledgeTechnicalStatus || (allSearchFailed ? "search_failed" : !allPages.length && !directCandidates.length ? "no_search_results" : !evidence.extractedCandidates ? "page_extraction_empty" : layers.length && layers.every((item) => item === "size") && !retainedCandidates.length ? "all_candidates_too_small" : layers.includes("decode") ? "candidate_decode_failed" : layers.includes("download") || layers.includes("page_access") ? "candidate_download_failed" : "no_technical_candidate");
+        const technicalStatus = knowledgeTechnicalStatus || (allSearchFailed ? "search_failed" : !allPages.length && !directCandidates.length ? "no_search_results" : !evidence.extractedCandidates ? "page_extraction_empty" : layers.length && layers.every((item) => item === "size") ? "all_candidates_too_small" : layers.includes("decode") ? "candidate_decode_failed" : layers.includes("download") || layers.includes("page_access") ? "candidate_download_failed" : "no_technical_candidate");
         const kind = knowledgeOnlyStatus === "needs_clarification" ? "knowledge_needs_clarification" : allSearchFailed ? "search_failed" : "no_candidate";
         return { kind, candidates: retain([]), sourceEvidence: unique([...allPages.map((item) => item.pageUrl), ...knowledgeCandidates.map((item) => item.pageUrl)]), actualSubject: null, technicalStatus };
       }
@@ -2629,37 +2662,38 @@ export async function runImageSearchSkill({
       route.enteredWeb = true;
       route.webQueries = [...(evidence.webExecution?.executedQueries || [])];
       if (web.kind === "success") route.finalSource = "web";
-      return {
+      return summarizeWebCandidatePool({
         ...web,
         candidates: [...(knowledge.candidates || []), ...(web.candidates || [])],
         sourceEvidence: unique([...(knowledge.sourceEvidence || []), ...(web.sourceEvidence || [])]),
         knowledgeFallbackReason: knowledge.technicalStatus || knowledge.kind,
-      };
+      }, evidence);
     }
 
     const exact = await runLayer(slot, constraints, queriesUsed, pipelineEvidence, "exact");
     const exactCandidates = exact.candidates || [];
+    const fallbackDiagnostic = exact.knowledgeFallbackReason ? { knowledgeFallbackReason: exact.knowledgeFallbackReason } : {};
     if (exact.kind === "success") {
       pipelineEvidence.exactMatchSuccess = true;
       const auditedMatchLevel = exact.selected?.matchLevel || exact.selected?.hardJudgment?.matchLevel;
       const matchLevel = auditedMatchLevel === "representative" ? "representative" : "exact_match";
       const selected = { ...exact.selected, matchLevel };
-      return { slotId: slot.slotId, status: "success", matchLevel, selected, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: exact.actualSubject, matchReason: exact.matchReason, technicalStatus: exact.technicalStatus, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
+      return { slotId: slot.slotId, status: "success", matchLevel, selected, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: exact.actualSubject, matchReason: exact.matchReason, technicalStatus: exact.technicalStatus, ...fallbackDiagnostic, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
     }
     if (exact.kind === "knowledge_needs_clarification") {
-      return { slotId: slot.slotId, status: "needs_user_action", matchLevel: null, selected: null, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: null, matchReason: "知识库存在同名目录，需要明确 scope / node_id", technicalStatus: exact.technicalStatus, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
+      return { slotId: slot.slotId, status: "needs_user_action", matchLevel: null, selected: null, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: null, matchReason: "知识库存在同名目录，需要明确 scope / node_id", technicalStatus: exact.technicalStatus, ...fallbackDiagnostic, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
     }
     if (["visual_unavailable", "visual_failed", "inconclusive"].includes(exact.kind)) {
-      return { slotId: slot.slotId, status: "needs_user_action", matchLevel: null, selected: null, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: exact.actualSubject, matchReason: exact.matchReason || "精确视觉判断未完成，不得进入 fallback", technicalStatus: exact.technicalStatus, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
+      return { slotId: slot.slotId, status: "needs_user_action", matchLevel: null, selected: null, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: exact.actualSubject, matchReason: exact.matchReason || "精确视觉判断未完成，不得进入 fallback", technicalStatus: exact.technicalStatus, ...fallbackDiagnostic, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
     }
     if (exact.kind === "search_failed") {
-      return { slotId: slot.slotId, status: "failed", matchLevel: null, selected: null, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: exact.actualSubject, matchReason: resolvedSourceMode === "knowledge_only" ? "知识库查询失败，未调用公网搜索" : "精确搜索失败，未进入 fallback", technicalStatus: exact.technicalStatus, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
+      return { slotId: slot.slotId, status: "failed", matchLevel: null, selected: null, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: exact.actualSubject, matchReason: resolvedSourceMode === "knowledge_only" ? "知识库查询失败，未调用公网搜索" : "精确搜索失败，未进入 fallback", technicalStatus: exact.technicalStatus, ...fallbackDiagnostic, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
     }
     if (resolvedSourceMode === "knowledge_only") {
-      return { slotId: slot.slotId, status: "not_found", matchLevel: null, selected: null, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: exact.actualSubject, matchReason: exact.matchReason || "知识库未找到可用候选，未调用公网搜索", technicalStatus: exact.technicalStatus, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
+      return { slotId: slot.slotId, status: "not_found", matchLevel: null, selected: null, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: exact.actualSubject, matchReason: exact.matchReason || "知识库未找到可用候选，未调用公网搜索", technicalStatus: exact.technicalStatus, ...fallbackDiagnostic, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
     }
 
-    return { slotId: slot.slotId, status: "not_found", matchLevel: null, selected: null, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: exact.actualSubject, matchReason: exact.matchReason || "当前图片位的 Query Plan 与 Scope Plan 均未找到合格候选", technicalStatus: exact.technicalStatus, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
+    return { slotId: slot.slotId, status: "not_found", matchLevel: null, selected: null, candidates: exactCandidates, queriesUsed, sourceEvidence: exact.sourceEvidence, actualSubject: exact.actualSubject, matchReason: exact.matchReason || "当前图片位的 Query Plan 与 Scope Plan 均未找到合格候选", technicalStatus: exact.technicalStatus, ...fallbackDiagnostic, pipelineEvidence, warnings, constraints, durationMs: Date.now() - slotStartedAt };
   }
 
   let completedSlots = 0;

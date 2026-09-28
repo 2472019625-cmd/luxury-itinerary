@@ -114,3 +114,22 @@ test('an existing locked asset or a duplicate-rejected candidate is not reassign
   assert.equal(allocated.results[1].status, 'not_found');
   assert.equal(allocated.metrics.compatibleCandidateAllocations, 0);
 });
+
+test('an 850x550 original can be allocated between matching two-card DAY targets', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'image-allocation-day-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const assetDir = path.join(root, 'output', 'image-assets');
+  await mkdir(assetDir, { recursive: true });
+  await writeFile(path.join(assetDir, 'day.jpg'), await sharp({ create: { width: 850, height: 550, channels: 3, background: '#806640' } }).jpeg().toBuffer());
+  const day = (id, patch = {}) => slot(id, { moduleType: 'day', hotel: '', location: '草原', queryCore: { subject: '游猎车', action: '行驶', identity: '' }, exactIdentityRequired: false, visualContext: { dayIndex: 0 }, ...patch });
+  const primary = day('day-primary');
+  const supporting = day('day-supporting', { required: false });
+  const execution = { results: [
+    { slotId: primary.slotId, status: 'not_found', candidates: [] },
+    { slotId: supporting.slotId, status: 'not_found', candidates: [{ ...approved('day-original', '/image-assets/day.jpg'), width: 850, height: 550 }] },
+  ] };
+  const allocated = allocateCompatibleImageCandidates({ slots: [primary, supporting], execution, root });
+  assert.equal(allocated.results[0].status, 'success');
+  assert.equal(allocated.results[0].selected.reusedFromSlotId, supporting.slotId);
+  assert.equal(allocated.metrics.compatibleCandidateAllocations, 1);
+});
