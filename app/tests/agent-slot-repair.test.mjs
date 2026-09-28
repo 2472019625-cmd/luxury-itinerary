@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { applySlotRepairProposal, prepareFrozenSlotRepair, requestFrozenSlotRepair, validateSlotRepairInWorker } from "../server/agent-slot-repair.mjs";
 import { buildAgentFactBasis } from "../server/agent-trip-planner.mjs";
 import { plannerRequestJson } from "./helpers/simple-pipeline-fixture.mjs";
+import { SLOT_VISUAL_CONTRACT } from "../server/planner-visual-contract.mjs";
 
 const originalSlot = {
   role: "day:1", required: true, removable: false, primaryVisualSubject: "未定画面",
@@ -67,7 +68,39 @@ test("full Planner validation still rejects a duplicate visual responsibility", 
     fidelityQuery: cover.fidelityQuery, alternateQueries: structuredClone(cover.alternateQueries) };
   const result = applySlotRepairProposal(prepared, { patches: [{ role: "day:1", action: "replace", reason: "重复画面", slot: duplicate }] });
   assert.equal(result.accepted, false);
-  assert.deepEqual(result.rejected, [{ role: "day:1", code: "target_still_unresolved" }]);
+  assert.equal(result.rejected[0].role, "day:1");
+  assert.equal(result.rejected[0].code, "target_still_unresolved");
+  assert.ok(result.rejected[0].issues.some((issue) => issue.code === "duplicate_visual_responsibility" && issue.conflictingRole === "cover"));
+});
+
+test("hotel repair preserves locked identity without asking the model to rewrite it; explicit changes still fail", async () => {
+  const factBasis = buildAgentFactBasis({ destination: "测试城市", hotels: [{ officialName: "Example Hotel", region: "测试城市" }], days: [{ description: "酒店外观与城市公园漫步" }] });
+  const rawPlan = (await plannerRequestJson({ delayMs: 0 })({ messages: [{ role: "user", content: JSON.stringify({ factBasis }) }] })).json;
+  const hotel = rawPlan.imagePlan.slots.find((slot) => slot.role === "hotel:1");
+  hotel.sourceRefs = ["hotels.0"];
+  const writable = Object.fromEntries(Object.entries(hotel).filter(([key]) => ["primaryVisualSubject", "visualDuty", "differentiation", "location", "locationRole", "queryCore", "fidelityQuery", "alternateQueries", "sourceRefs", "exactIdentityRequired"].includes(key)));
+  hotel.locationRole = "invalid";
+  const preparedHotel = prepareFrozenSlotRepair({ rawPlan, project: { projectId: "hotel-locked", factBasis, inputFingerprint: "test" } });
+  assert.deepEqual(preparedHotel.targets, ["hotel:1"]);
+  delete writable.exactIdentityRequired;
+  writable.queryCore = { ...writable.queryCore };
+  delete writable.queryCore.identity;
+  delete writable.queryCore.identityEn;
+  const proposal = { patches: [{ role: "hotel:1", action: "replace", slot: writable, reason: "酒店外观类别与原酒店身份保持一致" }] };
+  const good = applySlotRepairProposal(preparedHotel, proposal);
+  assert.equal(good.accepted, true);
+  const repaired = good.rawPlan.imagePlan.slots.find((slot) => slot.role === "hotel:1");
+  assert.equal(repaired.queryCore.identity, hotel.queryCore.identity);
+  assert.equal(repaired.queryCore.identityEn, hotel.queryCore.identityEn);
+  assert.equal(repaired.exactIdentityRequired, true);
+  assert.equal("identity" in proposal.patches[0].slot.queryCore, false, "input proposal remains unchanged");
+  for (const change of [{ identity: "" }, { identity: "Other Hotel" }, { identityEn: "Other Hotel" }]) {
+    const changed = structuredClone(proposal);
+    Object.assign(changed.patches[0].slot.queryCore, change);
+    const rejected = applySlotRepairProposal(preparedHotel, changed);
+    assert.equal(rejected.rejected[0].code, "hotel_identity_changed");
+    assert.equal(rejected.diagnostics.validationPasses, 0);
+  }
 });
 
 test("slot repair allows at most one physical fetch and disables client retries", async () => {
@@ -84,6 +117,7 @@ test("slot repair allows at most one physical fetch and disables client retries"
   assert.equal(result.physicalRequests, 1);
   assert.equal(configuration.emptyContentRetries, 0);
   assert.equal(configuration.allowSyntaxRepair, false);
+  assert.ok(configuration.messages[0].content.includes(SLOT_VISUAL_CONTRACT));
 });
 
 test("slot repair timeout aborts one pending request and ignores late response", async () => {

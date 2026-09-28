@@ -358,14 +358,21 @@ test("HTTP 200 图片响应不能按页面正文核验，同一失效 URL 不重
 test("同页错误摘录只拒该断言，另一类别可复用正文核验", async () => {
   const url = "https://examplelodge.com/facts";
   let fetches = 0;
+  const pages = [];
+  const body = "<title>Example Lodge</title><p>Example Lodge has a pool</p>";
   const result = await verifyCopyFactsResearch({ researchRequest: { ...hotelResearch, categories: ["位置", "设施"] },
     candidates: [
       { ...fixtureFact("位置", url), sources: [{ sourceUrl: url, sourceExcerpt: "not on this page", sourceMediaType: "page" }] },
       { ...fixtureFact("设施", url), sources: [{ sourceUrl: url, sourceExcerpt: "Example Lodge has a pool", sourceMediaType: "page" }] },
     ],
-    fetchSource: async () => { fetches += 1; return textResponse("<title>Example Lodge</title><p>Example Lodge has a pool</p>", undefined, url); }, fetchBrowserSource: null,
+    fetchSource: async () => { fetches += 1; return textResponse(body, undefined, url); }, fetchBrowserSource: null,
+    onSourcePage: async (page) => pages.push(structuredClone(page)),
   });
   assert.equal(fetches, 1);
+  assert.equal(pages.length, 1, "同页缓存复用不产生额外请求或重复证据");
+  assert.equal(pages[0].body, body);
+  assert.equal(pages[0].finalUrl, url);
+  assert.ok(pages[0].fetchedAt);
   assert.equal(result.rejected[0].reason, "source_excerpt_not_supported");
   assert.deepEqual(result.verifiedFacts.map((item) => item.category), ["设施"]);
 });

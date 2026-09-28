@@ -70,6 +70,7 @@ try {
   summary.remainingRoles = prepared.targets;
   await save("before-raw.json", rawPlan);
   await save("before-validated.json", prepared.baseline);
+  await save("request-input.json", prepared.requestInput);
   if (!process.env.TEXT_MODEL_API_KEY || !process.env.TEXT_MODEL_BASE_URL || !process.env.TEXT_MODEL_NAME) throw new Error("model_config_missing");
   const response = await requestFrozenSlotRepair({ prepared, signal: cancellation.signal, onPhase: recordPhase, apiKey: process.env.TEXT_MODEL_API_KEY,
     baseUrl: process.env.TEXT_MODEL_BASE_URL, model: process.env.TEXT_MODEL_NAME,

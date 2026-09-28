@@ -5,12 +5,18 @@ import { buildAgentFactBasis, buildPlannerImageCandidates, fillPlannerImageDeter
 import { materializeSimpleSkillPlan, normalizeNonDayPlannerImageRoles } from "../server/simple-plan-adapter.mjs";
 import { STRUCTURED_HOTEL_FACT_FORMAT } from "../src/lib/hotelFactPresentation.js";
 import { plannerRequestJson } from './helpers/simple-pipeline-fixture.mjs';
+import { SLOT_VISUAL_CONTRACT } from '../server/planner-visual-contract.mjs';
 
 test('Planner请求统一视觉覆盖规则和一基DAY编号，保留丰富日辅助槽', async () => {
   const factBasis = buildAgentFactBasis({ destination: '肯尼亚', days: [{ description: '大象雪山，Observation Hill，步行Safari，夜间游猎' }, { description: '简单送机' }] });
   const result = await generateAgentPlan({ project: { projectId: 'visual-contract', inputFingerprint: 'test', factBasis }, simpleSkillContract: true, requestJson: async options => {
     const system = options.messages.filter(m => m.role === 'system');
     assert.equal(system.length, 1);
+    assert.ok(system[0].content.includes(SLOT_VISUAL_CONTRACT));
+    const coverageTasks = JSON.parse(options.messages.at(-1).content).dayVisualCoverageTasks;
+    assert.deepEqual(coverageTasks.map((task) => task.dayRole), ['day:1', 'day:2']);
+    assert.deepEqual(coverageTasks.map((task) => task.sourceRefs[0]), ['days.0.experience', 'days.1.experience']);
+    assert.ok(coverageTasks.every((task) => !('expectedCount' in task)), '不能由程序猜测每日正确数量');
     assert.match(system[0].content, /普通核心体验日默认规划2张不同职责的图/);
     assert.match(system[0].content, /事实丰富且职责不同可规划3—4张/);
     assert.match(system[0].content, /资料确实只有一个合理画面时可只保留主图/);

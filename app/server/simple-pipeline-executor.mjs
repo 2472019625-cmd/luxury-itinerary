@@ -250,7 +250,12 @@ export async function runSimplePipeline({
   emit({ stage: "copy_skill", phase: "started", targetCount: simplePlan.copyTasks.length, startedAtMs: copyStartedAt });
   let copyFinishedAt = null;
   const researchStateStore = createCopyResearchStateStore({ store, projectId, executionRunId });
-  const copyPromise = runCopy({ itineraryContext: simplePlan.itineraryContext, tasks: simplePlan.copyTasks, ...copyOptions, researchStateStore, signal, onCapabilityCall: capabilityEvent })
+  const copyPromise = runCopy({ itineraryContext: simplePlan.itineraryContext, tasks: simplePlan.copyTasks, ...copyOptions, researchStateStore, signal, onCapabilityCall: capabilityEvent,
+    onWriterEvidence: async (event) => {
+      store.saveEvidence(projectId, executionRunId, `copy-writer-${event.batchId}-${event.batchKind}-${event.phase}-${event.attempt || 0}`, { ...event, recordedAt: new Date().toISOString() });
+      await copyOptions.onWriterEvidence?.(event);
+    },
+  })
     .then((result) => { emit({ stage: "copy_skill", phase: "finished", status: result.status }); return result; })
     .catch((error) => { emit({ stage: "copy_skill", phase: "failed", status: "failed", error: { code: error?.code || "copy_skill_failed", message: error?.message || String(error) } }); throw error; })
     .finally(() => { copyFinishedAt = Date.now(); });

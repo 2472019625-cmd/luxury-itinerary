@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -87,6 +87,12 @@ test("完整链路隔离单项失败，必需项未齐时仍生成可编辑草�
   const saved = JSON.parse(await readFile(path.join(root, "projects", result.projectId, result.finalResultRef), "utf8"));
   assert.equal(saved.pipelineStatus, result.pipelineStatus);
   assert.equal(saved.data.days[0].description, "当天沿既定路线展开真实活动，在明确的交通、用餐与住宿安排中形成独立体验重点。");
+  const evidenceRoot = path.join(root, "projects", result.projectId, path.dirname(result.finalResultRef), "evidence");
+  const writerFiles = (await readdir(evidenceRoot)).filter((name) => name.startsWith("copy-writer-"));
+  assert.equal(writerFiles.filter((name) => name.includes("-request-")).length, 3);
+  assert.equal(writerFiles.filter((name) => name.includes("-response-")).length, 3);
+  const persistedRequest = JSON.parse(await readFile(path.join(evidenceRoot, writerFiles.find((name) => name.includes("-request-"))), "utf8"));
+  assert.ok(JSON.parse(persistedRequest.messages.at(-1).content).tasks.length > 0);
 });
 
 test("全部必需单元满足时进入 Renderer，并只在真实渲染成功后写100%", async (t) => {

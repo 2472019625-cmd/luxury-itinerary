@@ -25,6 +25,41 @@ const task = (targetId, targetPath, moduleType = "day") => ({
   outputSchema: { type: "string", minLength: 2 },
 });
 
+test("Writer evidence preserves actual input and raw response without connection configuration", async () => {
+  const evidence = [];
+  const input = task("evidence-day", "days.0.description");
+  let actualMessages;
+  const responseBody = { results: [{ targetId: input.targetId, targetPath: input.targetPath, value: "当天沿原定路线展开活动。" }] };
+  const rawContent = JSON.stringify(responseBody);
+  const result = await runCopyWriterSkill({ tasks: [input], apiKey: "PRIVATE_TEST_KEY", baseUrl: "https://private-test.invalid", model: "private-test-model",
+    onWriterEvidence: async (event) => evidence.push(structuredClone(event)),
+    requestJson: async ({ messages, onModelAttempt }) => {
+      assert.equal(evidence[0].phase, "request");
+      actualMessages = structuredClone(messages);
+      await onModelAttempt({ attempt: 1, rawContent, parseResult: { status: "valid_json" }, request: { model: "private-test-model" } });
+      return { json: responseBody, attemptUsages: [{}] };
+    },
+  });
+  assert.equal(result.results[0].status, "success");
+  assert.deepEqual(evidence.map((item) => item.phase), ["request", "attempt", "response"]);
+  assert.deepEqual(evidence[0].messages, actualMessages);
+  assert.equal(evidence[1].rawContent, rawContent);
+  assert.deepEqual(evidence[2].json, responseBody);
+  assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE_TEST_KEY|private-test\.invalid|private-test-model/);
+});
+
+test("Writer input evidence failure prevents dispatch and does not count a nonexistent request", async () => {
+  let calls = 0;
+  const result = await runCopyWriterSkill({ tasks: [task("evidence-failure", "days.0.description")],
+    onWriterEvidence: async () => { throw Object.assign(new Error("Evidence storage unavailable"), { code: "evidence_write_failed" }); },
+    requestJson: async () => { calls += 1; },
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.metrics.modelCalls, 0);
+  assert.equal(result.results[0].status, "failed");
+  assert.equal(result.results[0].error.code, "evidence_write_failed");
+});
+
 test('target_path_mismatch 只记录受控点路径，仍严格拒绝且不重绑', async () => {
   const expected = 'days.0.description';
   const input = task('day-path', expected);
@@ -224,6 +259,7 @@ test("hotel editorialCopy、proofPoints 和 factRows 共用一次研究，factRo
   assert.equal(result.metrics.researchCalls, 1);
   assert.equal(result.metrics.modelCalls, 1);
   assert.deepEqual(result.results.map((item) => item.status), ["success", "success", "success"]);
+  assert.equal(result.results[2].value[0].sourceExcerpt, "located on the Grumeti River");
   assert.deepEqual(result.results[2].value.map(({ key, label, text, status }) => ({ key, label, text, status })), [
     { key: "location", label: "位置", text: "临近 Grumeti River。", status: "success" },
     { key: "rooms", label: "客房", text: "", status: "not_found" },

@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
+import { captureLongElement } from "./capture-long-element.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const arg = process.argv.find((item) => item.startsWith("--width="));
@@ -66,7 +67,8 @@ try {
   const output = requestedOutput || path.join(root, "output", `${dataset}-itinerary-${width}.png`);
   fs.mkdirSync(path.dirname(output), { recursive: true });
   const box = await target.boundingBox();
-  await target.screenshot({ path: output, type: "png", captureBeyondViewport: true });
+  const { png, capture } = await captureLongElement(page, target);
+  fs.writeFileSync(output, png);
 
   const expectedPayment = renderedData?.payment || null;
   const layoutQa = await page.evaluate((expectedPayment) => {
@@ -108,6 +110,7 @@ try {
     };
     return { width: Math.round(root.getBoundingClientRect().width), height: Math.round(root.getBoundingClientRect().height), overflows, brokenImages, cardImageUpscales, largeGaps, footerPresent: fixedModules.footer.present, fixedModules };
   }, expectedPayment);
+  layoutQa.capture = capture;
   if (qaOutput) {
     fs.mkdirSync(path.dirname(qaOutput), { recursive: true });
     fs.writeFileSync(qaOutput, JSON.stringify(layoutQa, null, 2), 'utf8');

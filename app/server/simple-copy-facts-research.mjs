@@ -472,7 +472,7 @@ export function buildResearchCategoryOutcomes({ researchRequest, verifiedFacts =
   });
 }
 
-export async function verifyCopyFactsResearch({ researchRequest, candidates = [], reportedOutcomes = [], checkedAt = new Date().toISOString(), signal, fetchSource = fetchPublicUrl, fetchBrowserSource = fetchOfficialPageWithBrowser, verificationContext = {}, onExternalPage } = {}) {
+export async function verifyCopyFactsResearch({ researchRequest, candidates = [], reportedOutcomes = [], checkedAt = new Date().toISOString(), signal, fetchSource = fetchPublicUrl, fetchBrowserSource = fetchOfficialPageWithBrowser, verificationContext = {}, onExternalPage, onSourcePage } = {}) {
   const requestedCategories = new Set((researchRequest.categories || []).map(clean));
   const verifiedFacts = [];
   const rejected = [];
@@ -497,6 +497,8 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
       const finalUrl = clean(response.url) || candidateUrl;
       const nonText = binaryUrlPattern.test(finalUrl) || (contentType && !textContentTypePattern.test(contentType));
       const body = response.ok && !nonText ? await response.text() : "";
+      await onSourcePage?.({ requestedUrl: candidateUrl, finalUrl, mode, status: response.status || null, contentType,
+        body, nonText, fetchedAt: new Date().toISOString() });
       return { response, contentType, body, nonText };
     })());
     return sourceCache.get(cacheKey);
@@ -678,6 +680,11 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
   let invocationBusinessCalls = 0;
   const save = async (patch) => { state = { ...state, ...patch }; await researchStateStore?.save(key, patch); };
   const onExternalPage = (pages) => save({ externalSourcePages: pages });
+  const sourcePages = [...(state.sourcePageEvidence || [])];
+  const onSourcePage = async (page) => {
+    sourcePages.push(page);
+    await save({ sourcePageEvidence: sourcePages });
+  };
   const claim = async (phase) => {
     if (!researchStateStore) return { claimed: phase === "main", state };
     const result = await researchStateStore.claim(key, phase);
@@ -733,7 +740,7 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
       }
       try {
         const response = await dispatch(researchRequest, "main");
-        const verified = await verifyCopyFactsResearch({ researchRequest, candidates: response.json?.facts, reportedOutcomes: response.json?.categoryOutcomes, signal, fetchSource, fetchBrowserSource, verificationContext, onExternalPage });
+        const verified = await verifyCopyFactsResearch({ researchRequest, candidates: response.json?.facts, reportedOutcomes: response.json?.categoryOutcomes, signal, fetchSource, fetchBrowserSource, verificationContext, onExternalPage, onSourcePage });
         mainResult = { ...verified, model: response.model || model, usage: response.usage || null, attemptUsages: response.attemptUsages || [] };
         await save({ mainResult });
       } catch (error) {
@@ -768,7 +775,7 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
           if (!allowed) { rejectedDirections.push({ category: candidate.category, sourceUrl: source.sourceUrl, reason: "source_direction_not_allowed" }); return []; }
           return [{ ...candidate, ...source, sources: undefined }];
         }));
-        const supplementary = await verifyCopyFactsResearch({ researchRequest: request, candidates, reportedOutcomes: response.json?.categoryOutcomes, signal, fetchSource, fetchBrowserSource, verificationContext, onExternalPage });
+        const supplementary = await verifyCopyFactsResearch({ researchRequest: request, candidates, reportedOutcomes: response.json?.categoryOutcomes, signal, fetchSource, fetchBrowserSource, verificationContext, onExternalPage, onSourcePage });
         result.verifiedFacts = [...mainResult.verifiedFacts, ...supplementary.verifiedFacts];
         result.rejected = [...mainResult.rejected, ...supplementary.rejected, ...rejectedDirections];
         result.categoryOutcomes = mainResult.categoryOutcomes.map((item) => item.status === "success" ? item : buildResearchCategoryOutcomes({ researchRequest: { categories: [item.category] }, verifiedFacts: result.verifiedFacts, rejected: result.rejected, reportedOutcomes: response.json?.categoryOutcomes })[0]);

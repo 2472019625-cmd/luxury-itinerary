@@ -12,8 +12,9 @@ import { validateReviewDecisionBatch } from "./agent-review-decision.mjs";
 import { buildKnowledgeQueryPlan, cleanupPlannerQueryScope, validatePlannerSearchIntent } from "./knowledge-scope-resolver.mjs";
 import { visualSubjectPolicyIssue } from "./visual-subject-policy.mjs";
 import { highlightToText } from "../src/lib/highlightDisplay.js";
+import { SLOT_VISUAL_CONTRACT, buildDayVisualCoverageTasks } from "./planner-visual-contract.mjs";
 
-export const AGENT_PROMPT_VERSION = "agent-trip-planner-v12-day-coverage-core-consistency";
+export const AGENT_PROMPT_VERSION = "agent-trip-planner-v13-explicit-day-coverage";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const prompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-trip-planner-v1.md"), "utf8");
 const reviewDecisionPrompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-review-decision-v1.md"), "utf8");
@@ -937,7 +938,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   const context = { projectId: project.projectId, inputFingerprint: project.inputFingerprint, factBasis, previousPlanVersion: project.planIds?.length || 0 };
   const sharedInput = {
     factBasis,
-    ...(simpleSkillContract ? { imageCandidateSlots: buildPlannerImageCandidates(factBasis) } : {}),
+    ...(simpleSkillContract ? { imageCandidateSlots: buildPlannerImageCandidates(factBasis), dayVisualCoverageTasks: buildDayVisualCoverageTasks(factBasis) } : {}),
     preflightDecisions: project.confirmationDecisions || [],
     inputFingerprint: project.inputFingerprint,
     versions: { ruleProfileVersion: AGENT_RULE_PROFILE_VERSION, capabilityConfigVersion: AGENT_CAPABILITY_VERSION, promptVersion: AGENT_PROMPT_VERSION },
@@ -960,7 +961,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   const visualTargetPrompt = '视觉目标契约澄清：前文单一画面与禁止A或B约束的是Core主体、必要动作和不可替代身份，不能把理想描述的背景、光线、构图选择提升为硬条件。请在本次输出中直接保持queryCore明确，非核心背景只作表现偏好。独立hotel:N代表图已有外观、套房、泳池、公共空间候选池：若职责是展示这家酒店的真实代表空间，queryCore.subject写酒店代表性空间，action为空，identity是正式酒店身份且exactIdentityRequired=true；primaryVisualSubject可表达代表空间偏好，不能要求每种空间同框。只有客户文案明确承诺并需要图片证明某一特定房型、专属设施或体验时，Core才保留该具体主体与动作，不能归为代表图；DAY、餐饮和交通不得借酒店代表图规则放宽。真正不同Core主体、动作或身份的二选一仍不得输出，不能靠选第一个或删掉限定来解决。此澄清只使用现有字段，不新增输出字段、模型调用或备用画面。';
   const candidateSlotPrompt = '图片位置契约：用户输入的imageCandidateSlots由原始事实和版面预先确定，每项有稳定role、sourceKey、slotId及required/removable。你只决定画面，不改编号、来源或必要性；每个required=true候选必须在imagePlan.slots中恰好规划一次。sourceRefs必须引用候选的原始sourceKey，不能在事实数组过滤空行后自行重编号。可选的dining:N、transport:N只有确实无独立展示价值时才可不规划，并把对应role明确写入imagePlan.omittedOptionalRoles；没有省略时也输出空数组。不能同时规划又省略同一role，不能省略必需位。未写在omittedOptionalRoles的可选候选也须规划，遗漏不能冒充主动取舍。DAY辅助视觉可从当天真实事实另外选择0—3个；0—3是结构范围，普通核心体验日默认另选一个有独立职责的辅助位，不机械为每个Spot创建图片位。';
   const compactOutputPrompt = '只输出一个完整、紧凑的 JSON 对象，顶层先写 imagePlan，再写其他字段；不加 Markdown、解释、重复事实、冗长 rationale 或未定义字段。保留契约要求的所有字段和全部图片位；每个说明字段只写必要短句，sourceRefs只写可追溯路径。不要靠省略 slot、queryCore、Query 或 exactIdentityRequired 缩短输出。输出结束前确认整个对象闭合。';
-  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, visualTargetPrompt, candidateSlotPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist, visualSelectionChecklist] : []), compactOutputPrompt].join('\n\n') }];
+  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, visualTargetPrompt, candidateSlotPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist, visualSelectionChecklist, SLOT_VISUAL_CONTRACT] : []), compactOutputPrompt].join('\n\n') }];
   const plannerPromptFingerprint = createHash("sha256").update(systemMessages[0].content).digest("hex");
   const messages = [...systemMessages, { role: "user", content: JSON.stringify(sharedInput) }];
   const retryMessages = [...systemMessages, { role: "user", content: `${JSON.stringify(sharedInput)}\n\n技术补救：上次响应没有形成完整合法JSON。本次直接输出完整紧凑JSON对象，不写推理、前言或代码块；优先保证全部必需图片位及其完整字段，非图片说明简短。` }];

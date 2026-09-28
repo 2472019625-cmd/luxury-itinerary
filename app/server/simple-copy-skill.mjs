@@ -189,7 +189,7 @@ export function buildHotelFactRows(research = {}, facts = {}) {
       ...(fact?.sourceClass === "supplier_original" ? { reason: "supplier_original" } : reasonByCategory.get(category) ? { reason: reasonByCategory.get(category) } : {}),
       ...(clean(fact?.sourceUrl) ? { sourceUrl: clean(fact.sourceUrl) } : {}),
       ...(clean(fact?.sourceClass) ? { sourceClass: clean(fact.sourceClass) } : {}),
-      ...(clean(fact?.sourceExcerpt) && fact?.sourceClass === "supplier_original" ? { sourceExcerpt: clean(fact.sourceExcerpt) } : {}),
+      ...(clean(fact?.sourceExcerpt) ? { sourceExcerpt: clean(fact.sourceExcerpt) } : {}),
       ...(clean(fact?.checkedAt) ? { checkedAt: clean(fact.checkedAt) } : {}),
     };
   });
@@ -397,6 +397,7 @@ export async function runCopyWriterSkill({
   signal,
   onStatus,
   onCapabilityCall,
+  onWriterEvidence,
 } = {}) {
   const startedAt = Date.now();
   const batchId = randomUUID();
@@ -553,23 +554,32 @@ export async function runCopyWriterSkill({
   await Promise.all(physicalBatches.map(async ({ batchKind, tasks: batchTasks }) => {
     const callId = randomUUID();
     const callStartedAt = Date.now();
+    let requestStarted = false;
     onCapabilityCall?.({ phase: "started", capabilityId: "copy_writer", callId, batchId, batchKind, targetCount: batchTasks.length });
     try {
       const modelStartedAt = Date.now();
-      const response = await copyTaskQueue.add(() => requestJson({
+      const messages = [
+          { role: "system", content: `${skillPrompt}\n\n## Runtime response contract\n只处理输入 tasks，不新增、删除、重排或重新规划任务。只输出 JSON 对象：{"results":[{"targetId":"与输入一致","targetPath":"与输入一致","value":"严格符合该任务 outputSchema 的值","warnings":[]}]}；targetId 与 targetPath 必须和输入完全一致，一个任务无法完成时仍保留其他任务结果。\n酒店 task 的 hotelSearchSnippets 只属于标明的 entityName，每条有 sourceExcerpt 和 categoryKeys；酒店正文、卖点与四行共用这批片段。只可提取或忠实改写片段明确支持的公开一般属性，不能把不同来源拼成新事实。hotel_fact_rows 每个非空行必须填写准确 sourceUrl 和该来源片段中的逐字 sourceExcerpt，categoryKeys 只是类别提示；必须按片段实际语义判断归属。用户确认和 supplierHotelContext 与搜索片段冲突时以前者为准；公开客房选择不能写成本次已订房型，设施不能写成本次已含服务。不要从片段推断本次订单房型、包含项、价格或保证服务，不要把来源或审核措辞写入客户文案。酒店四行直接面向客户，不写“让客人”“适合客人”等内部讲解语气。其他模块仍只按原 verifiedFacts 与订单事实边界生成。\n固定钟点、保证性结果、明确人员资质等级、强制预约要求或期限、具体金额、订单包含或已预订状态，以及具体房型或车型履约，必须有当前 task 的订单事实或 verifiedFacts 支持。\n不得返回 Reviewer、finding、自动改写或 retry 决策。` },
+          { role: "user", content: JSON.stringify({ itineraryContext, batchKind, tasks: batchTasks }) },
+        ];
+      await onWriterEvidence?.({ batchId, batchKind, phase: "request", messages: structuredClone(messages) });
+      const response = await copyTaskQueue.add(() => {
+        requestStarted = true;
+        return requestJson({
         apiKey,
         baseUrl,
         model,
-        messages: [
-          { role: "system", content: `${skillPrompt}\n\n## Runtime response contract\n只处理输入 tasks，不新增、删除、重排或重新规划任务。只输出 JSON 对象：{"results":[{"targetId":"与输入一致","targetPath":"与输入一致","value":"严格符合该任务 outputSchema 的值","warnings":[]}]}；targetId 与 targetPath 必须和输入完全一致，一个任务无法完成时仍保留其他任务结果。\n酒店 task 的 hotelSearchSnippets 只属于标明的 entityName，每条有 sourceExcerpt 和 categoryKeys；酒店正文、卖点与四行共用这批片段。只可提取或忠实改写片段明确支持的公开一般属性，不能把不同来源拼成新事实。hotel_fact_rows 每个非空行必须填写准确 sourceUrl 和该来源片段中的逐字 sourceExcerpt，categoryKeys 只是类别提示；必须按片段实际语义判断归属。用户确认和 supplierHotelContext 与搜索片段冲突时以前者为准；公开客房选择不能写成本次已订房型，设施不能写成本次已含服务。不要从片段推断本次订单房型、包含项、价格或保证服务，不要把来源或审核措辞写入客户文案。酒店四行直接面向客户，不写“让客人”“适合客人”等内部讲解语气。其他模块仍只按原 verifiedFacts 与订单事实边界生成。\n固定钟点、保证性结果、明确人员资质等级、强制预约要求或期限、具体金额、订单包含或已预订状态，以及具体房型或车型履约，必须有当前 task 的订单事实或 verifiedFacts 支持。\n不得返回 Reviewer、finding、自动改写或 retry 决策。` },
-          { role: "user", content: JSON.stringify({ itineraryContext, batchKind, tasks: batchTasks }) },
-        ],
+        messages,
         reasoningEffort,
         maxTokens: Math.min(20_000, Math.max(4_000, batchTasks.length * 1_200)),
         emptyContentRetries: 1,
         signal,
         onStatus,
-      }), { taskId: `simple-copy:${batchId}:${batchKind}` });
+        onModelAttempt: async (attempt) => onWriterEvidence?.({ batchId, batchKind, phase: "attempt", attempt: attempt.attempt,
+          rawContent: attempt.rawContent, parseStatus: attempt.parseResult?.status || null }),
+      });
+      }, { taskId: `simple-copy:${batchId}:${batchKind}` });
+      await onWriterEvidence?.({ batchId, batchKind, phase: "response", json: structuredClone(response.json) });
       modelMs += Date.now() - modelStartedAt;
       const attempts = response.attemptUsages?.length || response.usage?.attempt_count || 1;
       modelCalls += attempts;
@@ -613,7 +623,7 @@ export async function runCopyWriterSkill({
       onCapabilityCall?.({ phase: "finished", capabilityId: "copy_writer", callId, batchId, batchKind, targetCount: batchTasks.length, durationMs: Date.now() - callStartedAt, attemptCount: attempts, usage: response.usage || null });
     } catch (error) {
       modelMs += Date.now() - callStartedAt;
-      const attempts = error?.attemptUsages?.length || 1;
+      const attempts = requestStarted ? error?.attemptUsages?.length || 1 : 0;
       modelCalls += attempts;
       transportAttempts += attempts;
       for (const task of batchTasks) resultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, status: "failed", error: { code: error?.code || "copy_request_failed", message: error?.message || String(error) }, warnings: [] });

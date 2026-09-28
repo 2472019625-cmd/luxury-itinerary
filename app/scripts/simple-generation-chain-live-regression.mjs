@@ -125,7 +125,7 @@ try {
     adapters: { retrievalSession },
   };
   log({ event: "live_regression_started", runRoot });
-  const result = await runSimplePipeline({ sourceFile, baseData: createProductionDefaultData(), root: appRoot,
+  const result = await runSimplePipeline({ sourceFile, baseData: createProductionDefaultData(), root: runRoot,
     storeRoot: path.join(runRoot, "projects"), origin, adapters: { store,
       runImage: (options) => runImageSearchSkill({ ...options, root: runRoot }),
       render: (options) => runSimpleRenderer({ ...options, root: appRoot, outputDirectory: path.join(runRoot, "render", options.projectId), origin }),

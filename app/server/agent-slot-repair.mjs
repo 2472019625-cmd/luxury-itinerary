@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { Worker } from "node:worker_threads";
 import { materializeAgentPlanForSlotRepair } from "./agent-trip-planner.mjs";
 import { requestDeepSeekJson } from "./deepseek-client.mjs";
+import { SLOT_VISUAL_CONTRACT } from "./planner-visual-contract.mjs";
 
 const VISUAL_FIELDS = new Set([
   "primaryVisualSubject", "visualDuty", "differentiation", "location", "locationRole",
@@ -69,11 +70,20 @@ export function prepareFrozenSlotRepair({ rawPlan, project, expectedRoles } = {}
     sourceFactsByRole[role] = roots.map((ref) => ({ ref, value: referenceValue(project.factBasis, ref) }));
   }
   const requestInput = {
-    contract: "Repair only the listed unresolved image roles. Return one JSON object with patches. Each patch is {role, action:'replace', slot:{primaryVisualSubject,visualDuty,differentiation,location,locationRole,queryCore,fidelityQuery,alternateQueries,sourceRefs,exactIdentityRequired}, reason} or {role,action:'omit',reason}. Omit only when required=false and removable=true, with a fact-based reason why no independent useful picture is supported; optional dining/transport omissions must still respect the existing module choice, and DAY supporting remains optional. Do not invent facts, select a branch without source support, repeat any read-only visual responsibility, or change trip facts. Hotel representative images must keep the specific booked hotel identity, while a generic representative space may not promise an unsupported room type or facility. Preserve optional/self-paid/pending experience status and fee boundaries exactly; sourceRef path existence alone is not semantic evidence. Keep one Core subject/action/identity and all queries for the same photograph. Every listed role must receive exactly one patch.",
+    contract: "Repair only the listed unresolved image roles. Return one JSON object with patches. Each patch is {role, action:'replace', slot:{primaryVisualSubject,visualDuty,differentiation,location,locationRole,queryCore,fidelityQuery,alternateQueries,sourceRefs,exactIdentityRequired}, reason} or {role,action:'omit',reason}. Omit only when required=false and removable=true, with a fact-based reason why no independent useful picture is supported; optional dining/transport omissions must still respect the existing module choice, and DAY supporting remains optional. Do not invent facts, select a branch without source support, repeat any read-only visual responsibility, or change trip facts. Hotel representative images must keep the specific booked hotel identity, while a generic representative space may not promise an unsupported room type or facility. Preserve optional/self-paid/pending experience status and fee boundaries exactly; sourceRef path existence alone is not semantic evidence. Keep one Core subject/action/identity and all queries for the same photograph. For hotel roles only, omit the locked exactIdentityRequired and queryCore.identity/identityEn fields from the replacement: the program preserves their original values. Never output empty identity to mean scope_only. Every listed role must receive exactly one patch.",
     unresolved: targets.map((role) => {
       const slot = baselineSlots.get(role);
       const rawSlot = rawPlan.imagePlan.slots.find((candidate) => candidate.role === role);
-      return { role, required: slot.required, removable: slot.removable, current: Object.fromEntries(Object.entries(rawSlot).filter(([key]) => VISUAL_FIELDS.has(key))), issues: safeIssues(slot) };
+      const duplicate = slot.plannerValidationIssues?.find((issue) => issue.code === "duplicate_visual_responsibility");
+      const hotel = /^hotel:\d+$/.test(role);
+      return { role, required: slot.required, removable: slot.removable,
+        previousRejectedTarget: Object.fromEntries(Object.entries(rawSlot).filter(([key]) => VISUAL_FIELDS.has(key))),
+        issues: slot.plannerValidationIssues || [],
+        ...(duplicate ? { forbiddenCore: { ...slot.queryCore }, conflictsWith: duplicate.conflictingRole,
+          repairInstruction: "必须从本位原始事实选择另一可见主体或必要动作；仅改地点、时间、背景、职责说明或查询措辞仍然重复。" } : {}),
+        ...(hotel ? { lockedFields: { exactIdentityRequired: true, identity: rawSlot.queryCore?.identity, identityEn: rawSlot.queryCore?.identityEn || "" },
+          repairInstruction: "酒店身份是程序保留的只读值。替换slot不输出exactIdentityRequired；queryCore不输出identity/identityEn，程序从原始位补回。其他视觉字段仍完整输出。" } : {}),
+      };
     }),
     sourceFactsByRole,
     readOnlyVisualDuties: readOnlyRoles.map((role) => {
@@ -99,9 +109,24 @@ function validatePatch(patch, prepared) {
   if (patch.action !== "replace" || !patch.slot || typeof patch.slot !== "object" || Array.isArray(patch.slot)) return "patch_shape_invalid";
   if (Object.keys(patch.slot).some((key) => !VISUAL_FIELDS.has(key)) || REQUIRED_FIELDS.some((key) => !(key in patch.slot))) return "readonly_or_missing_field";
   if (/^hotel:\d+$/.test(patch.role)
-    && (patch.slot.exactIdentityRequired !== true || patch.slot.queryCore?.identity !== source.queryCore?.identity)) return "hotel_identity_changed";
+    && (patch.slot.exactIdentityRequired !== true || patch.slot.queryCore?.identity !== source.queryCore?.identity
+      || (patch.slot.queryCore?.identityEn || "") !== (source.queryCore?.identityEn || ""))) return "hotel_identity_changed";
   if (!validReferences(patch.slot.sourceRefs, patch.role, prepared.project.factBasis, source.sourceRefs)) return "source_ref_out_of_scope_or_missing";
   return null;
+}
+
+// Hotel identity is a protected input, not a model writing task. Missing locked
+// fields are copied verbatim; an explicit conflicting value still fails the
+// original hotel_identity_changed guard. No entity aliases are guessed.
+function restoreLockedHotelFields(patch, prepared) {
+  if (patch?.action !== "replace" || !/^hotel:\d+$/.test(patch.role)
+    || !patch.slot?.queryCore || typeof patch.slot.queryCore !== "object" || Array.isArray(patch.slot.queryCore)) return patch;
+  const source = prepared.rawPlan.imagePlan.slots.find((slot) => slot.role === patch.role);
+  if (!source) return patch;
+  const slot = copy(patch.slot);
+  if (!("exactIdentityRequired" in slot)) slot.exactIdentityRequired = true;
+  for (const field of ["identity", "identityEn"]) if (!(field in slot.queryCore) && field in (source.queryCore || {})) slot.queryCore[field] = source.queryCore[field];
+  return { ...patch, slot };
 }
 
 function mergeOne(rawPlan, patch) {
@@ -139,7 +164,8 @@ export function applySlotRepairProposal(prepared, proposal) {
   if (!same([...received].sort(), [...prepared.targets].sort())) return reject("target_roles_mismatch");
   const rejected = [];
   const validPatches = [];
-  for (const patch of proposal.patches) {
+  for (const proposed of proposal.patches) {
+    const patch = restoreLockedHotelFields(proposed, prepared);
     const issue = validatePatch(patch, prepared);
     if (issue) { rejected.push({ role: patch?.role || null, code: issue }); continue; }
     validPatches.push(patch);
@@ -183,7 +209,8 @@ export function applySlotRepairProposal(prepared, proposal) {
     : unresolved(current.plan).has(patch.role));
   const acceptedPatches = validPatches.filter((patch) => !failedPatches.includes(patch));
   if (failedPatches.length) {
-    rejected.push(...failedPatches.map((patch) => ({ role: patch.role, code: "target_still_unresolved" })));
+    rejected.push(...failedPatches.map((patch) => ({ role: patch.role, code: "target_still_unresolved",
+      issues: safeIssues(slotsByRole(current.plan).get(patch.role)) })));
     if (!acceptedPatches.length) current = { raw: copy(prepared.rawPlan), plan: prepared.baseline };
     else try { current = build(acceptedPatches); } catch { return reject("validation_error", { rejected }); }
     const secondIssue = batchIssue(current.plan, acceptedPatches);
@@ -276,7 +303,7 @@ export async function requestFrozenSlotRepair({ prepared, apiKey, baseUrl, model
   try {
     recordPhase("request_started");
     const messages = [
-      { role: "system", content: "你只修补一次完整行程Planner中的未决图片位。严格按输入契约返回JSON对象，只含patches。不要修改任何非目标role或事实。每个画面单一Core，所有Query与Core一致，来源必须支持，不能复制已通过画面。仅required=false且removable=true的位可基于事实说明理由省略。" },
+      { role: "system", content: `你只修补一次完整行程Planner中的未决图片位。严格按输入契约返回JSON对象，只含patches。不要修改任何非目标role或事实。每个画面单一Core，所有Query与Core一致，来源必须支持，不能复制已通过画面。仅required=false且removable=true的位可基于事实说明理由省略。\n\n${SLOT_VISUAL_CONTRACT}\n\n逐位读取issues中的具体原因，完成后在本次响应内检查每个patch是否消除了这些原因；不能返回仍包含原错误的提案。reason要指出本位sourceRefs中支持所选画面的事实；引用路径存在不等于该事实存在。` },
       { role: "user", content: JSON.stringify(prepared.requestInput) },
     ];
     const modelPromise = requestJson({ apiKey, baseUrl, model, messages, reasoningEffort: "medium", thinkingType: "disabled", maxTokens: 9000,
