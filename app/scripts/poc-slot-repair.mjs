@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { appendFileSync } from "node:fs";
 import path from "node:path";
-import { prepareFrozenSlotRepair, requestFrozenSlotRepair } from "../server/agent-slot-repair.mjs";
+import { prepareSourceGroundedSlotRepair, requestFrozenSlotRepair } from "../server/agent-slot-repair.mjs";
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -62,7 +62,8 @@ try {
   const expectedRoles = (simplePlan.imageSlots || []).filter((slot) => slot.plannerSlotStatus === "unresolved")
     .map(roleFromSimpleSlot);
   if (expectedRoles.some((role) => !role) || new Set(expectedRoles).size !== expectedRoles.length) throw new Error("frozen_roles_unmapped");
-  const prepared = prepareFrozenSlotRepair({ rawPlan, project, expectedRoles });
+  const prepared = prepareSourceGroundedSlotRepair({ rawPlan, project, expectedRoles });
+  summary.groundingMode = prepared.groundingMode;
   summary.preparationMs = performance.now() - started;
   recordPhase({ phase: "preparation_finished", stage: "preparation", physicalRequests: 0, durationMs: 0, preparationMs: summary.preparationMs, targetCount: prepared.targets.length });
   summary.planId = project.activePlanId;

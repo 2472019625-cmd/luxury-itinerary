@@ -275,6 +275,19 @@ export function validateVisualCardSubjectRetention(value, task = {}) {
   return [];
 }
 
+// Give the Writer the same source-derived anchors the existing title check
+// uses. This adds no facts and does not repair or relax rejected output.
+export function withVisualCardTitleContract(task) {
+  if (task.moduleType !== "visual_card") return task;
+  const subject = clean(task.facts?.titleCoreSubject || task.facts?.visualSubject);
+  const anchors = [...new Set(VISUAL_SUBJECT_CONCEPTS.flatMap((pattern) => subject.match(pattern)?.[0] || []))];
+  return { ...task, facts: { ...task.facts, titleRetention: {
+    subjectAnchors: anchors,
+    requiredEntityDisplayName: clean(task.facts?.entityDisplayName),
+    instruction: "以自然体验标题保留主题：subjectAnchors非空时至少原样保留其中一项；requiredEntityDisplayName非空时必须原样保留。锚点只说明当前画面主题，不新增当天事实或保证性承诺。其余标题文字可自然改写，不必复述构图。",
+  } } };
+}
+
 export function validateCopyCommitments(value, task = {}) {
   const output = task.moduleType === 'visual_card' && value && typeof value === 'object' ? copyText([value.cardTitle, value.cardDescription]) : copyText(value);
   if (!output) return [];
@@ -549,7 +562,7 @@ export async function runCopyWriterSkill({
   }));
   emitTaskProgress();
 
-  const writerTasks = validTasks.map((task) => writerTaskById.get(task.targetId)).filter(Boolean);
+  const writerTasks = validTasks.map((task) => writerTaskById.get(task.targetId)).filter(Boolean).map(withVisualCardTitleContract);
   const physicalBatches = partitionCopyTasks(writerTasks);
   await Promise.all(physicalBatches.map(async ({ batchKind, tasks: batchTasks }) => {
     const callId = randomUUID();

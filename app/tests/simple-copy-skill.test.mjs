@@ -113,6 +113,27 @@ test('visual_card 与 DAY 同批并明确支持内部描述路径，不新增调
   assert.equal(result.metrics.automaticBusinessRetryRounds, 0);
 });
 
+test("Visual Card Writer receives existing validation anchors in the same request without relaxing rejected titles", async () => {
+  const samples = [
+    ["夜间游猎中，探照灯照亮草原上的夜行动物", "乘越野车夜探草原", "夜间游猎，循声探访草原", "夜间游猎"],
+    ["营地 Ember Bar 户外篝火与落日酒会", "在 Ember Bar 看落日，围篝火告别", "在 Ember Bar 享受落日酒会", "落日酒会"],
+    ["凯伦·布里克森博物馆的故居外观与花园", "探访《走出非洲》的取景地", "走进凯伦·布里克森博物馆", "博物馆"],
+  ];
+  const tasks = samples.map(([subject], index) => ({ ...task(`visual-${index}`, `simpleImageSlotBindings.visual_${index}`, "visual_card"), facts: { visualSubject: subject }, outputSchema: { type: "object", required: ["cardTitle", "cardDescription"] } }));
+  for (const [index, sample] of samples.entries()) assert.ok(validateCopyCommitments({ cardTitle: sample[1], cardDescription: "按当天已确认安排展开体验。" }, tasks[index]).length);
+  let calls = 0;
+  const result = await runCopyWriterSkill({ tasks, requestJson: async ({ messages }) => {
+    calls += 1;
+    const received = JSON.parse(messages.at(-1).content).tasks;
+    received.forEach((item, index) => assert.deepEqual(item.facts.titleRetention.subjectAnchors, [samples[index][3]]));
+    return { json: { results: received.map((item, index) => ({ targetId: item.targetId, targetPath: item.targetPath, value: { cardTitle: samples[index][2], cardDescription: "按当天已确认安排展开体验。" } })) } };
+  } });
+  assert.equal(calls, 1);
+  assert.equal(result.results.every((item) => item.status === "success"), true);
+  assert.equal(result.metrics.automaticBusinessRetryRounds, 0);
+  assert.equal(tasks[0].facts.titleRetention, undefined);
+});
+
 test("Copy 按全局、DAY、notes形成三个物理批次并按 targetId 隔离结构失败", async () => {
   let calls = 0;
   const events = [];

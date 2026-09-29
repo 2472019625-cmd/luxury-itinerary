@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applySlotRepairProposal, prepareFrozenSlotRepair, requestFrozenSlotRepair, validateSlotRepairInWorker } from "../server/agent-slot-repair.mjs";
+import { applySlotRepairProposal, prepareFrozenSlotRepair, prepareSourceGroundedSlotRepair, requestFrozenSlotRepair, validateSlotRepairInWorker } from "../server/agent-slot-repair.mjs";
 import { buildAgentFactBasis } from "../server/agent-trip-planner.mjs";
 import { plannerRequestJson } from "./helpers/simple-pipeline-fixture.mjs";
 import { SLOT_VISUAL_CONTRACT } from "../server/planner-visual-contract.mjs";
@@ -59,6 +59,41 @@ test("full Planner validation accepts a repaired target while preserving a previ
   assert.deepEqual(result.plan.imagePlan.slots.find((slot) => slot.role === "cover"), beforeCover);
   assert.deepEqual(result.plan.factBasis, prepared.project.factBasis);
   assert.equal(result.plan.dayRoles[0].primaryVisualSubject, original.primaryVisualSubject);
+});
+
+test("source-grounded repair retains the full original validation and immutable roles", async () => {
+  const { prepared: legacy, original } = await realValidationFixture();
+  const strict = prepareSourceGroundedSlotRepair({ rawPlan: legacy.rawPlan, project: legacy.project });
+  const quote = strict.project.factBasis.days[0].experience;
+  const grounding = { subject: { sourceRef: "days.0.experience", quote }, action: { sourceRef: "days.0.experience", quote } };
+  const result = applySlotRepairProposal(strict, { patches: [{ role: "day:1", action: "replace", reason: "原文已有飞机降落画面", slot: original, grounding }] });
+  assert.equal(result.accepted, true);
+  assert.deepEqual(result.plan.factBasis, strict.project.factBasis);
+  assert.deepEqual(result.plan.imagePlan.slots.find((slot) => slot.role === "cover"), strict.baseline.imagePlan.slots.find((slot) => slot.role === "cover"));
+});
+
+test("source-grounded repair rejects a real path with an invented Core before materialization", () => {
+  const strict = structuredClone(prepared);
+  strict.groundingMode = "source-quotes-v1";
+  strict.project.factBasis.days[0] = { experience: "每日两次游猎。", spots: [{ description: "夜间游猎追踪花豹。" }] };
+  const patch = { role: "day:1", action: "replace", reason: "来源路径存在", slot: { ...replacement, queryCore: { subject: "狮子", action: "", identity: "" } }, grounding: { subject: { sourceRef: "days.0.experience", quote: "每日两次游猎。" } } };
+  const check = (proposal, code) => {
+    const result = applySlotRepairProposal(strict, { patches: [proposal] });
+    assert.equal(result.rejected[0].code, code);
+    assert.equal(result.diagnostics.validationPasses, 0);
+  };
+  check(patch, "core_grounding_term_not_in_quote");
+  const spotlight = structuredClone(patch);
+  spotlight.slot.sourceRefs = ["days.0.spots.0"];
+  spotlight.slot.queryCore = { subject: "花豹", action: "被探照灯照亮", identity: "" };
+  spotlight.grounding = { subject: { sourceRef: "days.0.spots.0.description", quote: "夜间游猎追踪花豹。" }, action: { sourceRef: "days.0.spots.0.description", quote: "夜间游猎追踪花豹。" } };
+  check(spotlight, "core_grounding_term_not_in_quote");
+  const inventedQuote = structuredClone(patch);
+  inventedQuote.grounding.subject.quote = "狮子在草原休憩";
+  check(inventedQuote, "core_grounding_quote_not_in_source");
+  const wrongRef = structuredClone(spotlight);
+  wrongRef.slot.sourceRefs = ["days.0.experience"];
+  check(wrongRef, "core_grounding_ref_out_of_scope");
 });
 
 test("full Planner validation still rejects a duplicate visual responsibility", async () => {

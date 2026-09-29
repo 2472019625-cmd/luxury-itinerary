@@ -18,8 +18,8 @@ const slotsByRole = (plan) => new Map((plan.imagePlan?.slots || []).map((slot) =
 const failure = (code, detail = {}) => ({ accepted: false, code, ...detail });
 
 function referenceValue(factBasis, ref) {
-  if (!/^(?:days|hotels|transport|diningExperiences)\.\d+(?:\.[A-Za-z][A-Za-z0-9]*(?:\.\d+)?)?$/.test(ref)) return undefined;
-  return ref.split(".").reduce((value, part) => value?.[part], factBasis);
+  if (!/^(?:days|hotels|transport|diningExperiences)\.\d+(?:\.(?:[A-Za-z][A-Za-z0-9]*|\d+))*$/.test(ref)) return undefined;
+  return ref.split(".").reduce((value, part) => value && Object.hasOwn(value, part) ? value[part] : undefined, factBasis);
 }
 
 function allowedReferenceRoots(role, originalRefs = []) {
@@ -94,9 +94,48 @@ export function prepareFrozenSlotRepair({ rawPlan, project, expectedRoles } = {}
   return { rawPlan: copy(rawPlan), project: copy(project), baseline, targets, readOnlyRoles, requestInput };
 }
 
+// The earlier frozen experiments remain replayable. New live experiments use
+// this stricter, extractive Core contract; it is not a production integration
+// or a semantic approval of the complete visual/English queries.
+export function prepareSourceGroundedSlotRepair(input) {
+  const prepared = prepareFrozenSlotRepair(input);
+  prepared.groundingMode = "source-quotes-v1";
+  prepared.requestInput.groundingContract = {
+    version: prepared.groundingMode,
+    instruction: "replace补丁除原字段外必须提供grounding对象。subject、action和非酒店identity每个非空Core字段分别提供{sourceRef,quote}；sourceRef必须指向本位允许范围内的原始字符串叶字段，且被slot.sourceRefs覆盖；quote必须是该字段连续原文，并逐字包含对应中文Core值。本轮用原文已有的可见主体与必要动作，静态画面不新增动作，不能把可合理联想的道具/动作升级成必需Core。若原文有多个对象，选择有原文依据的单个对象。primaryVisualSubject仍由你完整决定，不由程序拼接；它和全部Query不得新增来源不支持的事实，英文仅忠实翻译。不能缩短引用以隐去否定、可选、费用或待确认边界。只有独立hotel:N的“酒店代表性空间”且action为空可免subject证据，其身份仍由程序锁定。omit补丁契约不变。",
+    example: { subject: { sourceRef: "days.0.experience", quote: "本位支持主体的完整原文片段" } },
+  };
+  prepared.requestInput.contract = `Only return {"patches":[...]}, with no type or other top-level fields. Each replacement has exactly the sibling keys {role,action:"replace",grounding:{subject:{sourceRef,quote},action:{sourceRef,quote},identity:{sourceRef,quote}},slot:{primaryVisualSubject,visualDuty,differentiation,location,locationRole,queryCore,fidelityQuery,alternateQueries,sourceRefs,exactIdentityRequired},reason}. Grounding entries for empty Core fields may be omitted; generic hotel representatives use grounding:{} and omit the locked hotel identity fields as specified below. reason is beside slot, never inside slot. An omission has exactly {role,action:"omit",reason}. Omit only${prepared.requestInput.contract.split("Omit only")[1]}`;
+  return prepared;
+}
+
+function validateCoreGrounding(patch, prepared, source) {
+  if (prepared.groundingMode !== "source-quotes-v1") return null;
+  if (!patch.grounding || typeof patch.grounding !== "object" || Array.isArray(patch.grounding)
+    || Object.keys(patch.grounding).some((key) => !["subject", "action", "identity"].includes(key))) return "core_grounding_missing_or_invalid";
+  const core = patch.slot.queryCore || {};
+  const hotel = /^hotel:\d+$/.test(patch.role);
+  for (const field of ["subject", "action", "identity"]) {
+    if (hotel && field === "identity") continue;
+    if (hotel && field === "subject" && core.subject === "酒店代表性空间" && !core.action) continue;
+    const term = core[field];
+    if (field !== "subject" && !term) continue;
+    if (typeof term !== "string" || !term.trim()) return "core_grounding_missing_or_invalid";
+    const anchor = patch.grounding[field];
+    if (!anchor || !same(Object.keys(anchor).sort(), ["quote", "sourceRef"])) return "core_grounding_missing_or_invalid";
+    if (!validReferences([anchor.sourceRef], patch.role, prepared.project.factBasis, source.sourceRefs)
+      || !patch.slot.sourceRefs.some((ref) => anchor.sourceRef === ref || anchor.sourceRef.startsWith(`${ref}.`))) return "core_grounding_ref_out_of_scope";
+    const text = referenceValue(prepared.project.factBasis, anchor.sourceRef);
+    if (typeof text !== "string" || typeof anchor.quote !== "string" || !anchor.quote.trim() || !text.includes(anchor.quote)) return "core_grounding_quote_not_in_source";
+    if (!anchor.quote.includes(term.trim())) return "core_grounding_term_not_in_quote";
+  }
+  return null;
+}
+
 function validatePatch(patch, prepared) {
   if (!patch || typeof patch !== "object" || !prepared.targets.includes(patch.role)) return "unknown_role";
-  if (!same(Object.keys(patch).sort(), (patch.action === "replace" ? ["role", "action", "slot", "reason"] : ["role", "action", "reason"]).sort())) return "patch_shape_invalid";
+  const replaceKeys = ["role", "action", "slot", "reason", ...(prepared.groundingMode === "source-quotes-v1" ? ["grounding"] : [])];
+  if (!same(Object.keys(patch).sort(), (patch.action === "replace" ? replaceKeys : ["role", "action", "reason"]).sort())) return "patch_shape_invalid";
   if (typeof patch.reason !== "string" || !patch.reason.trim()) return "reason_missing";
   const source = prepared.rawPlan.imagePlan.slots.find((slot) => slot.role === patch.role);
   if (!source) return "unknown_role";
@@ -112,7 +151,7 @@ function validatePatch(patch, prepared) {
     && (patch.slot.exactIdentityRequired !== true || patch.slot.queryCore?.identity !== source.queryCore?.identity
       || (patch.slot.queryCore?.identityEn || "") !== (source.queryCore?.identityEn || ""))) return "hotel_identity_changed";
   if (!validReferences(patch.slot.sourceRefs, patch.role, prepared.project.factBasis, source.sourceRefs)) return "source_ref_out_of_scope_or_missing";
-  return null;
+  return validateCoreGrounding(patch, prepared, source);
 }
 
 // Hotel identity is a protected input, not a model writing task. Missing locked
@@ -303,7 +342,7 @@ export async function requestFrozenSlotRepair({ prepared, apiKey, baseUrl, model
   try {
     recordPhase("request_started");
     const messages = [
-      { role: "system", content: `你只修补一次完整行程Planner中的未决图片位。严格按输入契约返回JSON对象，只含patches。不要修改任何非目标role或事实。每个画面单一Core，所有Query与Core一致，来源必须支持，不能复制已通过画面。仅required=false且removable=true的位可基于事实说明理由省略。\n\n${SLOT_VISUAL_CONTRACT}\n\n逐位读取issues中的具体原因，完成后在本次响应内检查每个patch是否消除了这些原因；不能返回仍包含原错误的提案。reason要指出本位sourceRefs中支持所选画面的事实；引用路径存在不等于该事实存在。` },
+      { role: "system", content: `你只修补一次完整行程Planner中的未决图片位。严格按输入契约返回JSON对象，只含patches。不要修改任何非目标role或事实。每个画面单一Core，所有Query与Core一致，来源必须支持，不能复制已通过画面。仅required=false且removable=true的位可基于事实说明理由省略。\n\n${SLOT_VISUAL_CONTRACT}\n\n${prepared.requestInput.groundingContract?.instruction || ""}\n\n逐位读取issues中的具体原因，完成后在本次响应内检查每个patch是否消除了这些原因；不能返回仍包含原错误的提案。reason要指出本位sourceRefs中支持所选画面的事实；引用路径存在不等于该事实存在。` },
       { role: "user", content: JSON.stringify(prepared.requestInput) },
     ];
     const modelPromise = requestJson({ apiKey, baseUrl, model, messages, reasoningEffort: "medium", thinkingType: "disabled", maxTokens: 9000,

@@ -362,8 +362,8 @@ test("同页错误摘录只拒该断言，另一类别可复用正文核验", as
   const body = "<title>Example Lodge</title><p>Example Lodge has a pool</p>";
   const result = await verifyCopyFactsResearch({ researchRequest: { ...hotelResearch, categories: ["位置", "设施"] },
     candidates: [
-      { ...fixtureFact("位置", url), sources: [{ sourceUrl: url, sourceExcerpt: "not on this page", sourceMediaType: "page" }] },
-      { ...fixtureFact("设施", url), sources: [{ sourceUrl: url, sourceExcerpt: "Example Lodge has a pool", sourceMediaType: "page" }] },
+      { ...fixtureFact("位置", url), sources: [{ fact: "位置的公开资料。", sourceUrl: url, sourceExcerpt: "not on this page", sourceMediaType: "page" }] },
+      { ...fixtureFact("设施", url), sources: [{ fact: "设施的公开资料。", sourceUrl: url, sourceExcerpt: "Example Lodge has a pool", sourceMediaType: "page" }] },
     ],
     fetchSource: async () => { fetches += 1; return textResponse(body, undefined, url); }, fetchBrowserSource: null,
     onSourcePage: async (page) => pages.push(structuredClone(page)),
@@ -570,8 +570,40 @@ function memoryResearchState() {
 }
 
 const hotelResearch = { researchType: "official_entity_facts", entityKind: "hotel", entityName: "Example Lodge", categories: ["位置", "客房", "设计", "设施"] };
-const fixtureFact = (category, url = "https://examplelodge.com/facts") => ({ category, fact: `${category}的公开资料。`, sources: [{ sourceUrl: url, sourceExcerpt: "Example Lodge river courtyard rooms pool", sourceMediaType: "page" }] });
+const fixtureFact = (category, url = "https://examplelodge.com/facts") => ({ category, fact: `${category}的公开资料。`, sources: [{ fact: `${category}的公开资料。`, sourceUrl: url, sourceExcerpt: "Example Lodge river courtyard rooms pool", sourceMediaType: "page" }] });
 const fixturePage = (url) => textResponse("<title>Example Lodge</title><p>Example Lodge river courtyard rooms pool</p>", undefined, url);
+
+test("酒店候选只采用已核验页面自己的事实，不能继承其他页面的设施合集", async () => {
+  const missing = "https://examplelodge.com/unavailable";
+  const available = "https://examplelodge.com/fitness";
+  const result = await verifyCopyFactsResearch({
+    researchRequest: { ...hotelResearch, categories: ["设施"] },
+    candidates: [{ category: "设施", fact: "设有泳池、水疗、酒吧及健身中心。", sources: [
+      { fact: "设有泳池和水疗。", sourceUrl: missing, sourceExcerpt: "Example Lodge offers a pool and spa.", sourceMediaType: "page" },
+      { fact: "设有健身中心。", sourceUrl: available, sourceExcerpt: "Example Lodge offers a fitness center.", sourceMediaType: "page" },
+    ] }],
+    fetchSource: async (url) => url === available
+      ? textResponse("<title>Example Lodge</title><p>Example Lodge offers a fitness center.</p>", undefined, url)
+      : { ok: false, status: 404, url, headers: { get: () => "text/html" } },
+    fetchBrowserSource: null,
+  });
+  assert.equal(result.verifiedFacts.length, 1);
+  assert.equal(result.verifiedFacts[0].fact, "设有健身中心。");
+  assert.equal(result.verifiedFacts[0].sourceUrl, available);
+  assert.equal(result.rejected[0].reason, "source_unavailable");
+});
+
+test("酒店来源未给出自身事实时不回退采用父级总结", async () => {
+  let fetches = 0;
+  const result = await verifyCopyFactsResearch({ researchRequest: { ...hotelResearch, categories: ["设施"] },
+    candidates: [{ category: "设施", fact: "设有泳池和健身中心。", sources: [
+      { sourceUrl: "https://examplelodge.com/fitness", sourceExcerpt: "fitness center", sourceMediaType: "page" },
+    ] }], fetchSource: async () => { fetches++; return fixturePage("https://examplelodge.com/fitness"); },
+  });
+  assert.equal(result.verifiedFacts.length, 0);
+  assert.equal(result.rejected[0].reason, "fact_source_incomplete");
+  assert.equal(fetches, 0);
+});
 
 test("同酒店仅缺类补证一次，已核验字段不重写，重入复用持久结果", async () => {
   const researchStateStore = memoryResearchState();
@@ -601,7 +633,7 @@ test("同酒店仅缺类补证一次，已核验字段不重写，重入复用�
 test("主研究先核验备选页面；全部类别完成时不再补证", async () => {
   let calls = 0;
   const result = await runCopyFactsResearch({ researchRequest: hotelResearch, researchStateStore: memoryResearchState(),
-    requestResearch: async () => { calls += 1; return { json: { facts: hotelResearch.categories.map((category) => ({ ...fixtureFact(category), sources: [{ sourceUrl: "https://examplelodge.com/missing", sourceExcerpt: "river courtyard", sourceMediaType: "page" }, ...fixtureFact(category).sources] })) } }; },
+    requestResearch: async () => { calls += 1; return { json: { facts: hotelResearch.categories.map((category) => ({ ...fixtureFact(category), sources: [{ fact: `${category}的公开资料。`, sourceUrl: "https://examplelodge.com/missing", sourceExcerpt: "river courtyard", sourceMediaType: "page" }, ...fixtureFact(category).sources] })) } }; },
     fetchSource: async (url) => url.includes("missing") ? { ok: false, status: 404, url, headers: { get: () => "text/html" } } : fixturePage(url), fetchBrowserSource: null,
   });
   assert.equal(calls, 1);
@@ -633,7 +665,7 @@ test("官方 404 后同批有效详情页可核验，补搜排除旧页", async 
   const result = await runCopyFactsResearch({ researchRequest: hotelResearch, researchStateStore: memoryResearchState(),
     requestResearch: async ({ researchRequest }) => {
       requests.push(researchRequest);
-      return { json: { facts: researchRequest.researchPhase === "supplement" ? [fixtureFact("设计", designPage)] : [{ ...fixtureFact("客房"), sources: [{ sourceUrl: missing, sourceExcerpt: "rooms", sourceMediaType: "page" }, { sourceUrl: valid, sourceExcerpt: "rooms", sourceMediaType: "page" }] }] } };
+      return { json: { facts: researchRequest.researchPhase === "supplement" ? [fixtureFact("设计", designPage)] : [{ ...fixtureFact("客房"), sources: [{ fact: "客房的公开资料。", sourceUrl: missing, sourceExcerpt: "rooms", sourceMediaType: "page" }, { fact: "客房的公开资料。", sourceUrl: valid, sourceExcerpt: "rooms", sourceMediaType: "page" }] }] } };
     },
     fetchSource: async (url) => url.includes("/missing") ? { ok: false, status: 404, url, headers: { get: () => "text/html" } } : fixturePage(url), fetchBrowserSource: null,
   });
@@ -666,9 +698,9 @@ test("母品牌域名不同于酒店名时，失败候选只作为外部额度�
     requestResearch: async ({ researchRequest }) => {
       requests.push(researchRequest);
       return { json: { facts: researchRequest.researchPhase === "supplement"
-        ? [{ ...fixtureFact("客房", valid), sources: [{ sourceUrl: valid, sourceExcerpt: "Example Lodge river courtyard rooms pool", sourceMediaType: "page", sourceClass: "official_brand" }] }]
+        ? [{ ...fixtureFact("客房", valid), sources: [{ fact: "客房的公开资料。", sourceUrl: valid, sourceExcerpt: "Example Lodge river courtyard rooms pool", sourceMediaType: "page", sourceClass: "official_brand" }] }]
         : [
-          { ...fixtureFact("客房", missing), sources: [{ sourceUrl: missing, sourceExcerpt: "rooms", sourceMediaType: "page", sourceClass: "official_brand" }] },
+          { ...fixtureFact("客房", missing), sources: [{ fact: "客房的公开资料。", sourceUrl: missing, sourceExcerpt: "rooms", sourceMediaType: "page", sourceClass: "official_brand" }] },
           fixtureFact("位置", "https://www.booking.com/hotel/xx/example-lodge.html"),
           fixtureFact("设计", "https://www.sleepermagazine.com/project/example-lodge"),
         ] } };
@@ -737,7 +769,7 @@ test("补搜可复用主搜摘录失败但正文有效的官方页面", async ()
   const result = await runCopyFactsResearch({ researchRequest: hotelResearch, researchStateStore: memoryResearchState(),
     requestResearch: async ({ researchRequest }) => {
       requests.push(researchRequest);
-      return { json: { facts: [{ ...fixtureFact("位置", url), sources: [{ sourceUrl: url, sourceExcerpt: researchRequest.researchPhase === "supplement" ? "Example Lodge beside the river" : "incorrect excerpt", sourceMediaType: "page" }] }] } };
+      return { json: { facts: [{ ...fixtureFact("位置", url), sources: [{ fact: "位置的公开资料。", sourceUrl: url, sourceExcerpt: researchRequest.researchPhase === "supplement" ? "Example Lodge beside the river" : "incorrect excerpt", sourceMediaType: "page" }] }] } };
     },
     fetchSource: async () => { fetches += 1; return textResponse("<title>Example Lodge</title><p>Example Lodge beside the river</p>", undefined, url); }, fetchBrowserSource: null,
   });

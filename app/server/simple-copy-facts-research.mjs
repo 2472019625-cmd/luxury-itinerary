@@ -29,14 +29,17 @@ const browserExecutables = [
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
 ].filter(Boolean);
 
-function normalizedCandidateSources(candidate = {}) {
+function normalizedCandidateSources(candidate = {}, { sourceLocalFacts = false } = {}) {
   const sources = [];
   if (clean(candidate.sourceUrl) || clean(candidate.sourceExcerpt)) {
-    sources.push({ sourceUrl: candidate.sourceUrl, sourceExcerpt: candidate.sourceExcerpt, sourceMediaType: candidate.sourceMediaType, sourceClass: candidate.sourceClass });
+    sources.push({ fact: candidate.fact, sourceUrl: candidate.sourceUrl, sourceExcerpt: candidate.sourceExcerpt, sourceMediaType: candidate.sourceMediaType, sourceClass: candidate.sourceClass });
   }
   if (Array.isArray(candidate.sources)) sources.push(...candidate.sources);
   const seen = new Set();
   return sources.map((source) => ({
+    // Hotel sources are alternatives, not pieces of a combined claim. The
+    // page that passes verification may support less than the parent summary.
+    ...(sourceLocalFacts ? { fact: clean(source?.fact) } : {}),
     sourceUrl: clean(source?.sourceUrl),
     sourceExcerpt: clean(source?.sourceExcerpt),
     sourceMediaType: clean(source?.sourceMediaType) || "page",
@@ -379,6 +382,8 @@ export function buildCopyFactsResearchRequest({ researchRequest, model = COPY_FA
           "公开研究只能补充实体客观是什么、有什么，绝不能推断或改变本订单购买了什么。不得声明本次房型、包含项、价格、已保证车型、已预订服务或正式状态。",
           "entityKind=hotel 时，类别固定按输入的‘位置、客房、设计、设施’理解。设计允许有原文证据的建筑风格、材料、布局和空间设计，不要求设计师姓名。客房只描述酒店公开房型或景观选择，不得推断本次预订房型；OTA 只能候选支持位置、一般房型与设施，不能证明设计。entityKind=dining 时，只核实 focus 对应的餐饮形式和体验特色；不得把酒店其他餐厅、泛化菜单、未经确认的具体菜品酒款、价格、包含状态或服务流程写成事实。",
           "每个指定类别最多返回一条精炼事实；一条只保留一个可直接用于文案的核心事实，不要把设施、活动、儿童政策和多段宣传合并成长段。餐饮研究总计最多返回两条事实。每条事实可返回 1—3 个相互独立的候选页面，按上述来源优先级排序，每个页面必须附上该页自身的原文证据和 sourceClass。sourceClass 只能是 official_entity、official_brand、official_press、operator_or_tourism_authority、architect_or_design_studio、trusted_trade_media、major_ota。程序会核对候选来源；餐饮的实体官网、品牌官网或正式运营方页面若仅因技术原因无法再次访问，可按餐饮非履约体验事实的窄例外保留。",
+          "entityKind=hotel 时，每个 sources 项还必须单独包含 fact：只根据这一项 sourceExcerpt 忠实译写成一句中文事实，摘录必须支持这句话的全部客观要点。先逐页摘取原文，再写该页支持的 fact；不同候选页面的 fact 可以不同。程序只采用实际通过核验那一页的 sources[].fact，不会采用父级 fact，不允许把其他页面、模型常识或父级总结的细节带入。例如摘录仅说有健身中心，该项 fact 就只能说明健身中心，不能并列增添泳池、水疗或餐厅；地址只列城市和街道，就不推导邻近地标或景观。不要把导航菜单当作酒店属性。",
+          "酒店来源项结构为 {fact:\"仅本条原文支持的中文事实\",sourceUrl,sourceExcerpt,sourceMediaType:\"page\",sourceClass}。每个来源独立闭合证据，不用多页拼凑一句事实；不确定的细节直接不写。",
           "品牌官网可能由母品牌官方域托管；不要仅按酒店名与域名字符是否相同判断。优先返回实体或品牌官方具体页，并在页面标题、结构化数据或正文中确认实体全名。输入 officialDomains 时优先使用这些已知官方域。",
           "必须逐项覆盖输入 categories；在当前这次研究内优先为每类寻找官方页面及可核验的备选来源。categoryOutcomes 每类恰好一项，status 为 candidate_found（有候选事实）、no_evidence（本次没有取得证据）或 access_failed（发现来源但不可访问）。这只是本次研究结果，不代表穷尽互联网。不得把漏写类别当 no_evidence。",
           "若 researchPhase=supplement，只研究输入缺失类别及 sourceDirections 的新来源方向，不重复已核验字段，不重复 excludedSourceUrls，不修改已成立事实。官方方向应寻找同一酒店官网中与缺失类别相关的真实详情子页；旧 URL 返回404不能推断整站无资料，也不能换查询词后重复该 URL。没有可靠新证据仍明确返回各类结果。",
@@ -504,7 +509,7 @@ export async function verifyCopyFactsResearch({ researchRequest, candidates = []
     return sourceCache.get(cacheKey);
   };
   const expandedCandidates = (Array.isArray(candidates) ? candidates : []).flatMap((candidate) => {
-    const sources = normalizedCandidateSources(candidate);
+    const sources = normalizedCandidateSources(candidate, { sourceLocalFacts: researchRequest.entityKind === "hotel" });
     return sources.length ? sources.map((source) => ({ ...candidate, ...source, sources: undefined })) : [candidate];
   }).map((candidate, index) => ({ ...candidate, _candidateOrder: index }))
     .sort((left, right) => candidatePriority(left, researchRequest) - candidatePriority(right, researchRequest) || left._candidateOrder - right._candidateOrder);
@@ -769,7 +774,7 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
       try {
         const response = await dispatch(request, "supplement");
         const rejectedDirections = [];
-        const candidates = (response.json?.facts || []).flatMap((candidate) => normalizedCandidateSources(candidate).flatMap((source) => {
+        const candidates = (response.json?.facts || []).flatMap((candidate) => normalizedCandidateSources(candidate, { sourceLocalFacts: request.entityKind === "hotel" }).flatMap((source) => {
           const direction = directions.find((item) => item.category === candidate.category);
           const allowed = direction && !excludedSourceUrls.some((url) => sourceIdentity(url) === sourceIdentity(source.sourceUrl)) && direction.domains.some((domain) => { try { return hostMatches(new URL(source.sourceUrl).hostname, domain); } catch { return false; } });
           if (!allowed) { rejectedDirections.push({ category: candidate.category, sourceUrl: source.sourceUrl, reason: "source_direction_not_allowed" }); return []; }
