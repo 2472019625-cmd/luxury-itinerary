@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { addDays, isUsableFinalImageSource, mapDaysFromStart, removeExperienceReferences, synchronizeExperienceStatus, validateItineraryFacts } from "./lib/itineraryRules.js";
 import { applyImageToSlot, canManuallyChooseImageCandidate, canRecommendImageCandidateForSlot, IMAGE_REVIEW_STATE, pendingImageReviewSlots } from "./lib/imageReviewPolicy.js";
 import { buildLayoutImageSlots, getSlotImage, listImagePlacements, moveImageToSlot, setSlotImage } from "./lib/imageSlots.js";
+import { ImageCropEditor, ImageSlotPreview } from './ImageCropEditor.jsx';
 import { deriveProjectThumbnail } from "./lib/projectThumbnail.js";
 import { safeWriteStorage } from './lib/storageSafety.js';
 import { agentProjectHeaders, agentProjectsApi } from './lib/agentProjectsApi.js';
@@ -19,6 +20,11 @@ import { imageReviewForSlot, imageSearchPresentation } from "./lib/imageSearchPr
 import { candidateResolutionAllowsManualChoice, candidateResolutionForTarget, imageActionFailureMessage } from "./lib/imageActionFeedback.js";
 import { hotelFactPresentation, STRUCTURED_HOTEL_FACT_FORMAT } from "./lib/hotelFactPresentation.js";
 import { sha256File } from './lib/fileHash.js';
+
+import { displayDiningIntroCopy } from './lib/diningIntroCopy.js';
+import { hotelStayDetails } from './lib/hotelStayPresentation.js';
+import { applyHotelNightChange, planHotelNightChange } from './lib/hotelStayEditing.js';
+import { defaultDeliveryFilenameBase, deliveryDownloadUrl } from './lib/deliveryFilename.js';
 
 const STORAGE_USERS = "sheyou-workspace-users-v1";
 const STORAGE_SESSION = "sheyou-workspace-session-v1";
@@ -624,9 +630,9 @@ function AgentProgressOverview({ snapshot, elapsed, action }) {
   const display = agentDisplayState(snapshot);
   progress.stages = displayAgentStages(progress.stages, display);
   const safeProgress = Math.max(0, Math.min(100, Number(progress.percent) || 0));
-  const animatedProgress = useAnimatedProgress(safeProgress, !display.failed && !display.cancelled && !display.disconnected);
+  const animatedProgress = useAnimatedProgress(safeProgress, !display.frozen);
   const routeTarget = display.draft ? Math.min(99, agentRouteProgress(progress.stages)) : agentRouteProgress(progress.stages, display.completed);
-  const animatedRouteProgress = useAnimatedProgress(routeTarget, !display.failed && !display.cancelled && !display.disconnected);
+  const animatedRouteProgress = useAnimatedProgress(routeTarget, !display.frozen);
   const labels = { complete: "已完成", active: display.disconnected ? "上次状态" : "进行中", waiting: "等待确认", failed: "失败", cancelled: "已停止", pending: display.failed || display.cancelled ? "未执行" : "等待处理", unknown: "状态待确认" };
   const latestEvent = snapshot?.executionRun?.events?.at(-1);
   const waitingReason = display.draft ? "可编辑草稿已生成，未完成内容请在编辑页补充或确认。" : (latestEvent?.waitingReason || snapshot?.project?.status === "awaiting_confirmation") ? "有一项重要信息需要你确认，保存后会从当前位置继续制作。" : "";
@@ -689,7 +695,7 @@ function AgentGenerationStep({ project, snapshot, saveState, error, onCancel, on
   const run = snapshot?.executionRun;
   const display = agentDisplayState(snapshot);
   const elapsed = agentProject?.createdAt ? agentElapsed(snapshot) : 0;
-  const waiting = agentProject?.status === "awaiting_confirmation";
+  const waiting = !display.draft && ["awaiting_confirmation", "awaiting_user_action"].includes(agentProject?.status);
   const draft = project.flowKind === "simple_skill_v1" ? simpleRenderedEditorState(snapshot) === "draft" : agentProject?.status === "partial";
   const failed = display.failed;
   const cancelled = agentProject?.status === "cancelled" || project.workflowStage === "cancelled";
@@ -785,12 +791,77 @@ function updateHotelFactRow(hotel, { key, label }, text) {
   if (wasStructured || String(text || "").trim()) hotel.hotelFactFormat = STRUCTURED_HOTEL_FACT_FORMAT;
 }
 
+function HotelFactEditor({ hotel, hotelIndex, rows, onEdit, onSearch, onReplace, jobs, setJobs, proposals, setProposals, messages, setMessages }) {
+  const hotelKey = String(hotel.id || hotelIndex);
+  const missing = rows.filter(({ row }) => !String(row?.text || "").trim()).map(({ key }) => key);
+  const lookup = async (keys, mode) => {
+    const jobKey = `${hotelKey}:${mode === "fill" ? "all" : keys[0]}`;
+    if (jobs[jobKey]) return;
+    setJobs((current) => ({ ...current, [jobKey]: true }));
+    setMessages((current) => ({ ...current, [jobKey]: "" }));
+    try {
+      const result = await onSearch({ hotelId: hotel.id, hotelIndex, keys, mode });
+      if (mode === "fill") setMessages((current) => ({ ...current, [jobKey]: `已补全 ${result.appliedRows?.length || 0} 项${result.missingKeys?.length ? `，${result.missingKeys.length} 项暂未找到可靠信息` : ""}` }));
+      else {
+        const candidate = result.candidates?.find((item) => item.key === keys[0]);
+        setProposals((current) => ({ ...current, [jobKey]: candidate ? { ...candidate, expectedText: result.expectedText } : null }));
+        if (!candidate) setMessages((current) => ({ ...current, [jobKey]: "暂未找到有来源依据的新内容，原文未变" }));
+      }
+    } catch (error) { setMessages((current) => ({ ...current, [jobKey]: error.message || "查找失败，请重试" })); }
+    finally { setJobs((current) => ({ ...current, [jobKey]: false })); }
+  };
+  return <div className="hotel-fact-editor">
+    <div className="hotel-fact-heading"><div className="inspector-divider">酒店展示信息</div>{onSearch && missing.length > 0 && <button type="button" className="hotel-fact-action" disabled={Boolean(jobs[`${hotelKey}:all`])} onClick={() => lookup(missing, "fill")}>{jobs[`${hotelKey}:all`] ? <><span className="hotel-fact-spinner" />正在查找…</> : `补全缺失信息（${missing.length}）`}</button>}</div>
+    {messages[`${hotelKey}:all`] && <p className="hotel-fact-message" role="status">{messages[`${hotelKey}:all`]}</p>}
+    {rows.map(({ key, label, row }) => {
+      const jobKey = `${hotelKey}:${key}`;
+      const proposal = proposals[jobKey];
+      return <div className="hotel-fact-row" key={key}>
+        <div className="hotel-fact-row-heading"><span>{label}</span>{onSearch && <button type="button" className="hotel-fact-action" disabled={Boolean(jobs[jobKey])} onClick={() => lookup([key], "suggest")}>{jobs[jobKey] ? <><span className="hotel-fact-spinner" />正在查找…</> : row?.text ? "重新查找" : "查找此项"}</button>}</div>
+        <textarea rows={3} value={row?.text || ""} placeholder={`请输入酒店${label}信息`} onChange={(event) => onEdit({ key, label }, event.target.value)} />
+        {messages[jobKey] && <p className="hotel-fact-message" role="status">{messages[jobKey]}</p>}
+        {proposal && <div className="hotel-fact-proposal"><span>当前内容</span><p>{row?.text || "（空白）"}</p><span>新找到的内容（不会自动替换）</span><p>{proposal.text}</p><a href={proposal.source.sourceUrl} target="_blank" rel="noreferrer">查看信息来源</a><div><button type="button" onClick={async () => { try { await onReplace({ hotelId: hotel.id, hotelIndex, key, text: proposal.text, source: proposal.source, expectedText: proposal.expectedText }); setProposals((current) => ({ ...current, [jobKey]: null })); setMessages((current) => ({ ...current, [jobKey]: "已替换并保存" })); } catch (error) { setMessages((current) => ({ ...current, [jobKey]: error.message || "替换失败" })); } }}>替换此项</button><button type="button" onClick={() => setProposals((current) => ({ ...current, [jobKey]: null }))}>保留原文</button></div></div>}
+      </div>;
+    })}
+  </div>;
+}
+
 function snapshotProject(project) {
   return { data: clone(project.data), visibility: clone(project.visibility || {}), title: project.title, customerName: project.customerName, requirements: project.requirements };
 }
 
 function Field({ label, value, onChange, rows, type = "text", placeholder }) {
   return <label>{label}{rows ? <textarea rows={rows} value={value ?? ""} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /> : <input type={type} value={value ?? ""} onChange={(event) => onChange(type === "number" ? Number(event.target.value) : event.target.value)} placeholder={placeholder} />}</label>;
+}
+
+function HotelStayFields({ hotel, data, hotelIndex, onRegionChange, onApplyStay }) {
+  const stay = hotelStayDetails(hotel, data.days || []);
+  const storedNights = Number(hotel.nights);
+  const [draftNights, setDraftNights] = useState(String(stay.nights || ""));
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  useEffect(() => { setDraftNights(String(stay.nights || "")); setMessage(""); }, [hotel.id, stay.nights]);
+  const changed = draftNights !== String(stay.nights);
+  const plan = changed ? planHotelNightChange(data, hotelIndex, draftNights) : null;
+  const neighbor = plan?.ok ? data.hotels[plan.neighborIndex] : null;
+  return <>
+    <div className="field-grid-compact">
+      <Field label="酒店所在地" value={hotel.region} onChange={onRegionChange} />
+      <label className="hotel-stay-input">入住晚数<input type="number" min="1" max={data.days?.length || 1} step="1" value={draftNights} onChange={(event) => { setDraftNights(event.target.value); setMessage(""); }} /></label>
+    </div>
+    {stay.nights > 0 && storedNights > 0 && storedNights !== stay.nights && <p className="hotel-stay-warning" role="status">原酒店记录为 {storedNights} 晚，与每日住宿的 {stay.nights} 晚不一致；客户预览以每日安排为准，请核对。</p>}
+    {stay.nights > 0 && !stay.isContinuous && <p className="hotel-stay-warning" role="status">该酒店分散在多个住宿日，入住动线暂不显示，请核对每日住宿。</p>}
+    {changed && <div className="hotel-stay-plan" role="status">
+      {plan?.ok ? <>
+        <strong>调整预览（行程总天数不变）</strong>
+        <p>「{hotel.shortName || hotel.officialName}」{plan.currentNights} 晚 → {plan.desiredNights} 晚；「{neighbor.shortName || neighbor.officialName}」{plan.neighborCurrentNights} 晚 → {plan.neighborDesiredNights} 晚。</p>
+        <p>DAY {plan.changedDayIndexes.map((index) => index + 1).join("、")} 当晚住宿：{data.hotels[plan.fromHotelIndex].shortName || data.hotels[plan.fromHotelIndex].officialName} → {data.hotels[plan.toHotelIndex].shortName || data.hotels[plan.toHotelIndex].officialName}。</p>
+        <small>只调整当晚住宿；路线、活动、价格和预订状态不会自动修改，请核对相关文案。</small>
+        <button type="button" disabled={busy} onClick={async () => { setBusy(true); setMessage(""); try { await onApplyStay(plan); setMessage("入住安排已更新，请核对受影响日期的文案。"); } catch (error) { setMessage(`保存失败：${error.message}`); } finally { setBusy(false); } }}>{busy ? "正在保存…" : "确认调整入住晚数"}</button>
+      </> : <p className="hotel-stay-warning">{plan?.reason}</p>}
+    </div>}
+    {message && <p className="hotel-stay-warning" role="status">{message}</p>}
+  </>;
 }
 
 function ItemPicker({ label, items, index = 0, getLabel, onSelect, onAdd, onDelete, onMove }) {
@@ -841,11 +912,14 @@ function ImagePickerModal({ data, targetSlot, onChoose, onReject, onUpload, onRe
   </section></div>;
 }
 
-export function Editor({ project, ItineraryComponent, onProject, onPersistDayEditor, onVersions, onResearchSlot, onChooseImage, onRejectImage, onOpenImagePicker, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, onRetryCopy, onRetryAllCopy, onRetryAllImages, onRetryRenderer, copyRepairState, issueActionState, blockingItems = [], defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
+export function Editor({ project, ItineraryComponent, onProject, onPersistDayEditor, onPersistHotelFact, onPersistHotelRegion, onPersistHotelStay, onHotelFactSearch, onReplaceHotelFact, onVersions, onResearchSlot, onChooseImage, onRejectImage, onOpenImagePicker, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, onRetryCopy, onRetryAllCopy, onRetryAllImages, onRetryRenderer, copyRepairState, issueActionState, blockingItems = [], defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
   const [selection, setSelection] = useState(initialSelection || { module: "days", itemIndex: Math.min(2, project.data.days.length - 1), subItemIndex: null, imageIndex: 0 });
   const [tab, setTab] = useState(initialTab);
   const [historyTick, setHistoryTick] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [hotelFactJobs, setHotelFactJobs] = useState({});
+  const [hotelFactProposals, setHotelFactProposals] = useState({});
+  const [hotelFactMessages, setHotelFactMessages] = useState({});
   const [pendingPickerSlotId, setPendingPickerSlotId] = useState("");
   useEffect(() => { if (pickerOpen) onOpenImagePicker?.(); }, [pickerOpen]);
   const [imageOperations, setImageOperations] = useState({});
@@ -940,12 +1014,27 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     }
     const nextProject = { ...project, workflowStage: imageOnly ? project.workflowStage : 'needs-copy-revision', revisionMode: imageOnly ? project.revisionMode : true, data: next };
     commit(nextProject, group);
+    if (String(group || "").startsWith("hotel-region-")) {
+      const hotelIndex = Number(String(group).slice("hotel-region-".length));
+      const hotel = next.hotels?.[hotelIndex];
+      if (hotel) onPersistHotelRegion?.({ hotelId: hotel.id, hotelIndex, region: hotel.region });
+    }
     return nextProject;
   };
   const updateDayData = (updater, group, options) => {
     const nextProject = updateData(updater, group);
     onPersistDayEditor?.(nextProject, selection.itemIndex, options);
     return nextProject;
+  };
+  const applyHotelStay = async (plan) => {
+    const currentPlan = planHotelNightChange(project.data, plan.hotelIndex, plan.desiredNights);
+    if (!currentPlan.ok || currentPlan.signature !== plan.signature) throw new Error("住宿安排已变化，请重新预览。");
+    if (onPersistHotelStay) await onPersistHotelStay({ hotelId: project.data.hotels[plan.hotelIndex].id, hotelIndex: plan.hotelIndex, desiredNights: plan.desiredNights, expectedSignature: plan.signature });
+    updateData((next) => {
+      const adjusted = applyHotelNightChange(next, currentPlan);
+      next.days = adjusted.days;
+      next.hotels = adjusted.hotels;
+    }, `hotel-stay-${plan.hotelIndex}-${Date.now()}`);
   };
   const restore = (direction) => {
     const history = historyRef.current;
@@ -1037,7 +1126,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     if (match) return selectModule('highlights', Number(match[1]));
     if (targetPath === 'highlights') return selectModule('highlights');
     if (targetPath === 'expenses') return selectModule('expenses');
-    return selectModule('cover');
+    return false;
   };
   useEffect(() => {
     const editorPage = previewRef.current?.closest(".editor-page");
@@ -1076,7 +1165,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     const spotId = resolvedSpotIndex >= 0 ? day?.spots?.[resolvedSpotIndex]?.id || null : null;
     const next = { module, itemIndex, spotId, slotId, subItemIndex: resolvedSpotIndex >= 0 ? resolvedSpotIndex : null, imageIndex: Number(imageNode?.dataset.editImage || 0) };
     choose(next, imageNode ? "image" : "copy");
-    if (imageNode && openPickerOnImageClick && module !== "days") {
+    if (imageNode && openPickerOnImageClick) {
       requestAnimationFrame(() => setPickerOpen(true));
     }
   };
@@ -1106,10 +1195,10 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     const hotel = project.data.hotels?.[selection.itemIndex] || {};
     const factRows = HOTEL_FACT_ROW_DEFINITIONS.map((definition) => ({ ...definition, row: (hotel.factRows || []).find((row) => row?.key === definition.key) }));
     const showLegacyHotelCopy = hotelFactPresentation(hotel).showLegacy && (hotel.editorialCopy || hotel.proofPoints?.length > 0);
-    copyPanel = <><Field label="模块标题" value={!project.data.hotelSectionTitle || project.data.hotelSectionTitle === "臻选下榻" ? "臻选酒店" : project.data.hotelSectionTitle} onChange={(value) => updateData((next) => { next.hotelSectionTitle = value; }, "hotel-section-title")} /><Field label="模块引导标题" value={project.data.hotelIntroTitle || "住进风景深处，也住进旅程的黄金位置"} onChange={(value) => updateData((next) => { next.hotelIntroTitle = value; }, "hotel-intro-title")} /><Field label="模块引导文案" rows={3} value={project.data.hotelIntroCopy || "每一处下榻都服务于路线节奏：或更接近游猎现场，或以完整度假体验承接长途移动后的松弛时刻。"} onChange={(value) => updateData((next) => { next.hotelIntroCopy = value; }, "hotel-intro-copy")} />{picker("hotels", "酒店", (value, index) => value.shortName || value.officialName || `酒店${index + 1}`, () => ({ id: uid("hotel"), officialName: "新酒店", shortName: "新酒店", region: "", nights: 1, editorialCopy: "", proofPoints: [], factRows: HOTEL_FACT_ROW_DEFINITIONS.map(({ key, label }) => ({ key, label, text: "", status: "not_found" })), images: [] }))}<Field label="展示名称" value={hotel.shortName} onChange={(value) => updateData((next) => { next.hotels[selection.itemIndex].shortName = value; }, `hotel-short-${selection.itemIndex}`)} /><Field label="酒店正式名称" value={hotel.officialName} onChange={(value) => updateData((next) => { next.hotels[selection.itemIndex].officialName = value; }, `hotel-name-${selection.itemIndex}`)} /><div className="field-grid-compact"><Field label="地区" value={hotel.region} onChange={(value) => updateData((next) => { next.hotels[selection.itemIndex].region = value; }, `hotel-region-${selection.itemIndex}`)} /><Field label="入住晚数" type="number" value={hotel.nights || 1} onChange={(value) => updateData((next) => { next.hotels[selection.itemIndex].nights = value; }, `hotel-nights-${selection.itemIndex}`)} /></div><div className="hotel-fact-editor"><div className="inspector-divider">酒店展示信息</div>{factRows.map(({ key, label, row }) => <Field key={key} label={label} rows={3} value={row?.text || ""} placeholder={`请输入酒店${label}信息`} onChange={(value) => updateData((next) => { updateHotelFactRow(next.hotels[selection.itemIndex], { key, label }, value); }, `hotel-fact-${key}-${selection.itemIndex}`)} />)}</div>{showLegacyHotelCopy && <div className="hotel-legacy-copy"><div className="inspector-divider">旧项目兼容内容</div><Field label="酒店介绍" rows={6} value={hotel.editorialCopy} onChange={(value) => updateData((next) => { next.hotels[selection.itemIndex].editorialCopy = value; }, `hotel-copy-${selection.itemIndex}`)} /><Field label="酒店卖点（每行一个）" rows={4} value={(hotel.proofPoints || []).join("\n")} onChange={(value) => updateData((next) => { next.hotels[selection.itemIndex].proofPoints = splitLines(value); }, `hotel-points-${selection.itemIndex}`)} /></div>}</>;
+    copyPanel = <><Field label="模块标题" value={!project.data.hotelSectionTitle || project.data.hotelSectionTitle === "臻选下榻" ? "臻选酒店" : project.data.hotelSectionTitle} onChange={(value) => updateData((next) => { next.hotelSectionTitle = value; }, "hotel-section-title")} /><Field label="模块引导标题" value={project.data.hotelIntroTitle || "住进风景深处，也住进旅程的黄金位置"} onChange={(value) => updateData((next) => { next.hotelIntroTitle = value; }, "hotel-intro-title")} /><Field label="模块引导文案" rows={3} value={project.data.hotelIntroCopy || "每一处下榻都服务于路线节奏：或更接近游猎现场，或以完整度假体验承接长途移动后的松弛时刻。"} onChange={(value) => updateData((next) => { next.hotelIntroCopy = value; }, "hotel-intro-copy")} />{picker("hotels", "酒店", (value, index) => value.shortName || value.officialName || `酒店${index + 1}`, () => ({ id: uid("hotel"), officialName: "新酒店", shortName: "新酒店", region: "", nights: 1, editorialCopy: "", proofPoints: [], factRows: HOTEL_FACT_ROW_DEFINITIONS.map(({ key, label }) => ({ key, label, text: "", status: "not_found" })), images: [] }))}<Field label="展示名称" value={hotel.shortName} onChange={(value) => updateData((next) => { next.hotels[selection.itemIndex].shortName = value; }, `hotel-short-${selection.itemIndex}`)} /><Field label="酒店正式名称" value={hotel.officialName} onChange={(value) => updateData((next) => { next.hotels[selection.itemIndex].officialName = value; }, `hotel-name-${selection.itemIndex}`)} /><HotelStayFields hotel={hotel} data={project.data} hotelIndex={selection.itemIndex} onRegionChange={(value) => updateData((next) => { next.hotels[selection.itemIndex].region = value; }, `hotel-region-${selection.itemIndex}`)} onApplyStay={applyHotelStay} /><HotelFactEditor key={hotel.id || selection.itemIndex} hotel={hotel} hotelIndex={selection.itemIndex} rows={factRows} onEdit={(definition, value) => { const nextProject = updateData((next) => { updateHotelFactRow(next.hotels[selection.itemIndex], definition, value); }, `hotel-fact-${definition.key}-${selection.itemIndex}`); onPersistHotelFact?.({ hotelId: hotel.id, hotelIndex: selection.itemIndex, key: definition.key, text: value, project: nextProject }); }} onSearch={onHotelFactSearch} onReplace={onReplaceHotelFact} jobs={hotelFactJobs} setJobs={setHotelFactJobs} proposals={hotelFactProposals} setProposals={setHotelFactProposals} messages={hotelFactMessages} setMessages={setHotelFactMessages} />{showLegacyHotelCopy && <div className="hotel-legacy-copy"><div className="inspector-divider">旧项目兼容内容</div><Field label="酒店介绍" rows={6} value={hotel.editorialCopy} onChange={(value) => updateData((next) => { next.hotels[selection.itemIndex].editorialCopy = value; }, `hotel-copy-${selection.itemIndex}`)} /><Field label="酒店卖点（每行一个）" rows={4} value={(hotel.proofPoints || []).join("\n")} onChange={(value) => updateData((next) => { next.hotels[selection.itemIndex].proofPoints = splitLines(value); }, `hotel-points-${selection.itemIndex}`)} /></div>}</>;
   } else if (selection.module === "dining") {
     const item = project.data.diningExperiences?.[selection.itemIndex] || {};
-    copyPanel = <><Field label="模块标题" value={project.data.diningSectionTitle || "特色餐饮"} onChange={(value) => updateData((next) => { next.diningSectionTitle = value; }, "dining-section-title")} /><Field label="模块引导标题" value={project.data.diningIntroTitle || ""} onChange={(value) => updateData((next) => { next.diningIntroTitle = value; }, "dining-intro-title")} /><Field label="模块引导文案" rows={3} value={project.data.diningIntroCopy || ""} onChange={(value) => updateData((next) => { next.diningIntroCopy = value; }, "dining-intro-copy")} />{picker("diningExperiences", "餐饮项目", (value, index) => value.title || `餐饮${index + 1}`, () => ({ id: uid("dining"), location: "", title: "新餐饮体验", officialName: "", editorialCopy: "", images: [] }))}<Field label="地点" value={item.location} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].location = value; }, `dining-location-${selection.itemIndex}`)} /><Field label="餐饮名称" value={item.title} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].title = value; }, `dining-title-${selection.itemIndex}`)} /><Field label="正式/英文名称" value={item.officialName} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].officialName = value; }, `dining-official-${selection.itemIndex}`)} /><Field label="餐饮介绍" rows={6} value={item.editorialCopy} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].editorialCopy = value; }, `dining-copy-${selection.itemIndex}`)} /></>;
+    copyPanel = <><Field label="模块标题" value={project.data.diningSectionTitle || "特色餐饮"} onChange={(value) => updateData((next) => { next.diningSectionTitle = value; }, "dining-section-title")} /><Field label="模块引导标题" value={project.data.diningIntroTitle || ""} onChange={(value) => updateData((next) => { next.diningIntroTitle = value; }, "dining-intro-title")} /><Field label="模块引导文案" rows={3} value={displayDiningIntroCopy(project.data.diningIntroCopy)} onChange={(value) => updateData((next) => { next.diningIntroCopy = value; }, "dining-intro-copy")} />{picker("diningExperiences", "餐饮项目", (value, index) => value.title || `餐饮${index + 1}`, () => ({ id: uid("dining"), location: "", title: "新餐饮体验", officialName: "", editorialCopy: "", images: [] }))}<Field label="地点" value={item.location} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].location = value; }, `dining-location-${selection.itemIndex}`)} /><Field label="餐饮名称" value={item.title} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].title = value; }, `dining-title-${selection.itemIndex}`)} /><Field label="正式/英文名称" value={item.officialName} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].officialName = value; }, `dining-official-${selection.itemIndex}`)} /><Field label="餐饮介绍" rows={6} value={item.editorialCopy} onChange={(value) => updateData((next) => { next.diningExperiences[selection.itemIndex].editorialCopy = value; }, `dining-copy-${selection.itemIndex}`)} /></>;
   } else if (selection.module === "transport") {
     const item = project.data.transportSummary?.[selection.itemIndex] || {};
     copyPanel = <><Field label="模块标题" value={project.data.transportSectionTitle || "全程交通"} onChange={(value) => updateData((next) => { next.transportSectionTitle = value; }, "transport-section-title")} /><Field label="模块引导标题" value={project.data.transportIntroTitle || "移动不是赶路，而是旅程体验的一部分"} onChange={(value) => updateData((next) => { next.transportIntroTitle = value; }, "transport-intro-title")} /><Field label="模块引导文案" rows={3} value={project.data.transportIntroCopy || "城市接送、专属游猎、草原飞行与海上衔接各司其职，让跨区域移动保持私密、舒适与从容。"} onChange={(value) => updateData((next) => { next.transportIntroCopy = value; }, "transport-intro-copy")} />{picker("transportSummary", "交通项目", (value, index) => value.category || `交通${index + 1}`, () => ({ id: uid("transport"), category: "新交通项目", serviceLevel: "", usageLabel: "全程专属交通衔接", usageSegments: [], editorialCopy: "", features: [], images: [] }))}<Field label="交通类别" value={item.category} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].category = value; }, `transport-category-${selection.itemIndex}`)} /><Field label="服务等级" value={item.serviceLevel} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].serviceLevel = value; }, `transport-level-${selection.itemIndex}`)} /><Field label="客户可见适用场景" value={item.usageLabel || ""} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].usageLabel = value; }, `transport-usage-label-${selection.itemIndex}`)} /><div className="field-grid-compact"><Field label="参考车型" value={item.model || ""} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].model = value; }, `transport-model-${selection.itemIndex}`)} /><Field label="座位数" type="number" value={item.seatCount || ""} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].seatCount = value; }, `transport-seats-${selection.itemIndex}`)} /></div><Field label="交通介绍" rows={5} value={item.editorialCopy} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].editorialCopy = value; }, `transport-copy-${selection.itemIndex}`)} /><Field label="服务特色（每行一个）" rows={4} value={(item.features || []).join("\n")} onChange={(value) => updateData((next) => { next.transportSummary[selection.itemIndex].features = splitLines(value); }, `transport-features-${selection.itemIndex}`)} /></>;
@@ -1135,7 +1224,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
       const image = getSlotImage(project.data, slot) || {};
       const pipelineSlotId = pipelineSlotIdByFieldPath.get(slot.fieldPath) || null;
       const binding = pipelineSlotId ? bindings[pipelineSlotId] : null;
-      return { ...slot, key: pipelineSlotId || slot.slotId, slotId: pipelineSlotId || slot.slotId, layoutSlotId: slot.slotId, pipelineSlotId, spotId: binding?.spotId || slot.spotId || null, binding, src: image.src || "", focus: image.focus || "50% 50%", fit: image.fit, subItemIndex: slot.spotIndex };
+      return { ...slot, key: pipelineSlotId || slot.slotId, slotId: pipelineSlotId || slot.slotId, layoutSlotId: slot.slotId, pipelineSlotId, spotId: binding?.spotId || slot.spotId || null, binding, src: image.src || "", focus: image.focus || "50% 50%", crop: image.crop || null, fit: image.fit, subItemIndex: slot.spotIndex };
     });
   };
   const slots = collectSlots();
@@ -1144,12 +1233,30 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     || slots.find((slot) => selection.spotId && slot.spotId === selection.spotId && slot.imageIndex === selection.imageIndex)
     || slots.find((slot) => !selection.spotId && !selection.slotId && (slot.itemIndex ?? null) === (selection.itemIndex ?? null) && (slot.subItemIndex ?? null) === (selection.subItemIndex ?? null) && slot.imageIndex === selection.imageIndex)
     || (simpleBoundMode ? null : slots[0]);
+  const [cropTargetRatio, setCropTargetRatio] = useState(16 / 9);
+  const [dayCropOpen, setDayCropOpen] = useState(false);
+  useEffect(() => setDayCropOpen(false), [currentSlot?.slotId]);
+  useEffect(() => {
+    if (!currentSlot?.src || !previewRef.current) return;
+    const nodes = Array.from(previewRef.current.querySelectorAll('img[data-edit-image]'));
+    const path = currentSlot.module === 'day' ? `days.${currentSlot.itemIndex}.spots.${currentSlot.subItemIndex}` : currentSlot.module === 'cover' ? 'cover' : `${selection.module}.${currentSlot.itemIndex}`;
+    const image = nodes.find((node) => currentSlot.module === 'day' && node.getAttribute('data-edit-slot-id') === currentSlot.slotId && Number(node.getAttribute('data-edit-image')) === currentSlot.imageIndex)
+      || nodes.find((node) => node.getAttribute('data-edit-path') === path && Number(node.getAttribute('data-edit-image')) === currentSlot.imageIndex);
+    if (!image) return;
+    const target = image.parentElement?.classList.contains('crop-slot-viewport') ? image.parentElement : image;
+    const measure = () => { if (target.clientWidth && target.clientHeight) setCropTargetRatio(target.clientWidth / target.clientHeight); };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [currentSlot?.slotId, currentSlot?.src, currentSlot?.itemIndex, currentSlot?.subItemIndex, currentSlot?.imageIndex, selection.module, viewData]);
   const setImage = (src, focus = currentSlot?.focus || "50% 50%", slot = currentSlot, extra = {}) => updateData((next) => {
     if (!slot) return;
-    setSlotImage(next, slot, src ? { src, focus, ...extra } : null);
+    const previous = getSlotImage(next, slot);
+    setSlotImage(next, slot, src ? { ...(previous?.src === src ? previous : {}), src, focus, ...extra } : null);
   }, `image-${slot?.slotId || currentSlot?.slotId}`);
-  const setFocus = (x, y) => currentSlot && setImage(currentSlot.src, `${Math.round(x)}% ${Math.round(y)}%`);
-  const [focusX, focusY] = String(currentSlot?.focus || "50% 50%").match(/[\d.]+/g)?.map(Number) || [50, 50];
+  const setCrop = (rect) => currentSlot && setImage(currentSlot.src, currentSlot.focus, currentSlot, { crop: rect });
+  const resetCrop = () => currentSlot && setImage(currentSlot.src, '50% 50%', currentSlot, { crop: null });
   const selectSlot = (slot) => {
     if (selection.module === "days" && selection.slotId === slot.slotId && collapsedDaySlotId !== slot.slotId) {
       setCollapsedDaySlotId(slot.slotId);
@@ -1261,7 +1368,14 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   const imageSearching = (slotId) => Boolean(imageOperations[slotId]?.searching || (issueActionState?.busy && (issueActionState.targetId === "image:all" || issueActionState.targetId === slotId)));
   const currentImageSearching = imageSearching(currentSlot?.slotId) || imageSearching(currentSlot?.pipelineSlotId);
   const provisionalNotice = currentProvisional && <div className="empty-image-state" role="status" aria-live="polite"><strong>已预填·待确认</strong><span>图片目前只用于可编辑草稿，确认前不算完成，也不能正式下载。请核对画面与使用权。</span><div className="candidate-actions"><Button tone="primary" disabled={Boolean(imageOperations[currentSlot?.slotId]?.saving)} onClick={confirmProvisional}>确认使用此图</Button>{onRejectImage && <Button disabled={Boolean(imageOperations[currentSlot?.slotId]?.saving)} onClick={() => rejectProvisional()}>{currentImageReview.required ? "不使用此图（仍需补图）" : "不使用此图"}</Button>}</div></div>;
-  const imagePanel = <div className="image-inspector"><div className="image-library"><header><strong>本模块图片位置</strong><span>{slots.filter((slot) => slot.src).length} / {slots.length}</span></header><div className="image-thumbnails">{slots.map((slot) => <button key={slot.key} className={currentSlot?.key === slot.key ? "active" : ""} onClick={() => selectSlot(slot)}>{slot.src ? <img src={slot.src} alt={slot.label} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add("thumbnail-load-failed"); }} /> : <span className="empty-slot-thumb">缺图</span>}<span>{slot.label}</span></button>)}</div>{!slots.some((slot) => slot.src) && <div className="empty-image-state"><strong>当前模块暂时缺图</strong><span>可以打开换图窗口，从本次行程图片中选择或本地上传。</span></div>}</div>{currentSlot && <>{currentSlot.src ? <><div className="focus-preview" onPointerDown={(event) => { const box = event.currentTarget.getBoundingClientRect(); event.currentTarget.setPointerCapture(event.pointerId); setFocus((event.clientX - box.left) / box.width * 100, (event.clientY - box.top) / box.height * 100); }} onPointerMove={(event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const box = event.currentTarget.getBoundingClientRect(); setFocus(Math.max(0, Math.min(100, (event.clientX - box.left) / box.width * 100)), Math.max(0, Math.min(100, (event.clientY - box.top) / box.height * 100))); }}><img src={currentSlot.src} alt="当前选中图片" style={{ objectPosition: currentSlot.focus }} /><span style={{ left: `${focusX}%`, top: `${focusY}%` }} /></div><div className="focus-controls"><label>横向焦点 <span>{Math.round(focusX)}%</span><input type="range" min="0" max="100" value={focusX} onChange={(event) => setFocus(Number(event.target.value), focusY)} /></label><label>纵向焦点 <span>{Math.round(focusY)}%</span><input type="range" min="0" max="100" value={focusY} onChange={(event) => setFocus(focusX, Number(event.target.value))} /></label></div></> : <ImageSearchNotice review={currentImageReview} searching={currentImageSearching} />}<div className="image-actions"><Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button>{currentSlot.src && <Button onClick={() => setFocus(50, 50)}>恢复居中</Button>}</div></>}<input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { uploadLocalImage(event.target.files?.[0]); event.target.value = ""; }} />{currentSlot?.src && selection.module !== "cover" && <button className="delete-image-button" onClick={deleteImage}>删除当前图片</button>}<p className="image-source">自动图片已经下载保存并检查；本地素材请确认使用权。</p></div>;
+  const failurePrefix = selection.module === "cover" ? "cover" : selection.module === "days" ? `days:${selection.itemIndex}:` : `${selection.module}:`;
+  const moduleFailures = (project.data.imageFailures || []).filter((failure) => String(failure.slot || "").startsWith(failurePrefix));
+  const imagePanel = <div className="image-inspector">
+    <div className="image-library"><header><strong>本模块图片位置</strong><span>{slots.filter((slot) => slot.src).length} / {slots.length}</span></header><div className="image-thumbnails">{slots.map((slot) => <button key={slot.key} className={currentSlot?.key === slot.key ? "active" : ""} onClick={() => selectSlot(slot)}>{slot.src ? <img src={slot.src} alt={slot.label} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add("thumbnail-load-failed"); }} /> : <span className="empty-slot-thumb">缺图</span>}<span>{slot.label}</span></button>)}</div>{!slots.some((slot) => slot.src) && <div className="empty-image-state"><strong>当前模块暂时缺图</strong><span>可以打开换图窗口，从本次行程图片中选择或本地上传。</span>{moduleFailures.map((failure) => <small key={failure.slot}>{failure.label}：{failure.error}</small>)}</div>}</div>
+    {currentSlot && <>{currentSlot.src ? <ImageCropEditor key={currentSlot.slotId} src={currentSlot.src} crop={currentSlot.crop} focus={currentSlot.focus} targetRatio={cropTargetRatio} onCommit={setCrop} /> : <ImageSearchNotice review={currentImageReview} searching={currentImageSearching} />}<div className="image-actions"><Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button>{currentSlot.src && <Button onClick={resetCrop}>恢复默认构图</Button>}</div></>}
+    {provisionalNotice}
+    <input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { uploadLocalImage(event.target.files?.[0]); event.target.value = ""; }} />{currentSlot?.src && selection.module !== "cover" && <button className="delete-image-button" onClick={deleteImage}>删除当前图片</button>}<p className="image-source">自动图片已经下载保存并检查；本地素材请确认使用权。</p>
+  </div>;
 
   const dayStatusOptions = [
     ["included", "已包含"],
@@ -1300,10 +1414,11 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     setDragSpotId(null);
   };
   const selectedDaySlotTools = currentSlot && <div className="day-slot-tools">
-    {currentSlot.src ? <div className="day-slot-focus-preview"><img src={currentSlot.src} alt="当前图片" style={{ objectPosition: currentSlot.focus }} /></div> : <><div className="day-slot-empty"><UiIcon name="itinerary" /><span>上传真实图片后，这张卡片才会进入中间客户预览</span></div><ImageSearchNotice review={currentImageReview} searching={currentImageSearching} /></>}
+    {currentSlot.src ? <ImageSlotPreview src={currentSlot.src} crop={currentSlot.crop} focus={currentSlot.focus} /> : <><div className="day-slot-empty"><UiIcon name="itinerary" /><span>上传真实图片后，这张卡片才会进入中间客户预览</span></div><ImageSearchNotice review={currentImageReview} searching={currentImageSearching} /></>}
+    {currentSlot.src && dayCropOpen && <ImageCropEditor key={currentSlot.slotId} src={currentSlot.src} crop={currentSlot.crop} focus={currentSlot.focus} targetRatio={cropTargetRatio} onCommit={setCrop} />}
     {provisionalNotice}
     {selectedBinding && <div className="day-visual-copy">{selectedBinding.manualEditorCard !== true && <Field label="卡片标题" value={selectedBinding.cardTitle || (selectedBinding.useSpotCopy !== false ? selectedDay?.spots?.[resolveDaySpotIndex(selectedDay, { spotId: currentSlot.spotId, subItemIndex: currentSlot.subItemIndex })]?.name || "" : "")} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardTitle = value; }, `visual-title-${currentSlot.slotId}`)} />}{selectedBinding.useSpotCopy === false && <Field label="图片下方文字" rows={3} value={selectedBinding.cardDescription || ""} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardDescription = value; }, `visual-copy-${currentSlot.slotId}`)} />}</div>}
-    <div className="day-inline-image-actions">{selectedBinding?.manualEditorCard ? <Button tone="primary" onClick={() => fileRef.current?.click()}>{currentSlot.src ? "更换上传图片" : "上传体验图片"}</Button> : <Button tone="primary" onClick={() => setPickerOpen(true)}>处理图片</Button>}{currentSlot.src && <Button onClick={() => setFocus(50, 50)}>恢复居中</Button>}{currentSlot.src && !selectedBinding?.manualEditorCard && <button className="day-image-danger" onClick={deleteImage}>删除图片</button>}</div>
+    <div className="day-inline-image-actions">{currentSlot.src && <Button onClick={() => setDayCropOpen((open) => !open)}>{dayCropOpen ? '收起裁切' : '调整画面'}</Button>}{selectedBinding?.manualEditorCard ? <Button tone="primary" onClick={() => fileRef.current?.click()}>{currentSlot.src ? "更换上传图片" : "上传体验图片"}</Button> : <Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button>}{currentSlot.src && <Button onClick={resetCrop}>恢复默认构图</Button>}{currentSlot.src && !selectedBinding?.manualEditorCard && <button className="day-image-danger" onClick={deleteImage}>删除图片</button>}</div>
   </div>;
   const dayPanel = selection.module === "days" && <div className="day-editor-flow">
     <section className={`day-editor-section day-info-section ${dayInfoOpen ? "is-open" : ""}`}>
@@ -1344,8 +1459,14 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     setFinalIssuesOpen(false);
     if (item.kind === "image") return selectBlockingImage(item);
     if (item.kind === "copy") {
+      const visualSlotId = item.slotId || (item.id?.startsWith("copy:visual:") ? item.id.slice("copy:visual:".length) : "");
+      if (visualSlotId) {
+        const binding = project.data.simpleImageSlotBindings?.[visualSlotId] || {};
+        pendingIssueFocusRef.current = binding.useSpotCopy === false ? "卡片标题" : "图片下方文字";
+        return selectBlockingImage({ slotId: visualSlotId });
+      }
       if (/^days\.\d+/.test(item.targetPath || "")) setDayInfoOpen(true);
-      pendingIssueFocusRef.current = /^days\.\d+\.spots\./.test(item.targetPath || "") ? "图片下方文字" : /^days\.\d+/.test(item.targetPath || "") ? "当日行程" : null;
+      pendingIssueFocusRef.current = /^days\.\d+\.spots\./.test(item.targetPath || "") ? "图片下方文字" : /^days\.\d+\.theme$/.test(item.targetPath || "") ? "每日主题" : /^days\.\d+/.test(item.targetPath || "") ? "当日行程" : null;
       return selectIssueTarget(item.targetPath);
     }
     if (item.action === "retry_renderer") return onRetryRenderer?.().catch(() => {});
@@ -1379,15 +1500,20 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
 }
 
 export function VersionsStep({ project, exporting, exportError, onExport, onBack, onReviewDecision, existingOnly = false }) {
+  const deliveryBase = defaultDeliveryFilenameBase(project);
+  const downloadLink = (version, label, className) => {
+    const href = deliveryDownloadUrl(version.downloadUrl, deliveryBase);
+    return <a className={className} href={href} download={`${deliveryBase}.png`}>{label}</a>;
+  };
   const humanReview = project.data.humanReview || {};
   const ready = humanReviewReady(humanReview);
   const exportEligibility = copyExportEligibility(project);
   const warningAccepted = !exportEligibility.requiresWarningAcknowledgement || humanReview.exportWithCopyWarningsConfirmed === true;
   const latestVersion = project.versions?.[project.versions.length - 1];
   return <main className="flow-page"><StepRail active={4} onStep={(step) => step === 3 && onBack()} /><section className="flow-content versions-content"><header className="flow-heading"><small>STEP 05</small><h1>正式版本</h1><p>每次生成都会冻结当时内容，之后仍可返回草稿继续修改。</p></header>
-    {existingOnly && latestVersion?.downloadUrl && <div className="export-hero export-ready-hero"><div><UiIcon name="included" size={32} /><h2>正式成品已生成</h2><p>已经完成2000px长图排版与检查，可以直接下载交付。</p></div><a className="ws-button ws-button-primary" href={latestVersion.downloadUrl} download>下载高清长图</a></div>}
+    {existingOnly && latestVersion?.downloadUrl && <div className="export-hero export-ready-hero"><div><UiIcon name="included" size={32} /><h2>正式成品已生成</h2><p>已经完成2000px长图排版与检查，可以直接下载交付。</p></div>{downloadLink(latestVersion, "下载客户行程方案", "ws-button ws-button-primary")}</div>}
     {!existingOnly && <div className="export-hero"><div><UiIcon name="included" size={32} /><h2>{exporting > 0 && exporting < 100 ? "正在生成高清成品" : "生成新的正式版本"}</h2><p>{exporting > 0 && exporting < 100 ? "正在排版并检查超长页尾，请保持此页面打开。" : "输出一张供客户查看的2000px高清长图。"}</p>{exportEligibility.hardBlocked && <p className="export-error">当前仍有事实、费用、安全或结构问题，必须先处理后才能正式导出。</p>}{exportEligibility.hasWarnings && <label><input type="checkbox" checked={humanReview.exportWithCopyWarningsConfirmed === true} onChange={(event) => onReviewDecision('exportWithCopyWarningsConfirmed', event.target.checked)} /> 我已查看全部文案待修项，仍确认按当前内容生成正式版本</label>}<label><input type="checkbox" checked={humanReview.aestheticConfirmed === true} onChange={(event) => onReviewDecision('aestheticConfirmed', event.target.checked)} /> 我已查看完整预览，确认整体审美、层级和客户可读性</label><label><input type="checkbox" checked={humanReview.licenseReviewed === true} onChange={(event) => onReviewDecision('licenseReviewed', event.target.checked)} /> 我已核对最终图片来源和使用权；授权不明素材会在正式发布前替换</label>{!ready && <p className="export-error">人工复核不会阻止进入编辑器，但生成正式客户版本前必须留下确认记录。</p>}{exporting > 0 && exporting < 100 && <div className="export-progress"><span style={{ width: `${exporting}%` }} /><strong>{exporting}%</strong></div>}{exportError && <p className="export-error">{exportError}</p>}</div><Button tone="primary" disabled={!exportEligibility.allowed || !warningAccepted || !ready || (exporting > 0 && exporting < 100)} onClick={onExport}>生成版本</Button></div>}
-    <div className="version-list"><header><h2>版本历史</h2><span>{project.versions?.length || 0} 个版本</span></header>{project.versions?.length ? project.versions.slice().reverse().map((version, index) => <article key={version.id}><div className="version-index">V{String(project.versions.length - index).padStart(2, "0")}</div><div><strong>{version.name}</strong><span>{formatTime(version.createdAt)} · 2000px</span></div><div className="version-downloads">{version.downloadUrl ? <a href={version.downloadUrl} download>下载高清长图</a> : <span>旧版未生成文件</span>}</div></article>) : <div className="empty-versions">还没有正式版本，点击上方按钮生成。</div>}</div>
+    <div className="version-list"><header><h2>版本历史</h2><span>{project.versions?.length || 0} 个版本</span></header>{project.versions?.length ? project.versions.slice().reverse().map((version, index) => <article key={version.id}><div className="version-index">V{String(project.versions.length - index).padStart(2, "0")}</div><div><strong>{String(version.name || "正式版本").replace(/ · 2000px 正式成品$/, " · 正式版本")}</strong><span>{formatTime(version.createdAt)} · 2000px PNG</span></div><div className="version-downloads">{version.downloadUrl ? downloadLink(version, "下载客户行程方案") : <span>旧版未生成文件</span>}</div></article>) : <div className="empty-versions">还没有正式版本，点击上方按钮生成。</div>}</div>
   </section></main>;
 }
 
@@ -1868,7 +1994,8 @@ export function Workspace({ initialData, ItineraryComponent, agentMode = false }
       setProjectId(project.id);
       setAgentSnapshot(null);
       const simpleRunStarted = project.flowKind === "simple_skill_v1" && Boolean(project.agentProjectId);
-      if (simpleRunStarted && (project.workflowStage === "generated" || project.revisionMode)) {
+      const simpleEditorReady = simpleRunStarted && (project.workflowStage === "generated" || project.workflowStage === "partial" || project.revisionMode || ["complete", "ready_for_editor", "partial", "awaiting_user_action", "ready_to_render"].includes(project.runtimeStatus));
+      if (simpleEditorReady) {
         window.location.assign(`/simple/projects/${project.agentProjectId}`);
         return;
       }

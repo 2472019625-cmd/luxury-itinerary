@@ -225,7 +225,25 @@ function hotelCopyFacts(hotel = {}) {
 }
 
 function diningCopyGuidance() {
-  return "根据 sourceEvidence 与 verifiedFacts 只选择一个最有辨识度的餐饮锚点，可以是风味或品饮内容、用餐方式、服务动作或特色场景；必要时补充一个直接相关的已确认事实。优先写一个完整短句，确有必要时最多两句。让特色从具体内容中自然显现，不强制比较普通用餐，也不追加抽象价值总结。不照抄固定模板，不增加无依据的菜单、食材、酒款、人员、布置、制作方式、服务流程、费用或包含承诺。";
+  return "根据 sourceEvidence、verifiedFacts 或当前体验的 diningSearchSnippets 只选择一个最有辨识度的餐饮锚点，可以是风味或品饮内容、用餐方式、服务动作或特色场景；必要时补充一个直接相关的事实。搜索片段不能证明本次订单事实。优先写一个完整短句，确有必要时最多两句。让特色从具体内容中自然显现，不强制比较普通用餐，也不追加抽象价值总结。原始资料明确当前整项或其中某项内容另收费时，点明收费对象与边界；没有原始依据不得猜测收费。不照抄固定模板，不增加无依据的菜单、食材、酒款、人员、布置、制作方式、服务流程、费用或包含承诺。";
+}
+
+function diningFeeDisclosure(item = {}) {
+  if (item.status === "optional_paid" || item.feeBoundary === "excluded") {
+    const name = clean(item.title || item.name);
+    return name ? `“${name}”为自费项目` : "本项为自费项目";
+  }
+  const charge = /(?:额外收费|另行收费|单独收费|另行付费|另外付费|另付费|另付|自费|费用不含|费用另计|另计费|加价|加收费用)/;
+  for (const source of item.sourceEvidence || []) {
+    const evidence = clean(source);
+    const bracketed = [...evidence.matchAll(/[（(]([^）)]{1,70})[）)]/g)]
+      .map((match) => clean(match[1])).find((part) => charge.test(part));
+    if (bracketed) return bracketed;
+    const clause = evidence.replace(/^DAY\s*\d+[^：:]{0,20}[：:]/i, "")
+      .split(/[。；;]/).map(clean).find((part) => charge.test(part));
+    if (clause) return clause.length <= 45 ? clause : clean(clause.match(/[^，,]{0,32}(?:额外收费|另行收费|单独收费|另行付费|另外付费|另付费|另付|自费|费用不含|费用另计|另计费|加价|加收费用)/)?.[0]);
+  }
+  return "";
 }
 
 function officialDomainsFromEntity(entity = {}) {
@@ -798,10 +816,13 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
         title: item.title,
         officialName: item.officialName,
         location: item.location,
+        status: item.status,
+        feeBoundary: item.feeBoundary,
+        feeDisclosure: diningFeeDisclosure(item),
         sourceEvidence: item.sourceEvidence || [],
         copyGuidance: diningCopyGuidance(),
       },
-      plannerGoal: "这是整趟旅行独立的特色餐饮总览卡，不是 DAY 行程段落。优先写一个完整短句，确有必要时最多两句。先从 sourceEvidence 与 verifiedFacts 中选择一个最有辨识度的餐饮锚点，可以是风味或品饮内容、用餐方式、服务动作或特色场景；必要时只补一个直接相关的已确认事实。让特色从具体内容中自然显现，不强制写“与普通用餐不同”，也不追加抽象客户价值总结。遵守 facts.copyGuidance，但不得把它当成可直接照抄的产品化参考句。存在 verifiedFacts 时最多选择 2 条与当前餐饮直接相关的事实，不做网页摘要；不存在或研究失败时仅使用 sourceEvidence，保持克制并继续生成。不得写具体 DAY、当天、随后、游猎归来、开启一天、结束一天等行程推进或前后衔接，不总结一天，不告别地点，也不为整趟旅程收尾。正文必须让客户独立看懂当前餐饮最特别的内容、方式、动作或场景，不得借用本批其他 Dining target 的事实。卡片已单独展示 title、location 与 status，正文不重复 DAY 编号、完整 title、officialName、地点名和状态标签。局部升级收费只保留在 sourceEvidence，不进入总览正文，也不得暗示升级消费已包含；不新增会改变费用、订单或履约理解的具体硬事实。",
+      plannerGoal: "这是整趟旅行独立的特色餐饮总览卡，不是 DAY 行程段落。优先写一个完整短句，确有必要时最多两句。从 sourceEvidence、verifiedFacts 或当前体验的 diningSearchSnippets 中选择一个最有辨识度的餐饮锚点，可以是风味或品饮内容、用餐方式、服务动作或特色场景；必要时只补一个直接相关的事实。搜索片段最多使用 2 项，只用于当前体验的公开特色，不做网页摘要，也不能证明本次订单事实。让特色从具体内容中自然显现，不强制写“与普通用餐不同”，也不追加抽象客户价值总结。遵守 facts.copyGuidance，但不得把它当成可直接照抄的产品化参考句。研究未找到或失败时仅使用 sourceEvidence，保持克制并继续生成。不得写具体 DAY、当天、随后、游猎归来、开启一天、结束一天等行程推进或前后衔接，不总结一天，不告别地点，也不为整趟旅程收尾。正文必须让客户独立看懂当前餐饮最特别的内容、方式、动作或场景，不得借用本批其他 Dining target 的事实。卡片已单独展示 title、location 与 status，正文不重复 DAY 编号、完整 title、officialName 和地点名。若原始资料明确当前整项自费或其中某项内容/升级另收费，必须在本卡点明收费对象和边界；对应 DAY 也保留，不把局部收费误写成整项自费。不从网页资料推断本订单费用、包含项或履约；不新增会改变费用、订单或履约理解的具体硬事实。",
       relevantContext: itineraryContext, layoutHints: { placement: "dining_card", itemIndex: index }, outputSchema: diningCopySchema, researchRequest, required: false,
     }));
   });
@@ -834,6 +855,10 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
   data.days.forEach((day, index) => {
     const role = dayRole(effectiveAgentPlan, index);
     const adjacentDays = [data.days[index - 1], data.days[index + 1]].filter(Boolean).map((item) => ({ theme: item.theme, routeNodes: item.routeNodes, description: item.description }));
+    const feeDisclosures = unique([
+      ...(data.diningExperiences || []).filter((item) => (item.dayRefs || []).includes(index + 1)).map(diningFeeDisclosure),
+      ...(day.spots || []).map(diningFeeDisclosure),
+    ]);
     copyTasks.push(copyTask({
       targetId: `copy:day:${index + 1}:theme`, targetPath: `days.${index}.theme`, moduleType: "day_theme",
       facts: { date: day.date, city: day.city, routeNodes: day.routeNodes || [], spots: (day.spots || []).map((spot) => ({ name: spot.name, status: spot.status, statusLabel: spot.statusLabel })), hotel: day.hotel, vehicle: day.vehicle },
@@ -843,8 +868,8 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     }));
     copyTasks.push(copyTask({
       targetId: `copy:day:${index + 1}`, targetPath: `days.${index}.description`, moduleType: "day",
-      facts: day,
-      plannerGoal: `站在高端定制旅行产品经理视角，从当天真实事实中选择 1 个主体验、最多 1 个辅助体验，写成顺畅的客户叙事。结构字段负责保存完整路线、餐食、住宿、交通、Spot 与状态，正文不需要逐项复述。若 facts.estimatedTravelTime 已有可靠具体车程时长，正文不得再次写数字车程，只保留不带时长的自然移动衔接；该字段为空或待定时不得删除正文中唯一存在的移动事实。与相邻 DAY 保持真实重点差异，说明最核心的体验如何发生、为什么值得；不要为了事实完整把当天所有活动全部塞进正文。`,
+      facts: { ...day, feeDisclosures },
+      plannerGoal: `站在高端定制旅行产品经理视角，从当天真实事实中选择 1 个主体验、最多 1 个辅助体验，写成顺畅的客户叙事。结构字段负责保存完整路线、餐食、住宿、交通、Spot 与状态，正文不需要逐项复述；但原始资料明确本日体验整项或局部另收费时，客户可见的当天表达必须保留准确收费对象和边界，不得将局部收费写成整项自费。若 facts.estimatedTravelTime 已有可靠具体车程时长，正文不得再次写数字车程，只保留不带时长的自然移动衔接；该字段为空或待定时不得删除正文中唯一存在的移动事实。与相邻 DAY 保持真实重点差异，说明最核心的体验如何发生、为什么值得；不要为了事实完整把当天所有活动全部塞进正文。`,
       relevantContext: { ...itineraryContext, dayRole: role, adjacentDays },
       layoutHints: { placement: "day_detail", dayIndex: index, ordinaryDaySoftMaxChars: 220, transferDaySoftMaxChars: 130, sentenceCountReference: 5 }, required: true,
     }));

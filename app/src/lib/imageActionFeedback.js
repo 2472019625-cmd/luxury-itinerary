@@ -13,11 +13,13 @@ export function candidateResolutionForTarget(candidate, policy = {}) {
   const height = Number(storedOriginal ? candidate?.height : candidate?.originalHeight);
   if (!(width > 0 && height > 0)) return { status: 'pending', label: '原图尺寸待校验' };
   if (width < Number(policy.minWidth || 0) || height < Number(policy.minHeight || 0)) return {
-    status: 'insufficient', label: `原图 ${width}×${height}，当前位置至少需要 ${policy.minWidth}×${policy.minHeight}`,
+    status: 'insufficient', label: policy.allowManualLowResolution
+      ? `原图 ${width}×${height}，建议 ${policy.minWidth}×${policy.minHeight}；清晰度偏低，可确认使用`
+      : `原图 ${width}×${height}，当前位置至少需要 ${policy.minWidth}×${policy.minHeight}`,
   };
   return { status: 'sufficient', label: `原图 ${width}×${height} · 尺寸适合当前位置` };
 }
 
 export function candidateResolutionAllowsManualChoice(candidate, policy = {}) {
-  return candidateResolutionForTarget(candidate, policy).status !== 'insufficient';
+  return policy.allowManualLowResolution === true || candidateResolutionForTarget(candidate, policy).status !== 'insufficient';
 }

@@ -11,11 +11,13 @@ import { normalizeLegacyNotesForDisplay } from './lib/notesSchema.js';
 import { transportConfigurationLabels, transportProductName, transportUsageLabel } from './lib/transportPresentation.js';
 import { dayVisualCards } from './lib/dayVisualCards.js';
 import { coverLayout } from './lib/coverLayout.js';
+import { cropImageStyle } from './lib/imageCrop.js';
 import { buildCustomerTravelEntityData, sameTravelEntityName } from './lib/travelEntityDisplay.js';
 import { normalizeHighlightsForDisplay } from './lib/highlightDisplay.js';
 import { hotelFactPresentation } from './lib/hotelFactPresentation.js';
 import { deriveFeaturedCardLayout } from './lib/featuredCardLayout.js';
 import { deriveHotelStayLine } from './lib/hotelStayPresentation.js';
+import { displayDiningIntroCopy } from './lib/diningIntroCopy.js';
 const VisualBindingsContext = React.createContext(undefined);
 
 const ICON = "/assets/icons/";
@@ -29,11 +31,30 @@ function MissingImageState({ label = "图片待补充", compact = false, classNa
   return <div className={`missing-image-state${compact ? " missing-image-state-compact" : ""} ${className}`.trim()} role="img" aria-label={label} {...props}><Icon name="itinerary" size={compact ? 34 : 54} /><span>{label}</span></div>;
 }
 
-function SafeImage({ src, alt, fallbackLabel, ...props }) {
+function SafeImage({ src, alt, fallbackLabel, crop, style, onLoad, ...props }) {
   const [failed, setFailed] = useState(false);
+  const [geometry, setGeometry] = useState(null);
+  const imageRef = useRef(null);
   useEffect(() => setFailed(false), [src]);
+  useLayoutEffect(() => {
+    const node = imageRef.current;
+    if (!node || !crop) return;
+    const measure = () => {
+      const parent = node.parentElement;
+      if (parent && node.naturalWidth && node.naturalHeight) setGeometry({ imageWidth: node.naturalWidth, imageHeight: node.naturalHeight, width: parent.clientWidth, height: parent.clientHeight });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (node.parentElement) observer.observe(node.parentElement);
+    return () => observer.disconnect();
+  }, [src, crop]);
   if (!isUsableFinalImageSource(src) || failed) return <MissingImageState label={fallbackLabel || `${alt || "图片"}暂缺`} {...props} />;
-  return <img {...props} src={src} alt={alt} onError={() => setFailed(true)} />;
+  const cropStyle = geometry && cropImageStyle(crop, geometry.imageWidth, geometry.imageHeight, geometry.width, geometry.height);
+  const node = <img {...props} ref={imageRef} src={src} alt={alt} style={{ ...style, ...cropStyle }} onLoad={(event) => {
+    if (crop) { const parent = event.currentTarget.parentElement; setGeometry({ imageWidth: event.currentTarget.naturalWidth, imageHeight: event.currentTarget.naturalHeight, width: parent.clientWidth, height: parent.clientHeight }); }
+    onLoad?.(event);
+  }} onError={() => setFailed(true)} />;
+  return crop ? <span className="crop-slot-viewport">{node}</span> : node;
 }
 
 function AutoFitTitle({ children }) {
@@ -87,12 +108,12 @@ function SloganLockup() {
   return <div className="slogan-lockup"><span>{SLOGAN}</span></div>;
 }
 
-function CoverVisual({ src, focus, alt }) {
+function CoverVisual({ src, focus, crop, alt }) {
   const [layout, setLayout] = useState(() => coverLayout());
   return <div className={`cover-visual${layout.aspectRatio ? " cover-visual-adaptive" : ""}`}>
     <SloganLockup />
     <div className={`hero-frame hero-frame-${layout.displayMode}`} data-display-mode={layout.displayMode} style={layout.aspectRatio ? { aspectRatio: layout.aspectRatio, height: "auto", boxSizing: "content-box" } : undefined}>
-      <SafeImage src={src} alt={alt} fallbackLabel="行程图片待补充" data-edit-path="cover" data-edit-image="0" onLoad={(event) => setLayout(coverLayout(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight))} style={{ objectPosition: focus || "50% 50%" }} />
+      <SafeImage src={src} alt={alt} crop={crop} fallbackLabel="行程图片待补充" data-edit-path="cover" data-edit-image="0" onLoad={(event) => setLayout(coverLayout(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight))} style={{ objectPosition: focus || "50% 50%" }} />
       <div className="hero-overlay" />
     </div>
   </div>;
@@ -118,7 +139,7 @@ function Cover({ data }) {
     <section className="cover" data-edit-path="cover">
       <img className="brand-logo brand-logo-cover" src="/assets/logos/logo-gold.png" alt="奢游国际 Luxury Travel" />
       <div className="cover-copy"><span className="eyebrow">PRIVATE JOURNEY · {data.destination}</span><AutoFitTitle>{data.title}</AutoFitTitle><p>{data.subtitle}</p></div>
-      <CoverVisual key={data.heroImage || "missing-cover"} src={data.heroImage} focus={data.heroFocus} alt={data.destination || "封面主图"} />
+      <CoverVisual key={data.heroImage || "missing-cover"} src={data.heroImage} focus={data.heroFocus} crop={data.heroCrop} alt={data.destination || "封面主图"} />
       <div className={`designer-card${hasDesigner ? "" : " designer-card-placeholder"}${metrics.length ? " designer-card-has-metrics" : " designer-card-no-metrics"}`}>
         <img src={designer.avatar} alt={designer.name} />
         <div className="designer-heading"><strong>{designer.name}</strong><span>{designer.role || "资深定制师"}</span>{contacts.length > 0 && <dl className={`designer-contact-row designer-contact-count-${contacts.length}`}>{contacts.map((item) => <div className="designer-contact-item" key={item.label}><dt><Icon name={item.icon} size={36} /><span>{item.label}</span></dt><dd>{item.value}</dd></div>)}</dl>}<p>{String(designer.bio || "").split("\n").map((line, index) => <span className="designer-bio-line" key={`${line}-${index}`}>{line}</span>)}</p></div>
@@ -139,12 +160,12 @@ function DiningOverview({ items = [], policy, title = "特色餐饮", introTitle
   const isOdd = items.length % 2 === 1;
   const { entries, hasFeatured } = deriveFeaturedCardLayout(items, "dining");
   const resolvedIntroTitle = introTitle || "旅途中的风味时刻";
-  const resolvedIntroCopy = introCopy || "精选行程中最具代表性的餐饮与品饮体验，让不同风味、用餐方式与在地场景，共同构成旅途的味觉记忆。";
+  const resolvedIntroCopy = displayDiningIntroCopy(introCopy);
   return <section className="journey-feature-section dining-section" data-edit-path="dining"><SectionTitle en="CULINARY JOURNEY" zh={title} /><div className="feature-intro"><span>{resolvedIntroTitle}</span><p>{resolvedIntroCopy}</p></div><div className={`dining-grid${isOdd ? " dining-grid-odd" : ""}${hasFeatured ? " dining-grid-featured" : ""}`}>{entries.map(({ item, originalIndex: itemIndex, isFeatured: isWide }) => {
     const images = (item.images?.length ? item.images : item.image ? [item.image] : []).slice(0, 2);
     const imageOmitted = item.imageDisplay === "copy_only" && images.length === 0;
     return <article className={`dining-card${isWide ? " dining-card-wide" : ""}${imageOmitted ? " dining-card-no-image" : ""}`} key={item.id || item.title} data-edit-path={`dining.${itemIndex}`}>
-    {images.length > 0 ? <div className={`dining-image dining-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${item.id || item.title}-${imageIndex}`} src={image.src || image} alt={image.label || `${item.title}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`dining.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : !imageOmitted && <MissingImageState label="餐饮图片待补充" compact className="card-missing-image" data-edit-path={`dining.${itemIndex}`} data-edit-image="0" />}
+    {images.length > 0 ? <div className={`dining-image dining-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${item.id || item.title}-${imageIndex}`} src={image.src || image} crop={image.crop} alt={image.label || `${item.title}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`dining.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : !imageOmitted && <MissingImageState label="餐饮图片待补充" compact className="card-missing-image" data-edit-path={`dining.${itemIndex}`} data-edit-image="0" />}
     <div className="dining-copy"><small>{item.location}</small><h3>{item.title}</h3>{item.officialName && <p className="dining-official-name">{item.officialName}</p>}<p>{item.editorialCopy}</p></div>
   </article>;
   })}</div>{policy && <p className="feature-footnote">{policy}</p>}</section>;
@@ -215,10 +236,9 @@ function HotelsOverview({ hotels = [], days = [], destination = "", policy, titl
   return <section className="journey-feature-section hotels-section" data-edit-path="hotels"><SectionTitle en="SIGNATURE STAYS" zh={displayTitle} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`hotel-grid${isOdd ? " hotel-grid-odd" : ""}${hasFeatured ? " hotel-grid-featured" : ""}`}>{entries.map(({ item: hotel, originalIndex: hotelIndex, isFeatured }) => {
     const { rows: factRows, showLegacy } = hotelFactPresentation(hotel);
     const stayLine = deriveHotelStayLine(hotel, days, hotels, destination);
-    const [stayTiming, stayRoute] = stayLine.split("｜");
     return <article className={`hotel-card${isFeatured ? " hotel-card-wide" : ""}${hotel.images?.[0] ? "" : " hotel-card-no-image"}`} key={hotel.id || hotel.officialName} data-edit-path={`hotels.${hotelIndex}`}>
-    {hotel.images?.[0] ? <div className="hotel-image"><SafeImage src={hotel.images[0].src || hotel.images[0]} alt={hotel.shortName || hotel.officialName} fallbackLabel="酒店图片待补充" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" style={{ objectPosition: hotel.images[0].focus || "50% 50%" }} /></div> : <MissingImageState label="酒店图片待补充" compact className="card-missing-image" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" />}
-    <div className="hotel-copy">{stayLine && <div className="hotel-stay-line"><span className="hotel-stay-pill">{stayTiming}</span>{stayRoute && <span className="hotel-stay-route">｜{stayRoute}</span>}</div>}<h3>{hotel.shortName || hotel.officialName}</h3>{hotel.shortName && hotel.officialName && !sameTravelEntityName(hotel.shortName, hotel.officialName) && <p className="hotel-official-name">{hotel.officialName}</p>}
+    {hotel.images?.[0] ? <div className="hotel-image"><SafeImage src={hotel.images[0].src || hotel.images[0]} crop={hotel.images[0].crop} alt={hotel.shortName || hotel.officialName} fallbackLabel="酒店图片待补充" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" style={{ objectPosition: hotel.images[0].focus || "50% 50%" }} /></div> : <MissingImageState label="酒店图片待补充" compact className="card-missing-image" data-edit-path={`hotels.${hotelIndex}`} data-edit-image="0" />}
+    <div className="hotel-copy">{stayLine && <div className="hotel-stay-line"><span className="hotel-stay-pill">{stayLine}</span></div>}<h3>{hotel.shortName || hotel.officialName}</h3>{hotel.shortName && hotel.officialName && !sameTravelEntityName(hotel.shortName, hotel.officialName) && <p className="hotel-official-name">{hotel.officialName}</p>}
       {factRows.length > 0 && <ul className="hotel-fact-rows">{factRows.map((row) => <li key={row.key || row.label}><span className="hotel-fact-label">{row.label}</span><span className="hotel-fact-text">{row.text}</span></li>)}</ul>}
       {showLegacy && <>
         {hotel.editorialCopy && <p className="hotel-editorial">{hotel.editorialCopy}</p>}
@@ -237,7 +257,7 @@ function TransportOverview({ items = [], disclaimer, title = "全程交通", int
     const configurationLabels = transportConfigurationLabels(item);
     const imageOmitted = item.imageDisplay === "copy_only" && !item.images?.length;
     return <article className={`transport-card${isWide ? " transport-card-wide" : ""}${imageOmitted ? " transport-card-no-image" : ""}`} key={item.id || item.category} data-edit-path={`transport.${itemIndex}`}>
-    {item.images?.length > 0 ? <div className={`transport-image transport-image-count-${Math.min(item.images.length, 2)}`}>{item.images.slice(0, 2).map((image, imageIndex) => <SafeImage key={`${item.id}-${imageIndex}`} src={image.src || image} alt={`${item.category}${imageIndex ? "内部空间" : "出行场景"}`} data-edit-path={`transport.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : !imageOmitted && <MissingImageState label="交通图片待补充" compact className="card-missing-image" data-edit-path={`transport.${itemIndex}`} data-edit-image="0" />}
+    {item.images?.length > 0 ? <div className={`transport-image transport-image-count-${Math.min(item.images.length, 2)}`}>{item.images.slice(0, 2).map((image, imageIndex) => <SafeImage key={`${item.id}-${imageIndex}`} src={image.src || image} crop={image.crop} alt={`${item.category}${imageIndex ? "内部空间" : "出行场景"}`} data-edit-path={`transport.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : !imageOmitted && <MissingImageState label="交通图片待补充" compact className="card-missing-image" data-edit-path={`transport.${itemIndex}`} data-edit-image="0" />}
     <div className="transport-copy"><div className="transport-heading"><span className="transport-icon"><Icon name="vehicle" size={44} tone="light" /></span><div><small>{transportUsageLabel(item)}</small><h3>{transportProductName(item)}</h3></div></div>
       {configurationLabels.length > 0 && <div className="transport-specs">{configurationLabels.map((label) => <span key={label}>{label}</span>)}</div>}
       {item.editorialCopy && <p className="transport-editorial">{item.editorialCopy}</p>}
@@ -286,7 +306,7 @@ function SpotCard({ spot, dayIndex, spotIndex, spotId, slotId, imageIndexBase = 
   // DAY cards do not show status badges; keep the underlying business facts intact.
   const images = (spot.images?.length ? spot.images : spot.image ? [{ src: spot.image, focus: spot.focus, fit: spot.fit }] : []).filter((image) => typeof image === "string" ? Boolean(image) : Boolean(image?.src)).slice(0, 2);
   const identity = { "data-edit-path": `days.${dayIndex}.spots.${spotIndex}`, "data-edit-spot-id": spotId || undefined, "data-edit-slot-id": slotId || undefined };
-  return <article className="spot-card" {...identity}>{images.length > 0 ? <div className={`spot-image spot-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${spot.name}-${imageIndex}`} src={image.src || image} alt={image.label || `${spot.name}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} {...identity} data-edit-image={imageIndexBase + imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="体验图片待补充" compact className="card-missing-image" {...identity} data-edit-image={imageIndexBase} />}<div className="spot-copy"><h4>{spot.name}</h4><p>{spot.experience || spot.description}</p>{spot.reminder && <small>{spot.reminder}</small>}</div></article>;
+  return <article className="spot-card" {...identity}>{images.length > 0 ? <div className={`spot-image spot-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${spot.name}-${imageIndex}`} src={image.src || image} crop={image.crop} alt={image.label || `${spot.name}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} {...identity} data-edit-image={imageIndexBase + imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : <MissingImageState label="体验图片待补充" compact className="card-missing-image" {...identity} data-edit-image={imageIndexBase} />}<div className="spot-copy"><h4>{spot.name}</h4><p>{spot.experience || spot.description}</p>{spot.reminder && <small>{spot.reminder}</small>}</div></article>;
 }
 
 function SpotGallery({ spots = [], dayIndex }) {

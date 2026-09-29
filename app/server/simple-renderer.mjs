@@ -7,6 +7,7 @@ import { isUsableFinalImageSource, validateItineraryFacts } from "../src/lib/iti
 import { selectCustomerRenderData } from "./customer-render-data.mjs";
 import { MAX_CARD_IMAGE_UPSCALE } from "./image-download.mjs";
 import { FIXED_MODULE_NAMES, SIMPLE_PIPELINE_DEFAULT_ORIGIN, fixedModuleExpectations, validateApprovedPayment } from "./simple-fixed-modules.mjs";
+import { normalizeRenderIssues } from "./simple-render-issues.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const internalVisible = /图片未通过终审|审核分数|候选状态|来源账本|成本|利润|供应商底价|内部报价/i;
@@ -107,6 +108,8 @@ export async function runSimpleRenderer({ data, projectId, root = appRoot, origi
   issues.push(...reviewCardImageUpscales(layout, mode));
   issues.push(...reviewFixedModuleLayout(preflight.expectedFixedModules, layout).map((item) => draft ? { ...item, severity: "warning" } : item));
   for (const item of layout.largeGaps || []) issues.push({ severity: "warning", code: "large_gap", message: `检测到异常大空白 ${item.gap}px` });
-  const passed = existsSync(outputPath) && !issues.some((item) => item.severity === "blocker");
-  return { status: passed ? "success" : "blocked", mode: draft ? "draft" : "final", outputPath: passed ? outputPath : null, qa: { passed, issues, layout }, durationMs: Date.now() - startedAt, rendererCalls: 1 };
+  issues.push(...(layout.issues || []), ...(layout.imageQualityIssues || []), ...(layout.imageUpscaleIssues || []));
+  const normalizedIssues = normalizeRenderIssues(issues);
+  const passed = existsSync(outputPath) && !normalizedIssues.some((item) => item.severity === "blocker");
+  return { status: passed ? "success" : "blocked", mode: draft ? "draft" : "final", outputPath: passed ? outputPath : null, qa: { passed, issues: normalizedIssues, layout }, durationMs: Date.now() - startedAt, rendererCalls: 1 };
 }

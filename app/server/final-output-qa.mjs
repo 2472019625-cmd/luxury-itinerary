@@ -1,6 +1,7 @@
 import { isUsableFinalImageSource, validateItineraryFacts } from '../src/lib/itineraryRules.js';
 import { selectCustomerRenderData } from './customer-render-data.mjs';
 import { reviewCustomerContent } from './content-quality.mjs';
+import { normalizeRenderIssues } from './simple-render-issues.mjs';
 
 const INTERNAL_VISIBLE = /图片未通过终审|审核分数|候选状态|来源账本|经地点核验|原始资料照片|成本|利润|供应商底价|内部报价/i;
 
@@ -37,6 +38,7 @@ export function reviewFinalOutputData(data = {}, layout = null, options = {}) {
     (layout.brokenImages || []).forEach((item) => add('blocker', 'broken_image', `图片未能正常渲染：${item.src}`, item.selector));
     (layout.largeGaps || []).forEach((item) => add('warning', 'large_gap', `检测到异常大空白 ${item.gap}px`, item.after));
     if (!layout.footerPresent) add('blocker', 'footer_missing', '固定品牌页脚缺失');
+    normalizeRenderIssues([...(layout.issues || []), ...(layout.imageQualityIssues || []), ...(layout.imageUpscaleIssues || [])]).forEach((item) => add(item.severity || 'warning', item.code || 'layout_warning', item.message || item.reason || '检测到版面质量提示', item.path || item.selector || ''));
   }
   return { passed: !issues.some((item) => item.severity === 'blocker'), issues, checkedAt: new Date().toISOString() };
 }

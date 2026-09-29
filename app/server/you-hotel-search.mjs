@@ -49,10 +49,13 @@ export async function searchHotelHighlights({ researchRequest, apiKey = process.
   if (!clean(apiKey)) throw Object.assign(new Error("未配置 YDC_API_KEY，不能执行酒店搜索片段研究"), { code: "you_hotel_api_key_missing" });
   const entityName = clean(researchRequest?.entityName);
   if (!entityName) throw Object.assign(new Error("酒店正式名称不能为空"), { code: "hotel_entity_name_missing" });
+  const focusTerms = { location: "location setting", rooms: "rooms suites accommodation", design: "architecture interior design", facilities: "facilities amenities" };
+  const focus = [...new Set((researchRequest?.focusCategories || []).filter((key) => focusTerms[key]))];
+  const query = focus.length ? `${entityName} ${focus.map((key) => focusTerms[key]).join(" ")}` : entityName;
   const response = await fetchImpl(SEARCH_URL, {
     method: "POST",
     headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ query: entityName, count: 10, extraction: { extraction_mode: "highlights" } }),
+    body: JSON.stringify({ query, count: 10, extraction: { extraction_mode: "highlights" } }),
     signal,
   });
   if (!response.ok) throw Object.assign(new Error(`You.com 酒店搜索失败（HTTP ${response.status}）`), { code: "you_hotel_search_failed", status: response.status });
@@ -83,7 +86,7 @@ export async function searchHotelHighlights({ researchRequest, apiKey = process.
     entityName,
     status: snippets.length ? "success" : "not_found",
     provider: "you_web_search_highlights",
-    searchQuery: entityName,
+    searchQuery: query,
     searchResultCount: results.length,
     searchSnippets: snippets,
     verifiedFacts: [],

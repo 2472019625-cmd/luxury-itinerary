@@ -3,7 +3,8 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import sharp from "sharp";
-import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, researchSimpleImageSlot, saveSimpleDayEditor, uploadSimpleImage } from "../server/simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, researchSimpleImageSlot, saveSimpleDayEditor, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "../server/simple-manual-images.mjs";
+import { planHotelNightChange } from "../src/lib/hotelStayEditing.js";
 import { mergeManualImagePayload } from '../src/lib/manualImageState.js';
 import { buildLayoutImageSlots } from '../src/lib/imageSlots.js';
 import { createManualDayCard } from '../src/lib/dayEditorState.js';
@@ -253,7 +254,7 @@ test("人工确认可采用非硬拒绝的待判断候选，跨位移动并保�
   assert.deepEqual(saved.humanDecision.movedFrom, ['image:cover:primary']);
 });
 
-test("双列DAY接受850×550原件，移动成单列时拒绝且保持原选择", async (t) => {
+test("双列DAY接受850×550原件，人工确认后可移到单列并保留清晰度提示尺寸", async (t) => {
   const value = await fixture({ includeOptionalDay: true }); t.after(() => rm(value.root, { recursive: true, force: true }));
   const render = async ({ mode }) => ({ status: 'success', mode, outputPath: 'draft.png' });
   const large = await sharp({ create: { width: 1600, height: 900, channels: 3, background: '#446644' } }).jpeg().toBuffer();
@@ -269,17 +270,24 @@ test("双列DAY接受850×550原件，移动成单列时拒绝且保持原选择
   const primaryReview = selected.imageReview.slots.find((item) => item.slotId === 'image:day:1:primary');
   assert.equal(primaryReview.resolutionPolicy.minWidth, 575);
   assert.equal(primaryReview.resolutionPolicyByMovedSourceSlotId['image:day:1:supporting:1'].minWidth, 1181);
-  await assert.rejects(() => chooseSimpleImageCandidate({ ...value, slotId: 'image:day:1:primary', candidateId: candidate.candidateId, manualConfirmed: true, render }), (error) => error.code === 'image_resolution_insufficient' && error.actualWidth === 850 && error.minWidth === 1181);
+  assert.equal(primaryReview.resolutionPolicy.allowManualLowResolution, true);
+  await assert.rejects(() => chooseSimpleImageCandidate({ ...value, slotId: 'image:day:1:primary', candidateId: candidate.candidateId, render }), (error) => error.code === 'manual_confirmation_required');
+  await chooseSimpleImageCandidate({ ...value, slotId: 'image:day:1:primary', candidateId: candidate.candidateId, manualConfirmed: true, render });
   const after = value.store.getFinalResult(value.projectId, value.executionRunId);
-  assert.equal(after.imageExecution.results.find((item) => item.slotId === 'image:day:1:primary').selected.localUrl, selected.project.data.days[0].spots[0].images[0].src);
-  assert.equal(after.imageExecution.results.find((item) => item.slotId === 'image:day:1:supporting:1').selected.localUrl, candidate.localUrl);
+  assert.equal(after.imageExecution.results.find((item) => item.slotId === 'image:day:1:primary').selected.localUrl, candidate.localUrl);
+  assert.equal(after.imageExecution.results.find((item) => item.slotId === 'image:day:1:primary').selected.width, 850);
+  assert.equal(after.imageExecution.results.find((item) => item.slotId === 'image:day:1:supporting:1').selected, null);
 });
 
-test("单列DAY上传小图被拒绝，原项目图片不改变", async (t) => {
+test("单列DAY允许用户上传小图，但损坏图片仍被拒绝且不改变已保存图片", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
   const small = await sharp({ create: { width: 850, height: 550, channels: 3, background: '#665544' } }).jpeg().toBuffer();
-  await assert.rejects(() => uploadSimpleImage({ ...value, slotId: 'image:day:1:primary', dataUrl: `data:image/jpeg;base64,${small.toString('base64')}`, render: async () => assert.fail('尺寸拒绝后不可渲染') }), (error) => error.code === 'image_resolution_insufficient' && error.minWidth === 1181);
-  assert.deepEqual(value.store.getFinalResult(value.projectId, value.executionRunId).data.days[0].spots[0].images, []);
+  const uploaded = await uploadSimpleImage({ ...value, slotId: 'image:day:1:primary', dataUrl: `data:image/jpeg;base64,${small.toString('base64')}`, render: async ({ mode }) => ({ status: 'success', mode, outputPath: 'draft.png' }) });
+  assert.match(uploaded.project.data.days[0].spots[0].images[0].src, /^\/image-assets\//);
+  const before = value.store.getFinalResult(value.projectId, value.executionRunId);
+  assert.equal(before.imageExecution.results.find((item) => item.slotId === 'image:day:1:primary').selected.width, 850);
+  await assert.rejects(() => uploadSimpleImage({ ...value, slotId: 'image:day:1:primary', dataUrl: `data:image/jpeg;base64,${small.subarray(0, 200).toString('base64')}`, render: async () => assert.fail('损坏图片不可渲染') }));
+  assert.deepEqual(value.store.getFinalResult(value.projectId, value.executionRunId), before);
 });
 
 test("Step4 选择尚未下载原件的知识库 preview 时才下载 matched_file", async (t) => {
@@ -379,6 +387,95 @@ test("人工选择不能使用损坏文件且不修改项目", async (t) => {
   assert.equal(value.store.getFinalResult(value.projectId, value.executionRunId).imageExecution.results[0].selected, null);
 });
 
+test("待处理事项透传 Renderer 的具体阻断原因", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.unresolvedItems = [{ kind:"renderer", id:"renderer:2000", required:true, status:"blocked", error:{ code:"renderer_failed", message:"成品检查未通过：DAY 4 正文溢出", details:["DAY 4 正文溢出"] }, qa:{ issues:[{ severity:"blocker", code:"text_overflow", message:"DAY 4 正文溢出" }] } }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const payload = buildSimpleManualImagePayload(value.store, value.projectId);
+  const renderer = payload.blockingItems.find((item) => item.kind === "renderer");
+  assert.equal(renderer.label, "2000px 成品检查");
+  assert.match(renderer.message, /未通过原因：DAY 4 正文溢出/);
+});
+
+test("视觉卡文案失败标明 DAY 和图片主题，并指向对应体验卡片", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const existingPlan = value.store.getPlan(value.projectId, "plan-manual-images");
+  const slotId = "image:day:1:primary";
+  const targetId = `copy:visual:${slotId}`;
+  const targetPath = "simpleImageSlotBindings.image_day_1_primary";
+  value.store.activatePlan(value.projectId, {
+    ...existingPlan,
+    planId: "plan-visual-copy-location",
+    copyTasks: [{ targetId, targetPath, moduleType: "visual_card", layoutHints: { placement: "visual_card", slotId }, required: true }],
+    imageSlots: existingPlan.imageSlots.map((slot) => slot.slotId === slotId ? { ...slot, primaryVisualSubject: "花豹追踪" } : slot),
+  });
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.data.simpleImageSlotBindings = { ...existingPlan.slotBindings, [slotId]: { ...existingPlan.slotBindings[slotId], visualSubject: "花豹追踪" } };
+  result.unresolvedItems = [{ kind: "copy", id: targetId, required: true, status: "failed", error: { code: "copy_request_failed" } }];
+  result.copyExecution.results = [{ targetId, targetPath, status: "failed", error: { code: "copy_request_failed" } }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+
+  const payload = buildSimpleManualImagePayload(value.store, value.projectId);
+  assert.deepEqual(payload.blockingItems.map(({ id, slotId: itemSlotId, targetPath: path, label }) => ({ id, slotId: itemSlotId, targetPath: path, label })), [
+    { id: targetId, slotId, targetPath, label: "DAY 01 · 花豹追踪 · 体验卡片文案" },
+  ]);
+
+  const editedDay = structuredClone(result.data.days[0]);
+  editedDay.spots[0].description = "在向导带领下观察草原野生动物的真实活动。";
+  const afterEdit = await saveSimpleDayEditor({
+    ...value,
+    dayIndex: 0,
+    day: editedDay,
+    bindings: { [slotId]: result.data.simpleImageSlotBindings[slotId] },
+    render: async ({ mode }) => ({ status: "success", mode, outputPath: path.join(value.root, "draft-2000.png"), rendererCalls: 1 }),
+  });
+  assert.equal(afterEdit.blockingItems.some((item) => item.id === targetId), false);
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId);
+  assert.equal(saved.copyExecution.results.find((item) => item.targetId === targetId).resolution, "manual_editor");
+  assert.equal(saved.data.simpleImageSlotBindings[slotId].cardDescription, editedDay.spots[0].description);
+
+  saved.data.simpleImageSlotBindings[slotId].useSpotCopy = false;
+  saved.unresolvedItems.push({ kind: "copy", id: targetId, required: true, status: "failed" });
+  saved.copyExecution.results = [{ targetId, targetPath, status: "failed" }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, saved);
+  const independentCard = { ...saved.data.simpleImageSlotBindings[slotId], cardTitle: "花豹追踪", cardDescription: "跟随向导观察花豹，了解它在草原上的活动方式。" };
+  const afterIndependentEdit = await saveSimpleDayEditor({
+    ...value,
+    dayIndex: 0,
+    day: saved.data.days[0],
+    bindings: { [slotId]: independentCard },
+    render: async ({ mode }) => ({ status: "success", mode, outputPath: path.join(value.root, "draft-2000.png"), rendererCalls: 1 }),
+  });
+  assert.equal(afterIndependentEdit.blockingItems.some((item) => item.id === targetId), false);
+});
+
+test("旧项目即使只保存通用 Renderer 文案，也从 render QA 恢复具体原因", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.unresolvedItems = [{ kind:"renderer", id:"renderer:2000", required:true, status:"blocked", error:{ code:"renderer_failed", message:"正式成品版面检查未通过" } }];
+  result.render = { status:"success", mode:"draft", outputPath:"draft.png", finalAttempt:{ status:"blocked", qa:{ issues:[{ severity:"blocker", code:"image_upscale_excessive", message:"图片放大过多" }, { severity:"blocker", code:"footer_missing", message:"固定品牌页脚缺失" }] } } };
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const renderer = buildSimpleManualImagePayload(value.store, value.projectId).blockingItems.find((item) => item.kind === "renderer");
+  assert.match(renderer.message, /固定品牌页脚缺失/);
+  assert.doesNotMatch(renderer.message, /图片放大过多/);
+});
+
+test("旧项目只有清晰度历史阻断时按新规则直接解除", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.outputPath = path.join(value.root, "draft-2000.png");
+  result.renderStatus = "success";
+  result.unresolvedItems = [{ kind:"renderer", id:"renderer:2000", required:true, status:"blocked", error:{ code:"renderer_failed", message:"正式成品版面检查未通过" } }];
+  result.render = { status:"success", mode:"draft", outputPath:result.outputPath, finalAttempt:{ status:"blocked", qa:{ issues:[{ severity:"blocker", code:"image_upscale_excessive", message:"图片放大倍数 1.61，可能不够清晰" }] } } };
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const payload = buildSimpleManualImagePayload(value.store, value.projectId);
+  assert.equal(payload.blockingItems.length, 0);
+  assert.equal(payload.unresolvedRequiredCount, 0);
+  assert.equal(payload.canEnterFinal, true);
+  assert.ok(payload.outputUrl);
+});
+
 test("只有远程预览的人工候选会在确认时下载原图再替换", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
   const result = value.store.getFinalResult(value.projectId, value.executionRunId);
@@ -448,6 +545,61 @@ test("人工新增体验卡片先保存为空草稿，上传后才进入客户�
   const manualSpot = payload.project.data.days[0].spots.find((spot) => spot.id === "spot-manual");
   assert.match(manualSpot.images[0].src, /^\/image-assets\/simple-manual-/);
   assert.equal(payload.project.data.simpleImageSlotBindings[slotId].manualEditorCard, true);
+});
+
+test("每日编辑不能绕过酒店模块直接修改住宿", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId);
+  saved.data.hotels = [
+    { id: "hotel-a", officialName: "Hotel A", shortName: "甲酒店", nights: 1 },
+    { id: "hotel-b", officialName: "Hotel B", shortName: "乙酒店", nights: 0 },
+  ];
+  saved.data.days[0].hotel = "Hotel A";
+  saved.data.days[0].hotelShortName = "甲酒店";
+  saved.data.days[0].overnightType = "hotel";
+  value.store.saveFinalResult(value.projectId, value.executionRunId, saved);
+  const data = structuredClone(buildSimpleManualImagePayload(value.store, value.projectId).project.data);
+  const day = { ...data.days[0], hotel: "Hotel B", hotelOfficialName: "Hotel B", hotelShortName: "乙酒店" };
+  const bindings = Object.fromEntries(Object.entries(data.simpleImageSlotBindings || {}).filter(([, binding]) => binding.module === "day" && binding.dayIndex === 0));
+  await assert.rejects(saveSimpleDayEditor({ ...value, dayIndex: 0, day, bindings, render: async ({ mode }) => ({ status: "success", mode, outputPath: "stay-edit.png", rendererCalls: 1 }) }), { code: "hotel_stay_hotel_module_only" });
+});
+
+test("酒店所在地单独保存，不改动住宿晚数与每日路线", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId);
+  saved.data.hotels = [{ id: "hotel-a", officialName: "Hotel A", shortName: "甲酒店", region: "旧地区", nights: 2 }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, saved);
+  const previousRoute = structuredClone(saved.data.days[0].routeNodes);
+  const result = await saveSimpleHotelRegion({ ...value, hotelIndex: 0, hotelId: "hotel-a", region: "新地区", render: async ({ mode }) => ({ status: "success", mode, outputPath: "hotel-region.png", rendererCalls: 1 }) });
+  const after = value.store.getFinalResult(value.projectId, value.executionRunId).data;
+  assert.equal(result.region, "新地区");
+  assert.equal(after.hotels[0].region, "新地区");
+  assert.equal(after.hotels[0].nights, 2);
+  assert.deepEqual(after.days[0].routeNodes, previousRoute);
+});
+
+test("酒店模块调整晚数前核对版本，确认后一次保存受影响住宿日", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId);
+  saved.data.hotels = [
+    { id: "hotel-a", officialName: "Hotel A", shortName: "甲酒店", nights: 1 },
+    { id: "hotel-b", officialName: "Hotel B", shortName: "乙酒店", nights: 2 },
+  ];
+  saved.data.days = [
+    { ...saved.data.days[0], hotel: "Hotel A", hotelOfficialName: "Hotel A", hotelShortName: "甲酒店", overnightType: "hotel", description: "第一天文案" },
+    { ...saved.data.days[0], hotel: "Hotel B", hotelOfficialName: "Hotel B", hotelShortName: "乙酒店", overnightType: "hotel", description: "第二天文案" },
+    { ...saved.data.days[0], hotel: "Hotel B", hotelOfficialName: "Hotel B", hotelShortName: "乙酒店", overnightType: "hotel", description: "第三天文案" },
+  ];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, saved);
+  const plan = planHotelNightChange(saved.data, 0, 2);
+  assert.equal(plan.ok, true);
+  await assert.rejects(saveSimpleHotelStay({ ...value, hotelIndex: 0, hotelId: "hotel-a", desiredNights: 2, expectedSignature: "old", deferRender: true }), { code: "hotel_stay_changed" });
+  const result = await saveSimpleHotelStay({ ...value, hotelIndex: 0, hotelId: "hotel-a", desiredNights: 2, expectedSignature: plan.signature, deferRender: true });
+  const after = value.store.getFinalResult(value.projectId, value.executionRunId).data;
+  assert.deepEqual(result.changedDayIndexes, [1]);
+  assert.deepEqual(after.hotels.map((hotel) => hotel.nights), [2, 1]);
+  assert.equal(after.days[1].hotel, "Hotel A");
+  assert.equal(after.days[1].description, "第二天文案");
 });
 
 test("用户主动单槽重搜只调用一个 slot，automaticFollowupRounds 保持 0", async (t) => {

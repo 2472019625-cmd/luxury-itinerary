@@ -12,6 +12,9 @@ import { dayVisualCards } from "../src/lib/dayVisualCards.js";
 import { imageSearchPresentation } from "../src/lib/imageSearchPresentation.js";
 import { buildImageSearchDiagnostic } from "./image-search-diagnostics.mjs";
 import { imageTargetFingerprint, reconcileProvisionalImageSelections } from "./simple-image-allocation.mjs";
+import { buildRendererUnresolvedItem, normalizeRenderIssues, rendererQaIssues } from "./simple-render-issues.mjs";
+import { hotelStayDetails } from "../src/lib/hotelStayPresentation.js";
+import { applyHotelNightChange, planHotelNightChange } from "../src/lib/hotelStayEditing.js";
 
 const MIME_EXTENSIONS = Object.freeze({ "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" });
 const manualRenders = new Map();
@@ -110,7 +113,7 @@ function unresolvedNotices(items = []) {
     if (item.kind === "image") label = "图片待补充";
     else if (/^hotels\./.test(item.targetPath || "")) label = "酒店文案待处理";
     else if (/^transportSummary\./.test(item.targetPath || "")) label = "交通文案待处理";
-    else if (/^days\./.test(item.targetPath || "")) label = "每日行程文案待处理";
+    else if (/^days\./.test(item.targetPath || "") || (item.kind === "copy" && item.id?.startsWith("copy:visual:image:day:"))) label = "每日行程文案待处理";
     else if (item.kind === "copy") label = "其他文案待处理";
     const group = groups.get(label) || { label, count: 0, ids: [] };
     group.count += 1;
@@ -120,13 +123,24 @@ function unresolvedNotices(items = []) {
   return [...groups.values()].map((group) => ({ ...group, message: `${group.label} ${group.count} 项` }));
 }
 
-function copyLocation(targetPath = "", data = {}) {
+function copyLocation(targetPath = "", data = {}, slotId = "", plan = {}) {
+  if (slotId) {
+    const binding = data.simpleImageSlotBindings?.[slotId] || plan.slotBindings?.[slotId] || {};
+    const planned = (plan.imageSlots || []).find((slot) => slot.slotId === slotId) || {};
+    const dayNumber = Number(slotId.match(/^image:day:(\d+):/)?.[1]);
+    const dayIndex = Number.isInteger(binding.dayIndex) ? binding.dayIndex : dayNumber - 1;
+    if (Number.isInteger(dayIndex) && dayIndex >= 0) {
+      const spot = data.days?.[dayIndex]?.spots?.find((value) => value.id && value.id === binding.spotId) || data.days?.[dayIndex]?.spots?.[binding.spotIndex];
+      const subject = binding.visualSubject || planned.primaryVisualSubject || planned.subject || spot?.name || binding.cardTitle || "体验卡片";
+      return `DAY ${String(dayIndex + 1).padStart(2, "0")} · ${subject} · 体验卡片文案`;
+    }
+  }
   let match = targetPath.match(/^days\.(\d+)\.(theme|description|dayNotices\.0\.text)$/);
   if (match) return `DAY ${String(Number(match[1]) + 1).padStart(2, "0")} · ${{ theme: "每日主题", description: "今日行程", "dayNotices.0.text": "今日贴士" }[match[2]]}`;
   match = targetPath.match(/^days\.(\d+)\.spots\.(\d+)\.description$/);
   if (match) return `DAY ${String(Number(match[1]) + 1).padStart(2, "0")} · ${data.days?.[Number(match[1])]?.spots?.[Number(match[2])]?.name || `体验 ${Number(match[2]) + 1}`}`;
-  match = targetPath.match(/^hotels\.(\d+)\.(editorialCopy|proofPoints)$/);
-  if (match) return `${data.hotels?.[Number(match[1])]?.shortName || data.hotels?.[Number(match[1])]?.officialName || `酒店 ${Number(match[1]) + 1}`} · ${match[2] === "proofPoints" ? "酒店卖点" : "酒店介绍"}`;
+  match = targetPath.match(/^hotels\.(\d+)\.(editorialCopy|proofPoints|factRows)$/);
+  if (match) return `${data.hotels?.[Number(match[1])]?.shortName || data.hotels?.[Number(match[1])]?.officialName || `酒店 ${Number(match[1]) + 1}`} · ${{ proofPoints: "酒店卖点", factRows: "酒店事实", editorialCopy: "酒店介绍" }[match[2]]}`;
   match = targetPath.match(/^diningExperiences\.(\d+)\.editorialCopy$/);
   if (match) return `${data.diningExperiences?.[Number(match[1])]?.name || `特色餐饮 ${Number(match[1]) + 1}`} · 体验介绍`;
   match = targetPath.match(/^transportSummary\.(\d+)\.(usageLabel|editorialCopy|features)$/);
@@ -158,17 +172,30 @@ function imageLocation(item = {}, data = {}, plan = {}) {
   return planned.primaryVisualSubject || planned.subject || "行程图片";
 }
 
-function blockingItems(items = [], data = {}, plan = {}, reviews = []) {
+function blockingItems(items = [], data = {}, plan = {}, renderResult = {}, reviews = []) {
   return items.filter((item) => item.required).map((item) => {
-    if (item.kind === "copy") return { kind: "copy", id: item.id, targetPath: item.targetPath || "", label: copyLocation(item.targetPath, data), message: "这段文案尚未生成完成，可以只重新生成这一项。", action: "retry_copy" };
+    if (item.kind === "copy") {
+      const task = (plan.copyTasks || []).find((value) => value.targetId === item.id);
+      const targetPath = item.targetPath || task?.targetPath || "";
+      const slotId = task?.layoutHints?.slotId || (item.id.startsWith("copy:visual:") ? item.id.slice("copy:visual:".length) : "");
+      return { kind: "copy", id: item.id, targetPath, slotId, label: copyLocation(targetPath, data, slotId, plan), message: slotId ? "这张体验卡片的文案尚未生成完成，可查看对应卡片或单独重新生成。" : "这段文案尚未生成完成，可以只重新生成这一项。", action: "retry_copy" };
+    }
     if (item.kind === "image") {
       if (item.technicalStatus === "identity_evidence_pending_confirmation") return { kind: "image", id: item.id, slotId: item.id, label: imageLocation(item, data, plan), message: "图片已预填到草稿，具体实体身份尚未证实。请确认这张图，或为可选位置移除图片。", action: "handle_image" };
       const explanation = imageSearchPresentation(reviews.find(review => review.slotId === item.id));
       return { kind: "image", id: item.id, slotId: item.id, label: imageLocation(item, data, plan), message: `${explanation.title}。${explanation.detail}`, action: "handle_image" };
     }
-    if (item.kind === "renderer") return { kind: "renderer", id: item.id, label: "2000px 高清成品", message: "内容已经齐全，但最后排版检查尚未通过。", action: "retry_renderer" };
+    if (item.kind === "renderer") {
+      const messages = [...new Set(normalizeRenderIssues([...(item.error?.details || []), ...(item.qa?.issues || []), ...rendererQaIssues(renderResult)]).filter((issue) => issue.severity === "blocker").map((issue) => issue.message || issue.reason || issue.code).filter(Boolean))];
+      return { kind: "renderer", id: item.id, label: "2000px 成品检查", message: messages.length ? `未通过原因：${messages.join("；")}` : item.error?.message || "版面检查未返回具体原因，请重新检查。", details: messages, action: "retry_renderer" };
+    }
     return { kind: item.kind || "confirmation", id: item.id, targetPath: item.targetPath || "", label: "生成前确认信息", message: "这项客户信息需要先确认，不能由系统自动改写。", action: "review_facts" };
   });
+}
+
+function rendererItemIsOnlyClarityWarning(item = {}, renderResult = {}) {
+  const recorded = normalizeRenderIssues([...(item.error?.details || []), ...(item.qa?.issues || []), ...rendererQaIssues(renderResult)]);
+  return recorded.length > 0 && recorded.every((issue) => issue.severity !== "blocker");
 }
 
 function moduleName(slotId) {
@@ -306,10 +333,10 @@ export function buildSimpleManualImagePayload(store, projectId) {
       module: moduleName(slotId),
       label: binding?.cardTitle || planned?.primaryVisualSubject || planned?.subject || SLOT_LABELS[slotId] || slotId,
       primaryVisualSubject: planned?.primaryVisualSubject || planned?.subject || planned?.activity || "",
-      resolutionPolicy: targetResolutionPolicy(context, slotId),
+      resolutionPolicy: { ...targetResolutionPolicy(context, slotId), allowManualLowResolution: true },
       resolutionPolicyByMovedSourceSlotId: Object.fromEntries((result.imageExecution?.results || [])
         .filter((item) => item.slotId !== slotId && (item.selected?.localUrl || item.provisionalSelected?.localUrl))
-        .map((item) => [item.slotId, targetResolutionPolicy(context, slotId, [item.slotId])])),
+        .map((item) => [item.slotId, { ...targetResolutionPolicy(context, slotId, [item.slotId]), allowManualLowResolution: true }])),
       targetFingerprint,
       status: slotReviewStatus(imageResult, candidates),
       provisionalSelected: imageResult.provisionalSelected || null,
@@ -329,11 +356,12 @@ export function buildSimpleManualImagePayload(store, projectId) {
     const targetFingerprint = imageTargetFingerprint(plan.imageSlots.find((slot) => slot.slotId === imageResult.slotId));
     return visibleCandidatePool(imageResult).map((candidate) => frontendCandidate(candidate, imageResult.slotId, binding, candidateCanBeSelected(result, imageResult, candidate), targetFingerprint));
   }));
-  const unresolvedRequired = (result.unresolvedItems || []).filter((item) => item.required);
+  const unresolvedItems = (result.unresolvedItems || []).filter((item) => item.kind !== "renderer" || !rendererItemIsOnlyClarityWarning(item, result.render || {}));
+  const unresolvedRequired = unresolvedItems.filter((item) => item.required);
   const canEnterFinal = unresolvedRequired.length === 0 && Boolean(result.outputPath);
   const outputUrl = canEnterFinal ? `/api/simple/projects/${projectId}/output` : null;
-  const notices = unresolvedNotices(result.unresolvedItems || []);
-  const blockers = blockingItems(result.unresolvedItems || [], result.data || {}, plan, slots);
+  const notices = unresolvedNotices(unresolvedItems);
+  const blockers = blockingItems(unresolvedItems, result.data || {}, plan, result.render || {}, slots);
   const draftRendered = result.renderStatus === "success" && result.render?.mode === "draft";
   const reviewBySlotId = new Map(slots.map((slot) => [slot.slotId, slot]));
   const editorBindings = Object.fromEntries(Object.entries(result.data?.simpleImageSlotBindings || plan.slotBindings || {}).map(([slotId, binding]) => {
@@ -356,8 +384,8 @@ export function buildSimpleManualImagePayload(store, projectId) {
       status: project.status,
       currentStage: project.currentStage,
       progress: project.progress,
-      versions: outputUrl ? [{ id: `simple-${run.executionRunId}`, name: `${result.data?.title || "行程"} · 2000px 正式成品`, createdAt: Date.parse(result.completedAt || result.updatedAt || project.updatedAt || new Date().toISOString()), downloadUrl: outputUrl }] : [],
-      data: { ...result.data, imageCandidates, imageReview: { slots }, simpleImageSlotBindings: editorBindings, generationIssues: result.unresolvedItems || [], requiredImageGate: { unresolvedSlotIds: unresolvedRequired.filter((item) => item.kind === "image").map((item) => item.id), passed: unresolvedRequired.filter((item) => item.kind === "image").length === 0 } },
+      versions: outputUrl ? [{ id: `simple-${run.executionRunId}`, name: `${result.data?.title || "行程"} · 正式版本`, createdAt: Date.parse(result.completedAt || result.updatedAt || project.updatedAt || new Date().toISOString()), downloadUrl: outputUrl }] : [],
+      data: { ...result.data, imageCandidates, imageReview: { slots }, simpleImageSlotBindings: editorBindings, generationIssues: unresolvedItems, requiredImageGate: { unresolvedSlotIds: unresolvedRequired.filter((item) => item.kind === "image").map((item) => item.id), passed: unresolvedRequired.filter((item) => item.kind === "image").length === 0 } },
     },
     executionRunId: run.executionRunId,
     manualRevision: result.manualImageCompletion?.revision || null,
@@ -368,8 +396,8 @@ export function buildSimpleManualImagePayload(store, projectId) {
     outputUrl,
     unresolvedRequiredCount: unresolvedRequired.length,
     unresolvedRequiredSlotIds: unresolvedRequired.map((item) => item.id),
-    unresolvedCopyCount: (result.unresolvedItems || []).filter((item) => item.kind === "copy").length,
-    unresolvedImageCount: (result.unresolvedItems || []).filter((item) => item.kind === "image").length,
+    unresolvedCopyCount: unresolvedItems.filter((item) => item.kind === "copy").length,
+    unresolvedImageCount: unresolvedItems.filter((item) => item.kind === "image").length,
     unresolvedNotices: notices,
     blockingItems: blockers,
     draftRendered,
@@ -437,13 +465,13 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
   let renderResult = await safeRender({ data: writeback.data, projectId: project.projectId, root, mode: renderMode });
   if (renderMode === "final" && renderResult.status !== "success") {
     const finalAttempt = renderResult;
-    writeback.unresolvedItems.push({ kind: "renderer", id: "renderer:2000", status: finalAttempt.status || "failed", required: true, error: finalAttempt.error || { code: "renderer_failed", message: "正式成品版面检查未通过" } });
+    writeback.unresolvedItems.push(buildRendererUnresolvedItem(finalAttempt));
     renderResult = await safeRender({ data: writeback.data, projectId: project.projectId, root, mode: "draft" });
     renderResult = { ...renderResult, mode: "draft", rendererCalls: Number(finalAttempt.rendererCalls || 0) + Number(renderResult.rendererCalls || 0), finalAttempt };
   }
   renderResult.mode ||= renderMode;
   if (renderResult.status !== "success" && !writeback.unresolvedItems.some((item) => item.kind === "renderer")) {
-    writeback.unresolvedItems.push({ kind: "renderer", id: "renderer:2000", status: renderResult.status || "failed", required: true, error: renderResult.error || { code: "renderer_failed", message: "2000px Renderer 未通过" } });
+    writeback.unresolvedItems.push(buildRendererUnresolvedItem(renderResult, "2000px Renderer 未通过"));
   }
   const unresolvedRequired = writeback.unresolvedItems.filter((item) => item.required);
   const complete = renderResult.status === "success" && unresolvedRequired.length === 0;
@@ -628,7 +656,7 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
   if (current.provisionalSelected?.candidateId === candidateId && !manualConfirmed) throw Object.assign(new Error("预填图片须明确确认具体实体身份"), { code: "manual_confirmation_required" });
   const overridesAutomaticJudgment = source.slotId !== slotId || !candidateCanBeSelected(context.result, current, candidate);
   if (overridesAutomaticJudgment && !manualConfirmed) throw Object.assign(new Error("未确认图片风险，不能采用"), { code: "manual_confirmation_required" });
-  const resolutionPolicy = targetResolutionPolicy(context, slotId, source.slotId !== slotId && (source.selected?.candidateId === candidateId || source.provisionalSelected?.candidateId === candidateId) ? [source.slotId] : []);
+  const resolutionPolicy = manualConfirmed ? { minWidth: 1, minHeight: 1 } : targetResolutionPolicy(context, slotId, source.slotId !== slotId && (source.selected?.candidateId === candidateId || source.provisionalSelected?.candidateId === candidateId) ? [source.slotId] : []);
   let delayedOriginal = { attempts: 0, success: 0, saved: 0, durationMs: 0 };
   if (!candidate.localUrl?.startsWith("/image-assets/")) {
     try {
@@ -671,7 +699,8 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
     const metadata = await sharp(file, options).metadata();
     if (!['jpeg', 'png', 'webp'].includes(metadata.format)) throw new Error('invalid format');
     await sharp(file, options).raw().toBuffer();
-    assertTargetResolution(metadata.width || 0, metadata.height || 0, targetResolutionPolicy(context, slotId, imageResults.filter((item) => item.slotId !== slotId && (item.selected?.localUrl === candidate.localUrl || item.provisionalSelected?.localUrl === candidate.localUrl)).map((item) => item.slotId)));
+    if (!manualConfirmed) assertTargetResolution(metadata.width || 0, metadata.height || 0, targetResolutionPolicy(context, slotId, imageResults.filter((item) => item.slotId !== slotId && (item.selected?.localUrl === candidate.localUrl || item.provisionalSelected?.localUrl === candidate.localUrl)).map((item) => item.slotId)));
+    candidate = { ...candidate, width: metadata.width, height: metadata.height };
   } catch (error) {
     if (error?.code === "image_resolution_insufficient") throw error;
     throw Object.assign(new Error('图片文件缺失、损坏或无法安全解码，请重新上传'), { code: 'candidate_file_unusable' });
@@ -790,10 +819,33 @@ export async function saveSimpleDayEditor({ store, root, projectId, dayIndex, da
 
   const nextData = structuredClone(currentData);
   nextData.days[index] = { ...currentDay, ...day, spots };
+  const stayChanged = ["hotel", "hotelShortName", "hotelOfficialName", "overnightType"]
+    .some((key) => String(currentDay[key] ?? "") !== String(nextData.days[index][key] ?? ""));
+  if (stayChanged) throw Object.assign(new Error("请在酒店模块调整入住安排"), { code: "hotel_stay_hotel_module_only" });
   nextData.simpleImageSlotBindings = {
     ...Object.fromEntries(Object.entries(allCurrentBindings).filter(([, binding]) => !(binding.module === "day" && binding.dayIndex === index))),
     ...nextDayBindings,
   };
+  const manuallyResolvedCopy = [];
+  for (const item of context.result.unresolvedItems || []) {
+    if (item.kind !== "copy" || !item.id?.startsWith("copy:visual:")) continue;
+    const slotId = item.id.slice("copy:visual:".length);
+    const previousBinding = currentDayBindings[slotId];
+    const binding = nextDayBindings[slotId];
+    if (!previousBinding || !binding) continue;
+    const previousSpot = currentDay.spots?.find((spot) => spot.id && spot.id === previousBinding.spotId) || currentDay.spots?.[previousBinding.spotIndex];
+    const nextSpot = spots.find((spot) => spot.id && spot.id === binding.spotId) || spots[binding.spotIndex];
+    const useSpotCopy = binding.useSpotCopy !== false;
+    const previousTitle = useSpotCopy ? previousSpot?.name : previousBinding.cardTitle;
+    const previousDescription = useSpotCopy ? previousSpot?.experience || previousSpot?.description : previousBinding.cardDescription;
+    const title = String(useSpotCopy ? nextSpot?.name || "" : binding.cardTitle || "").trim();
+    const description = String(useSpotCopy ? nextSpot?.description || nextSpot?.experience || "" : binding.cardDescription || "").trim();
+    const changed = title !== String(previousTitle || "").trim() || description !== String(previousDescription || "").trim();
+    if (!changed || title.length < 2 || description.length < 12) continue;
+    binding.cardTitle = title;
+    binding.cardDescription = description;
+    manuallyResolvedCopy.push({ targetId: item.id, targetPath: item.targetPath, value: { cardTitle: title, cardDescription: description } });
+  }
   if (Array.isArray(included)) nextData.included = included;
   if (Array.isArray(excluded)) nextData.excluded = excluded;
   if (Array.isArray(pendingConfirmations)) nextData.pendingConfirmations = pendingConfirmations;
@@ -805,7 +857,63 @@ export async function saveSimpleDayEditor({ store, root, projectId, dayIndex, da
     if (!imageResults.some((item) => item.slotId === slotId)) imageResults.push({ slotId, status: "needs_user_action", selected: null, candidates: [], technicalStatus: "manual_card_waiting_upload", manualAction: { userRequiredActions: ["upload_real_image"] } });
   }
   const imageExecution = { ...context.result.imageExecution, results: imageResults };
-  return persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution, render, deferRender, action: { type: "editor_day_update", slotId: `editor:day:${index + 1}`, dayIndex: index } });
+  const resolvedById = new Map(manuallyResolvedCopy.map((item) => [item.targetId, item]));
+  const copyResults = (context.result.copyExecution?.results || []).map((item) => resolvedById.has(item.targetId) ? { ...item, ...resolvedById.get(item.targetId), status: "success", resolution: "manual_editor", error: null } : item);
+  const copyExecution = manuallyResolvedCopy.length ? {
+    ...context.result.copyExecution,
+    status: copyResults.every((item) => item.status === "success") ? "success" : copyResults.some((item) => item.status === "success") ? "partial_success" : context.result.copyExecution?.status,
+    results: copyResults,
+  } : context.result.copyExecution;
+  const unresolvedItems = (context.result.unresolvedItems || []).filter((item) => !resolvedById.has(item.id));
+  return persistResult({ ...context, result: { ...context.result, data: nextData, copyExecution, unresolvedItems }, store, root, imageExecution, render, deferRender, action: { type: "editor_day_update", slotId: `editor:day:${index + 1}`, dayIndex: index, resolvedCopyTargetIds: manuallyResolvedCopy.map((item) => item.targetId) } });
+}
+
+const HOTEL_FACT_LABELS = Object.freeze({ location: "位置", rooms: "客房", design: "设计", facilities: "设施" });
+
+export async function saveSimpleHotelStay({ store, root, projectId, hotelIndex, hotelId, desiredNights, expectedSignature, render, deferRender = true } = {}) {
+  const context = projectContext(store, projectId);
+  const hotel = context.result.data?.hotels?.[Number(hotelIndex)];
+  if (!hotel || String(hotel.id) !== String(hotelId)) throw Object.assign(new Error("酒店已变化，请重新选择"), { code: "hotel_changed" });
+  const plan = planHotelNightChange(context.result.data, hotelIndex, desiredNights);
+  if (!plan.ok) throw Object.assign(new Error(plan.reason), { code: "hotel_stay_invalid" });
+  if (plan.signature !== expectedSignature) throw Object.assign(new Error("住宿安排已变化，请重新预览"), { code: "hotel_stay_changed" });
+  const nextData = applyHotelNightChange(context.result.data, plan);
+  nextData.copyQuality = { ...(nextData.copyQuality || {}), passed: false, status: "needs_copy_revision", needsReview: true, blocked: false, checkedAt: null, manualEditPendingRecheck: true };
+  nextData.humanReview = { ...(nextData.humanReview || {}), exportWithCopyWarningsConfirmed: false };
+  const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_hotel_stay_update", hotelId, hotelIndex: plan.hotelIndex, desiredNights: plan.desiredNights, changedDayIndexes: plan.changedDayIndexes } });
+  return { manualRevision: payload.manualRevision, renderPending: payload.renderPending, changedDayIndexes: plan.changedDayIndexes };
+}
+
+export async function saveSimpleHotelRegion({ store, root, projectId, hotelIndex, hotelId, region, render, deferRender = true } = {}) {
+  const context = projectContext(store, projectId);
+  const index = Number(hotelIndex);
+  const hotel = context.result.data?.hotels?.[index];
+  if (!hotel || String(hotel.id) !== String(hotelId)) throw Object.assign(new Error("酒店已变化，请重新选择"), { code: "hotel_changed" });
+  const nextData = structuredClone(context.result.data);
+  nextData.hotels[index].region = String(region || "").trim().slice(0, 200);
+  const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_hotel_region_update", hotelId, hotelIndex: index } });
+  return { region: nextData.hotels[index].region, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
+}
+
+export async function saveSimpleHotelFactRow({ store, root, projectId, hotelIndex, hotelId, key, text, mode = "manual", expectedText, source, render, deferRender = true } = {}) {
+  const context = projectContext(store, projectId);
+  const index = Number(hotelIndex);
+  const hotel = context.result.data?.hotels?.[index];
+  if (!hotel || String(hotel.id) !== String(hotelId)) throw Object.assign(new Error("酒店已变化，请重新选择"), { code: "hotel_changed" });
+  if (!HOTEL_FACT_LABELS[key]) throw Object.assign(new Error("酒店信息字段无效"), { code: "hotel_fact_key_invalid" });
+  const current = (hotel.factRows || []).find((row) => row?.key === key);
+  const currentText = String(current?.text || "");
+  if (mode === "fill" && currentText.trim()) return { applied: false, row: current || null };
+  if (mode === "replace" && currentText !== String(expectedText ?? "")) throw Object.assign(new Error("这项文字已被修改，请重新查找后再替换"), { code: "hotel_fact_changed" });
+  if (!["manual", "fill", "replace"].includes(mode)) throw Object.assign(new Error("保存方式无效"), { code: "hotel_fact_mode_invalid" });
+  const value = String(text || "").trim().slice(0, 2000);
+  if (mode !== "manual" && (!value || !source?.sourceUrl)) throw Object.assign(new Error("没有可核验的候选文字"), { code: "hotel_fact_evidence_missing" });
+  const row = { key, label: HOTEL_FACT_LABELS[key], text: value, status: value ? "success" : "not_found", ...(mode === "manual" ? { confirmedByUser: true } : { sourceUrl: source.sourceUrl, sourceClass: source.sourceClass || "search_highlight", sourceExcerpt: source.sourceExcerpt || "", checkedAt: source.checkedAt || new Date().toISOString(), ...(mode === "replace" ? { confirmedByUser: true } : {}) }) };
+  const nextData = structuredClone(context.result.data);
+  const nextHotel = nextData.hotels[index];
+  nextHotel.factRows = [...(nextHotel.factRows || []).filter((item) => item?.key !== key), row];
+  const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_hotel_fact_update", hotelId, hotelIndex: index, key, mode } });
+  return { applied: true, row, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
 }
 
 export async function uploadSimpleImage({ store, root, projectId, slotId, dataUrl, fileName, render, deferRender = false } = {}) {
@@ -815,10 +923,11 @@ export async function uploadSimpleImage({ store, root, projectId, slotId, dataUr
   if (!match) throw Object.assign(new Error("仅支持 JPEG、PNG 或 WebP 图片"), { code: "upload_format_invalid" });
   const buffer = Buffer.from(match[2], "base64");
   if (!buffer.length || buffer.length > 14 * 1024 * 1024) throw Object.assign(new Error("图片文件为空或超过 14MB"), { code: "upload_size_invalid" });
-  const metadata = await sharp(buffer, { failOn: "warning" }).metadata();
+  const decodeOptions = { failOn: "warning", limitInputPixels: 40000000 };
+  const metadata = await sharp(buffer, decodeOptions).metadata();
   const contentType = metadata.format === "jpeg" ? "image/jpeg" : metadata.format === "png" ? "image/png" : metadata.format === "webp" ? "image/webp" : "";
   if (!MIME_EXTENSIONS[contentType]) throw Object.assign(new Error("图片无法解码或格式不受支持"), { code: "upload_decode_failed" });
-  assertTargetResolution(metadata.width || 0, metadata.height || 0, targetResolutionPolicy(context, slotId));
+  await sharp(buffer, decodeOptions).raw().toBuffer();
   const ratio = metadata.width / metadata.height;
   if (ratio < 0.65 || ratio > 3.2) throw Object.assign(new Error("图片比例不适合行程主图"), { code: "upload_ratio_invalid" });
   const sha256 = createHash("sha256").update(buffer).digest("hex");

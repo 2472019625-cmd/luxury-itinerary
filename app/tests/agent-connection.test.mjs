@@ -25,6 +25,18 @@ test('completed generation freezes elapsed time and removes stale active stages'
  assert.equal(state.completed,true);assert.equal(agentElapsed(s,Date.parse('2026-09-08T01:00:00Z')),180);
  assert.deepEqual(displayAgentStages([{state:'complete'},{state:'active'},{state:'pending'}],state).map(x=>x.state),['complete','complete','complete']);
 });
+test('rendered simple draft opens the editor despite catalog/runtime status wording differences',()=>{
+ const s={project:{flowKind:'simple_skill_v1',status:'partial',activeExecutionRunId:'run-1',createdAt:'2026-09-08T00:00:00Z',updatedAt:'2026-09-08T00:30:00Z'},executionRun:{executionRunId:'run-1',status:'partial',createdAt:'2026-09-08T00:01:00Z',updatedAt:'2026-09-08T00:12:00Z'},activeJob:{status:'awaiting_user_action',createdAt:'2026-09-08T00:01:00Z',updatedAt:'2026-09-08T00:10:00Z'},result:{data:{title:'draft'},outputPath:'draft-2000.png',render:{status:'success',mode:'draft',outputPath:'draft-2000.png'}}};
+ assert.equal(simpleRenderedEditorState(s),'draft');
+ assert.equal(agentDisplayState(s).draft,true);
+ assert.equal(agentDisplayState(s).failed,false);
+ assert.equal(agentElapsed(s,Date.parse('2026-09-08T01:00:00Z')),540);
+});
+test('a blocked final render without a rendered draft does not masquerade as editable',()=>{
+ const s={project:{flowKind:'simple_skill_v1',status:'partial',createdAt:'2026-09-08T00:00:00Z'},executionRun:{status:'partial'},activeJob:{status:'awaiting_user_action'},result:{data:{title:'draft'},outputPath:null,render:{status:'blocked',mode:'final',outputPath:null}}};
+ assert.equal(simpleRenderedEditorState(s),null);
+ assert.equal(agentDisplayState(s).failed,true);
+});
 test('invalid JSON and JSON errors cannot masquerade as snapshots',async()=>{
  await assert.rejects(readAgentSnapshot(Response.json({error:'failure'},{status:500})),/HTTP 500/);
  await assert.rejects(readAgentSnapshot(Response.json({})),/missing project status/);

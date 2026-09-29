@@ -18,6 +18,9 @@ test('candidate list prechecks known originals and leaves previews pending', () 
   assert.equal(candidateResolutionForTarget(original, paired).status, 'sufficient');
   assert.equal(candidateResolutionForTarget(original, single).status, 'insufficient');
   assert.equal(candidateResolutionAllowsManualChoice(original, single), false);
+  const manualPolicy = { ...single, allowManualLowResolution: true };
+  assert.equal(candidateResolutionAllowsManualChoice(original, manualPolicy), true);
+  assert.match(candidateResolutionForTarget(original, manualPolicy).label, /清晰度偏低，可确认使用/);
   assert.equal(candidateResolutionForTarget({ localPreviewUrl: '/image-assets/test/preview.jpg', width: 850, height: 550, originalDownloaded: false }, paired).status, 'pending');
   assert.equal(candidateResolutionAllowsManualChoice({ localPreviewUrl: '/image-assets/test/preview.jpg', width: 850, height: 550, originalDownloaded: false }, paired), true);
   assert.equal(candidateResolutionForTarget({ originalWidth: 850, originalHeight: 550, originalDownloaded: false }, paired).status, 'sufficient');

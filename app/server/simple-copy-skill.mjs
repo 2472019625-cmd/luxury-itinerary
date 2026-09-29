@@ -110,6 +110,28 @@ function clean(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+export function ensureCopyFeeDisclosures(value, task = {}) {
+  if (!["dining", "day"].includes(task.moduleType) || typeof value !== "string") return value;
+  const notices = (task.moduleType === "dining" ? [task.facts?.feeDisclosure] : task.facts?.feeDisclosures || [])
+    .map((notice) => clean(notice).replace(/[。；;]+$/, "")).filter(Boolean);
+  let text = clean(value);
+  const feeWords = /(?:收费|付费|另付|自费|费用不含|另计|加价|加收)/;
+  for (const notice of [...new Set(notices)]) {
+    const subject = notice.replace(/(?:额外收费|另行收费|单独收费|另行付费|另外付费|另付费|另付|自费|费用不含|费用另计|另计费|加价|加收费用).*$/, "").trim();
+    if (text.includes(notice) || (feeWords.test(text) && (!subject || (subject.length >= 2 && text.includes(subject))))) continue;
+    const suffix = `；${notice}。`;
+    const maxLength = Number.isInteger(task.outputSchema?.maxLength) ? task.outputSchema.maxLength : Infinity;
+    if (text.length + suffix.length <= maxLength) {
+      text = `${text.replace(/[。；;]+$/, "")}${suffix}`;
+      continue;
+    }
+    const available = Math.max(0, maxLength - suffix.length);
+    const body = text.slice(0, available).replace(/[，、；;。\s]+$/, "");
+    text = `${body}${suffix}`;
+  }
+  return text;
+}
+
 function researchFallbackPolicy(task = {}) {
   if (task.moduleType === "dining") return {
     label: "餐饮事实研究",
@@ -496,17 +518,19 @@ export async function runCopyWriterSkill({
       const researchPolicy = researchFallbackPolicy(task);
       researchResultById.set(task.targetId, { targetId: task.targetId, targetPath: task.targetPath, ...research });
       const hotelSearchSnippets = task.researchRequest.entityKind === "hotel" ? research.searchSnippets || [] : [];
-      const evidenceCount = (research.verifiedFacts?.length || 0) + hotelSearchSnippets.length;
+      const diningSearchSnippets = task.researchRequest.entityKind === "dining" ? research.searchSnippets || [] : [];
+      const evidenceCount = (research.verifiedFacts?.length || 0) + hotelSearchSnippets.length + diningSearchSnippets.length;
       const writerTask = {
         ...task,
         facts: {
           ...task.facts,
           verifiedFacts: research.verifiedFacts || [],
           ...(hotelSearchSnippets.length ? { hotelSearchSnippets } : {}),
+          ...(diningSearchSnippets.length ? { diningSearchSnippets } : {}),
           factsResearchOutcome: {
             status: research.status,
             verifiedFactCount: research.verifiedFacts?.length || 0,
-            searchSnippetCount: hotelSearchSnippets.length,
+            searchSnippetCount: hotelSearchSnippets.length + diningSearchSnippets.length,
             categoryOutcomes: research.categoryOutcomes || [],
             zeroFactBoundary: evidenceCount ? null : researchPolicy.zeroFactBoundary,
           },
@@ -572,7 +596,7 @@ export async function runCopyWriterSkill({
     try {
       const modelStartedAt = Date.now();
       const messages = [
-          { role: "system", content: `${skillPrompt}\n\n## Runtime response contract\n只处理输入 tasks，不新增、删除、重排或重新规划任务。只输出 JSON 对象：{"results":[{"targetId":"与输入一致","targetPath":"与输入一致","value":"严格符合该任务 outputSchema 的值","warnings":[]}]}；targetId 与 targetPath 必须和输入完全一致，一个任务无法完成时仍保留其他任务结果。\n酒店 task 的 hotelSearchSnippets 只属于标明的 entityName，每条有 sourceExcerpt 和 categoryKeys；酒店正文、卖点与四行共用这批片段。只可提取或忠实改写片段明确支持的公开一般属性，不能把不同来源拼成新事实。hotel_fact_rows 每个非空行必须填写准确 sourceUrl 和该来源片段中的逐字 sourceExcerpt，categoryKeys 只是类别提示；必须按片段实际语义判断归属。用户确认和 supplierHotelContext 与搜索片段冲突时以前者为准；公开客房选择不能写成本次已订房型，设施不能写成本次已含服务。不要从片段推断本次订单房型、包含项、价格或保证服务，不要把来源或审核措辞写入客户文案。酒店四行直接面向客户，不写“让客人”“适合客人”等内部讲解语气。其他模块仍只按原 verifiedFacts 与订单事实边界生成。\n固定钟点、保证性结果、明确人员资质等级、强制预约要求或期限、具体金额、订单包含或已预订状态，以及具体房型或车型履约，必须有当前 task 的订单事实或 verifiedFacts 支持。\n不得返回 Reviewer、finding、自动改写或 retry 决策。` },
+          { role: "system", content: `${skillPrompt}\n\n## Runtime response contract\n只处理输入 tasks，不新增、删除、重排或重新规划任务。只输出 JSON 对象：{"results":[{"targetId":"与输入一致","targetPath":"与输入一致","value":"严格符合该任务 outputSchema 的值","warnings":[]}]}；targetId 与 targetPath 必须和输入完全一致，一个任务无法完成时仍保留其他任务结果。\n酒店 task 的 hotelSearchSnippets 只属于标明的 entityName，每条有 sourceExcerpt 和 categoryKeys；酒店正文、卖点与四行共用这批片段。只可提取或忠实改写片段明确支持的公开一般属性，不能把不同来源拼成新事实。hotel_fact_rows 每个非空行必须填写准确 sourceUrl 和该来源片段中的逐字 sourceExcerpt，categoryKeys 只是类别提示；必须按片段实际语义判断归属。用户确认和 supplierHotelContext 与搜索片段冲突时以前者为准；公开客房选择不能写成本次已订房型，设施不能写成本次已含服务。不要从片段推断本次订单房型、包含项、价格或保证服务，不要把来源或审核措辞写入客户文案。酒店四行直接面向客户，不写“让客人”“适合客人”等内部讲解语气。餐饮 task 的 diningSearchSnippets 只用于当前明确实体的 focus 体验，最多选择两项有原文依据的形式或特色；不得借用其他餐厅或同酒店其他体验。片段来源 URL 与摘录保留在内部，不进入客户文案。原始资料的整项或局部另收费边界必须保留，不能从搜索片段推断本次价格、包含、另收费、预订或保证服务。除酒店与餐饮的限定片段外，其他模块仍只按原 verifiedFacts 与订单事实边界生成。\n固定钟点、保证性结果、明确人员资质等级、强制预约要求或期限、具体金额、订单包含或已预订状态，以及具体房型或车型履约，必须有当前 task 的订单事实或 verifiedFacts 支持。\n不得返回 Reviewer、finding、自动改写或 retry 决策。` },
           { role: "user", content: JSON.stringify({ itineraryContext, batchKind, tasks: batchTasks }) },
         ];
       await onWriterEvidence?.({ batchId, batchKind, phase: "request", messages: structuredClone(messages) });
@@ -613,6 +637,7 @@ export async function runCopyWriterSkill({
           continue;
         }
         const normalized = normalizeCopyValueForSchema(item.value, task.outputSchema);
+        normalized.value = ensureCopyFeeDisclosures(normalized.value, task);
         if (task.moduleType === "hotel_fact_rows" && task.facts.hotelSearchSnippets?.length) {
           normalized.value = normalizeHotelSnippetRows(normalized.value, task.facts.hotelSearchSnippets, task.researchRequest?.entityName);
           const supplierRows = buildHotelFactRows({}, task.facts);

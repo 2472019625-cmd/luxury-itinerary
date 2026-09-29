@@ -83,14 +83,14 @@ export function buildLayoutImageSlots(data = {}) {
 }
 
 export function getSlotImage(data, slot) {
-  if (slot.module === "cover") return data.heroImage ? { src: data.heroImage, focus: data.heroFocus || "50% 50%" } : null;
+  if (slot.module === "cover") return data.heroImage ? { src: data.heroImage, focus: data.heroFocus || "50% 50%", crop: data.heroCrop || null } : null;
   const collections = { hotel: data.hotels, dining: data.diningExperiences, transport: data.transportSummary };
   const item = slot.module === "day" ? dayBindingSpot(data, slot) : collections[slot.module]?.[slot.itemIndex];
   return imageArray(item)[slot.imageIndex] || null;
 }
 
 export function setSlotImage(data, slot, image) {
-  if (slot.module === "cover") { data.heroImage = image?.src || ""; data.heroFocus = image?.focus || "50% 50%"; return; }
+  if (slot.module === "cover") { data.heroImage = image?.src || ""; data.heroFocus = image?.focus || "50% 50%"; data.heroCrop = image?.crop || null; return; }
   const collections = { hotel: data.hotels, dining: data.diningExperiences, transport: data.transportSummary };
   const item = slot.module === "day" ? dayBindingSpot(data, slot) : collections[slot.module]?.[slot.itemIndex];
   if (!item) return;

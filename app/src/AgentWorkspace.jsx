@@ -24,6 +24,8 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   const [repairState, setRepairState] = useState({ busy:false, targetId:"", message:"" });
   const [screen, setScreen] = useState("editor");
   const daySaveTimer = useRef(null);
+  const hotelSaveTimers = useRef(new Map());
+  const hotelSaveInflight = useRef(new Map());
   const [user] = useState(() => {
     if (window.__sheyouServerUser) return window.__sheyouServerUser;
     const session = readStorage(AGENT_STORAGE.session, null);
@@ -35,6 +37,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   };
   useEffect(() => { load(); }, [projectId]);
   useEffect(() => () => clearTimeout(daySaveTimer.current), []);
+  useEffect(() => () => { hotelSaveTimers.current.forEach((entry) => clearTimeout(entry.timer)); hotelSaveTimers.current.clear(); }, []);
   useEffect(() => {
     if (!payload?.renderPending) return;
     let stopped = false;
@@ -135,6 +138,73 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     daySaveTimer.current = setTimeout(() => saveDayEditor(project, dayIndex).catch((failure) => setError(`体验卡片保存失败：${failure.message}`)), 500);
     return Promise.resolve(null);
   };
+  const mergeHotelRows = (current, hotelId, rows, metadata = {}) => {
+    if (!current?.project?.data?.hotels?.length) return current;
+    const hotels = current.project.data.hotels.map((hotel) => {
+      if (String(hotel.id) !== String(hotelId)) return hotel;
+      let factRows = [...(hotel.factRows || [])];
+      for (const row of rows) {
+        const old = factRows.find((item) => item.key === row.key);
+        if (metadata.onlyEmpty && String(old?.text || "").trim()) continue;
+        factRows = [...factRows.filter((item) => item.key !== row.key), row];
+      }
+      return { ...hotel, factRows };
+    });
+    return { ...current, manualRevision: metadata.manualRevision || current.manualRevision, renderPending: metadata.renderPending ?? current.renderPending, project: { ...current.project, data: { ...current.project.data, hotels } } };
+  };
+  const saveHotelFact = async ({ hotelId, hotelIndex, key, text, mode = "manual", expectedText, source }) => {
+    const next = await readJson(await fetch(`/api/simple/projects/${projectId}/hotel-facts/${hotelIndex}/${key}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ hotelId, text, mode, expectedText, source }), signal: AbortSignal.timeout(60000) }));
+    if (mode === "replace") setPayload((current) => mergeHotelRows(current, hotelId, [next.row], next));
+    else setPayload((current) => ({ ...current, manualRevision: next.manualRevision || current.manualRevision, renderPending: next.renderPending ?? current.renderPending }));
+    setError("");
+    return next;
+  };
+  const persistHotelFact = ({ hotelId, hotelIndex, key, text }) => {
+    const timerKey = `${hotelId}:${key}`;
+    clearTimeout(hotelSaveTimers.current.get(timerKey)?.timer);
+    const input = { hotelId, hotelIndex, key, text };
+    const timer = setTimeout(() => {
+      hotelSaveTimers.current.delete(timerKey);
+      const saving = saveHotelFact(input);
+      hotelSaveInflight.current.set(timerKey, saving);
+      saving.then(() => { if (hotelSaveInflight.current.get(timerKey) === saving) hotelSaveInflight.current.delete(timerKey); }, (failure) => { if (hotelSaveInflight.current.get(timerKey) === saving) hotelSaveInflight.current.delete(timerKey); setError(`酒店信息保存失败：${failure.message}`); });
+    }, 500);
+    hotelSaveTimers.current.set(timerKey, { timer, input });
+  };
+  const persistHotelRegion = ({ hotelId, hotelIndex, region }) => {
+    const timerKey = `${hotelId}:region`;
+    clearTimeout(hotelSaveTimers.current.get(timerKey)?.timer);
+    const timer = setTimeout(async () => {
+      hotelSaveTimers.current.delete(timerKey);
+      try {
+        const next = await readJson(await fetch(`/api/simple/projects/${projectId}/hotels/${hotelIndex}/region`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ hotelId, region }), signal: AbortSignal.timeout(60000) }));
+        setPayload((current) => ({ ...current, manualRevision: next.manualRevision || current.manualRevision, renderPending: next.renderPending ?? current.renderPending }));
+        setError("");
+      } catch (failure) { setError(`酒店所在地保存失败：${failure.message}`); }
+    }, 500);
+    hotelSaveTimers.current.set(timerKey, { timer });
+  };
+  const persistHotelStay = async ({ hotelId, hotelIndex, desiredNights, expectedSignature }) => {
+    const next = await readJson(await fetch(`/api/simple/projects/${projectId}/hotels/${hotelIndex}/stay`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ hotelId, desiredNights, expectedSignature }), signal: AbortSignal.timeout(60000) }));
+    setPayload((current) => ({ ...current, manualRevision: next.manualRevision || current.manualRevision, renderPending: next.renderPending ?? current.renderPending }));
+    setError("");
+    return next;
+  };
+  const flushHotelFact = async (hotelId, key) => {
+    const timerKey = `${hotelId}:${key}`;
+    if (hotelSaveInflight.current.has(timerKey)) await hotelSaveInflight.current.get(timerKey);
+    const pending = hotelSaveTimers.current.get(timerKey);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    hotelSaveTimers.current.delete(timerKey);
+    await saveHotelFact(pending.input);
+  };
+  const searchHotelFact = async (request) => {
+    await Promise.all((request.keys || []).map((key) => flushHotelFact(request.hotelId, key)));
+    const result = await readJson(await fetch(`/api/simple/projects/${projectId}/hotel-facts/${request.hotelIndex}/search`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request), signal: AbortSignal.timeout(240000) }));
+    if (result.appliedRows?.length) setPayload((current) => mergeHotelRows(current, request.hotelId, result.appliedRows, { ...result, onlyEmpty: true }));
+    return result;
+  };
   if (!payload) return <div className="agent-shell"><div className="agent-status"><span className="agent-spinner"/><b>{error || "正在读取当前项目"}</b></div></div>;
   const workspaceUser = user || { id:"project-designer", name:payload.project.data?.designer?.name || "定制师", profile:payload.project.data?.designer || {} };
   const headerProject = { ...payload.project, title:payload.project.title || payload.project.data?.title || "定制行程" };
@@ -149,6 +219,11 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     ItineraryComponent={ItineraryComponent}
     onProject={(project) => setPayload((current) => ({ ...current, project }))}
     onPersistDayEditor={persistDayEditor}
+    onPersistHotelFact={persistHotelFact}
+    onPersistHotelRegion={persistHotelRegion}
+    onPersistHotelStay={persistHotelStay}
+    onHotelFactSearch={searchHotelFact}
+    onReplaceHotelFact={async (value) => { await flushHotelFact(value.hotelId, value.key); return saveHotelFact({ ...value, mode: "replace" }); }}
     onChooseImage={choose}
     onRejectImage={reject}
     onUploadImage={uploadFromEditor}

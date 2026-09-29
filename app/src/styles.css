@@ -54,6 +54,17 @@ img { display: block; max-width: 100%; }
 .slogan-lockup span { flex: 0 0 auto; min-width: 700px; padding: 20px 54px 24px; text-align: center; color: var(--gold-deep); border: 2px solid rgba(178,139,51,.55); border-radius: 999px; background: #f7e7ce url('/assets/backgrounds/day-silk.png') center / cover; box-shadow: 0 7px 22px rgba(90,65,35,.08); font-family: "FangYa Song", "Source Han Serif CN", serif; font-size: 54px; line-height: 1.2; }
 .hero-frame { position: relative; width: 2000px; height: 2420px; overflow: hidden; border-top: 5px solid rgba(178,139,51,.62); border-bottom: 5px solid rgba(178,139,51,.34); }
 .hero-frame img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 50%; }
+.crop-slot-viewport { position: relative; display: block; width: 100%; overflow: hidden; }
+.hero-frame > .crop-slot-viewport { position: absolute; inset: 0; height: 100%; }
+.hotel-image > .crop-slot-viewport { height: 570px; }
+.hotel-card-wide .hotel-image > .crop-slot-viewport { height: 100%; min-height: 620px; }
+.dining-image > .crop-slot-viewport { height: 520px; }
+.dining-card-wide .dining-image > .crop-slot-viewport { height: 100%; min-height: 570px; }
+.transport-image > .crop-slot-viewport { height: 470px; }
+.transport-card-wide .transport-image > .crop-slot-viewport { height: 640px; }
+.spot-image > .crop-slot-viewport { aspect-ratio: 3 / 2; }
+.spot-count-1 .spot-image > .crop-slot-viewport { aspect-ratio: 16 / 9; }
+.spot-count-3 .spot-card:nth-child(3) .spot-image > .crop-slot-viewport { aspect-ratio: auto; height: 100%; min-height: 470px; }
 .cover-visual-adaptive .hero-frame img { position: absolute; inset: 0; }
 .missing-image-state { width: 100%; min-height: 280px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 36px; color: #8a765f; background: linear-gradient(145deg, rgba(255,253,248,.96), rgba(240,226,205,.78)); text-align: center; font-family: "Source Han Sans CN", sans-serif; font-size: 30px; line-height: 1.45; }
 .missing-image-state-compact { min-height: 150px; gap: 12px; padding: 24px; font-size: 24px; }
@@ -294,7 +305,6 @@ img { display: block; max-width: 100%; }
 .hotel-copy, .transport-copy { padding: 42px 48px 50px; }
 .hotel-stay-line { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; color: var(--gold-deep); font-family: "Source Han Sans CN", "Microsoft YaHei", sans-serif; font-size: 25px; font-weight: 600; line-height: 1.35; white-space: nowrap; }
 .hotel-stay-pill { display: inline-flex; align-items: center; min-height: 40px; padding: 2px 14px; border-radius: 999px; background: rgba(190, 143, 47, 0.11); }
-.hotel-stay-route { min-width: 0; }
 .hotel-copy h3, .transport-copy h3 { margin: 0; color: #3f3a35; font-family: "Source Han Serif CN", serif; font-size: 48px; font-weight: 700; line-height: 1.28; }
 .hotel-official-name { margin: 8px 0 0; color: var(--muted); font: 400 24px/1.45 Poppins, "Source Han Sans CN", sans-serif; }
 .hotel-fact-rows { display: grid; gap: 24px; margin: 30px 0 0; padding: 0; list-style: none; }
