@@ -4,6 +4,7 @@ import { applySlotRepairProposal, prepareFrozenSlotRepair, prepareSourceGrounded
 import { buildAgentFactBasis } from "../server/agent-trip-planner.mjs";
 import { plannerRequestJson } from "./helpers/simple-pipeline-fixture.mjs";
 import { SLOT_VISUAL_CONTRACT } from "../server/planner-visual-contract.mjs";
+import { prepareBoundSlotRepair, compileBoundSlotProposal, boundVisualSceneKey } from "../server/agent-slot-repair-bindings.mjs";
 
 const originalSlot = {
   role: "day:1", required: true, removable: false, primaryVisualSubject: "未定画面",
@@ -20,6 +21,20 @@ const replacement = {
   location: "草原", locationRole: "scope_only", queryCore: { subject: "象群", action: "行走", identity: "" },
   fidelityQuery: "草原象群行走", alternateQueries: ["大象群行走"], sourceRefs: ["days.0.experience"], exactIdentityRequired: false,
 };
+
+test("binding rejection ends the same repair request before Worker dispatch without transport retry", async () => {
+  let calls = 0;
+  const phases = [];
+  const result = await requestFrozenSlotRepair({ prepared,
+    requestJson: async () => { calls += 1; return { json: { patches: [] } }; },
+    transformProposal: () => { throw Object.assign(new Error("invalid binding"), { code: "slot_repair_binding_invalid" }); },
+    onPhase: (event) => phases.push(event.phase),
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.status, "validation_failed");
+  assert.equal(result.errorCode, "slot_repair_binding_invalid");
+  assert.equal(phases.includes("validation_queued"), false);
+});
 
 async function realValidationFixture(dayCount = 1) {
   const factBasis = buildAgentFactBasis({ destination: "测试草原", days: Array.from({ length: dayCount }, (_, index) => ({ region: "草原", description: index === 0 ? "草原飞机降落后观察象群" : "草原飞机起飞返程" })) });
@@ -106,6 +121,69 @@ test("full Planner validation still rejects a duplicate visual responsibility", 
   assert.equal(result.rejected[0].role, "day:1");
   assert.equal(result.rejected[0].code, "target_still_unresolved");
   assert.ok(result.rejected[0].issues.some((issue) => issue.code === "duplicate_visual_responsibility" && issue.conflictingRole === "cover"));
+});
+
+test("bound source selection builds evidence from full original leaves and retains all existing guards", async () => {
+  const { prepared: old, original } = await realValidationFixture();
+  const strict = prepareSourceGroundedSlotRepair({ rawPlan: old.rawPlan, project: old.project });
+  const bound = prepareBoundSlotRepair(strict);
+  const source = bound.bindingCatalog.find((item) => item.sourceRef === 'days.0.experience');
+  const select = (field) => original.queryCore[field] ? { sourceId: source.id, text: original.queryCore[field], english: { subject: 'bush plane landing', action: 'landing' }[field] } : null;
+  const proposal = { patches: [{ role: 'day:1', action: 'replace', reason: '当日明确飞机降落',
+    primaryVisualSubject: original.primaryVisualSubject, visualDuty: original.visualDuty, differentiation: original.differentiation,
+    location: original.location, locationRole: original.locationRole, exactIdentityRequired: original.exactIdentityRequired,
+    core: { subject: select('subject'), action: select('action'), identity: select('identity') },
+    queries: [original.fidelityQuery, ...original.alternateQueries],
+  }] };
+  assert.equal('previousRejectedTarget' in bound.requestInput.unresolved[0], false);
+  assert.equal('sourceFactsByRole' in bound.requestInput, false);
+  const compiled = compileBoundSlotProposal(bound, proposal);
+  assert.equal(compiled.patches[0].grounding.subject.quote, strict.project.factBasis.days[0].experience);
+  const accepted = applySlotRepairProposal(bound, compiled);
+  assert.equal(accepted.accepted, true);
+  assert.deepEqual(accepted.plan.factBasis, strict.project.factBasis);
+  assert.deepEqual(accepted.plan.imagePlan.slots.find((item) => item.role === 'cover'), strict.baseline.imagePlan.slots.find((item) => item.role === 'cover'));
+  for (const mutate of [
+    (p) => { p.patches[0].core.action.text = '被探照灯照亮'; },
+    (p) => { p.patches[0].core.subject.sourceId = 'days.0'; },
+    (p) => { p.patches[0].slot = { reason: '多余字段' }; },
+    (p) => { p.patches[0].core.subject.quote = '自写引文'; },
+    (p) => { p.patches[0].core.subject.text = ''; },
+  ]) {
+    const changed = structuredClone(proposal); mutate(changed);
+    assert.throws(() => compileBoundSlotProposal(bound, changed), { code: 'slot_repair_binding_invalid' });
+  }
+  const requiredOmit = compileBoundSlotProposal(bound, { patches: [{ role: 'day:1', action: 'omit', reason: '必需位不能删除' }] });
+  assert.equal(applySlotRepairProposal(bound, requiredOmit).rejected[0].code, 'required_or_nonremovable_omission');
+  const collision = structuredClone(proposal);
+  const cover = bound.baseline.imagePlan.slots.find((slot) => slot.role === 'cover');
+  cover.primaryVisualSubject = '营地花园餐桌旁，客人品尝现摘食材';
+  cover.queryCore = { subject: '花园餐桌与现摘食材', action: '客人品尝', identity: '' };
+  collision.patches[0].location = '莱基皮亚';
+  collision.patches[0].primaryVisualSubject = '莱基皮亚营地花园餐桌旁，客人品尝现摘食材';
+  assert.throws(() => compileBoundSlotProposal(bound, collision), { code: 'slot_repair_duplicate_scene' });
+});
+
+test('exact scene comparison preserves different entity identities and actual actions', () => {
+  const scene = { primaryVisualSubject: '保护区草原上，向导带领客人观察动物', location: '保护区', locationRole: 'scope_only', queryCore: { identity: '' } };
+  const normalized = { ...scene, primaryVisualSubject: '草原上，向导带领客人观察动物' };
+  assert.equal(boundVisualSceneKey(scene), boundVisualSceneKey(normalized));
+  assert.notEqual(boundVisualSceneKey(scene), boundVisualSceneKey({ ...normalized, primaryVisualSubject: '草原上，向导带领客人学习辨认足迹' }));
+  assert.notEqual(boundVisualSceneKey(scene), boundVisualSceneKey({ ...scene, queryCore: { identity: '另一处私人保护区' } }));
+});
+
+test("bound catalog retains negation and optional boundaries and rejects another role's source", () => {
+  const base = structuredClone(prepared);
+  base.groundingMode = 'source-quotes-v1';
+  base.targets = ['day:1', 'day:2'];
+  base.requestInput = { unresolved: base.targets.map((role) => ({ role, required: true, removable: false, issues: [] })),
+    sourceFactsByRole: { 'day:1': [{ ref: 'days.0', value: { experience: '可自费乘坐飞机，不含包机升级。' } }], 'day:2': [{ ref: 'days.1', value: { experience: '夜间追踪花豹。' } }] }, readOnlyVisualDuties: [] };
+  const bound = prepareBoundSlotRepair(base);
+  assert.equal(bound.bindingCatalog[0].text, '可自费乘坐飞机，不含包机升级。');
+  const patch = { role: 'day:1', action: 'replace', primaryVisualSubject: '花豹', visualDuty: '目标', differentiation: '不同画面',
+    location: '', locationRole: 'scope_only', exactIdentityRequired: false, reason: '不得跨日',
+    core: { subject: { sourceId: bound.bindingCatalog[1].id, text: '花豹', english: 'leopard' }, action: null, identity: null }, queries: ['花豹', 'leopard'] };
+  assert.throws(() => compileBoundSlotProposal(bound, { patches: [patch] }), { code: 'slot_repair_binding_invalid' });
 });
 
 test("hotel repair preserves locked identity without asking the model to rewrite it; explicit changes still fail", async () => {

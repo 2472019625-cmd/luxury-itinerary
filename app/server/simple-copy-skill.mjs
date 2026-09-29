@@ -280,7 +280,7 @@ const VISUAL_SUBJECT_CONCEPTS = Object.freeze([
 
 export function validateVisualCardSubjectRetention(value, task = {}) {
   if (task.moduleType !== "visual_card" || !value || typeof value !== "object") return [];
-  const subject = clean(task.facts?.titleCoreSubject || task.facts?.visualSubject);
+  const subject = visualCardSubject(task);
   const title = clean(value.cardTitle);
   if (!subject || !title) return [];
   const missingSubject = () => `Visual Card 标题“${title}”丢失了明确视觉主体“${subject}”，不能退化成泛化游猎或体验名称`;
@@ -297,24 +297,46 @@ export function validateVisualCardSubjectRetention(value, task = {}) {
   return [];
 }
 
-// Give the Writer the same source-derived anchors the existing title check
-// uses. This adds no facts and does not repair or relax rejected output.
+function visualCardSubject(task) {
+  return clean(task.visualDirection?.titleCoreSubject || task.visualDirection?.visualSubject
+    || task.facts?.titleCoreSubject || task.facts?.visualSubject);
+}
+
+function copyFactsWithoutVisualDirection(task) {
+  if (task.moduleType !== "visual_card") return task.facts || {};
+  const { visualSubject, titleCoreSubject, titleRetention, ...facts } = task.facts || {};
+  return facts;
+}
+
+// A planned scene is a composition constraint, not evidence for its contents.
+// Keep legacy saved tasks readable while separating these fields in the actual
+// Writer request and in commitment validation. Never change the Image input.
 export function withVisualCardTitleContract(task) {
   if (task.moduleType !== "visual_card") return task;
-  const subject = clean(task.facts?.titleCoreSubject || task.facts?.visualSubject);
+  const subject = visualCardSubject(task);
   const anchors = [...new Set(VISUAL_SUBJECT_CONCEPTS.flatMap((pattern) => subject.match(pattern)?.[0] || []))];
-  return { ...task, facts: { ...task.facts, titleRetention: {
-    subjectAnchors: anchors,
-    requiredEntityDisplayName: clean(task.facts?.entityDisplayName),
-    instruction: "以自然体验标题保留主题：subjectAnchors非空时至少原样保留其中一项；requiredEntityDisplayName非空时必须原样保留。锚点只说明当前画面主题，不新增当天事实或保证性承诺。其余标题文字可自然改写，不必复述构图。",
-  } } };
+  const { visualSubject, otherVisualSubjects, ...relevantContext } = task.relevantContext || {};
+  return { ...task, facts: copyFactsWithoutVisualDirection(task), relevantContext,
+    visualDirection: {
+      visualSubject: clean(task.visualDirection?.visualSubject || task.facts?.visualSubject || visualSubject || subject),
+      titleCoreSubject: subject,
+      otherVisualSubjects: task.visualDirection?.otherVisualSubjects || otherVisualSubjects || [],
+      evidenceRole: "composition_only_not_factual_evidence",
+      instruction: "这里只指定画面和标题主题，不证明实体历史、设施、人物关系或现场安排。画面中出现的客观细节须另由facts支持；不同安排之间的地点、先后和或选关系必须沿用原文，不得合并。",
+      titleRetention: {
+        subjectAnchors: anchors,
+        requiredEntityDisplayName: clean(task.facts?.entityDisplayName),
+        instruction: "以自然体验标题保留主题：subjectAnchors非空时至少原样保留其中一项；requiredEntityDisplayName非空时必须原样保留。锚点只说明当前画面主题，不新增当天事实或保证性承诺。其余标题文字可自然改写，不必复述构图。",
+      },
+    },
+  };
 }
 
 export function validateCopyCommitments(value, task = {}) {
   const output = task.moduleType === 'visual_card' && value && typeof value === 'object' ? copyText([value.cardTitle, value.cardDescription]) : copyText(value);
   if (!output) return [];
   const source = JSON.stringify({
-    facts: task.facts || {},
+    facts: copyFactsWithoutVisualDirection(task),
     factStatuses: task.factStatuses || {},
     verifiedFacts: task.verifiedFacts || task.facts?.verifiedFacts || [],
   });
@@ -608,7 +630,12 @@ export async function runCopyWriterSkill({
         model,
         messages,
         reasoningEffort,
-        maxTokens: Math.min(20_000, Math.max(4_000, batchTasks.length * 1_200)),
+        // Sourced hotel rows already have a bounded evidence set. Request the
+        // structured answer directly so hidden reasoning cannot consume it all.
+        thinkingType: batchTasks.some((task) => task.moduleType === "hotel_fact_rows") ? "disabled" : undefined,
+        // A hotel target returns four sourced rows, not one prose field.
+        // Keep the existing batch ceiling while budgeting for the actual rows.
+        maxTokens: Math.min(20_000, Math.max(4_000, batchTasks.reduce((units, task) => units + (task.moduleType === "hotel_fact_rows" ? HOTEL_FACT_ROW_DEFINITIONS.length : 1), 0) * 1_200)),
         emptyContentRetries: 1,
         signal,
         onStatus,

@@ -316,7 +316,7 @@ export function validateSlotRepairInWorker(prepared, proposal, signal, onProgres
   });
 }
 
-export async function requestFrozenSlotRepair({ prepared, apiKey, baseUrl, model, signal, requestJson = requestDeepSeekJson, fetchImpl = fetch, onModelAttempt, onPhase, deadlineMs = MAX_DURATION_MS } = {}) {
+export async function requestFrozenSlotRepair({ prepared, apiKey, baseUrl, model, signal, requestJson = requestDeepSeekJson, fetchImpl = fetch, onModelAttempt, onPhase, transformProposal = (proposal) => proposal, deadlineMs = MAX_DURATION_MS } = {}) {
   if (signal?.aborted) throw signal.reason || new DOMException("Cancelled", "AbortError");
   const effectiveDeadlineMs = Math.min(MAX_DURATION_MS, Math.max(1, deadlineMs));
   const started = Date.now();
@@ -345,6 +345,7 @@ export async function requestFrozenSlotRepair({ prepared, apiKey, baseUrl, model
       { role: "system", content: `你只修补一次完整行程Planner中的未决图片位。严格按输入契约返回JSON对象，只含patches。不要修改任何非目标role或事实。每个画面单一Core，所有Query与Core一致，来源必须支持，不能复制已通过画面。仅required=false且removable=true的位可基于事实说明理由省略。\n\n${SLOT_VISUAL_CONTRACT}\n\n${prepared.requestInput.groundingContract?.instruction || ""}\n\n逐位读取issues中的具体原因，完成后在本次响应内检查每个patch是否消除了这些原因；不能返回仍包含原错误的提案。reason要指出本位sourceRefs中支持所选画面的事实；引用路径存在不等于该事实存在。` },
       { role: "user", content: JSON.stringify(prepared.requestInput) },
     ];
+    if (prepared.requestFormat === "source-bindings-v2") messages[0].content += "\n本次输出格式仅服从输入contract中的source-bindings-v2。上文queryCore/sourceRefs是语义要求，不是本次输出字段；由程序根据core原文选择构建。只输出扁平patch，不输出slot、grounding或sourceRefs。";
     const modelPromise = requestJson({ apiKey, baseUrl, model, messages, reasoningEffort: "medium", thinkingType: "disabled", maxTokens: 9000,
       timeoutMs: effectiveDeadlineMs, emptyContentRetries: 0, allowSyntaxRepair: false, signal: controller.signal,
       fetchImpl: async (...args) => {
@@ -378,8 +379,9 @@ export async function requestFrozenSlotRepair({ prepared, apiKey, baseUrl, model
     if (timedOut || Date.now() - started > effectiveDeadlineMs) return { status: "timeout", ...diagnostics(), rawContent };
     if (signal?.aborted) throw signal.reason || new DOMException("Cancelled", "AbortError");
     stage = "local_validation";
+    const proposal = transformProposal(response.json);
     recordPhase("validation_queued");
-    const result = await validateSlotRepairInWorker(prepared, response.json, controller.signal, ({ phase }) => recordPhase(phase));
+    const result = await validateSlotRepairInWorker(prepared, proposal, controller.signal, ({ phase }) => recordPhase(phase));
     recordPhase("validation_finished", { ...result.diagnostics, workerExitConfirmed: result.workerExitConfirmed, workerExitCode: result.workerExitCode });
     if (timedOut || Date.now() - started > effectiveDeadlineMs) return { status: "timeout", ...diagnostics(), rawContent };
     if (signal?.aborted) throw signal.reason || new DOMException("Cancelled", "AbortError");
@@ -393,7 +395,7 @@ export async function requestFrozenSlotRepair({ prepared, apiKey, baseUrl, model
     const status = error?.code === "repair_evidence_failed" ? "evidence_failed"
       : timedOut || error?.code === "model_timeout" ? "timeout"
       : error?.code === "planner_json_invalid" ? "parse_failed"
-        : /^validation_worker_/.test(error?.code || "") ? "validation_failed" : "transport_failed";
+        : /^(?:validation_worker_|slot_repair_binding_invalid|slot_repair_duplicate_scene)/.test(error?.code || "") ? "validation_failed" : "transport_failed";
     return { status, ...diagnostics(), rawContent,
       errorCode: timedOut ? "repair_timeout" : error?.code || error?.name || "request_failed",
       ...(error?.workerTerminationConfirmed ? { workerTerminationConfirmed: true, workerTerminationExitCode: error.workerTerminationExitCode } : {}) };

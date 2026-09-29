@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { prepareSourceGroundedSlotRepair, requestFrozenSlotRepair } from "../server/agent-slot-repair.mjs";
+import { prepareBoundSlotRepair, compileBoundSlotProposal } from "../server/agent-slot-repair-bindings.mjs";
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -62,7 +63,10 @@ try {
   const expectedRoles = (simplePlan.imageSlots || []).filter((slot) => slot.plannerSlotStatus === "unresolved")
     .map(roleFromSimpleSlot);
   if (expectedRoles.some((role) => !role) || new Set(expectedRoles).size !== expectedRoles.length) throw new Error("frozen_roles_unmapped");
-  const prepared = prepareSourceGroundedSlotRepair({ rawPlan, project, expectedRoles });
+  const grounded = prepareSourceGroundedSlotRepair({ rawPlan, project, expectedRoles });
+  const bound = argument("--contract") === "source-bindings-v2";
+  const prepared = bound ? prepareBoundSlotRepair(grounded) : grounded;
+  summary.requestFormat = prepared.requestFormat || prepared.groundingMode;
   summary.groundingMode = prepared.groundingMode;
   summary.preparationMs = performance.now() - started;
   recordPhase({ phase: "preparation_finished", stage: "preparation", physicalRequests: 0, durationMs: 0, preparationMs: summary.preparationMs, targetCount: prepared.targets.length });
@@ -75,6 +79,7 @@ try {
   if (!process.env.TEXT_MODEL_API_KEY || !process.env.TEXT_MODEL_BASE_URL || !process.env.TEXT_MODEL_NAME) throw new Error("model_config_missing");
   const response = await requestFrozenSlotRepair({ prepared, signal: cancellation.signal, onPhase: recordPhase, apiKey: process.env.TEXT_MODEL_API_KEY,
     baseUrl: process.env.TEXT_MODEL_BASE_URL, model: process.env.TEXT_MODEL_NAME,
+    transformProposal: bound ? (proposal) => compileBoundSlotProposal(prepared, proposal) : undefined,
     onModelAttempt: async (event) => {
       if (event.rawContent) {
         await writeFile(path.join(outputRoot, "model-raw.txt"), event.rawContent, { flag: "wx" });

@@ -125,13 +125,40 @@ test("Visual Card Writer receives existing validation anchors in the same reques
   const result = await runCopyWriterSkill({ tasks, requestJson: async ({ messages }) => {
     calls += 1;
     const received = JSON.parse(messages.at(-1).content).tasks;
-    received.forEach((item, index) => assert.deepEqual(item.facts.titleRetention.subjectAnchors, [samples[index][3]]));
+    received.forEach((item, index) => assert.deepEqual(item.visualDirection.titleRetention.subjectAnchors, [samples[index][3]]));
     return { json: { results: received.map((item, index) => ({ targetId: item.targetId, targetPath: item.targetPath, value: { cardTitle: samples[index][2], cardDescription: "按当天已确认安排展开体验。" } })) } };
   } });
   assert.equal(calls, 1);
   assert.equal(result.results.every((item) => item.status === "success"), true);
   assert.equal(result.metrics.automaticBusinessRetryRounds, 0);
   assert.equal(tasks[0].facts.titleRetention, undefined);
+});
+
+test("visual composition cannot supply commitment evidence and is separate from actual Writer facts", async () => {
+  const input = { ...task("visual-boundary", "simpleImageSlotBindings.visual_boundary", "visual_card"),
+    facts: { visualSubject: "保证看到大象的游猎画面", daySourceFacts: "参加游猎，有机会观察动物。", status: "included" },
+    relevantContext: { dayRole: "观察草原", visualSubject: "保证看到大象的游猎画面", otherVisualSubjects: ["落日酒会"] },
+    outputSchema: { type: "object", required: ["cardTitle", "cardDescription"] },
+  };
+  const before = structuredClone(input);
+  const unsafe = { cardTitle: "游猎寻找大象", cardDescription: "参加游猎，保证看到大象。" };
+  assert.ok(validateCopyCommitments(unsafe, input).some((error) => error.includes("保证性结果")));
+  let calls = 0;
+  const result = await runCopyWriterSkill({ tasks: [input], requestJson: async ({ messages }) => {
+    calls += 1;
+    const received = JSON.parse(messages.at(-1).content).tasks[0];
+    assert.equal(received.facts.daySourceFacts, before.facts.daySourceFacts);
+    assert.equal(received.facts.status, "included");
+    assert.equal(received.facts.visualSubject, undefined);
+    assert.equal(received.facts.titleRetention, undefined);
+    assert.equal(received.relevantContext.visualSubject, undefined);
+    assert.equal(received.visualDirection.visualSubject, before.facts.visualSubject);
+    assert.deepEqual(received.visualDirection.otherVisualSubjects, ["落日酒会"]);
+    return { json: { results: [{ targetId: received.targetId, targetPath: received.targetPath, value: unsafe }] } };
+  } });
+  assert.equal(calls, 1);
+  assert.equal(result.results[0].error.code, "unsupported_copy_commitment");
+  assert.deepEqual(input, before);
 });
 
 test("Copy 按全局、DAY、notes形成三个物理批次并按 targetId 隔离结构失败", async () => {
@@ -415,6 +442,29 @@ test("buildHotelFactRows 固定顺序保存核验事实与缺失状态", () => {
   assert.equal(rows[1].status, "source_unavailable");
   assert.equal(rows[3].text, "设有室内泳池。");
   assert.equal(rows[3].sourceUrl, "https://example.com");
+});
+
+test("four hotel targets budget for sixteen sourced rows within the existing batch ceiling", async () => {
+  const hotelTasks = Array.from({ length: 4 }, (_, index) => ({ ...task(`hotel-${index}`, `hotels.${index}.factRows`, 'hotel_fact_rows'),
+    researchRequest: { researchType: 'official_entity_facts', entityKind: 'hotel', entityName: `Example Hotel ${index}`, categories: ['位置', '客房', '设计', '设施'] },
+    outputSchema: { type: 'array', minItems: 4, maxItems: 4, items: { type: 'object' } },
+  }));
+  let calls = 0;
+  const result = await runCopyWriterSkill({ tasks: hotelTasks,
+    researchFacts: async ({ researchRequest }) => ({ status: 'success', entityName: researchRequest.entityName, verifiedFacts: [], searchSnippets: [{ sourceUrl: 'https://example.com/hotel', sourceExcerpt: 'A hotel with rooms and gardens.', checkedAt: '2026-09-29' }] }),
+    requestJson: async ({ messages, maxTokens, reasoningEffort, thinkingType }) => {
+      calls++;
+      const input = JSON.parse(messages.at(-1).content);
+      assert.equal(input.tasks.length, 4);
+      assert.equal(maxTokens, 19200);
+      assert.equal(reasoningEffort, 'medium');
+      assert.equal(thinkingType, 'disabled');
+      return { json: { results: input.tasks.map((item) => ({ targetId: item.targetId, targetPath: item.targetPath,
+        value: ['位置', '客房', '设计', '设施'].map((label, index) => ({ key: ['location', 'rooms', 'design', 'facilities'][index], label, text: '', status: 'not_found' })) })) } };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.ok(result.results.every((item) => item.status === 'success'));
 });
 
 test("酒店级原始供应商证据进入四类事实，泛国家、DAY 住宿名与已订房型不冒充公开事实", () => {
