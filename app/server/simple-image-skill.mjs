@@ -96,6 +96,9 @@ function positiveVisualContext(value) {
   if (!value || typeof value !== "object") return [];
   return Object.entries(value)
     .filter(([key]) => !/avoid|forbid|exclude|不得|避免/i.test(key))
+    // Whole-day facts remain available to planning/search, not to the visual
+    // judge: other activities and hotels cannot become this photo's target.
+    .filter(([key]) => !["allActivities", "daySourceFacts", "sourceExperience", "adjacentVisualResponsibilities", "routeNodes", "scopeFallbackLocations", "experienceStatus", "statusLabel", "feeBoundary"].includes(key))
     .flatMap(([, item]) => Array.isArray(item) ? item : [item])
     .flatMap((item) => typeof item === "string" ? [item] : item && typeof item === "object" ? Object.values(item).filter((entry) => typeof entry === "string") : [])
     .map((item) => item.trim())

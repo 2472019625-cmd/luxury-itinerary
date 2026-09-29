@@ -40,6 +40,9 @@ async function audit(candidates, judgments, slot = identitySlot) {
   let calls = 0;
   const results = await judgeCandidatesBatch({
     slot, candidates, apiKey: "fixture", baseUrl: "https://vision.invalid", model: "fixture",
+    // These fixtures exercise first-response normalization. Bounded repair is
+    // covered separately with distinct initial and supplemental responses.
+    allowContractRepair: false,
     fetchImpl: async (_url, options) => {
       calls += 1;
       request = JSON.parse(options.body);
@@ -49,6 +52,83 @@ async function audit(candidates, judgments, slot = identitySlot) {
   assert.equal(calls, 1, "source evidence and visual judgment share one request");
   return { results, request };
 }
+
+test("DAY审核只接收当前图片的Core与偏好，不混入整天酒店和相邻活动", async (t) => {
+  const { candidate } = await fixtures(t);
+  const target = { moduleType: "day", subject: "象群与雪山", exactIdentityRequired: true,
+    queryCore: { subject: "elephants", action: "walking", identity: "Mount Kilimanjaro" },
+    visualGoal: "象群在雪山下漫步", location: "Amboseli", locationRole: "visual_identity",
+    visualContext: { dayRole: "抵达", daySourceFacts: "入住 Azure Pavilion 酒店", allActivities: [{ description: "Azure Pavilion 私人泳池" }],
+      sourceExperience: "Azure Pavilion 入住", adjacentVisualResponsibilities: ["博物馆历史展览"], avoid: ["同一机位"] } };
+  const constraints = buildImageConstraints(target);
+  assert.doesNotMatch(constraints.prefer.join(" "), /Azure Pavilion|博物馆历史/);
+  const { request } = await audit([candidate], [judgment(candidate.candidateId)], {
+    ...target, ...constraints, context: "入住 Azure Pavilion，次日游览博物馆",
+  });
+  const prompt = request.messages[0].content.find(item => item.type === "text").text;
+  assert.doesNotMatch(prompt, /Azure Pavilion/);
+  assert.match(prompt, /Mount Kilimanjaro/);
+  assert.match(prompt, /同一机位/);
+});
+
+test("错误身份引文仅补核一次，其他候选和有效硬判定不变", async (t) => {
+  const { candidate } = await fixtures(t);
+  const target = { ...identitySlot, module: "day", queryCore: { identity: "Giraffe Centre" }, minimumVisualProof: { subject: "giraffe", action: "feeding", identityRequirement: "Giraffe Centre" } };
+  const photo = { ...candidate, alt: "Visitors feeding giraffes", caption: "Feeding at Giraffe Centre, Nairobi." };
+  const invalid = { status: "supported", basis: "photo_local", evidenceIds: ["alt"], quote: photo.alt, explanation: "claimed identity" };
+  for (const mode of ["repaired", "still-invalid", "failed", "disabled", "no-anchor", "hard-conflict"]) {
+    let calls = 0;
+    const image = mode === "no-anchor" ? { ...photo, caption: "Visitors with animals" } : photo;
+    const original = judgment(image.candidateId, { identityEvidence: invalid,
+      ...(mode === "hard-conflict" ? { coreActionMatch: false, hardRejectCode: "wrong_activity", eligible: false } : {}) });
+    const results = await judgeCandidatesBatch({ slot: target, candidates: [image, { ...candidate, candidateId: "peer" }],
+      apiKey: "fixture", baseUrl: "https://vision.invalid", model: "fixture", allowContractRepair: mode !== "disabled",
+      fetchImpl: async (_url, options) => {
+        calls += 1;
+        if (calls === 1) return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ judgments: [original, judgment("peer")] }) } }] }) };
+        const prompt = JSON.parse(options.body).messages[0].content.find(item => item.type === "text").text;
+        assert.match(prompt, /identityEvidence/);
+        if (mode === "failed") throw new Error("controlled repair failure");
+        return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ judgments: [{ candidateId: image.candidateId,
+          identityEvidence: mode === "still-invalid" ? invalid : { ...invalid, evidenceIds: ["caption"], quote: image.caption }, score: 1, coreActionMatch: true },
+          { candidateId: "peer", eligible: false, score: 1 }] }) } }] }) };
+      } });
+    const result = results.find(item => item.candidateId === image.candidateId);
+    assert.equal(calls, ["disabled", "no-anchor", "hard-conflict"].includes(mode) ? 1 : 2, mode);
+    assert.equal(result.identityEvidence.status, mode === "repaired" ? "supported" : "insufficient", mode);
+    assert.equal(result.score, 94);
+    assert.equal(results.find(item => item.candidateId === "peer").score, 94);
+    if (mode === "hard-conflict") assert.equal(result.hardRejectCode, "wrong_activity");
+    else assert.equal(result.eligible, mode === "repaired", mode);
+  }
+});
+
+test("早餐年代冲突在可选场地身份归一化后仍阻止自动采用", async (t) => {
+  const { candidate } = await fixtures(t);
+  const target = { moduleType: "dining", exactIdentityRequired: false,
+    queryCore: { subject: "丛林早餐", action: "享用早餐", identity: "Bush Breakfast" } };
+  for (const [actualSubject, reason] of [["1938年两名男子在丛林中吃早餐", "主体符合"], ["两名男子吃早餐", "这是一张历史照片"]]) {
+    const { results: [result] } = await audit([candidate], [judgment(candidate.candidateId, { actualSubject, reason })], target);
+    assert.equal(failedHardRequirement(target, result, candidate), "wrong_activity");
+    assert.equal(candidateQualification({ hardJudgment: result }), "rejected", "编辑器与自动采用共用的资格门禁必须拒绝历史冲突");
+  }
+  const { results: [modern] } = await audit([candidate], [judgment(candidate.candidateId, { actualSubject: "游客在建于1890年的露台享用早餐", reason: "现代实拍，不是历史照片" })], target);
+  assert.equal(failedHardRequirement(target, modern, candidate), null);
+  const history = { ...target, queryCore: { subject: "历史早餐照片", action: "博物馆展览", identity: "" } };
+  assert.equal(failedHardRequirement(history, judgment(candidate.candidateId, { actualSubject: "1938年两名男子在丛林中吃早餐" })), null);
+  const elsewhere = [
+    { moduleType: "dining", location: "Kyoto", queryCore: { subject: "tea ceremony", action: "drinking tea" }, visualGoal: "茶道，翌日参观博物馆" },
+    { moduleType: "day", location: "Paris", queryCore: { subject: "vineyard picnic", action: "dining" } },
+  ];
+  for (const place of elsewhere) {
+    assert.equal(failedHardRequirement(place, judgment("archive", { actualSubject: "Historical photo of guests dining" })), "wrong_activity");
+    assert.equal(failedHardRequirement(place, judgment("modern", { actualSubject: "Guests dining on a terrace built in 1890" })), null);
+  }
+  const transfer = { moduleType: "transport", queryCore: { subject: "classic car", action: "transfer" } };
+  for (const actualSubject of ["1960年车型的老爷车正在接送旅客", "1960年 款老爷车现代实拍", "1890年建成的车站前接送旅客"]) {
+    assert.equal(failedHardRequirement(transfer, judgment("modern", { actualSubject })), null, actualSubject);
+  }
+});
 
 test("缺失冲突字段只补判一次，完整候选不重判且合并后可自动采用", async (t) => {
   const { candidate } = await fixtures(t);
