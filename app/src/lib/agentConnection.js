@@ -23,15 +23,28 @@ export function simpleRenderedEditorState(snapshot) {
   return ['complete', 'ready_for_editor'].includes(status) ? 'complete' : 'draft';
 }
 
+export function simpleEditableEditorState(snapshot) {
+  const rendered = simpleRenderedEditorState(snapshot);
+  if (rendered) return rendered;
+  if (snapshot?.project?.flowKind !== 'simple_skill_v1') return null;
+  if (!['partial', 'awaiting_user_action', 'ready_to_render'].includes(snapshot.project.status)) return null;
+  if (snapshot.project.activeExecutionRunId && snapshot.project.activeExecutionRunId !== snapshot?.executionRun?.executionRunId) return null;
+  if (['cancelled', 'failed', 'planning_failed', 'execution_failed', 'terminated', 'running'].includes(snapshot?.activeJob?.status)) return null;
+  if (['cancelled', 'failed', 'running'].includes(snapshot?.executionRun?.status)) return null;
+  if (!snapshot?.result?.data || !['failed', 'blocked'].includes(snapshot?.result?.render?.status)) return null;
+  return 'draft';
+}
+
 export function agentDisplayState(snapshot) {
   const statuses = [snapshot?.project?.status, snapshot?.activeJob?.status, snapshot?.executionRun?.status];
   const simple = snapshot?.project?.flowKind === 'simple_skill_v1';
-  const draft = simpleRenderedEditorState(snapshot) === 'draft';
+  const draft = simple ? simpleEditableEditorState(snapshot) === 'draft' : false;
+  const renderFailed = simple && draft && !simpleRenderedEditorState(snapshot);
   const failed = statuses.some(s => ['failed', 'planning_failed', 'execution_failed', 'terminated'].includes(s)) || (simple && !draft && ['partial', 'awaiting_user_action', 'ready_to_render'].includes(snapshot?.project?.status) && ['failed', 'blocked'].includes(snapshot?.result?.render?.status));
   const cancelled = statuses.includes('cancelled');
   const completed = !failed && !cancelled && (simple ? simpleRenderedEditorState(snapshot) === 'complete' : statuses.some(s => ['complete', 'completed', 'ready_for_editor'].includes(s)));
   const disconnected = Boolean(snapshot?._connectionError) && !failed && !cancelled && !completed && !draft;
-  return { failed, cancelled, completed, draft, disconnected, frozen: failed || cancelled || completed || draft || disconnected };
+  return { failed, cancelled, completed, draft, renderFailed, disconnected, frozen: failed || cancelled || completed || draft || disconnected };
 }
 
 export function displayAgentStages(stages, state) {

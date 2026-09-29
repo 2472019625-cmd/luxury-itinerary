@@ -21,7 +21,7 @@ import { runSimplePipeline } from "./simple-pipeline-executor.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
 import { assertSimpleRendererOrigin } from "./simple-renderer-runtime.mjs";
 import { calculateSimplePipelineProgress } from "./simple-pipeline-progress.mjs";
-import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, saveSimpleHotelFactRow, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "./simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, saveSimpleHotelFactRow, saveSimpleHotelImageCrop, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "./simple-manual-images.mjs";
 import { searchSimpleHotelFacts } from "./simple-hotel-fact-search.mjs";
 import { deliveryContentDisposition } from "../src/lib/deliveryFilename.js";
 import { retrySimpleCopyTarget, retrySimpleCopyTargets, retrySimpleRenderer } from "./simple-targeted-repair.mjs";
@@ -580,6 +580,14 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "GET" && simpleManualMatch) {
       try { return json(response, 200, buildSimpleManualImagePayload(simpleStore, decodeURIComponent(simpleManualMatch[1]))); }
       catch (failure) { return json(response, failure.code === "simple_project_incomplete" ? 409 : 404, { error: failure.message, code: failure.code || "simple_project_not_found" }); }
+    }
+    const simpleHotelCropMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/hotel-images\/([^/]+)\/crop$/);
+    if (request.method === "PUT" && simpleHotelCropMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await saveSimpleHotelImageCrop({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelCropMatch[1]), slotId: decodeURIComponent(simpleHotelCropMatch[2]), expectedSrc: payload.expectedSrc, crop: payload.crop, deferRender: true });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "hotel_crop_image_changed" ? 409 : 400, { error: failure.message, code: failure.code || "hotel_crop_save_failed" }); }
     }
     const simpleDayEditorMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/day-editor\/(\d+)$/);
     if (request.method === "PUT" && simpleDayEditorMatch) {

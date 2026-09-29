@@ -304,14 +304,14 @@ export async function runSimplePipeline({
   const rendererStartedAt = Date.now();
   let renderExecution;
   try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: renderMode, signal }); }
-  catch (error) { assertNotCancelled(signal); renderExecution = { status: "failed", mode: renderMode, outputPath: null, rendererCalls: 1, error: { code: "renderer_failed", message: error.message } }; }
+  catch (error) { assertNotCancelled(signal); renderExecution = { status: "failed", mode: renderMode, outputPath: null, rendererCalls: 1, error: { code: error.code || "renderer_failed", message: error.message, diagnostic: error.diagnostic } }; }
   assertNotCancelled(signal);
   if (renderMode === "final" && renderExecution.status !== "success") {
     const finalAttempt = renderExecution;
     writeback.unresolvedItems.push(unresolvedRender(finalAttempt));
     emit({ stage: "renderer", phase: "draft_fallback_started" });
     try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: "draft", signal }); }
-    catch (error) { assertNotCancelled(signal); renderExecution = { status: "failed", mode: "draft", outputPath: null, rendererCalls: 1, error: { code: "renderer_failed", message: error.message } }; }
+    catch (error) { assertNotCancelled(signal); renderExecution = { status: "failed", mode: "draft", outputPath: null, rendererCalls: 1, error: { code: error.code || "renderer_failed", message: error.message, diagnostic: error.diagnostic } }; }
     assertNotCancelled(signal);
     renderExecution = {
       ...renderExecution,

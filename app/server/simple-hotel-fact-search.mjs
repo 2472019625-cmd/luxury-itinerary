@@ -19,16 +19,30 @@ export async function searchSimpleHotelFacts({ store, root, projectId, hotelInde
   if (!wanted.length) return { mode, hotelId, appliedRows: [], candidates: [], missingKeys: [] };
   const task = (plan?.copyTasks || []).find((item) => item.moduleType === "hotel_fact_rows" && item.targetPath === `hotels.${index}.factRows`);
   if (!task) throw Object.assign(new Error("当前酒店没有可执行的事实查找任务"), { code: "hotel_fact_task_missing" });
-  const focusedTask = {
-    ...task,
-    facts: { ...task.facts, hotelSearchSnippets: undefined },
-    researchRequest: { ...task.researchRequest, entityName: String(hotel.officialName || task.researchRequest?.entityName || "").trim(), categories: wanted.map((key) => LABELS[key]), focusCategories: wanted.length === 1 ? wanted : undefined },
-    plannerGoal: `${task.plannerGoal}\n本次只查找并输出这些字段：${wanted.map((key) => LABELS[key]).join("、")}。其他字段留空，不得沿用旧结果。`,
+  const searchKey = async (key) => {
+    const focusedTask = {
+      ...task,
+      facts: { ...task.facts, hotelSearchSnippets: undefined },
+      researchRequest: { ...task.researchRequest, entityName: String(hotel.officialName || task.researchRequest?.entityName || "").trim(), categories: [LABELS[key]], focusCategories: [key] },
+      plannerGoal: `${task.plannerGoal}\n本次仅查找并输出「${LABELS[key]}」字段。其他字段留空，不得沿用旧结果。`,
+    };
+    const execution = await runCopy({ itineraryContext: plan.itineraryContext, tasks: [focusedTask], ...copyOptions });
+    const returned = (execution.results || []).find((item) => item.targetId === task.targetId);
+    const rows = Array.isArray(returned?.value) ? returned.value : [];
+    const row = rows.find((value) => value?.key === key && value.status === "success" && String(value.text || "").trim() && /^https?:\/\//i.test(String(value.sourceUrl || "")));
+    return row ? { key, label: LABELS[key], text: String(row.text).trim(), source: { sourceUrl: row.sourceUrl, sourceClass: row.sourceClass, sourceExcerpt: row.sourceExcerpt, checkedAt: row.checkedAt } } : null;
   };
-  const execution = await runCopy({ itineraryContext: plan.itineraryContext, tasks: [focusedTask], ...copyOptions });
-  const returned = (execution.results || []).find((item) => item.targetId === task.targetId);
-  const rows = Array.isArray(returned?.value) ? returned.value : [];
-  const candidates = rows.filter((row) => wanted.includes(row?.key) && row.status === "success" && String(row.text || "").trim() && /^https?:\/\//i.test(String(row.sourceUrl || ""))).map((row) => ({ key: row.key, label: LABELS[row.key], text: String(row.text).trim(), source: { sourceUrl: row.sourceUrl, sourceClass: row.sourceClass, sourceExcerpt: row.sourceExcerpt, checkedAt: row.checkedAt } }));
+  const candidates = [];
+  const failedKeys = [];
+  // Keep research bounded: each field gets the same focused query as the successful single-row action.
+  for (let start = 0; start < wanted.length; start += 2) {
+    const batch = wanted.slice(start, start + 2);
+    const results = await Promise.allSettled(batch.map(searchKey));
+    results.forEach((result, offset) => {
+      if (result.status === "fulfilled" && result.value) candidates.push(result.value);
+      else failedKeys.push(batch[offset]);
+    });
+  }
   if (mode === "suggest") return { mode, hotelId, appliedRows: [], candidates, missingKeys: wanted.filter((key) => !candidates.some((row) => row.key === key)), expectedText: String((hotel.factRows || []).find((row) => row?.key === wanted[0])?.text || "") };
   const appliedRows = [];
   let lastSave = null;
@@ -37,5 +51,5 @@ export async function searchSimpleHotelFacts({ store, root, projectId, hotelInde
     lastSave = saved;
     if (saved.applied) appliedRows.push(saved.row);
   }
-  return { mode, hotelId, appliedRows, candidates: [], missingKeys: wanted.filter((key) => !appliedRows.some((row) => row.key === key)), manualRevision: lastSave?.manualRevision, renderPending: lastSave?.renderPending };
+  return { mode, hotelId, appliedRows, candidates: [], missingKeys: wanted.filter((key) => !appliedRows.some((row) => row.key === key)), failedKeys, manualRevision: lastSave?.manualRevision, renderPending: lastSave?.renderPending };
 }

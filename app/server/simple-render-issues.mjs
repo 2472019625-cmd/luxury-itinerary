@@ -55,15 +55,19 @@ export function rendererBlockingMessages(renderResult = {}) {
 export function buildRendererUnresolvedItem(renderResult = {}, fallbackMessage = "正式成品版面检查未通过") {
   const details = rendererBlockingMessages(renderResult);
   const fallbackError = renderResult.error || {};
+  const captureFailure = fallbackError.code === "render_capture_failed" || /Export tile dimensions differ/.test(fallbackError.message || "");
+  const processFailure = captureFailure || (fallbackError.code && /(?:renderer|render)_.*failed/.test(fallbackError.code));
   const message = details.length
-    ? `成品检查未通过：${details.join("；")}`
-    : fallbackError.message || fallbackMessage;
+    ? `版面检查未通过：${details.join("；")}`
+    : captureFailure ? "长图截取失败，版面检查尚未开始。请重新生成长图；若再次失败，联系技术人员查看渲染日志。"
+      : processFailure ? "长图生成失败，版面检查尚未完成。请重新生成长图；若再次失败，联系技术人员查看渲染日志。"
+        : fallbackError.message || fallbackMessage;
   return {
     kind: "renderer",
     id: "renderer:2000",
     status: renderResult.status || "failed",
     required: true,
-    error: { code: fallbackError.code || "renderer_failed", message, details },
+    error: { code: captureFailure ? "render_capture_failed" : fallbackError.code || "renderer_failed", message, details },
     qa: { ...(renderResult.qa || {}), issues: rendererQaIssues(renderResult) },
   };
 }

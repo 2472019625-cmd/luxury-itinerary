@@ -36,6 +36,26 @@ test("已有文字重新查找只返回候选，未经确认不写入", async ()
   assert.equal(result.candidates[0].text, "新的位置描述");
 });
 
+test("批量补全逐字段聚焦，单项失败不影响其他字段保存", async () => {
+  const { store, result } = hotelStore();
+  const requested = [];
+  const saved = [];
+  const response = await searchSimpleHotelFacts({ store, root: "/tmp", projectId: "p1", hotelIndex: 0, hotelId: "h1", keys: ["rooms", "design", "facilities"], mode: "fill", runCopy: async ({ tasks }) => {
+    const [key] = tasks[0].researchRequest.focusCategories;
+    requested.push(key);
+    if (key === "design") throw new Error("search unavailable");
+    return { results: [{ targetId: tasks[0].targetId, value: [{ key, text: `${key} fact`, status: "success", sourceUrl: "https://example.com/source" }] }] };
+  }, saveRow: async (input) => {
+    saved.push(input.key);
+    result.data.hotels[0].factRows.push({ key: input.key, text: input.text });
+    return { applied: true, row: { key: input.key, text: input.text } };
+  } });
+  assert.deepEqual(requested, ["rooms", "design", "facilities"]);
+  assert.deepEqual(saved, ["rooms", "facilities"]);
+  assert.deepEqual(response.missingKeys, ["design"]);
+  assert.deepEqual(response.failedKeys, ["design"]);
+});
+
 test("服务端逐项保存：只补空项、过期替换拒绝、来源不进入客户成品", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
   const current = value.store.getFinalResult(value.projectId, value.executionRunId);

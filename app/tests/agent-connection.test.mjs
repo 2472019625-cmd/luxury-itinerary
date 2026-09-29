@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readAgentSnapshot,simpleRenderedEditorState,agentDisplayState,displayAgentStages,agentElapsed,agentFailurePresentation} from '../src/lib/agentConnection.js';
+import {readAgentSnapshot,simpleRenderedEditorState,simpleEditableEditorState,agentDisplayState,displayAgentStages,agentElapsed,agentFailurePresentation} from '../src/lib/agentConnection.js';
 test('HTML gateway errors retain HTTP diagnostic, not HTML content',async()=>{
  await assert.rejects(readAgentSnapshot(new Response('<!DOCTYPE html><h1>gateway</h1>',{status:502,headers:{'content-type':'text/html','cf-ray':'test'}})),/HTTP 502.*text\/html.*HTML response/);
 });
@@ -32,10 +32,22 @@ test('rendered simple draft opens the editor despite catalog/runtime status word
  assert.equal(agentDisplayState(s).failed,false);
  assert.equal(agentElapsed(s,Date.parse('2026-09-08T01:00:00Z')),540);
 });
-test('a blocked final render without a rendered draft does not masquerade as editable',()=>{
+test('a blocked final render keeps saved content editable but does not masquerade as a rendered draft',()=>{
  const s={project:{flowKind:'simple_skill_v1',status:'partial',createdAt:'2026-09-08T00:00:00Z'},executionRun:{status:'partial'},activeJob:{status:'awaiting_user_action'},result:{data:{title:'draft'},outputPath:null,render:{status:'blocked',mode:'final',outputPath:null}}};
  assert.equal(simpleRenderedEditorState(s),null);
- assert.equal(agentDisplayState(s).failed,true);
+ assert.equal(simpleEditableEditorState(s),'draft');
+ assert.equal(agentDisplayState(s).draft,true);
+ assert.equal(agentDisplayState(s).renderFailed,true);
+ assert.equal(agentDisplayState(s).failed,false);
+ assert.equal(agentDisplayState(s).completed,false);
+});
+test('render failure never opens an unfinished, cancelled or mismatched run',()=>{
+ const s={project:{flowKind:'simple_skill_v1',status:'partial',activeExecutionRunId:'current'},executionRun:{executionRunId:'current',status:'partial'},activeJob:{status:'partial'},result:{data:{title:'draft'},render:{status:'failed'}}};
+ assert.equal(simpleEditableEditorState(s),'draft');
+ assert.equal(simpleEditableEditorState({...s,activeJob:{status:'running'}}),null);
+ assert.equal(simpleEditableEditorState({...s,project:{...s.project,status:'cancelled'}}),null);
+ assert.equal(simpleEditableEditorState({...s,executionRun:{...s.executionRun,executionRunId:'old'}}),null);
+ assert.equal(simpleEditableEditorState({...s,result:{render:{status:'failed'}}}),null);
 });
 test('invalid JSON and JSON errors cannot masquerade as snapshots',async()=>{
  await assert.rejects(readAgentSnapshot(Response.json({error:'failure'},{status:500})),/HTTP 500/);

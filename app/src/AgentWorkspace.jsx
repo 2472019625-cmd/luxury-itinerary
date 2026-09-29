@@ -205,6 +205,12 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     if (result.appliedRows?.length) setPayload((current) => mergeHotelRows(current, request.hotelId, result.appliedRows, { ...result, onlyEmpty: true }));
     return result;
   };
+  const persistHotelImageCrop = async ({ slotId, expectedSrc, crop }) => {
+    const result = await readJson(await fetch(`/api/simple/projects/${projectId}/hotel-images/${encodeURIComponent(slotId)}/crop`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedSrc, crop }), signal: AbortSignal.timeout(60000) }));
+    setPayload((current) => ({ ...current, manualRevision: result.manualRevision || current.manualRevision, renderPending: result.renderPending ?? current.renderPending }));
+    setError("");
+    return result;
+  };
   if (!payload) return <div className="agent-shell"><div className="agent-status"><span className="agent-spinner"/><b>{error || "正在读取当前项目"}</b></div></div>;
   const workspaceUser = user || { id:"project-designer", name:payload.project.data?.designer?.name || "定制师", profile:payload.project.data?.designer || {} };
   const headerProject = { ...payload.project, title:payload.project.title || payload.project.data?.title || "定制行程" };
@@ -222,6 +228,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     onPersistHotelFact={persistHotelFact}
     onPersistHotelRegion={persistHotelRegion}
     onPersistHotelStay={persistHotelStay}
+    onPersistHotelImageCrop={persistHotelImageCrop}
     onHotelFactSearch={searchHotelFact}
     onReplaceHotelFact={async (value) => { await flushHotelFact(value.hotelId, value.key); return saveHotelFact({ ...value, mode: "replace" }); }}
     onChooseImage={choose}

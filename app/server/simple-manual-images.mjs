@@ -174,13 +174,25 @@ function imageLocation(item = {}, data = {}, plan = {}) {
   return planned.primaryVisualSubject || planned.subject || "行程图片";
 }
 
+export function effectiveUnresolvedItems(items = [], data = {}, plan = {}) {
+  return items.filter((item) => {
+    const notice = String(item.targetPath || "").match(/^days\.(\d+)\.dayNotices\.0\.text$/);
+    return !notice || Boolean(data.days?.[Number(notice[1])]?.dayNotices?.[0]);
+  }).map((item) => {
+    if (item.kind !== "copy" || !String(item.id || "").startsWith("copy:visual:")) return item;
+    const slotId = item.id.slice("copy:visual:".length);
+    const binding = data.simpleImageSlotBindings?.[slotId] || plan.slotBindings?.[slotId];
+    return binding && getSlotImage(data, binding)?.src ? { ...item, required: true } : item;
+  });
+}
+
 function blockingItems(items = [], data = {}, plan = {}, renderResult = {}, reviews = []) {
-  return items.filter((item) => item.required).map((item) => {
+  return items.filter((item) => item.required || item.kind === "copy").map((item) => {
     if (item.kind === "copy") {
       const task = (plan.copyTasks || []).find((value) => value.targetId === item.id);
       const targetPath = item.targetPath || task?.targetPath || "";
       const slotId = task?.layoutHints?.slotId || (item.id.startsWith("copy:visual:") ? item.id.slice("copy:visual:".length) : "");
-      return { kind: "copy", id: item.id, targetPath, slotId, label: copyLocation(targetPath, data, slotId, plan), message: slotId ? "这张体验卡片的文案尚未生成完成，可查看对应卡片或单独重新生成。" : "这段文案尚未生成完成，可以只重新生成这一项。", action: "retry_copy" };
+      return { kind: "copy", id: item.id, required: item.required === true, targetPath, slotId, label: copyLocation(targetPath, data, slotId, plan), message: slotId ? "这张体验卡片的文案尚未生成完成，可查看对应卡片或单独重新生成。" : "这段文案尚未生成完成，可以只重新生成这一项。", action: "retry_copy" };
     }
     if (item.kind === "image") {
       if (item.technicalStatus === "identity_evidence_pending_confirmation") return { kind: "image", id: item.id, slotId: item.id, label: imageLocation(item, data, plan), message: "图片已预填到草稿，具体实体身份尚未证实。请确认这张图，或为可选位置移除图片。", action: "handle_image" };
@@ -189,7 +201,8 @@ function blockingItems(items = [], data = {}, plan = {}, renderResult = {}, revi
     }
     if (item.kind === "renderer") {
       const messages = [...new Set(normalizeRenderIssues([...(item.error?.details || []), ...(item.qa?.issues || []), ...rendererQaIssues(renderResult)]).filter((issue) => issue.severity === "blocker").map((issue) => issue.message || issue.reason || issue.code).filter(Boolean))];
-      return { kind: "renderer", id: item.id, label: "2000px 成品检查", message: messages.length ? `未通过原因：${messages.join("；")}` : item.error?.message || "版面检查未返回具体原因，请重新检查。", details: messages, action: "retry_renderer" };
+      const generationFailed = item.error?.code === "render_capture_failed" || (item.error?.code && /(?:renderer|render)_.*failed/.test(item.error.code) && !messages.length);
+      return { kind: "renderer", id: item.id, label: generationFailed ? "2000px 长图生成" : "2000px 成品检查", message: messages.length ? `未通过原因：${messages.join("；")}` : item.error?.message || "版面检查未返回具体原因，请重新检查。", details: messages, action: generationFailed ? "retry_render_generation" : "retry_renderer" };
     }
     return { kind: item.kind || "confirmation", id: item.id, targetPath: item.targetPath || "", label: "生成前确认信息", message: "这项客户信息需要先确认，不能由系统自动改写。", action: "review_facts" };
   });
@@ -365,7 +378,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
     const targetFingerprint = imageTargetFingerprint(plan.imageSlots.find((slot) => slot.slotId === imageResult.slotId));
     return visibleCandidatePool(imageResult).map((candidate) => frontendCandidate(candidate, imageResult.slotId, binding, candidateCanBeSelected(result, imageResult, candidate), targetFingerprint));
   }));
-  const unresolvedItems = (result.unresolvedItems || []).filter((item) => item.kind !== "renderer" || !rendererItemIsOnlyClarityWarning(item, result.render || {}));
+  const unresolvedItems = effectiveUnresolvedItems(result.unresolvedItems || [], result.data || {}, plan).filter((item) => item.kind !== "renderer" || !rendererItemIsOnlyClarityWarning(item, result.render || {}));
   const unresolvedRequired = unresolvedItems.filter((item) => item.required);
   const canEnterFinal = unresolvedRequired.length === 0 && Boolean(result.outputPath);
   const outputUrl = canEnterFinal ? `/api/simple/projects/${projectId}/output` : null;
@@ -446,6 +459,7 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
   });
   writeback.copyWriteback = result.writeback?.copy || [];
   writeback.unresolvedItems.push(...(result.unresolvedItems || []).filter(item => item.kind !== "renderer" && !(item.kind === "image" && affected.has(item.id))));
+  writeback.unresolvedItems = effectiveUnresolvedItems(writeback.unresolvedItems, writeback.data, plan);
   writeback.data.simpleImageSlotBindings ||= plan.slotBindings;
   for (const slotId of affected) {
     if (action.type === "editor_day_update") continue;
@@ -468,7 +482,7 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
   if (store.getFinalResult(project.projectId, run.executionRunId)?.manualImageCompletion?.revision !== revision) return;
   const safeRender = async (input) => {
     try { return await render(input); }
-    catch (error) { return { status: "failed", error: { code: "manual_render_failed", message: error.message } }; }
+    catch (error) { return { status: "failed", error: { code: error.code || "manual_render_failed", message: error.message, diagnostic: error.diagnostic } }; }
   };
   const renderMode = writeback.requiredUnresolved.length ? "draft" : "final";
   let renderResult = await safeRender({ data: writeback.data, projectId: project.projectId, root, mode: renderMode });
@@ -923,6 +937,21 @@ export async function saveSimpleHotelFactRow({ store, root, projectId, hotelInde
   nextHotel.factRows = [...(nextHotel.factRows || []).filter((item) => item?.key !== key), row];
   const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_hotel_fact_update", hotelId, hotelIndex: index, key, mode } });
   return { applied: true, row, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
+}
+
+export async function saveSimpleHotelImageCrop({ store, root, projectId, slotId, expectedSrc, crop, render, deferRender = true } = {}) {
+  const context = projectContext(store, projectId);
+  const editable = editableImageBinding(context, slotId);
+  if (editable.binding?.module !== "hotel") throw Object.assign(new Error("只能保存酒店图片裁切"), { code: "hotel_crop_slot_invalid" });
+  const current = getSlotImage(context.result.data, editable.binding);
+  if (!current?.src || current.src !== expectedSrc) throw Object.assign(new Error("图片已变化，请重新打开裁切"), { code: "hotel_crop_image_changed" });
+  if (crop !== null && (!crop || [crop.x, crop.y, crop.width, crop.height].some((value) => !Number.isFinite(value)) || crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0 || crop.x + crop.width > 1.0001 || crop.y + crop.height > 1.0001)) {
+    throw Object.assign(new Error("裁切范围无效"), { code: "hotel_crop_invalid" });
+  }
+  const nextData = structuredClone(context.result.data);
+  setSlotImage(nextData, editable.binding, { ...current, crop });
+  const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_image_crop_update", imageSlotId: slotId } });
+  return { crop, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
 }
 
 export async function uploadSimpleImage({ store, root, projectId, slotId, dataUrl, fileName, render, deferRender = false } = {}) {
