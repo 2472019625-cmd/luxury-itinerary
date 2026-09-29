@@ -169,7 +169,7 @@ function DiningOverview({ items = [], policy, title = "特色餐饮", introTitle
     const imageOmitted = (item.imageDisplay === "copy_only" || suppressMissingImages) && images.length === 0;
     return <article className={`dining-card${isWide ? " dining-card-wide" : ""}${imageOmitted ? " dining-card-no-image" : ""}`} key={item.id || item.title} data-edit-path={`dining.${itemIndex}`}>
     {images.length > 0 ? <div className={`dining-image dining-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${item.id || item.title}-${imageIndex}`} src={image.src || image} crop={image.crop} alt={image.label || `${item.title}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`dining.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : !imageOmitted && <MissingImageState label="餐饮图片待补充" compact className="card-missing-image" data-edit-path={`dining.${itemIndex}`} data-edit-image="0" />}
-    <div className="dining-copy"><small>{item.location}</small><h3>{item.title}</h3>{item.officialName && <p className="dining-official-name">{item.officialName}</p>}<p>{item.editorialCopy}</p></div>
+    <div className="dining-copy"><small>{item.location}</small><h3>{item.title}</h3><p>{item.editorialCopy}</p></div>
   </article>;
   })}</div>{policy && <p className="feature-footnote">{policy}</p>}</section>;
 }
