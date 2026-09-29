@@ -17,6 +17,7 @@ import { imageTargetFingerprint, reconcileProvisionalImageSelections } from "./s
 import { buildRendererUnresolvedItem, normalizeRenderIssues, rendererQaIssues } from "./simple-render-issues.mjs";
 import { hotelStayDetails } from "../src/lib/hotelStayPresentation.js";
 import { applyHotelNightChange, planHotelNightChange } from "../src/lib/hotelStayEditing.js";
+import { applyModuleVisibility, EDITABLE_MODULE_VISIBILITY } from "../src/lib/moduleVisibility.js";
 
 const MIME_EXTENSIONS = Object.freeze({ "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" });
 const manualRenders = new Map();
@@ -187,7 +188,7 @@ export function effectiveUnresolvedItems(items = [], data = {}, plan = {}) {
 }
 
 function blockingItems(items = [], data = {}, plan = {}, renderResult = {}, reviews = []) {
-  return items.filter((item) => item.required || item.kind === "copy").map((item) => {
+  return items.filter((item) => item.required || item.kind === "copy").flatMap((item) => {
     if (item.kind === "copy") {
       const task = (plan.copyTasks || []).find((value) => value.targetId === item.id);
       const targetPath = item.targetPath || task?.targetPath || "";
@@ -200,9 +201,16 @@ function blockingItems(items = [], data = {}, plan = {}, renderResult = {}, revi
       return { kind: "image", id: item.id, slotId: item.id, label: imageLocation(item, data, plan), message: `${explanation.title}。${explanation.detail}`, action: "handle_image" };
     }
     if (item.kind === "renderer") {
-      const messages = [...new Set(normalizeRenderIssues([...(item.error?.details || []), ...(item.qa?.issues || []), ...rendererQaIssues(renderResult)]).filter((issue) => issue.severity === "blocker").map((issue) => issue.message || issue.reason || issue.code).filter(Boolean))];
-      const generationFailed = item.error?.code === "render_capture_failed" || (item.error?.code && /(?:renderer|render)_.*failed/.test(item.error.code) && !messages.length);
-      return { kind: "renderer", id: item.id, label: generationFailed ? "2000px 长图生成" : "2000px 成品检查", message: messages.length ? `未通过原因：${messages.join("；")}` : item.error?.message || "版面检查未返回具体原因，请重新检查。", details: messages, action: generationFailed ? "retry_render_generation" : "retry_renderer" };
+      const qaIssues = normalizeRenderIssues([...(item.qa?.issues || []), ...rendererQaIssues(renderResult)]).filter((issue) => issue.severity === "blocker");
+      const unique = [...new Map(qaIssues.map((issue) => [`${issue.code}:${issue.targetPath || issue.path || issue.message}`, issue])).values()];
+      if (unique.length) return unique.map((issue, index) => {
+        const oldCropFalsePositive = issue.code === "text_overflow" && /crop-slot-viewport/.test(`${issue.selector || ""} ${issue.message || ""}`);
+        return { kind: "renderer", id: `${item.id}:${index}`, label: "2000px 成品检查", targetPath: oldCropFalsePositive ? "" : issue.targetPath || issue.path || "", message: oldCropFalsePositive ? "此前将图片裁切误判为溢出；规则已修正，请重新检查版面。" : `未通过原因：${issue.message || issue.reason || "版面检查发现问题"}`, action: "retry_renderer" };
+      });
+      const details = [...new Set((item.error?.details || []).map((value) => typeof value === "string" ? value : value?.message).filter(Boolean))];
+      const generationFailed = item.error?.code === "render_capture_failed" || (item.error?.code && /(?:renderer|render)_.*failed/.test(item.error.code) && !details.length);
+      const oldCropFalsePositive = details.some((message) => /crop-slot-viewport/.test(message));
+      return { kind: "renderer", id: item.id, label: generationFailed ? "2000px 长图生成" : "2000px 成品检查", message: oldCropFalsePositive ? "此前将图片裁切误判为溢出；规则已修正，请重新检查版面。" : details.length ? `未通过原因：${details.join("；")}` : item.error?.message || "版面检查未返回具体原因，请重新检查。", action: generationFailed ? "retry_render_generation" : "retry_renderer" };
     }
     return { kind: item.kind || "confirmation", id: item.id, targetPath: item.targetPath || "", label: "生成前确认信息", message: "这项客户信息需要先确认，不能由系统自动改写。", action: "review_facts" };
   });
@@ -407,6 +415,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
       currentStage: project.currentStage,
       progress: project.progress,
       versions: outputUrl ? [{ id: `simple-${run.executionRunId}`, name: `${result.data?.title || "行程"} · 正式版本`, createdAt: Date.parse(result.completedAt || result.updatedAt || project.updatedAt || new Date().toISOString()), downloadUrl: outputUrl }] : [],
+      visibility: result.visibility || {},
       data: { ...result.data, imageCandidates, imageReview: { slots }, simpleImageSlotBindings: editorBindings, generationIssues: unresolvedItems, requiredImageGate: { unresolvedSlotIds: unresolvedRequired.filter((item) => item.kind === "image").map((item) => item.id), passed: unresolvedRequired.filter((item) => item.kind === "image").length === 0 } },
     },
     executionRunId: run.executionRunId,
@@ -485,11 +494,12 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
     catch (error) { return { status: "failed", error: { code: error.code || "manual_render_failed", message: error.message, diagnostic: error.diagnostic } }; }
   };
   const renderMode = writeback.requiredUnresolved.length ? "draft" : "final";
-  let renderResult = await safeRender({ data: writeback.data, projectId: project.projectId, root, mode: renderMode });
+  const customerData = applyModuleVisibility(writeback.data, result.visibility || {});
+  let renderResult = await safeRender({ data: customerData, projectId: project.projectId, root, mode: renderMode });
   if (renderMode === "final" && renderResult.status !== "success") {
     const finalAttempt = renderResult;
     writeback.unresolvedItems.push(buildRendererUnresolvedItem(finalAttempt));
-    renderResult = await safeRender({ data: writeback.data, projectId: project.projectId, root, mode: "draft" });
+    renderResult = await safeRender({ data: customerData, projectId: project.projectId, root, mode: "draft" });
     renderResult = { ...renderResult, mode: "draft", rendererCalls: Number(finalAttempt.rendererCalls || 0) + Number(renderResult.rendererCalls || 0), finalAttempt };
   }
   renderResult.mode ||= renderMode;
@@ -939,19 +949,31 @@ export async function saveSimpleHotelFactRow({ store, root, projectId, hotelInde
   return { applied: true, row, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
 }
 
-export async function saveSimpleHotelImageCrop({ store, root, projectId, slotId, expectedSrc, crop, render, deferRender = true } = {}) {
+export async function saveSimpleImageCrop({ store, root, projectId, slotId, expectedSrc, crop, render, deferRender = true, hotelOnly = false } = {}) {
   const context = projectContext(store, projectId);
   const editable = editableImageBinding(context, slotId);
-  if (editable.binding?.module !== "hotel") throw Object.assign(new Error("只能保存酒店图片裁切"), { code: "hotel_crop_slot_invalid" });
+  if (!['cover', 'hotel', 'dining', 'transport', 'day'].includes(editable.binding?.module) || (hotelOnly && editable.binding.module !== 'hotel')) throw Object.assign(new Error("这个位置不支持图片裁切"), { code: hotelOnly ? "hotel_crop_slot_invalid" : "image_crop_slot_invalid" });
   const current = getSlotImage(context.result.data, editable.binding);
-  if (!current?.src || current.src !== expectedSrc) throw Object.assign(new Error("图片已变化，请重新打开裁切"), { code: "hotel_crop_image_changed" });
+  if (!current?.src || current.src !== expectedSrc) throw Object.assign(new Error("图片已变化，请重新打开裁切"), { code: hotelOnly ? "hotel_crop_image_changed" : "image_crop_image_changed" });
   if (crop !== null && (!crop || [crop.x, crop.y, crop.width, crop.height].some((value) => !Number.isFinite(value)) || crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0 || crop.x + crop.width > 1.0001 || crop.y + crop.height > 1.0001)) {
-    throw Object.assign(new Error("裁切范围无效"), { code: "hotel_crop_invalid" });
+    throw Object.assign(new Error("裁切范围无效"), { code: hotelOnly ? "hotel_crop_invalid" : "image_crop_invalid" });
   }
   const nextData = structuredClone(context.result.data);
   setSlotImage(nextData, editable.binding, { ...current, crop });
   const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_image_crop_update", imageSlotId: slotId } });
   return { crop, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
+}
+
+export async function saveSimpleHotelImageCrop(options = {}) {
+  return saveSimpleImageCrop({ ...options, hotelOnly: true });
+}
+
+export async function saveSimpleModuleVisibility({ store, root, projectId, module, visible, render, deferRender = true } = {}) {
+  if (!EDITABLE_MODULE_VISIBILITY.has(module) || typeof visible !== 'boolean') throw Object.assign(new Error('模块显示状态无效'), { code: 'module_visibility_invalid' });
+  const context = projectContext(store, projectId);
+  const visibility = { ...(context.result.visibility || {}), [module]: visible };
+  const payload = await persistResult({ ...context, result: { ...context.result, visibility }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: 'editor_module_visibility_update', module, visible } });
+  return { visibility, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
 }
 
 export async function uploadSimpleImage({ store, root, projectId, slotId, dataUrl, fileName, render, deferRender = false } = {}) {

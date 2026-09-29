@@ -18,6 +18,15 @@ function severityFor(code, mode) {
   return mode === "draft" && !draftFatalCodes.has(code) ? "warning" : "blocker";
 }
 
+export function layoutOverflowIssue(item = {}, { draft = false } = {}) {
+  const path = String(item.editPath || "");
+  const match = path.match(/^(?:days|overview|hotels|dining|transport|highlights|notes)\.(\d+)/);
+  const section = path.split(".")[0];
+  const names = { cover: "封面", highlights: "产品亮点", overview: "行程总览", hotels: "臻选酒店", dining: "特色餐饮", transport: "全程交通", days: "每日行程", expenses: "费用说明", booking: "预订流程", security: "资金安全提醒", notes: "注意事项", footer: "品牌页尾" };
+  const location = section === "days" && match ? `DAY ${String(Number(match[1]) + 1).padStart(2, "0")}` : `${names[section] || "成品版面"}${match ? ` · 第 ${Number(match[1]) + 1} 项` : ""}`;
+  return { severity: draft ? "warning" : "blocker", code: "text_overflow", targetPath: path, selector: item.selector || "", message: `${location}的文字或模块超出显示区域，请定位检查并调整内容或版式。` };
+}
+
 export function deterministicPreflight(data, { root = appRoot, mode = "final" } = {}) {
   const issues = [];
   const facts = validateItineraryFacts(data);
@@ -92,7 +101,7 @@ function runRenderer(args, cwd) {
 export async function runSimpleRenderer({ data, projectId, root = appRoot, origin = SIMPLE_PIPELINE_DEFAULT_ORIGIN, outputDirectory = path.join(root, "output", "simple-pipeline", projectId), mode = "final" } = {}) {
   const startedAt = Date.now();
   const draft = mode === "draft";
-  const preflight = deterministicPreflight(data, { root, mode });
+  const preflight = deterministicPreflight({ ...data, suppressMissingImagePlaceholders: mode === "final" }, { root, mode });
   if (!preflight.passed) return { status: "blocked", outputPath: null, qa: preflight, durationMs: Date.now() - startedAt, rendererCalls: 0 };
   await mkdir(outputDirectory, { recursive: true });
   const dataFile = path.join(outputDirectory, draft ? "render-data-draft.json" : "render-data.json");
@@ -111,7 +120,7 @@ export async function runSimpleRenderer({ data, projectId, root = appRoot, origi
   const layout = JSON.parse(await readFile(qaPath, "utf8"));
   const issues = [];
   if (layout.width !== 2000) issues.push({ severity: draft ? "warning" : "blocker", code: "wrong_width", message: `成品宽度为 ${layout.width}px` });
-  for (const item of layout.overflows || []) issues.push({ severity: draft ? "warning" : "blocker", code: "text_overflow", message: `文字或模块溢出：${item.selector}` });
+  for (const item of layout.overflows || []) issues.push(layoutOverflowIssue(item, { draft }));
   for (const item of layout.brokenImages || []) issues.push({ severity: draft ? "warning" : "blocker", code: "broken_image", message: `图片未能正常渲染：${item.src}` });
   issues.push(...reviewCardImageUpscales(layout, mode));
   issues.push(...reviewFixedModuleLayout(preflight.expectedFixedModules, layout).map((item) => draft ? { ...item, severity: "warning" } : item));

@@ -1223,3 +1223,40 @@ body:has(.editor-page) { overflow: hidden; }
   .editor-grid.structure-expanded { grid-template-columns: 72px minmax(0, 1fr); }
   .editor-grid .inspector-panel { position: fixed; top: 148px; right: 0; bottom: 0; width: min(430px, calc(100vw - 72px)); z-index: 50; }
 }
+.shared-api-settings-trigger { display:grid; place-items:center; width:38px; height:38px; border:1px solid #e3d6c0; border-radius:10px; background:#fffaf1; color:#9b6f24; cursor:pointer; }
+.shared-api-settings-backdrop { position:fixed; inset:0; z-index:1200; display:grid; place-items:center; padding:24px; background:rgba(31,25,17,.45); }
+.shared-api-settings { width:min(720px,100%); max-height:min(850px,90vh); display:flex; flex-direction:column; overflow:hidden; border:1px solid #e5d7bf; border-radius:18px; background:#fffdfa; box-shadow:0 24px 80px rgba(32,23,9,.2); color:#332b22; }
+.shared-api-settings > header { display:flex; justify-content:space-between; gap:20px; padding:26px 30px 18px; border-bottom:1px solid #eee4d5; }
+.shared-api-settings > header small { color:#a77b2d; letter-spacing:.13em; }
+.shared-api-settings > header h2 { margin:5px 0 7px; font-size:25px; }
+.shared-api-settings > header p,.shared-api-settings > footer { margin:0; color:#756c61; font-size:13px; line-height:1.6; }
+.shared-api-settings > header button { align-self:flex-start; border:0; background:none; color:#7b6d59; font-size:27px; cursor:pointer; }
+.shared-api-settings-list { padding:8px 30px 24px; overflow-y:auto; }
+.shared-api-settings-list article { padding:20px 0; border-bottom:1px solid #eee4d5; }
+.shared-api-settings-service { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:14px; }
+.shared-api-settings-service strong,.shared-api-settings-service small { display:block; }
+.shared-api-settings-service small { margin-top:4px; color:#82796d; }
+.shared-api-settings-service span { padding:5px 10px; border-radius:999px; font-size:12px; white-space:nowrap; }
+.shared-api-settings-service .configured { color:#287558; background:#e5f4ec; }
+.shared-api-settings-service .missing { color:#9c6b2a; background:#f7ecdb; }
+.shared-api-settings-list label { display:block; margin-bottom:7px; font-size:13px; }
+.shared-api-settings-list input { width:100%; box-sizing:border-box; padding:12px 13px; border:1px solid #d9cdbb; border-radius:8px; background:#fff; color:#332b22; font:inherit; }
+.shared-api-settings-actions { display:flex; gap:9px; margin-top:12px; }
+.shared-api-settings-actions button { padding:8px 12px; border:1px solid #d8bb86; border-radius:8px; background:#fffaf2; color:#805918; cursor:pointer; }
+.shared-api-settings-actions button:first-child { background:#b18935; color:white; }
+.shared-api-settings-actions button:disabled { opacity:.5; cursor:not-allowed; }
+.shared-api-settings-list article > p { margin:10px 0 0; color:#6b604f; font-size:12px; }
+.shared-api-settings > footer { padding:14px 30px; border-top:1px solid #eee4d5; }
+.shared-api-settings-error { margin:14px 30px 0; color:#b04b39; }
+.shared-api-settings-mode { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:18px 30px 6px; padding:15px 17px; border:1px solid #e8d8b7; border-radius:10px; background:#fcf7ed; }
+.shared-api-settings-mode strong { color:#79571c; }
+.shared-api-settings-mode p { margin:5px 0 0; color:#756c61; font-size:12px; line-height:1.5; }
+.shared-api-settings-mode button { flex:none; padding:9px 13px; border:1px solid #b18935; border-radius:8px; background:#b18935; color:#fff; cursor:pointer; }
+.shared-api-settings-mode button:disabled { opacity:.5; cursor:not-allowed; }
+@media (max-width:600px) { .shared-api-settings-mode { align-items:stretch; flex-direction:column; } }
+.shared-api-settings-pin { padding:22px 0 8px; }
+.shared-api-settings-pin h3 { margin:0 0 6px; font-size:17px; }
+.shared-api-settings-pin p { color:#756c61; font-size:12px; }
+.shared-api-settings-pin label { margin-top:12px; }
+.shared-api-settings-pin button { margin-top:12px; padding:9px 14px; border:0; border-radius:8px; background:#b18935; color:white; cursor:pointer; }
+.shared-api-settings-pin button:disabled { opacity:.5; cursor:not-allowed; }

@@ -62,6 +62,12 @@ test('designer registration creates a persistent independent account without an 
  assert.equal('isAdmin' in registeredBody.user,false);
  assert.equal(existsSync(usersFile),true);
  const cookie=registered.headers.get('set-cookie').split(';')[0];
+ const change=await request('/api/auth/change-pin',{method:'POST',headers:{cookie},body:JSON.stringify({currentPin:'safe-password',newPin:'623814'})});
+ assert.equal(change.status,200);
+ const oldLogin=await request('/api/auth/login',{method:'POST',body:JSON.stringify({login:'zhangsan',password:'safe-password'})});
+ assert.equal(oldLogin.status,401);
+ const newLogin=await request('/api/auth/login',{method:'POST',body:JSON.stringify({login:'zhangsan',password:'623814'})});
+ assert.equal(newLogin.status,200);
  const own=await (await request('/whoami',{headers:{cookie}})).json();
  assert.equal(own.user.id,registeredBody.user.id);
  const duplicate=await request('/api/auth/register',{method:'POST',body:JSON.stringify({invite:'TEAM-INVITE',name:'另一个人',login:'zhangsan',password:'another-password'})});

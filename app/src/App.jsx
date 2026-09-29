@@ -19,6 +19,7 @@ import { deriveFeaturedCardLayout } from './lib/featuredCardLayout.js';
 import { deriveHotelStayLine } from './lib/hotelStayPresentation.js';
 import { displayDiningIntroCopy } from './lib/diningIntroCopy.js';
 const VisualBindingsContext = React.createContext(undefined);
+const SuppressMissingImagesContext = React.createContext(false);
 
 const ICON = "/assets/icons/";
 const SLOGAN = "高品质度假管家，懂度假，更懂你";
@@ -28,6 +29,7 @@ function Icon({ name, size = 48, tone = "gold" }) {
 }
 
 function MissingImageState({ label = "图片待补充", compact = false, className = "", ...props }) {
+  if (React.useContext(SuppressMissingImagesContext)) return null;
   return <div className={`missing-image-state${compact ? " missing-image-state-compact" : ""} ${className}`.trim()} role="img" aria-label={label} {...props}><Icon name="itinerary" size={compact ? 34 : 54} /><span>{label}</span></div>;
 }
 
@@ -156,6 +158,7 @@ function Cover({ data }) {
 }
 
 function DiningOverview({ items = [], policy, title = "特色餐饮", introTitle, introCopy }) {
+  const suppressMissingImages = React.useContext(SuppressMissingImagesContext);
   if (!items.length) return null;
   const isOdd = items.length % 2 === 1;
   const { entries, hasFeatured } = deriveFeaturedCardLayout(items, "dining");
@@ -163,7 +166,7 @@ function DiningOverview({ items = [], policy, title = "特色餐饮", introTitle
   const resolvedIntroCopy = displayDiningIntroCopy(introCopy);
   return <section className="journey-feature-section dining-section" data-edit-path="dining"><SectionTitle en="CULINARY JOURNEY" zh={title} /><div className="feature-intro"><span>{resolvedIntroTitle}</span><p>{resolvedIntroCopy}</p></div><div className={`dining-grid${isOdd ? " dining-grid-odd" : ""}${hasFeatured ? " dining-grid-featured" : ""}`}>{entries.map(({ item, originalIndex: itemIndex, isFeatured: isWide }) => {
     const images = (item.images?.length ? item.images : item.image ? [item.image] : []).slice(0, 2);
-    const imageOmitted = item.imageDisplay === "copy_only" && images.length === 0;
+    const imageOmitted = (item.imageDisplay === "copy_only" || suppressMissingImages) && images.length === 0;
     return <article className={`dining-card${isWide ? " dining-card-wide" : ""}${imageOmitted ? " dining-card-no-image" : ""}`} key={item.id || item.title} data-edit-path={`dining.${itemIndex}`}>
     {images.length > 0 ? <div className={`dining-image dining-image-count-${images.length}`}>{images.map((image, imageIndex) => <SafeImage key={`${item.id || item.title}-${imageIndex}`} src={image.src || image} crop={image.crop} alt={image.label || `${item.title}${images.length > 1 ? `体验${imageIndex + 1}` : ""}`} data-edit-path={`dining.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : !imageOmitted && <MissingImageState label="餐饮图片待补充" compact className="card-missing-image" data-edit-path={`dining.${itemIndex}`} data-edit-image="0" />}
     <div className="dining-copy"><small>{item.location}</small><h3>{item.title}</h3>{item.officialName && <p className="dining-official-name">{item.officialName}</p>}<p>{item.editorialCopy}</p></div>
@@ -250,12 +253,13 @@ function HotelsOverview({ hotels = [], days = [], destination = "", policy, titl
 }
 
 function TransportOverview({ items = [], disclaimer, title = "全程交通", introTitle = "移动不是赶路，而是旅程体验的一部分", introCopy = "城市接送、专属游猎、草原飞行与海上衔接各司其职，让跨区域移动保持私密、舒适与从容。" }) {
+  const suppressMissingImages = React.useContext(SuppressMissingImagesContext);
   if (!items.length) return null;
   const isOdd = items.length % 2 === 1;
   const { entries, hasFeatured } = deriveFeaturedCardLayout(items, "transport");
   return <section className="journey-feature-section transport-section" data-edit-path="transport"><SectionTitle en="TRAVEL IN COMFORT" zh={title} /><div className="feature-intro"><span>{introTitle}</span><p>{introCopy}</p></div><div className={`transport-grid${isOdd ? " transport-grid-odd" : ""}${hasFeatured ? " transport-grid-featured" : ""}`}>{entries.map(({ item, originalIndex: itemIndex, isFeatured: isWide }) => {
     const configurationLabels = transportConfigurationLabels(item);
-    const imageOmitted = item.imageDisplay === "copy_only" && !item.images?.length;
+    const imageOmitted = (item.imageDisplay === "copy_only" || suppressMissingImages) && !item.images?.length;
     return <article className={`transport-card${isWide ? " transport-card-wide" : ""}${imageOmitted ? " transport-card-no-image" : ""}`} key={item.id || item.category} data-edit-path={`transport.${itemIndex}`}>
     {item.images?.length > 0 ? <div className={`transport-image transport-image-count-${Math.min(item.images.length, 2)}`}>{item.images.slice(0, 2).map((image, imageIndex) => <SafeImage key={`${item.id}-${imageIndex}`} src={image.src || image} crop={image.crop} alt={`${item.category}${imageIndex ? "内部空间" : "出行场景"}`} data-edit-path={`transport.${itemIndex}`} data-edit-image={imageIndex} style={{ objectPosition: image.focus || "50% 50%", objectFit: image.fit }} />)}</div> : !imageOmitted && <MissingImageState label="交通图片待补充" compact className="card-missing-image" data-edit-path={`transport.${itemIndex}`} data-edit-image="0" />}
     <div className="transport-copy"><div className="transport-heading"><span className="transport-icon"><Icon name="vehicle" size={44} tone="light" /></span><div><small>{transportUsageLabel(item)}</small><h3>{transportProductName(item)}</h3></div></div>
@@ -443,7 +447,7 @@ function buildScenario(data, scenario) {
 }
 
 export function Itinerary({ data, scale = 1 }) {
-  return <VisualBindingsContext.Provider value={data.simpleImageSlotBindings}><ItineraryContent data={data} scale={scale} /></VisualBindingsContext.Provider>;
+  return <VisualBindingsContext.Provider value={data.simpleImageSlotBindings}><SuppressMissingImagesContext.Provider value={data.suppressMissingImagePlaceholders === true}><ItineraryContent data={data} scale={scale} /></SuppressMissingImagesContext.Provider></VisualBindingsContext.Provider>;
 }
 
 function ItineraryContent({ data, scale = 1 }) {

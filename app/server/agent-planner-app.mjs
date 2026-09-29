@@ -1,6 +1,7 @@
 import { createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createDemoAuth } from "./demo-auth.mjs";
+import { SharedApiKeyStore, testSharedApiService } from "./shared-api-keys.mjs";
 import { servePublicStatic } from "./public-static.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -21,7 +22,7 @@ import { runSimplePipeline } from "./simple-pipeline-executor.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
 import { assertSimpleRendererOrigin } from "./simple-renderer-runtime.mjs";
 import { calculateSimplePipelineProgress } from "./simple-pipeline-progress.mjs";
-import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, saveSimpleHotelFactRow, saveSimpleHotelImageCrop, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "./simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, saveSimpleHotelFactRow, saveSimpleHotelImageCrop, saveSimpleImageCrop, saveSimpleModuleVisibility, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "./simple-manual-images.mjs";
 import { searchSimpleHotelFacts } from "./simple-hotel-fact-search.mjs";
 import { deliveryContentDisposition } from "../src/lib/deliveryFilename.js";
 import { retrySimpleCopyTarget, retrySimpleCopyTargets, retrySimpleRenderer } from "./simple-targeted-repair.mjs";
@@ -92,9 +93,23 @@ export function createAgentPlannerServer(options = {}) {
   const simpleOrigin = () => `http://127.0.0.1:${server?.address()?.port || port}`;
   const simpleRenderer = options.simpleRenderer || ((input) => runSimpleRenderer({ ...input, root,
     outputDirectory: path.join(simpleRuntimeRoot, "output", "simple-pipeline", input.projectId), origin: simpleOrigin() }));
-  const modelConfig = options.modelConfig || { apiKey: process.env.TEXT_MODEL_API_KEY, baseUrl: (process.env.TEXT_MODEL_BASE_URL || "https://api.deepseek.com").replace(/\/$/, ""), model: process.env.TEXT_MODEL_NAME || "deepseek-v4-flash" };
-  const searchModelConfig = options.searchModelConfig || { apiKey: process.env.IMAGE_SEARCH_API_KEY, baseUrl: (process.env.IMAGE_SEARCH_BASE_URL || "https://api.vveai.com/v1").replace(/\/$/, ""), model: "gemini-3.7-flash-search", imageSearchModel: process.env.IMAGE_SEARCH_MODEL || "gemini-3.6-flash-search" };
-  const visionModelConfig = options.visionModelConfig || { apiKey: process.env.BIGMODEL_API_KEY, baseUrl: (process.env.BIGMODEL_BASE_URL || "https://open.bigmodel.cn/api/paas/v4").replace(/\/$/, ""), model: process.env.BIGMODEL_MODEL || "glm-5.3-flash" };
+  const authEnabled = options.auth?.enabled ?? process.env.NODE_ENV === "production";
+  const authFile = options.auth?.file || process.env.SHEYOU_AUTH_FILE;
+  const accountFile = options.auth?.usersFile || process.env.SHEYOU_USERS_FILE || (authFile ? `${authFile}.users.json` : "");
+  const apiKeyStore = options.apiKeyStore || (authEnabled && accountFile ? new SharedApiKeyStore({ file: `${path.resolve(accountFile)}.provider-keys.json` }) : null);
+  const legacyKeys = {
+    text: options.modelConfig?.apiKey ?? process.env.TEXT_MODEL_API_KEY,
+    search: options.searchModelConfig?.apiKey ?? process.env.IMAGE_SEARCH_API_KEY,
+    vision: options.visionModelConfig?.apiKey ?? process.env.BIGMODEL_API_KEY,
+    you: process.env.YDC_API_KEY,
+  };
+  const configuredKey = (id, mode = apiKeyStore?.mode()) => mode === "shared" ? apiKeyStore.get(id) : legacyKeys[id] || "";
+  const modelConfig = { baseUrl: (process.env.TEXT_MODEL_BASE_URL || "https://api.deepseek.com").replace(/\/$/, ""), model: process.env.TEXT_MODEL_NAME || "deepseek-v4-flash", ...options.modelConfig,
+    get apiKey() { return configuredKey("text"); } };
+  const searchModelConfig = { baseUrl: (process.env.IMAGE_SEARCH_BASE_URL || "https://api.vveai.com/v1").replace(/\/$/, ""), model: "gemini-3.7-flash-search", imageSearchModel: process.env.IMAGE_SEARCH_MODEL || "gemini-3.6-flash-search", ...options.searchModelConfig,
+    get apiKey() { return configuredKey("search"); } };
+  const visionModelConfig = { baseUrl: (process.env.BIGMODEL_BASE_URL || "https://open.bigmodel.cn/api/paas/v4").replace(/\/$/, ""), model: process.env.BIGMODEL_MODEL || "glm-5.3-flash", ...options.visionModelConfig,
+    get apiKey() { return configuredKey("vision"); } };
   const knowledgeImageConfig = options.knowledgeImageConfig || {
     sourceMode: process.env.IMAGE_SOURCE_MODE || "web_only",
     knowledgeBaseUrl: String(process.env.IMAGE_KNOWLEDGE_BASE_URL || "").replace(/\/$/, ""),
@@ -297,6 +312,13 @@ export function createAgentPlannerServer(options = {}) {
       createdAt: now, updatedAt: now,
     };
     const controller = new AbortController();
+    const runMode = apiKeyStore?.mode() || "legacy";
+    const runKeys = {
+      model: { ...modelConfig, apiKey: configuredKey("text", runMode) },
+      search: { ...searchModelConfig, apiKey: configuredKey("search", runMode) },
+      vision: { ...visionModelConfig, apiKey: configuredKey("vision", runMode) },
+      you: configuredKey("you", runMode),
+    };
     simpleJobs.set(projectId, job);
     simpleControllers.set(projectId, controller);
     const sourceData = { data: payload.facts, report: payload.report || {}, fileName: payload.sourceName || payload.report?.workbookName || "行程资料.xlsx" };
@@ -310,21 +332,22 @@ export function createAgentPlannerServer(options = {}) {
           root,
           origin: simpleOrigin(),
           adapters: { store: simpleStore },
-          plannerOptions: modelConfig,
+          plannerOptions: runKeys.model,
           copyOptions: {
-            ...modelConfig,
-            researchApiKey: searchModelConfig.apiKey,
-            researchBaseUrl: searchModelConfig.baseUrl,
-            researchModel: searchModelConfig.model,
+            ...runKeys.model,
+            researchApiKey: runKeys.search.apiKey,
+            researchBaseUrl: runKeys.search.baseUrl,
+            researchModel: runKeys.search.model,
+            hotelSearchApiKey: runKeys.you,
           },
           imageOptions: {
             ...knowledgeImageConfig,
-            searchApiKey: searchModelConfig.apiKey,
-            searchBaseUrl: searchModelConfig.baseUrl,
-            searchModel: searchModelConfig.imageSearchModel,
-            visionApiKey: visionModelConfig.apiKey,
-            visionBaseUrl: visionModelConfig.baseUrl,
-            visionModel: visionModelConfig.model,
+            searchApiKey: runKeys.search.apiKey,
+            searchBaseUrl: runKeys.search.baseUrl,
+            searchModel: runKeys.search.imageSearchModel,
+            visionApiKey: runKeys.vision.apiKey,
+            visionBaseUrl: runKeys.vision.baseUrl,
+            visionModel: runKeys.vision.model,
           },
           signal: controller.signal,
           onEvent: (event) => { if (!job.cancelRequested) updateSimpleJob(job, event); },
@@ -441,6 +464,12 @@ export function createAgentPlannerServer(options = {}) {
   };
 
   const authenticate = createDemoAuth(options.auth);
+  const missingApiServices = () => apiKeyStore?.mode() === "shared" ? apiKeyStore.status().filter((service) => !service.configured).map((service) => service.label) : [];
+  const apiServiceStatus = () => apiKeyStore.status().map((service) => {
+    const config = service.id === "text" ? modelConfig : service.id === "search" ? searchModelConfig : service.id === "vision" ? visionModelConfig : null;
+    return { ...service, provider: config ? new URL(config.baseUrl).hostname : service.provider, models: config ? [config.model, ...(service.id === "search" ? [config.imageSearchModel] : [])].filter(Boolean) : [] };
+  });
+  const apiSettingsResponse = () => ({ mode: apiKeyStore.mode(), services: apiServiceStatus() });
   const authorizeProject = (request, response, projectStore, projectId, fallbackProject) => {
     if (request.authDisabled || request.authInternal) return true;
     const currentUserId = request.authUser?.id;
@@ -461,6 +490,32 @@ export function createAgentPlannerServer(options = {}) {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${port}`);
     if (await authenticate(request, response, url)) return;
+    if (url.pathname === "/api/admin/api-keys" || url.pathname.startsWith("/api/admin/api-keys/")) {
+      if (!request.authUser?.canManageApiKeys || !apiKeyStore) return json(response, 403, { error: "只有接口设置负责人可以管理共用 Key" });
+      const id = url.pathname.slice("/api/admin/api-keys/".length);
+      try {
+        if (request.method === "GET" && url.pathname === "/api/admin/api-keys") return json(response, 200, apiSettingsResponse());
+        if (request.method === "POST" && id === "mode") {
+          const payload = await requestBody(request, 4096);
+          if (payload.mode === "shared") apiKeyStore.activate();
+          else if (payload.mode === "legacy") apiKeyStore.useLegacy();
+          else return json(response, 400, { error: "未知接口模式" });
+          return json(response, 200, apiSettingsResponse());
+        }
+        if (request.method === "POST" && id.endsWith("/test")) {
+          const serviceId = id.slice(0, -"/test".length);
+          const result = await testSharedApiService(serviceId, { apiKey: apiKeyStore.get(serviceId), modelConfig, searchModelConfig, visionModelConfig, fetchImpl: options.fetchImpl || fetch });
+          return json(response, 200, result);
+        }
+        if (request.method === "PUT" && id) {
+          const payload = await requestBody(request, 4096);
+          apiKeyStore.set(id, payload.apiKey);
+          return json(response, 200, apiSettingsResponse());
+        }
+        if (request.method === "DELETE" && id) { apiKeyStore.delete(id); return json(response, 200, apiSettingsResponse()); }
+        return json(response, 405, { error: "不支持的接口设置操作" });
+      } catch (failure) { return json(response, 400, { error: failure.message || "接口设置失败" }); }
+    }
     const catalogRoot = "/api/agent-workspace/projects";
     if (url.pathname === catalogRoot || url.pathname.startsWith(`${catalogRoot}/`)) {
       const ownerId = request.authUser?.id || (request.authDisabled ? String(request.headers["x-agent-local-user"] || "") : "");
@@ -540,6 +595,10 @@ export function createAgentPlannerServer(options = {}) {
     }
     if (request.method === "POST" && url.pathname === "/api/simple/projects") {
       if (simpleRuntimeRoot !== root) return json(response, 409, { error: "隔离项目读取入口不启动新的制作批次" });
+      let missing;
+      try { missing = missingApiServices(); }
+      catch { return json(response, 503, { error: "共用接口配置暂时无法读取，请联系接口设置负责人。", code: "SHARED_API_KEYS_UNAVAILABLE" }); }
+      if (missing.length) return json(response, 503, { error: `奢游共用接口尚未配置：${missing.join("、")}。请联系接口设置负责人。`, code: "SHARED_API_KEYS_MISSING" });
       const ownerId = request.authUser?.id || (request.authDisabled ? String(request.headers["x-agent-local-user"] || "").trim() : "");
       if (!ownerId) return json(response, 401, { error: "请先登录后开始制作" });
       try {
@@ -581,11 +640,27 @@ export function createAgentPlannerServer(options = {}) {
       try { return json(response, 200, buildSimpleManualImagePayload(simpleStore, decodeURIComponent(simpleManualMatch[1]))); }
       catch (failure) { return json(response, failure.code === "simple_project_incomplete" ? 409 : 404, { error: failure.message, code: failure.code || "simple_project_not_found" }); }
     }
+    const simpleVisibilityMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/module-visibility$/);
+    if (request.method === "PUT" && simpleVisibilityMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await saveSimpleModuleVisibility({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleVisibilityMatch[1]), module: payload.module, visible: payload.visible, deferRender: true });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "module_visibility_save_failed" }); }
+    }
+    const simpleImageCropMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images\/([^/]+)\/crop$/);
+    if (request.method === "PUT" && simpleImageCropMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await saveSimpleImageCrop({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleImageCropMatch[1]), slotId: decodeURIComponent(simpleImageCropMatch[2]), expectedSrc: payload.expectedSrc, crop: payload.crop, deferRender: true });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "image_crop_image_changed" ? 409 : 400, { error: failure.message, code: failure.code || "image_crop_save_failed" }); }
+    }
     const simpleHotelCropMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/hotel-images\/([^/]+)\/crop$/);
     if (request.method === "PUT" && simpleHotelCropMatch) {
       try {
         const payload = await requestBody(request);
-        const result = await saveSimpleHotelImageCrop({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelCropMatch[1]), slotId: decodeURIComponent(simpleHotelCropMatch[2]), expectedSrc: payload.expectedSrc, crop: payload.crop, deferRender: true });
+        const result = await saveSimpleHotelImageCrop({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleHotelCropMatch[1]), slotId: decodeURIComponent(simpleHotelCropMatch[2]), expectedSrc: payload.expectedSrc, crop: payload.crop, deferRender: true });
         return json(response, 200, result);
       } catch (failure) { return json(response, failure.code === "hotel_crop_image_changed" ? 409 : 400, { error: failure.message, code: failure.code || "hotel_crop_save_failed" }); }
     }
@@ -601,7 +676,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "POST" && simpleHotelSearchMatch) {
       try {
         const payload = await requestBody(request);
-        const result = await searchSimpleHotelFacts({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelSearchMatch[1]), hotelIndex: Number(simpleHotelSearchMatch[2]), hotelId: payload.hotelId, keys: payload.keys, mode: payload.mode, copyOptions: { ...modelConfig, researchApiKey: searchModelConfig.apiKey, researchBaseUrl: searchModelConfig.baseUrl, researchModel: searchModelConfig.model } });
+        const result = await searchSimpleHotelFacts({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelSearchMatch[1]), hotelIndex: Number(simpleHotelSearchMatch[2]), hotelId: payload.hotelId, keys: payload.keys, mode: payload.mode, copyOptions: { ...modelConfig, researchApiKey: searchModelConfig.apiKey, researchBaseUrl: searchModelConfig.baseUrl, researchModel: searchModelConfig.model, hotelSearchApiKey: configuredKey("you") } });
         return json(response, 200, result);
       } catch (failure) { return json(response, failure.code === "hotel_changed" ? 409 : 400, { error: failure.message, code: failure.code || "hotel_fact_search_failed" }); }
     }
@@ -722,6 +797,7 @@ export function createAgentPlannerServer(options = {}) {
             researchApiKey: searchModelConfig.apiKey,
             researchBaseUrl: searchModelConfig.baseUrl,
             researchModel: searchModelConfig.model,
+            hotelSearchApiKey: configuredKey("you"),
           },
         });
         return json(response, 200, result);
@@ -741,6 +817,7 @@ export function createAgentPlannerServer(options = {}) {
             researchApiKey: searchModelConfig.apiKey,
             researchBaseUrl: searchModelConfig.baseUrl,
             researchModel: searchModelConfig.model,
+            hotelSearchApiKey: configuredKey("you"),
           },
         });
         return json(response, 200, result);
@@ -771,6 +848,10 @@ export function createAgentPlannerServer(options = {}) {
     }
     if (request.method === "GET" && url.pathname === "/api/agent/health") return json(response, 200, { ok: true, flowKind: "agent_v1", port, executionEnabled: EXECUTION_ENABLED, executionConfigVersion: EXECUTION_CONFIG_VERSION, plannerConfigured: Boolean(modelConfig.apiKey), factSearchConfigured: Boolean(searchModelConfig.apiKey), imageSearchConfigured: Boolean(searchModelConfig.apiKey), imageSourceMode: knowledgeImageConfig.sourceMode, knowledgeImageConfigured: Boolean(knowledgeImageConfig.knowledgeBaseUrl && knowledgeImageConfig.trustedKnowledgeOrigins.length), visualAuditConfigured: Boolean(visionModelConfig.apiKey) });
     if (request.method === "POST" && url.pathname === "/api/agent/projects") {
+      let missing;
+      try { missing = missingApiServices(); }
+      catch { return json(response, 503, { error: "共用接口配置暂时无法读取，请联系接口设置负责人。", code: "SHARED_API_KEYS_UNAVAILABLE" }); }
+      if (missing.length) return json(response, 503, { error: `奢游共用接口尚未配置：${missing.join("、")}。请联系接口设置负责人。`, code: "SHARED_API_KEYS_MISSING" });
       try {
         const payload = await requestBody(request);
         if (!payload?.facts?.days?.length) return json(response, 400, { error: "没有识别到可规划的逐日行程" });

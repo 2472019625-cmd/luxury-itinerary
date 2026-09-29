@@ -205,8 +205,14 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     if (result.appliedRows?.length) setPayload((current) => mergeHotelRows(current, request.hotelId, result.appliedRows, { ...result, onlyEmpty: true }));
     return result;
   };
-  const persistHotelImageCrop = async ({ slotId, expectedSrc, crop }) => {
-    const result = await readJson(await fetch(`/api/simple/projects/${projectId}/hotel-images/${encodeURIComponent(slotId)}/crop`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedSrc, crop }), signal: AbortSignal.timeout(60000) }));
+  const persistImageCrop = async ({ slotId, expectedSrc, crop }) => {
+    const result = await readJson(await fetch(`/api/simple/projects/${projectId}/manual-images/${encodeURIComponent(slotId)}/crop`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedSrc, crop }), signal: AbortSignal.timeout(60000) }));
+    setPayload((current) => ({ ...current, manualRevision: result.manualRevision || current.manualRevision, renderPending: result.renderPending ?? current.renderPending }));
+    setError("");
+    return result;
+  };
+  const persistVisibility = async ({ module, visible }) => {
+    const result = await readJson(await fetch(`/api/simple/projects/${projectId}/module-visibility`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ module, visible }), signal: AbortSignal.timeout(60000) }));
     setPayload((current) => ({ ...current, manualRevision: result.manualRevision || current.manualRevision, renderPending: result.renderPending ?? current.renderPending }));
     setError("");
     return result;
@@ -228,7 +234,8 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     onPersistHotelFact={persistHotelFact}
     onPersistHotelRegion={persistHotelRegion}
     onPersistHotelStay={persistHotelStay}
-    onPersistHotelImageCrop={persistHotelImageCrop}
+    onPersistImageCrop={persistImageCrop}
+    onPersistVisibility={persistVisibility}
     onHotelFactSearch={searchHotelFact}
     onReplaceHotelFact={async (value) => { await flushHotelFact(value.hotelId, value.key); return saveHotelFact({ ...value, mode: "replace" }); }}
     onChooseImage={choose}

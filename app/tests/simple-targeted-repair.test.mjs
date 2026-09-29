@@ -59,6 +59,20 @@ test("最终排版单项复检只在其他必需项完成后开放下载", async
   assert.match(payload.outputUrl, /\/output$/);
 });
 
+test("重新检查成品沿用已保存的模块隐藏设置", async (t) => {
+  const value = await fixture({ oneSlot:true });
+  t.after(() => rm(value.root, { recursive:true, force:true }));
+  const current = value.store.getFinalResult(value.projectId, value.executionRunId);
+  current.data.diningExperiences = [{ id:'d1', title:'晚餐', images:[] }];
+  current.visibility = { dining:false };
+  current.unresolvedItems = [{ kind:'renderer', id:'renderer:2000', status:'failed', required:true, error:{ code:'renderer_failed', message:'测试失败' } }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, current);
+  let renderedData;
+  await retrySimpleRenderer({ ...value, render:async ({ data, mode }) => { renderedData = data; return { status:'success', mode, outputPath:'final-2000.png', rendererCalls:1 }; } });
+  assert.deepEqual(renderedData.diningExperiences, []);
+  assert.equal(value.store.getFinalResult(value.projectId, value.executionRunId).data.diningExperiences.length, 1);
+});
+
 test("单项返回只合并目标文案，不回滚等待期间的其他编辑", () => {
   const current = { manualVersion:1, project:{ data:{ title:"刚改的标题", days:[{ description:"旧文案", theme:"刚改的主题" }], simpleImageSlotBindings:{} } } };
   const incoming = { manualVersion:2, repair:{ kind:"copy", status:"success", targetPath:"days.0.description" }, project:{ data:{ title:"服务器旧标题", days:[{ description:"新文案", theme:"服务器旧主题" }], simpleImageSlotBindings:{} } } };

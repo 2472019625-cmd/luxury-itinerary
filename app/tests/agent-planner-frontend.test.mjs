@@ -7,6 +7,7 @@ const workspace = readFileSync(new URL("../src/Workspace.jsx", import.meta.url),
 const diagnostic = readFileSync(new URL("../src/AgentWorkspace.jsx", import.meta.url), "utf8");
 const workspaceCss = readFileSync(new URL("../src/workspace.css", import.meta.url), "utf8");
 const confirmationActions = readFileSync(new URL("../src/lib/confirmationActionItems.js", import.meta.url), "utf8");
+const moduleVisibility = readFileSync(new URL("../src/lib/moduleVisibility.js", import.meta.url), "utf8");
 
 test("Step5直接下载客户行程方案且所有入口使用自动名称", () => {
   const versions = workspace.slice(workspace.indexOf("export function VersionsStep"), workspace.indexOf("function ProfilePanel"));
@@ -157,12 +158,23 @@ test("编辑页以紧凑结构栏和右侧待处理视图替代底部重复提�
 
 test("编辑器将预订流程与资金安全提醒拆为独立显示模块", () => {
   assert.match(workspace, /\{ id: "booking", label: "预订流程" \},\s*\{ id: "security", label: "资金安全提醒" \}/);
-  const visibility = workspace.slice(workspace.indexOf("function visibilityData"), workspace.indexOf("function versionSnapshot"));
+  const visibility = moduleVisibility;
   assert.match(visibility, /visibility\.booking === false\) next\.showBookingSection = false/);
   assert.match(visibility, /visibility\.security === false\) next\.showSecuritySection = false/);
   assert.doesNotMatch(visibility, /visibility\.booking === false[^\n]+showSecuritySection/);
   assert.match(workspace, /预订流程为品牌固定内容，可独立控制是否进入正式版本/);
   assert.match(workspace, /资金安全提醒与其付款区域连续展示，可独立于预订流程显示或隐藏/);
+});
+
+test("全部内容图片裁切需要确认保存，正式版缺图不画占位框", () => {
+  assert.match(workspace, /const confirmCrop = async/);
+  assert.match(workspace, /onPersistImageCrop\(\{ slotId:/);
+  assert.match(workspace, /cropOpen && <ImageCropEditor/);
+  assert.match(workspace, /确认裁切/);
+  assert.doesNotMatch(workspace, /onCommit=\{setCrop\}/);
+  assert.match(app, /SuppressMissingImagesContext/);
+  assert.match(app, /suppressMissingImagePlaceholders === true/);
+  assert.match(app, /transport-card-no-image/);
 });
 
 test("酒店结构化事实同时进入最终展示和Step4编辑，并兼容旧项目文案", () => {
