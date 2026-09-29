@@ -80,3 +80,13 @@ for (const batch of [false, true]) test(`saved unresolved flight: explicit ${bat
   assert.equal(final.imageExecution.metrics.automaticFollowupRounds, 0);
   assert.deepEqual(value.store.getPlan(value.projectId, value.plan.planId), before);
 });
+
+
+test('saved bush airport pose alternatives use the same fact-bound manual recovery', () => {
+  const slot=flightTarget(), plan=flightPlan();
+  slot.primaryVisualSubject='草原飞机在塞伦盖蒂草原机场起降或停靠';
+  slot.queryCore={subject:'草原飞机',action:'起降',identity:'',subjectEn:'bush plane',actionEn:'taking off or landing',identityEn:''};
+  assert.equal(prepareExplicitImageSearchSlot(slot,{plan}).needsUserAction,false);
+  slot.primaryVisualSubject='草原飞机在专属机场起降或停靠';
+  assert.equal(prepareExplicitImageSearchSlot(slot,{plan}).needsUserAction,true);
+});

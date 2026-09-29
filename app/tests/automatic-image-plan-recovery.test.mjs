@@ -125,3 +125,34 @@ test('recovered cross-module breakfast slots still cannot adopt the same photo t
   assert.ok(result.results.every(r => r.technicalStatus !== 'planner_slot_unresolved'));
   assert.equal(result.metrics.automaticFollowupRounds, 0);
 });
+
+
+test('explicit optional omission removes only an empty task, preserving populated conflicts', async () => {
+  for (const populated of [false, true]) {
+    const { agentPlan, simple } = await recoveryPlan({ mutate(raw) {
+      raw.imagePlan.omittedOptionalRoles = [...(raw.imagePlan.omittedOptionalRoles || []), 'transport:1'];
+      const slot = raw.imagePlan.slots.find(item => item.role === 'transport:1');
+      if (!populated) Object.assign(slot, { primaryVisualSubject: '无用车安排，不单独规划图片',
+        queryCore: { subject: '', action: '', identity: '', subjectEn: '', actionEn: '', identityEn: '' },
+        fidelityQuery: '', alternateQueries: [], searchIntent: [], required: false, removable: true });
+    } });
+    assert.equal(agentPlan.imagePlan.slots.some(slot => slot.role === 'transport:1'), populated);
+    assert.equal(agentPlan.validation.unresolvedSlotRoles.includes('transport:1'), populated);
+    assert.equal(simple.imageSlots.some(slot => slot.moduleType === 'transport'), populated);
+  }
+});
+
+
+test('empty optional omission cannot erase a locked slot or a surviving query', async () => {
+  for (const patch of [{userLocked:true},{fidelityQuery:'飞机'},{role:'cover',required:true}]) {
+    const role=patch.role || 'transport:1';
+    const {agentPlan}=await recoveryPlan({mutate(raw){
+      raw.imagePlan.omittedOptionalRoles=[role];
+      Object.assign(raw.imagePlan.slots.find(slot=>slot.role===role),{
+        queryCore:{subject:'',action:'',identity:'',subjectEn:'',actionEn:'',identityEn:''},
+        fidelityQuery:'',alternateQueries:[],searchIntent:[],required:false,...patch});
+    }});
+    assert.ok(agentPlan.imagePlan.slots.some(slot=>slot.role===role));
+    assert.ok(agentPlan.validation.unresolvedSlotRoles.includes(role));
+  }
+});

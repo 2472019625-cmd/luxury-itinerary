@@ -10,6 +10,7 @@ import { validateAgentPlan } from "./agent-plan-validator.mjs";
 import { compileAgentExecutionPlan, filterImagePlanForModules } from "./agent-plan-compiler.mjs";
 import { validateReviewDecisionBatch } from "./agent-review-decision.mjs";
 import { buildKnowledgeQueryPlan, cleanupPlannerQueryScope, validatePlannerSearchIntent } from "./knowledge-scope-resolver.mjs";
+import { resolveScenePreference } from "./image-scene-preferences.mjs";
 import { visualSubjectPolicyIssue } from "./visual-subject-policy.mjs";
 import { highlightToText } from "../src/lib/highlightDisplay.js";
 import { SLOT_VISUAL_CONTRACT, buildDayVisualCoverageTasks } from "./planner-visual-contract.mjs";
@@ -555,7 +556,7 @@ function repairUnboundHotelSpecificVisual(slot, factBasis = {}) {
     repair: { code: "hotel_unbound_specific_visual_normalized", message: "酒店主图缺少专属房型或设施的酒店来源承诺，已恢复同店代表空间与完整酒店身份", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: slot.queryCore, primaryVisualSubject } };
 }
 
-function repairHotelRepresentativeChoice(slot, factBasis) {
+export function repairHotelRepresentativeChoice(slot, factBasis) {
   const hotelRole = /^hotel:(\d+)$/.exec(cleanText(slot.role));
   const hotel = hotelRole && (factBasis.hotels || [])[Number(hotelRole[1]) - 1];
   const core = slot.queryCore || {};
@@ -585,7 +586,15 @@ function repairHotelRepresentativeChoice(slot, factBasis) {
   }
   // Permit only neutral presentation wording around those category names.
   // An unbound second entity or a named/private facility is not neutral.
-  const visualCategories = splitVisualChoices(visual).map(hotelVisualCategory);
+  const visualCategories = splitVisualChoices(visual).map(part => {
+    // Canonical representative Core permits generic lodging presentation;
+    // named rooms, private facilities and other entities still fail parsing.
+    const neutral = alreadyRepresentative ? part.trim().replace(/^(?:(?:帐篷)?(?:营地|度假)?酒店|帐篷营地|营地|度假村)的?/, "") : part;
+    if (alreadyRepresentative && /^(?:代表性空间|representative (?:hotel )?space)$/i.test(neutral)) {
+      return { category: "representative", preference: "" };
+    }
+    return hotelVisualCategory(neutral);
+  });
   if (visualCategories.length < 2 || visualCategories.length > 4 || visualCategories.some((item) => !item)) return null;
   const categoryNames = visualCategories.map((item) => item.category);
   if (!alreadyRepresentative && (singleCoreCategory
@@ -603,7 +612,7 @@ function repairHotelRepresentativeChoice(slot, factBasis) {
     repair: { code: "hotel_representative_choice_resolved", message: "已按同一酒店代表图的既有空间类别归一，完整身份与硬门槛不变", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: core, originalQueries: [slot.fidelityQuery, ...(slot.alternateQueries || [])], primaryVisualSubject, allowedCategories: unique(categoryNames), ...(preferences.length ? { softViewPreferences: preferences } : {}) } };
 }
 
-function repairBackgroundVisualChoice(slot) {
+function repairBackgroundWithExistingQueries(slot) {
   const core = slot.queryCore || {};
   const values = [core.subject, core.action, core.identity, core.subjectEn, core.actionEn, core.identityEn].map(cleanText);
   if (slot.exactIdentityRequired !== false || !values[0] || values.some((value) => visualChoicePattern.test(value))) return null;
@@ -631,30 +640,32 @@ function repairBackgroundVisualChoice(slot) {
   };
   if (!queries.some((query) => languages.some((language) => supportsCore(query, language)))
     || !queries.every((query) => languages.some((language) => supportsSubject(query, language)))) return null;
-  const visual = cleanText(slot.primaryVisualSubject);
-  // Only a syntactically marked background/location phrase may be discarded.
-  // The entire subject and necessary action must remain outside the phrase.
-  const starts = [...visual.matchAll(/(?:背景(?:为|是|可为)|(?:位于|在))|\b(?:against|in|on|at)\s+/gi)];
-  for (const marker of starts.reverse()) {
-    const from = marker.index;
-    const bodyStart = from + marker[0].length;
-    const tail = visual.slice(bodyStart);
-    const boundaries = [visual.length, ...[...tail.matchAll(/[，,；;。]/g)].map((match) => bodyStart + match.index),
-      ...languages.flatMap(({ subject, action }) => [subject, action].filter(Boolean)).flatMap((part) => {
-        const at = visual.toLowerCase().indexOf(part.toLowerCase(), bodyStart);
-        return at >= 0 ? [at] : [];
-      })].sort((a, b) => a - b);
-    const end = boundaries.find((at) => visualChoicePattern.test(visual.slice(bodyStart, at)));
-    if (end === undefined) continue;
-    const background = visual.slice(bodyStart, end).trim();
-    const alternatives = splitVisualChoices(background);
-    if (alternatives.length < 2 || alternatives.length > 3 || alternatives.some((part) => !part || part.length > 30 || /[，,；;。!?！？]/.test(part))) continue;
-    const remaining = `${visual.slice(0, from)} ${visual.slice(end)}`.trim();
-    if (visualChoicePattern.test(remaining) || !languages.some((language) => supportsCore(remaining, language)) || visualSubjectPolicyIssue(remaining, core)) continue;
-    const primaryVisualSubject = unique([values[0], values[1]]).join(" ");
-    return { primaryVisualSubject, repair: { code: "background_visual_choice_resolved", message: "已保留由结构化Core与原查询共同证明的主体动作，仅移除非核心背景选择", originalPrimaryVisualSubject: slot.primaryVisualSubject, primaryVisualSubject, backgroundPreference: background } };
-  }
-  return null;
+  const preference = resolveScenePreference(slot);
+  if (!preference) return null;
+  return { primaryVisualSubject: preference.primaryVisualSubject, repair: {
+    code: "background_visual_choice_resolved", message: "保留结构化主体动作和有效原查询，仅移除非核心画面偏好",
+    originalPrimaryVisualSubject: slot.primaryVisualSubject, ...preference } };
+}
+
+function repairBackgroundVisualChoice(slot) {
+  const existing = repairBackgroundWithExistingQueries(slot);
+  if (existing) return existing;
+  // Synonymous transfer queries need not repeat the action verb literally,
+  // but every existing query must still refer to the selected subject.
+  const subjects = [slot.queryCore?.subject, slot.queryCore?.subjectEn].filter(Boolean).flatMap(visualWords)
+    .filter(word => word.length >= 2);
+  const originalQueries = [slot.fidelityQuery, ...(slot.alternateQueries || [])].map(cleanText).filter(Boolean);
+  if (originalQueries.some(query => visualChoicePattern.test(query)
+    || !visualWords(query).some(word => subjects.includes(word)))) return null;
+  const preference = resolveScenePreference(slot);
+  if (!preference) return null;
+  const queries = buildKnowledgeQueryPlan({ ...slot, primaryVisualSubject: preference.primaryVisualSubject,
+    fidelityQuery: "", alternateQueries: [], searchIntent: [] }, null);
+  if (queries.validationError || queries.queries.length < 2) return null;
+  return { primaryVisualSubject: preference.primaryVisualSubject,
+    fidelityQuery: queries.queries[0], alternateQueries: queries.queries.slice(1), searchIntent: queries.queries,
+    repair: { code: "background_visual_choice_resolved", message: "保留完整结构化主体动作，仅移除非核心画面偏好",
+      originalPrimaryVisualSubject: slot.primaryVisualSubject, ...preference } };
 }
 
 function repairEquivalentVisualChoice(slot) {
@@ -730,7 +741,7 @@ export function repairTransportOverviewPose(slot, factBasis, { allowCoreActionCh
   const choices = splitVisualChoices(choiceText);
   if (choices.length !== 2 || !choices.every((part) => ordinaryPose.test(part))
     || !/飞机|aircraft|plane/i.test(visual)
-    || /机场|航站楼|airport|terminal|直升机|热气球|船只?|商务车|越野车|helicopter|balloon|boat/i.test(`${visual} ${core.subject} ${core.identity}`)) return null;
+    || /专属机场|private\s+airport|航站楼|terminal|直升机|热气球|船只?|商务车|越野车|helicopter|balloon|boat/i.test(`${visual} ${core.subject} ${core.identity}`)) return null;
   const sourceDays = (transport.usageSegments || []).flatMap((entry) => {
     const number = Number(/\bDAY\s*(\d+)\b/i.exec(cleanText(entry))?.[1]);
     return Number.isInteger(number) && number > 0 ? [(factBasis.days || [])[number - 1]] : [];
@@ -862,10 +873,25 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
     }
   }
 
+  const omittedEmptyRoles = new Set();
+  const candidates = new Map(buildPlannerImageCandidates(factBasis).map(item => [item.role, item]));
+  const plannedSlots = next.imagePlan?.slots || [];
+  const omissions = new Set(next.imagePlan?.omittedOptionalRoles || []);
   const keptSlots = [];
   const dayCounts = new Map();
   const suppressedSlots = [];
   for (const slot of next.imagePlan?.slots || []) {
+    const candidate = candidates.get(slot.role);
+    const core = slot.queryCore || {};
+    if (candidate && candidate.required === false && omissions.has(slot.role) && !slot.userLocked && slot.required !== true
+      && plannedSlots.filter(item => item.role === slot.role).length === 1
+      && [core.subject, core.action, core.identity, core.subjectEn, core.actionEn, core.identityEn,
+        slot.fidelityQuery, ...(slot.alternateQueries || []), ...(slot.searchIntent || [])].every(value => !cleanText(value))) {
+      omittedEmptyRoles.add(slot.role);
+      repairs.push({ role: slot.role, repairs: [{ code: "empty_omitted_optional_slot_removed",
+        message: "遵从显式可选位省略声明，移除没有检索目标的空任务", originalSlot: structuredClone(slot) }] });
+      continue;
+    }
     const dayMatch = /^day:(\d+)(?::supporting:\d+)?$/.exec(String(slot.role || ""));
     if (dayMatch) {
       const count = dayCounts.get(dayMatch[1]) || 0;
@@ -886,7 +912,7 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
     const localRepairs = [];
     let repaired = { ...slot };
     const visualRepair = issues.some((issue) => issue.code === "ambiguous_visual_subject")
-      ? repairHotelRepresentativeChoice(slot, factBasis) || repairBackgroundVisualChoice(slot) || repairEquivalentVisualChoice(slot)
+      ? repairHotelRepresentativeChoice(slot, factBasis) || (boundVisualSource(slot, factBasis) ? repairBackgroundVisualChoice(slot) : null) || repairEquivalentVisualChoice(slot)
         || (boundVisualSource(slot, factBasis) ? repairTransportOverviewPose(slot, factBasis, { allowCoreActionChoices: true }) : null)
       : issues.some((issue) => issue.code === "hotel_specific_visual_unbound") ? repairUnboundHotelSpecificVisual(slot, factBasis) : null;
     if (visualRepair) {
@@ -975,7 +1001,7 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
 
   for (const issue of validationErrors) {
     if (["image_search_plan_missing", "image_optional_plan_unaccounted", "image_slot_role_duplicate", "image_optional_omission_conflict"].includes(issue.code)) {
-      for (const role of issue.slotRoles || []) unresolvedRoles.add(role);
+      for (const role of issue.slotRoles || []) if (!omittedEmptyRoles.has(role)) unresolvedRoles.add(role);
     }
   }
   return { plan: next, repairs, unresolvedSlotRoles: [...unresolvedRoles] };

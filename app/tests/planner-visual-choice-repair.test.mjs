@@ -599,3 +599,57 @@ test("同一Core的Scope词可局部清洗，保留主体动作并允许搜索",
   assert.ok([slot.fidelityQuery, ...slot.alternateQueries].every((query) => !query.includes("马赛马拉")));
   assert.ok([slot.fidelityQuery, ...slot.alternateQueries].length >= 2);
 });
+
+
+test("canonical hotel representative Core accepts neutral lodging presentation in both search entry points", async () => {
+  const { prepareExplicitImageSearchSlot } = await import("../server/manual-image-search-target.mjs");
+  for (const type of ["度假酒店", "营地酒店", "帐篷营地酒店", "酒店"]) {
+    const identity = "Synthetic Savannah Lodge";
+    const original = hotelVisual({ location: identity, locationRole: "scope_only",
+      primaryVisualSubject: `${identity} ${type}的代表性空间或外观`,
+      queryCore: { subject: "酒店代表性空间", subjectEn: "representative hotel space", action: "", actionEn: "", identity, identityEn: identity } });
+    const { slot, plan, data } = await generateWithVisual(original);
+    assert.equal(slot.needsUserAction, false, type);
+    assert.equal(slot.queryCore.identity, identity);
+    const simple = materializeSimpleSkillPlan({ data, agentPlan: plan });
+    const target = simple.imageSlots.find(item => item.moduleType === "hotel");
+    const legacy = { ...target, ...original, plannerSlotStatus: "unresolved", needsUserAction: true,
+      plannerValidationIssues: [{ code: "ambiguous_visual_subject" }] };
+    const before = structuredClone(legacy);
+    const manual = prepareExplicitImageSearchSlot(legacy, { plan: simple });
+    assert.equal(manual.needsUserAction, false, `manual ${type}`);
+    assert.deepEqual(manual.queryCore, slot.queryCore);
+    assert.deepEqual(legacy, before);
+    const wrong = prepareExplicitImageSearchSlot(legacy, { plan: { ...simple, slotBindings: {} } });
+    assert.equal(wrong.needsUserAction, true);
+  }
+});
+
+test("airport transfer backgrounds keep the complete passenger action for automatic and manual queries", async () => {
+  const { prepareExplicitImageSearchSlot } = await import("../server/manual-image-search-target.mjs");
+  const original = { role: "transport:1", location: "坦桑尼亚", locationRole: "scope_only", exactIdentityRequired: false,
+    primaryVisualSubject: "商务用车在乞力马扎罗机场或阿鲁沙接送乘客",
+    queryCore: { subject: "商务用车", action: "接送乘客", identity: "", subjectEn: "business car", actionEn: "picking up passengers", identityEn: "" },
+    fidelityQuery: "商务用车 机场接送", alternateQueries: ["business car airport transfer", "坦桑尼亚 商务接送"], sourceRefs: ["transport.0"] };
+  const { slot } = await generateWithVisual(original);
+  assert.equal(slot.needsUserAction, false);
+  assert.deepEqual(slot.queryCore, original.queryCore);
+  const manual = prepareExplicitImageSearchSlot({ ...original, plannerSlotStatus: "unresolved", needsUserAction: true,
+    plannerValidationIssues: [{ code: "ambiguous_visual_subject" }, { code: "scope_only_location_in_query" }] });
+  assert.equal(manual.needsUserAction, false);
+  assert.deepEqual(manual.queryCore, slot.queryCore);
+  assert.deepEqual(manual.searchIntent, slot.searchIntent);
+});
+
+test("ordinary bush airfield poses do not block a fact-bound flight overview", async () => {
+  const original = { role: "transport:1", location: "坦桑尼亚", locationRole: "scope_only", exactIdentityRequired: false,
+    primaryVisualSubject: "草原飞机在塞伦盖蒂草原机场起降或停靠",
+    queryCore: { subject: "草原飞机", action: "起降", identity: "", subjectEn: "bush plane", actionEn: "taking off or landing", identityEn: "" },
+    fidelityQuery: "草原飞机起降", alternateQueries: ["bush plane airstrip"], sourceRefs: ["transport.0"] };
+  const context = { transportFacts: { category: "草原飞机", usageSegments: ["DAY 1 阿鲁沙 → 塞伦盖蒂"] }, dayDescription: "乘草原飞机前往营地" };
+  const { slot } = await generateWithVisual(original, context);
+  assert.equal(slot.needsUserAction, false);
+  assert.equal(slot.queryCore.action, "");
+  const promised = await generateWithVisual(original, { ...context, dayDescription: "体验草原飞机降落" });
+  assert.equal(promised.slot.needsUserAction, true);
+});
