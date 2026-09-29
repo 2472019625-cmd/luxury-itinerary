@@ -722,9 +722,8 @@ export function repairTransportOverviewPose(slot, factBasis, { allowCoreActionCh
   const visual = cleanText(slot.primaryVisualSubject);
   if (allowCoreActionChoices && visualSubjectPolicyIssue(visual, core)) return null;
   const ordinaryPose = /(?:起飞|降落|起降|停靠|停放|飞行中|飞行|空中|跑道|taking[ -]?off|landing|parked|flying|in[ -]?flight|airstrip|runway)/i;
-  // Old saved slots can contain a single Chinese scene while its English
-  // action offers ordinary poses. Only explicit searches opt into this
-  // recovery; automatic planning retains its existing boundary.
+  // A single Chinese scene can have ordinary pose alternatives in its English
+  // Core. Automatic and manual callers use the same fact-backed recovery.
   const choiceText = allowCoreActionChoices && !visualChoicePattern.test(visual)
     ? [core.action, core.actionEn].map(cleanText).find((value) => visualChoicePattern.test(value)) || visual
     : visual;
@@ -758,7 +757,42 @@ export function repairTransportOverviewPose(slot, factBasis, { allowCoreActionCh
   const queryPlan = buildKnowledgeQueryPlan({ ...slot, queryCore, primaryVisualSubject }, null);
   if (queryPlan.validationError || queryPlan.queries.length < 2) return null;
   return { primaryVisualSubject, queryCore, fidelityQuery: queryPlan.queries[0], alternateQueries: queryPlan.queries.slice(1, 4), searchIntent: queryPlan.queries.slice(0, 4),
-    repair: { code: "transport_overview_pose_normalized", message: "交通概览保留原始飞机类型，普通跑道或空中姿态只作表现偏好", originalPrimaryVisualSubject: slot.primaryVisualSubject, primaryVisualSubject } };
+    repair: { code: "transport_overview_pose_normalized", message: "交通概览保留原始飞机类型，普通跑道或空中姿态只作表现偏好", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: structuredClone(core), primaryVisualSubject } };
+}
+
+function boundVisualSource(slot, factBasis) {
+  const role = /^(day|dining|hotel|transport):(\d+)(?::supporting:\d+)?$/.exec(cleanText(slot.role));
+  if (!role && slot.role !== "cover") return false;
+  const sourceKey = role && ({ day: "days", dining: "diningExperiences", hotel: "hotels", transport: "transport" })[role[1]];
+  const item = role && factBasis[sourceKey]?.[Number(role[2]) - 1];
+  if (role && !item) return false;
+  const prefix = role && `${sourceKey}.${item.sourceIndex ?? Number(role[2]) - 1}`;
+  return (Array.isArray(slot.sourceRefs) ? slot.sourceRefs : []).some(ref => {
+    if (typeof ref !== "string" || !/^(days|hotels|diningExperiences|transport)\.\d+(?:\.[\w]+)*$/.test(ref)) return false;
+    if (prefix && ref !== prefix && !ref.startsWith(`${prefix}.`)) return false;
+    // References use original source indices; filtered fact arrays need mapping.
+    const [key, index, ...parts] = ref.split(".");
+    let value = key === "days" ? factBasis.days?.[Number(index)]
+      : factBasis[key]?.find((entry, position) => (entry.sourceIndex ?? position) === Number(index));
+    for (const part of parts) value = value && Object.hasOwn(value, part) ? value[part] : undefined;
+    return value != null && value !== "" && (!Array.isArray(value) || value.length > 0);
+  });
+}
+
+function repairCrossModuleDuplicate(slot, first, factBasis, slots) {
+  const isDay = target => /^day:\d+(?::supporting:\d+)?$/.test(target.role);
+  // Do not manufacture extra same-day scenes or collapse hotel spaces. This
+  // recovery serves a DAY and an existing cover/module with the same Core.
+  if (!first || isDay(slot) === isDay(first)
+    || !boundVisualSource(slot, factBasis) || !boundVisualSource(first, factBasis)) return null;
+  const day = /^(day:\d+):supporting:/.exec(slot.role);
+  const coreKey = target => [target.queryCore?.identity, target.queryCore?.subject, target.queryCore?.action].map(visualKey).filter(Boolean).join("|");
+  if (day && slots.some(other => other !== slot && (other.role === day[1] || other.role.startsWith(`${day[1]}:supporting:`))
+    && coreKey(other) === coreKey(slot))) return null;
+  const queries = buildKnowledgeQueryPlan(slot, null);
+  if (queries.validationError || queries.queries.length < 2) return null;
+  return { code: "cross_module_distinct_photo_search", message: "保留已确认核心目标，跨模块分别搜索不同照片；沿用全局文件与近似图去重",
+    conflictingRole: first.role, corePreserved: true, requireDistinctPhoto: true };
 }
 
 function completePlannerObjectEnd(source, start) {
@@ -852,7 +886,8 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
     const localRepairs = [];
     let repaired = { ...slot };
     const visualRepair = issues.some((issue) => issue.code === "ambiguous_visual_subject")
-      ? repairHotelRepresentativeChoice(slot, factBasis) || repairBackgroundVisualChoice(slot) || repairEquivalentVisualChoice(slot) || repairTransportOverviewPose(slot, factBasis)
+      ? repairHotelRepresentativeChoice(slot, factBasis) || repairBackgroundVisualChoice(slot) || repairEquivalentVisualChoice(slot)
+        || (boundVisualSource(slot, factBasis) ? repairTransportOverviewPose(slot, factBasis, { allowCoreActionChoices: true }) : null)
       : issues.some((issue) => issue.code === "hotel_specific_visual_unbound") ? repairUnboundHotelSpecificVisual(slot, factBasis) : null;
     if (visualRepair) {
       const { repair, ...fields } = visualRepair;
@@ -917,6 +952,25 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
       slot.plannerValidationIssues.push({ code: "duplicate_visual_responsibility", message: "局部归一后与已有图片位承担相同核心视觉职责", conflictingRole: first.role });
       unresolvedRoles.add(slot.role);
     } else if (!first) repairedTargets.set(key, slot);
+  }
+
+  // A repeated Core across a DAY and another module is a composition concern,
+  // not a reason to skip all retrieval. Only release this specific issue after
+  // repairs have passed the same slot validator; retain every other blocker.
+  const remainingErrors = validateSimpleDayVisuals(next, factBasis);
+  for (const slot of next.imagePlan.slots) {
+    const duplicates = slot.plannerValidationIssues.filter(issue => issue.code === "duplicate_visual_responsibility");
+    if (!duplicates.length || slot.userLocked
+      || remainingErrors.some(issue => issue.code !== "duplicate_visual_responsibility" && issue.slotRoles?.includes(slot.role))
+      || slot.plannerValidationIssues.some(issue => !["duplicate_visual_responsibility", ...QUERY_REPAIRABLE_CODES, "invalid_supporting_visual"].includes(issue.code))) continue;
+    const duplicateRepairs = duplicates.map(issue => repairCrossModuleDuplicate(slot, next.imagePlan.slots.find(other => other.role === issue.conflictingRole), factBasis, next.imagePlan.slots));
+    if (duplicateRepairs.some(repair => !repair)) continue;
+    slot.plannerLocalRepairs.push(...duplicateRepairs);
+    slot.plannerSlotStatus = "locally_repaired";
+    slot.needsUserAction = false;
+    unresolvedRoles.delete(slot.role);
+    const entry = repairs.find(item => item.role === slot.role);
+    if (!entry) repairs.push({ role: slot.role, repairs: slot.plannerLocalRepairs });
   }
 
   for (const issue of validationErrors) {

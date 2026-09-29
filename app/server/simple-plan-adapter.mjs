@@ -1007,7 +1007,8 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     const normalizedSubject = rawPrimarySubject.toLowerCase().replace(/\s+/g, '');
     const matchedIndex = (day.spots || []).findIndex((spot) => clean(spot.name).toLowerCase().replace(/\s+/g, '') === normalizedSubject);
     const spotIndex = matchedIndex >= 0 ? matchedIndex : 0;
-    const referencedIndices = [...new Set((dayPlan.sourceRefs || []).flatMap(ref => {
+    const daySourceRefs = Array.isArray(dayPlan.sourceRefs) ? dayPlan.sourceRefs : [];
+    const referencedIndices = [...new Set(daySourceRefs.flatMap(ref => {
       const match = String(ref).replace(/^factBasis\./, '').replace(/\[(\d+)\]/g, '.$1').match(/^days\.(\d+)\.spots\.(\d+)(?:\.|$)/);
       return match && Number(match[1]) === index && day.spots?.[Number(match[2])] ? [Number(match[2])] : [];
     }))];
