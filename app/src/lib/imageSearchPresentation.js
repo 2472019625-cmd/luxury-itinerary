@@ -15,6 +15,17 @@ export function imageSearchPresentation(review = {}, { searching = false } = {})
   }
 
   const diagnostic = review.searchDiagnostic || current.searchDiagnostic || {};
+  if (technicalStatus === "planner_slot_unresolved" || diagnostic.planning?.blocked) {
+    return {
+      title: "本次未开始搜索",
+      detail: diagnostic.planning?.reason === "duplicate_visual"
+        ? "首轮自动搜索因图片主题重复而跳过。可以点击“为当前位置搜索更多”，沿用这个主题寻找不同照片，也可以选择已有候选或上传图片。"
+        : diagnostic.planning?.reason === "scene_preference"
+          ? "首轮自动搜索因画面包含可选细节而跳过。主题已经明确，可以点击“为当前位置搜索更多”寻找不同照片。"
+        : "这个位置的图片主题尚未明确，搜索已暂停。可以选择已有候选或上传合适的图片。",
+      active: false,
+    };
+  }
   const knowledge = diagnostic.knowledge || {};
   const web = diagnostic.web || {};
   const candidates = review.candidates || [];
@@ -41,10 +52,7 @@ export function imageSearchPresentation(review = {}, { searching = false } = {})
   const waiting = confirmableCount > 0 && (status === "candidate_waiting" || status === "needs_user_action");
   const selected = ["success", "auto_selected", "human_selected", "uploaded"].includes(status);
   let title = "这个位置尚未配图";
-  if (technicalStatus === "planner_slot_unresolved") {
-    title = "图片主题尚待确认";
-    details.push("这个位置的搜索主题尚未明确，尚未开始自动找图。");
-  } else if (selected) title = "当前位置已有图片";
+  if (selected) title = "当前位置已有图片";
   else if (rejected) {
     title = "候选图片未通过检查";
     details.push("已找到的候选未通过内容或图片质量检查，未自动填入。");
@@ -65,4 +73,13 @@ export function imageSearchPresentation(review = {}, { searching = false } = {})
 export function imageReviewForSlot(data = {}, slot = {}) {
   const slotId = slot.pipelineSlotId || slot.slotId;
   return (data.imageReview?.slots || []).find(review => review.slotId === slotId) || (slot.src ? { status: "success" } : {});
+}
+
+export function imageSearchCompletionMessage(payload = {}, slot = {}) {
+  const review = imageReviewForSlot(payload.project?.data || { imageReview: payload.imageReview }, slot);
+  const presentation = imageSearchPresentation(review);
+  if (presentation.title === "本次未开始搜索") return `${presentation.title}：${presentation.detail}`;
+  if (payload.newCandidateCount > 0) return `已找到 ${payload.newCandidateCount} 张新候选`;
+  if (["候选图片尚未完成检查", "部分来源页面无法访问", "知识库目录尚未定位"].includes(presentation.title)) return presentation.title;
+  return "暂未找到更多合适图片";
 }

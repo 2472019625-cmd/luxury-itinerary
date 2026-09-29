@@ -1,11 +1,41 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { imageReviewForSlot, imageSearchPresentation } from "../src/lib/imageSearchPresentation.js";
+import { imageReviewForSlot, imageSearchPresentation, imageSearchCompletionMessage } from "../src/lib/imageSearchPresentation.js";
 import { buildSimpleManualImagePayload } from "../server/simple-manual-images.mjs";
 import { selectCustomerRenderData } from "../server/customer-render-data.mjs";
 
 const text = value => `${value.title}。${value.detail}`;
 const diagnostic = (knowledge = {}, web = {}) => ({ knowledge, web });
+
+test("自动规划重复挂起明确显示未开始，并提供用户主动寻找不同照片的入口", () => {
+  const payload = payloadFor({ technicalStatus: "planner_slot_unresolved", plannerValidationIssues: [{ code: "duplicate_visual_responsibility", message: "internal-secret" }] });
+  const review = payload.imageReview.slots[0];
+  assert.equal(review.searchDiagnostic.planning.blocked, true);
+  assert.equal(review.searchDiagnostic.planning.reason, "duplicate_visual");
+  const presentation = imageSearchPresentation(review);
+  const message = imageSearchCompletionMessage(payload, { pipelineSlotId: review.slotId });
+  assert.match(message, /本次未开始搜索.*主题重复/);
+  assert.match(text(presentation), /寻找不同照片/);
+  assert.doesNotMatch(text(presentation), /未找到|internal-secret/);
+  assert.equal(imageSearchPresentation(review, { searching: true }).title, "正在搜索图片");
+  assert.equal(selectCustomerRenderData(payload.project.data).imageReview, undefined);
+});
+
+test("普通重搜完成反馈保持新候选计数，未完成审核不冒充搜不到图", () => {
+  assert.equal(imageSearchCompletionMessage({ newCandidateCount: 2 }), "已找到 2 张新候选");
+  assert.equal(imageSearchCompletionMessage({ newCandidateCount: 0 }), "暂未找到更多合适图片");
+  const payload = payloadFor({ technicalStatus: "visual_judgment_inconclusive" });
+  assert.equal(imageSearchCompletionMessage(payload, { slotId: "image:cover:primary" }), "候选图片尚未完成检查");
+});
+
+test("旧手动记录补充重复主题说明，其他规划问题仍保持主题未明确", () => {
+  const payload = payloadFor({ technicalStatus: "planner_slot_unresolved", plannerValidationIssues: [{ code: "duplicate_visual_responsibility" }],
+    manualAction: { currentSearchFallbackResult: { previousStatus: "needs_user_action", technicalStatus: "planner_slot_unresolved", searchDiagnostic: diagnostic({}, {}) } } });
+  assert.match(imageSearchPresentation(payload.imageReview.slots[0]).detail, /寻找不同照片/);
+  const unsafe = payloadFor({ technicalStatus: "planner_slot_unresolved", plannerValidationIssues: [{ code: "duplicate_visual_responsibility" }, { code: "ambiguous_visual_subject" }] });
+  assert.match(imageSearchPresentation(unsafe.imageReview.slots[0]).detail, /主题尚未明确/);
+  assert.doesNotMatch(imageSearchPresentation(unsafe.imageReview.slots[0]).detail, /寻找不同照片/);
+});
 
 test("目录未定位且零查询，不能冒充知识库无匹配", () => {
   for (const status of ["entity_directory_missing", "completed", "needs_clarification"]) {
@@ -52,6 +82,12 @@ test("正在搜索优先于历史失败，审核中不显示已失败", () => {
     assert.doesNotMatch(text(value), /未通过|未能访问|尚未定位/);
   }
   assert.equal(imageSearchPresentation({ ...old, status: "audit_pending" }).title, "正在检查候选图片");
+});
+
+test("背景可选的旧规划可以继续手动搜索，不再误称主体不明确", () => {
+  const review = { currentResult: { technicalStatus: "planner_slot_unresolved" }, searchDiagnostic: { planning: { blocked: true, reason: "scene_preference" } } };
+  assert.match(imageSearchPresentation(review).detail, /主题已经明确.*搜索更多/);
+  assert.doesNotMatch(imageSearchPresentation(review).detail, /主题尚未明确/);
 });
 
 test("最新重搜未成功时仍保留原图片，解释不能谎称本次搜索已成功", () => {

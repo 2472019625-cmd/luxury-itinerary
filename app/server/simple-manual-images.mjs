@@ -6,6 +6,8 @@ import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
 import { downloadCandidate, imageResolutionPolicyForSlot, withDayGalleryLayout } from "./image-download.mjs";
 import { refreshKnowledgeMatchedFile } from "./knowledge-image-search.mjs";
+import { prepareExplicitImageSearchSlot } from "./manual-image-search-target.mjs";
+export { prepareExplicitImageSearchSlot } from "./manual-image-search-target.mjs";
 import { candidateQualification, isHardRejectedCandidate } from "./image-candidate-eligibility.mjs";
 import { getSlotImage, setSlotImage } from "../src/lib/imageSlots.js";
 import { dayVisualCards } from "../src/lib/dayVisualCards.js";
@@ -328,6 +330,13 @@ export function buildSimpleManualImagePayload(store, projectId) {
     const candidates = visibleCandidatePool(imageResult).map((candidate) => frontendCandidate(candidate, slotId, binding, candidateCanBeSelected(result, imageResult, candidate), targetFingerprint));
     const currentSearch = imageResult.manualAction?.currentSearchFallbackResult || imageResult;
     const searchDiagnostic = currentSearch.searchDiagnostic || buildImageSearchDiagnostic(currentSearch);
+    let currentDiagnostic = currentSearch.technicalStatus === "planner_slot_unresolved" && !searchDiagnostic.planning
+      ? { ...searchDiagnostic, planning: buildImageSearchDiagnostic({ ...currentSearch, plannerValidationIssues: currentSearch.plannerValidationIssues || imageResult.plannerValidationIssues || planned?.plannerValidationIssues }).planning }
+      : searchDiagnostic;
+    if (currentSearch.technicalStatus === "planner_slot_unresolved" && planned
+      && ["non_core_background_choice", "non_core_supporting_choice"].includes(prepareExplicitImageSearchSlot(planned).manualSearchOverride?.reason)) {
+      currentDiagnostic = { ...currentDiagnostic, planning: { ...currentDiagnostic.planning, reason: "scene_preference" } };
+    }
     return {
       slotId,
       module: moduleName(slotId),
@@ -343,7 +352,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
       required: planned ? planned.required !== false : binding?.required === true,
       originalVisualTarget: imageResult.manualAction?.originalVisualTarget || (planned ? { location: planned.location, hotel: planned.hotel, activity: planned.activity, subject: planned.subject, visualGoal: planned.visualGoal } : null),
       currentResult: { previousStatus: currentSearch.previousStatus, status: currentSearch.status, technicalStatus: currentSearch.technicalStatus, matchReason: currentSearch.matchReason },
-      searchDiagnostic,
+      searchDiagnostic: currentDiagnostic,
       candidateCount: candidates.length,
       confirmableCandidateCount: candidates.filter((candidate) => candidate.canConfirm).length,
       selectableCandidateIds: [...selectables],
@@ -976,8 +985,9 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
   const slot = assertPlannedImageSlot(context, slotId);
   if (typeof runImage !== "function") throw new Error("单槽图片搜索能力未配置");
   let previousResults = context.result.imageExecution?.results || [];
-  const existingImages = previousResults.filter((item) => item.slotId !== slotId && (item.selected || item.provisionalSelected)).map((item) => { const image = item.selected || item.provisionalSelected; return { ...image, src: image.localUrl, slotId: item.slotId }; });
-  const searched = await runImage({ root, slots: [{ ...slot, ...projectedTargetSlot(context, slotId) }], existingImages, ...imageOptions });
+  const existingImages = previousResults.filter((item) => item.selected || item.provisionalSelected).map((item) => { const image = item.selected || item.provisionalSelected; return { ...image, src: image.localUrl, slotId: item.slotId }; });
+  const target = prepareExplicitImageSearchSlot({ ...slot, ...projectedTargetSlot(context, slotId) });
+  const searched = await runImage({ ...imageOptions, root, slots: [target], existingImages });
   context = projectContext(store, projectId);
   previousResults = context.result.imageExecution?.results || [];
   if (searched.status === "failed" || searched.results?.some(item => item.slotId === slotId && item.status === "failed")) throw new Error("搜索失败，请重试");
@@ -992,7 +1002,7 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
     provisionalSelected: null,
     requestKind: "user_requested_single_slot_search",
     candidates: mergedCandidates,
-    manualAction: { ...(previous.manualAction || {}), lastExplicitSearchAt: new Date().toISOString() },
+    manualAction: { ...(previous.manualAction || {}), currentSearchFallbackResult: null, preservedExistingSelection: false, lastExplicitSearchAt: new Date().toISOString() },
   } : preserveExistingSelection ? {
     ...previous,
     candidates: mergedCandidates,
@@ -1039,9 +1049,9 @@ export async function researchSimpleImageSlots({ store, root, projectId, slotIds
   const previousById = new Map((context.result.imageExecution?.results || []).map((item) => [item.slotId, item]));
   const retryIds = requestedIds.filter((slotId) => !(previousById.get(slotId)?.status === "success" && previousById.get(slotId)?.selected));
   if (!retryIds.length) throw Object.assign(new Error("当前没有需要重新搜索的缺图位置"), { code: "image_slots_not_unresolved" });
-  const slots = retryIds.map((slotId) => ({ ...assertPlannedImageSlot(context, slotId), ...projectedTargetSlot(context, slotId) }));
-  const existingImages = (context.result.imageExecution?.results || []).filter((item) => !retryIds.includes(item.slotId) && (item.selected || item.provisionalSelected)).map((item) => { const image = item.selected || item.provisionalSelected; return { ...image, src: image.localUrl, slotId: item.slotId }; });
-  const searched = await runImage({ root, slots, existingImages, ...imageOptions });
+  const slots = retryIds.map((slotId) => prepareExplicitImageSearchSlot({ ...assertPlannedImageSlot(context, slotId), ...projectedTargetSlot(context, slotId) }));
+  const existingImages = (context.result.imageExecution?.results || []).filter((item) => item.selected || item.provisionalSelected).map((item) => { const image = item.selected || item.provisionalSelected; return { ...image, src: image.localUrl, slotId: item.slotId }; });
+  const searched = await runImage({ ...imageOptions, root, slots, existingImages });
 
   context = projectContext(store, projectId);
   const previousResults = context.result.imageExecution?.results || [];
@@ -1060,7 +1070,7 @@ export async function researchSimpleImageSlots({ store, root, projectId, slotIds
       provisionalSelected: null,
       requestKind: "user_requested_multi_slot_search",
       candidates: mergedCandidates,
-      manualAction: { ...(previous.manualAction || {}), lastExplicitSearchAt: now },
+      manualAction: { ...(previous.manualAction || {}), currentSearchFallbackResult: null, preservedExistingSelection: false, lastExplicitSearchAt: now },
     } : preserveExistingSelection ? {
       ...previous,
       candidates: mergedCandidates,

@@ -16,7 +16,7 @@ import { buildCustomerTravelEntityData } from './lib/travelEntityDisplay.js';
 import { normalizeHighlightForDisplay } from './lib/highlightDisplay.js';
 import { buildConfirmationActionItems, currentPriceSelection, isChildCountConfirmed, listPriceOffers, matchingPriceOffers, priceOfferKey } from './lib/confirmationActionItems.js';
 import { createManualDayCard, daySpotIdentity, deleteDaySpotPreservingSlots, reorderDaySpots, resolveDayPreviewSpotIndex, resolveDaySpotIndex } from './lib/dayEditorState.js';
-import { imageReviewForSlot, imageSearchPresentation } from "./lib/imageSearchPresentation.js";
+import { imageReviewForSlot, imageSearchPresentation, imageSearchCompletionMessage } from "./lib/imageSearchPresentation.js";
 import { candidateResolutionAllowsManualChoice, candidateResolutionForTarget, imageActionFailureMessage } from "./lib/imageActionFeedback.js";
 import { hotelFactPresentation, STRUCTURED_HOTEL_FACT_FORMAT } from "./lib/hotelFactPresentation.js";
 import { sha256File } from './lib/fileHash.js';
@@ -958,7 +958,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     try {
       const result = await perform();
       if (result === false) throw new Error('保存失败');
-      const message = kind === 'search' ? (result?.newCandidateCount > 0 ? `已找到 ${result.newCandidateCount} 张新候选` : '暂未找到更多合适图片') : kind === 'upload' ? '上传成功，图片已保存' : kind === 'reject' ? (currentImageReview?.required ? '已移除预填图；此位置仍需补图' : '已移除可选预填图') : '图片替换成功';
+      const message = kind === 'search' ? imageSearchCompletionMessage(result, slot) : kind === 'upload' ? '上传成功，图片已保存' : kind === 'reject' ? (currentImageReview?.required ? '已移除预填图；此位置仍需补图' : '已移除可选预填图') : '图片替换成功';
       show(message, false);
       return true;
     } catch (error) {

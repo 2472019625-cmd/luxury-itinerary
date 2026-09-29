@@ -51,7 +51,7 @@ export function buildImagePipelineStageTrace(slot = {}, result = {}, sourceMode 
   const webCandidates = (result.candidates || []).filter((candidate) => candidate?.sourceKind !== "knowledge_library");
   const plannerIssues = (slot.plannerValidationIssues || []).map((issue) => diagnosticCode(issue?.code)).filter(Boolean);
   const plannerStatus = slot.plannerSlotStatus === "unresolved" || slot.needsUserAction === true
-    ? "unresolved" : slot.plannerSlotStatus === "locally_repaired" ? "locally_repaired" : "ready";
+    ? "unresolved" : slot.plannerSlotStatus === "user_requested" ? "user_requested" : slot.plannerSlotStatus === "locally_repaired" ? "locally_repaired" : "ready";
   const hierarchy = knowledge.hierarchyLookup || {};
   const hierarchyStatus = sourceMode === "web_only" ? "not_requested"
     : hierarchy.status || (knowledge.rootScopeResolution || attempts.length ? "loaded" : knowledge.status === "failed" ? "failed" : "not_requested");
@@ -74,7 +74,7 @@ export function buildImagePipelineStageTrace(slot = {}, result = {}, sourceMode 
       : result.status === "needs_user_action" ? "needs_user_action"
         : result.status === "not_found" ? "not_found" : "failed";
   return {
-    planner: { status: plannerStatus, issueCodes: plannerIssues },
+    planner: { status: plannerStatus, issueCodes: plannerIssues, ...(slot.manualSearchOverride ? { manualSearchOverride: slot.manualSearchOverride } : {}) },
     hierarchy: { status: hierarchyStatus, failureCode: diagnosticCode(hierarchy.failureCode), attempts: Number(hierarchy.attempts || 0), technicalRetries: Number(hierarchy.technicalRetries || 0) },
     directory: { status: directoryStatus, reasonCode: diagnosticCode(scopePlan.blockedReason || knowledge.failureReason), scopeCount: scopePlan.scopes?.length || 0 },
     knowledgeQuery: { status: sourceMode === "web_only" ? "not_requested" : queryStatus, attempts: attempts.length, failedAttempts, failureBreakdown: knowledgeFailureBreakdown, returnedCandidates: Number(knowledge.previewReturned || 0), sourcePathRejected: Number(knowledge.sourcePathRejectedCount || 0), previewsAudited: Number(knowledge.previewAudited || 0), originalsSaved: Number(knowledge.originalDownloadSavedCount || 0) },

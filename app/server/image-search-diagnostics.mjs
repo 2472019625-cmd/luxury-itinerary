@@ -11,7 +11,16 @@ export function buildImageSearchDiagnostic(result = {}) {
   const directoryStatus = missingDirectory ? "not_found"
     : knowledge.status === "needs_clarification" || knowledge.rootScopeResolution?.status === "ambiguous" ? "ambiguous"
       : knowledge.scopeResolution?.status === "resolved" ? "resolved" : "skipped";
+  const planningIssues = (result.plannerValidationIssues || evidence.searchTrace?.planner?.issueCodes || []).map(issue => issue.code || issue);
+  const duplicateOnly = planningIssues.includes("duplicate_visual_responsibility") && planningIssues.every(code => [
+    "duplicate_visual_responsibility", "invalid_image_search_queries", "image_fidelity_query_missing",
+    "image_alternate_queries_invalid", "scope_only_location_in_query",
+  ].includes(code));
   return {
+    planning: {
+      blocked: result.technicalStatus === "planner_slot_unresolved",
+      reason: duplicateOnly ? "duplicate_visual" : "target_unclear",
+    },
     knowledge: {
       queryExecuted: knowledge.knowledgeQueryExecuted === true || attempts.length > 0,
       attempts: attempts.length, status: knowledge.status || "skipped", scopeState: knowledge.scopeState || null,
