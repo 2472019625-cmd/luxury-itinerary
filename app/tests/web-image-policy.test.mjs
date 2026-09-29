@@ -195,3 +195,49 @@ test('Image-only:英文成功后不执行中文，过滤候选不占下载/审�
   }});
   assert.equal(result.results[0].status,'success',JSON.stringify(result.results[0]));assert.equal(queries.length,1);assert.match(queries[0],/wildebeest herd river crossing/);assert.doesNotMatch(queries[0],/[\u4e00-\u9fff]/);assert.equal(downloads.length,1);assert.deepEqual(audits,[1]);assert.equal(result.results[0].pipelineEvidence.webCandidateFiltering.before,6);assert.equal(result.results[0].pipelineEvidence.webCandidateFiltering.after,1);
 });
+
+
+test('generic scene qualifiers survive Web rebuilding only with the full chosen Core', () => {
+  for (const [subject, subjectEn, action, actionEn, zh, en] of [
+    ['游船','boat','航行','cruising','湖面游船航行','boat cruising on lake water'],
+    ['骑行者','cyclist','骑行','riding','骑行者在森林中骑行','cyclist riding through forest'],
+    ['大象','elephant','行走','walking','草原大象行走','elephant walking in savanna'],
+  ]) {
+    const slot={...ordinary(subject,subjectEn,action,actionEn,'测试地点'),locationRole:'scope_only',exactIdentityRequired:false};
+    const before=structuredClone(slot);
+    assert.deepEqual(buildWebExecutionQueries(slot,[zh,en]),[en,zh]);
+    assert.deepEqual(slot,before);
+  }
+});
+
+test('scene preservation cannot replace Core, introduce another action/identity or leak scope', () => {
+  const slot={...ordinary('游船','boat','航行','cruising','Lake Naivasha'),locationRole:'scope_only',exactIdentityRequired:false};
+  const fallback=['boat cruising','游船 航行'];
+  for (const query of ['lake boat safari','boat parked on lake water','cruise ship cruising on lake water',
+    'boathouse cruising on lake water','boat cruising or parked on lake water','boat not cruising on lake water',
+    'boat cruising photographing birds on lake water','boat cruising at Other Resort', '游船停靠湖面','游船航行或停靠湖面']) {
+    assert.deepEqual(buildWebExecutionQueries(slot,[query]),fallback,query);
+  }
+  const scoped=buildWebExecutionQueries(slot,['boat cruising on Lake Naivasha lake water','湖面游船航行']);
+  assert.match(scoped[0],/lake water/);
+  assert.doesNotMatch(scoped.join(' '),/Naivasha/);
+  const exact={...slot,exactIdentityRequired:true,queryCore:{...slot.queryCore,identity:'Chosen Entity',identityEn:'Chosen Entity'}};
+  assert.ok(buildWebExecutionQueries(exact,['boat cruising on lake water']).every(query=>query.includes('Chosen Entity')));
+});
+
+
+test('Image execution submits scene-preserving queries without another business round', async t => {
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'web-scene-contract-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const slot={...ordinary('游船','boat','航行','cruising','纳瓦沙湖'),slotId:'new-boat',moduleType:'transport',
+    exactIdentityRequired:false,locationRole:'scope_only',required:false,aspectRatio:'16:9',
+    userLocked:false,visualGoal:'湖上游船',visualContext:{destination:'肯尼亚'},copyTargetId:'copy:transport:boat',
+    fidelityQuery:'湖面游船航行',alternateQueries:['boat cruising on lake water','游船','lake boat safari']};
+  const sent=[];
+  const result=await runImageSearchSkill({root,slots:[slot],sourceMode:'web_only',
+    searchApiKey:'fixture',searchModel:'fixture',visionApiKey:'fixture',visionBaseUrl:'https://vision.invalid',visionModel:'fixture',
+    adapters:{searchWebBatch:async ({queries})=>{sent.push(...queries);return [];},searchCommonsImages:async()=>[]}});
+  assert.deepEqual(sent,['boat cruising on lake water','湖面游船航行']);
+  assert.equal(result.metrics.automaticFollowupRounds,0);
+  assert.deepEqual(result.results[0].pipelineEvidence.webExecution.executedQueries,sent);
+});

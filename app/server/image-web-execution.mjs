@@ -1,3 +1,4 @@
+import { cleanupPlannerQueryScope } from "./knowledge-scope-resolver.mjs";
 import { TRAVEL_ENTITY_REGISTRY } from "../src/data/travelEntityRegistry.js";
 const name = (value) => String(typeof value === "string" ? value : value?.officialName || value?.name || "").replace(/\s+/g, " ").trim();
 const unique = (items) => [...new Set(items.filter(Boolean).map((item) => item.trim().replace(/\s+/g, " ")))];
@@ -5,6 +6,33 @@ const english = (value) => Boolean(value && /[a-z]/i.test(value) && !/[\u4e00-\u
 const entityFor = (value) => TRAVEL_ENTITY_REGISTRY.find((entity) => [entity.canonicalName, ...(entity.aliases || []), ...Object.values(entity.displayNames || {})].some((alias) => alias && alias.toLowerCase() === name(value).toLowerCase()));
 const englishName = (value) => { const entity = entityFor(value); return [entity?.displayNames?.en, entity?.canonicalName, ...(entity?.aliases || []), name(value)].find(english) || name(value); };
 const hotelSpaceEnglish = (value) => ({ "酒店外观": "exterior", "建筑外观": "exterior", "外观": "exterior", "客房": "guest room", "套房": "suite", "大堂": "lobby", "公共空间": "public space", "酒店代表性空间": "public space" })[name(value)] || "";
+// Only preserve a provable extension of the full Core. Unknown qualifiers,
+// named entities, alternative subjects/actions and incomplete translations
+// fall back to the existing query contract; they are never guessed here.
+const sceneEnglish = /^(?:(?:on|in|at|over|through|along|across|a|the|lake|water|river|grassland|savanna|savannah|forest|woodland|wetland|wetlands|desert|beach|sea|ocean|mountain|mountains|road|street)\s*)+$/i;
+const sceneChinese = /^(?:(?:在|的|上|中|湖面|湖水|湖上|水面|河流|河面|河上|草原|森林|林地|湿地|沙漠|沙滩|海面|海上|山地|山间|道路|街道)\s*)+$/;
+function sceneQuery(slot, queries, subject, action, isEnglish) {
+  if (slot.exactIdentityRequired !== false || !name(subject)) return "";
+  const normalized = value => name(value).normalize("NFKC").toLowerCase();
+  const coreParts = [subject, action].filter(Boolean).map(normalized);
+  for (const original of queries) {
+    const query = cleanupPlannerQueryScope(original, slot).finalQuery;
+    if (english(query) !== isEnglish || /或者|或|二选一|\bor\b|[\/;；!?！？]/i.test(query)) continue;
+    let remainder = normalized(query);
+    let complete = true;
+    for (const part of coreParts) {
+      // English token boundaries prevent e.g. boathouse from proving boat.
+      const escaped = part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const pattern = new RegExp(isEnglish ? `\\b${escaped}\\b` : escaped, "i");
+      if (!pattern.test(remainder)) { complete = false; break; }
+      remainder = remainder.replace(pattern, " ").trim();
+    }
+    if (!complete || !remainder || !(isEnglish ? sceneEnglish : sceneChinese).test(remainder)) continue;
+    return query;
+  }
+  return "";
+}
+
 export function buildWebExecutionQueries(slot, queries, purpose = "", route = null) {
   const hotelModule = String(slot.moduleType).toLowerCase().includes("hotel");
   const hotel = name(slot.hotelOfficialName) || name(slot.hotel) || (route?.matched && route.entityType === "hotel" ? route.entityName : "");
@@ -39,9 +67,12 @@ export function buildWebExecutionQueries(slot, queries, purpose = "", route = nu
   const structuredEnglish = completeEnglishCore ? parts.join(" ") : "";
   const incompleteEnglishParts = !completeEnglishCore && (hasSubject || hasAction)
     ? unique([englishSubject, englishAction, [englishSubject, englishAction].filter(Boolean).join(" ")]).map(value => value.toLowerCase()) : [];
-  const first = structuredEnglish || shortQueries.find(query => english(query) && !incompleteEnglishParts.includes(query.toLowerCase()));
+  const sceneEnglishQuery = completeEnglishCore ? sceneQuery(slot, shortQueries, englishSubject, englishAction, true) : "";
+  const first = sceneEnglishQuery || structuredEnglish || shortQueries.find(query => english(query) && !incompleteEnglishParts.includes(query.toLowerCase()));
   const structuredChinese = unique([core.subject || core.subjectEn, core.action || core.actionEn]).join(" ");
-  const fallback = structuredChinese || shortQueries.find((query) => !english(query)) || shortQueries.find((query) => query !== first);
+  const sceneChineseQuery = name(core.subject) && (!hasAction || name(core.action))
+    ? sceneQuery(slot, shortQueries, core.subject, core.action, false) : "";
+  const fallback = sceneChineseQuery || structuredChinese || shortQueries.find((query) => !english(query)) || shortQueries.find((query) => query !== first);
   const ordered = first ? unique([first, fallback])
     : unique([structuredChinese, ...shortQueries.filter(query => !incompleteEnglishParts.includes(query.toLowerCase()))]).slice(0, 2);
   if (slot.exactIdentityRequired === true) {
