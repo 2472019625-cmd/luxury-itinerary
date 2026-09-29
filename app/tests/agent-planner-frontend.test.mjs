@@ -370,8 +370,8 @@ test("Simple 已渲染草稿在保存落盘后进入 Step4，结果尚未入快�
   const generation = workspace.slice(workspace.indexOf("function AgentGenerationStep"), workspace.indexOf("function CandidatePreview"));
   const polling = workspace.slice(workspace.indexOf("const cancellationLocked"), workspace.indexOf("const persistAgentProject"));
   assert.match(generation, /const waiting = !display\.draft && \["awaiting_confirmation", "awaiting_user_action"\]\.includes\(agentProject\?\.status\)/);
-  assert.match(generation, /simpleRenderedEditorState\(snapshot\)/);
-  assert.match(polling, /const simpleEditorState = currentProject\.flowKind === "simple_skill_v1" \? simpleRenderedEditorState\(value\)/);
+  assert.match(generation, /simpleEditableEditorState\(snapshot\)/);
+  assert.match(polling, /const simpleEditorState = currentProject\.flowKind === "simple_skill_v1" \? simpleEditableEditorState\(value\)/);
   assert.match(polling, /await updateProject\(\{ \.\.\.currentProject, workflowStage, runtimeStatus, unresolvedCount \}, true\)/);
   assert.match(polling, /saveState !== "saved"/);
   assert.match(polling, /window\.location\.assign\(`\/simple\/projects\/\$\{currentProject\.agentProjectId\}`\)/);

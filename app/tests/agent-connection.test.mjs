@@ -63,7 +63,7 @@ test('successful Simple draft is editable and freezes elapsed time without claim
  assert.equal(simpleRenderedEditorState({...s,project:{...s.project,status:'complete'},executionRun:{...s.executionRun,status:'complete'}}),'complete');
 });
 
-test('Simple editor requires the current successful full render, not an old result or completed slot count',()=>{
+test('rendered state requires a current successful render while a failed render retains only draft editing',()=>{
  const s={project:{flowKind:'simple_skill_v1',status:'awaiting_user_action'},executionRun:{status:'awaiting_user_action'},activeJob:{status:'complete',imageSlotProgress:{completed:23,total:23}},result:{data:{title:'行程'},render:{status:'success'},outputPath:'draft.png'}};
  assert.equal(simpleRenderedEditorState({...s,result:null}),null);
  assert.equal(simpleRenderedEditorState({...s,result:{...s.result,render:{status:'failed'}}}),null);
@@ -74,5 +74,7 @@ test('Simple editor requires the current successful full render, not an old resu
  assert.equal(simpleRenderedEditorState({...s,activeJob:{status:'cancelled'}}),null);
  assert.equal(simpleRenderedEditorState({...s,project:{...s.project,status:'cancelled'}}),null);
  assert.equal(agentDisplayState({...s,result:null}).completed,false);
- assert.equal(agentDisplayState({...s,result:{...s.result,render:{status:'failed'}}}).failed,true);
+ const failedRender=agentDisplayState({...s,result:{...s.result,render:{status:'failed'}}});
+ assert.deepEqual({failed:failedRender.failed,draft:failedRender.draft,renderFailed:failedRender.renderFailed,completed:failedRender.completed},
+   {failed:false,draft:true,renderFailed:true,completed:false});
 });

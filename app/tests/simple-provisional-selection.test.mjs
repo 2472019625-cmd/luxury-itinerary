@@ -160,17 +160,26 @@ test('reject removes optional prefill and completes, while required reject stays
   assert.equal(missing.payload.canEnterFinal, false);
 });
 
-test('850x550 provisional in two-column DAY cannot move to single-column primary', async (t) => {
+test('850x550 provisional move requires explicit confirmation while preserving the larger frame quality policy', async (t) => {
   const value = await setup(t, { includeOptionalDay: true });
   const pending = await original(value, 'day-small-pending', 850, 550, '#725833');
   const before = await seed(value, { provisionalSlot: optionalId, formalSlots: [coverId, dayId], provisional: pending });
   assert.equal(before.payload.imageReview.slots.find((slot) => slot.slotId === dayId).resolutionPolicyByMovedSourceSlotId[optionalId].minWidth, 1181);
-  await assert.rejects(() => chooseSimpleImageCandidate({ ...value, slotId: dayId, candidateId: pending.candidateId, manualConfirmed: true, render }), (error) => error.code === 'image_resolution_insufficient' && error.actualWidth === 850 && error.minWidth === 1181);
+  await assert.rejects(() => chooseSimpleImageCandidate({ ...value, slotId: dayId, candidateId: pending.candidateId, manualConfirmed: false, render }), (error) => error.code === 'manual_confirmation_required');
   const after = reload(value);
   assert.equal(row(after.result, optionalId).provisionalSelected.candidateId, pending.candidateId);
   assert.equal(row(after.result, dayId).selected.candidateId, row(before.result, dayId).selected.candidateId);
   assert.equal(after.result.data.days[0].spots[0].images[1].src, pending.localUrl);
   assert.equal(after.payload.canEnterFinal, false);
+  await chooseSimpleImageCandidate({ ...value, slotId: dayId, candidateId: pending.candidateId, manualConfirmed: true, render });
+  const confirmed = reload(value);
+  assert.equal(row(confirmed.result, optionalId).provisionalSelected, null);
+  assert.equal(confirmed.result.data.days[0].spots[0].images[1], null);
+  assert.equal(row(confirmed.result, dayId).selected.candidateId, pending.candidateId);
+  assert.equal(confirmed.result.data.imageLocks[dayId].source, 'user_selection');
+  assert.equal(confirmed.result.data.imageLocks[dayId].candidateId, pending.candidateId);
+  assert.equal(row(confirmed.result, dayId).selected.humanDecision.riskConfirmed, true);
+  assert.equal(confirmed.payload.imageReview.slots.find((slot) => slot.slotId === dayId).resolutionPolicy.minWidth, 1181);
 });
 
 test('confirmed move of a large provisional original clears its old slot after reload', async (t) => {
