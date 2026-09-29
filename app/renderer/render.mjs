@@ -73,7 +73,11 @@ try {
   const layoutQa = await page.evaluate((expectedPayment) => {
     const root = document.querySelector('#itinerary');
     const selectorFor = (element) => element.id ? `#${element.id}` : element.dataset?.editPath ? `[data-edit-path="${element.dataset.editPath}"]` : `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 2).join('.')}`;
-    const overflows = [...root.querySelectorAll('h1,h2,h3,h4,p,span,strong,li,section,article')].filter((element) => element.scrollWidth > element.clientWidth + 8 || element.scrollHeight - element.clientHeight > Math.max(24, element.clientHeight * 0.25)).slice(0, 50).map((element) => ({ selector: selectorFor(element), scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight }));
+    const overflows = [...root.querySelectorAll('h1,h2,h3,h4,p,span,strong,li,section,article')]
+      .filter((element) => !element.classList.contains('crop-slot-viewport'))
+      .filter((element) => element.scrollWidth > element.clientWidth + 8 || element.scrollHeight - element.clientHeight > Math.max(24, element.clientHeight * 0.25))
+      .slice(0, 50)
+      .map((element) => ({ selector: selectorFor(element), editPath: element.closest('[data-edit-path]')?.dataset.editPath || '', scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight }));
     const brokenImages = [...root.querySelectorAll('img')].filter((image) => !image.complete || image.naturalWidth === 0).map((image) => ({ selector: selectorFor(image), src: image.getAttribute('src') || '' }));
     const blocks = [...root.children].map((element) => ({ selector: selectorFor(element), top: element.offsetTop, bottom: element.offsetTop + element.offsetHeight })).sort((a, b) => a.top - b.top);
     const largeGaps = blocks.slice(1).map((item, index) => ({ after: blocks[index].selector, before: item.selector, gap: item.top - blocks[index].bottom })).filter((item) => item.gap > 900);

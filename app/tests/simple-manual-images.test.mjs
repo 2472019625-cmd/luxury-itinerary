@@ -3,11 +3,12 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import sharp from "sharp";
-import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, effectiveUnresolvedItems, researchSimpleImageSlot, saveSimpleDayEditor, saveSimpleHotelImageCrop, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "../server/simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, effectiveUnresolvedItems, researchSimpleImageSlot, saveSimpleDayEditor, saveSimpleHotelImageCrop, saveSimpleImageCrop, saveSimpleModuleVisibility, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "../server/simple-manual-images.mjs";
 import { planHotelNightChange } from "../src/lib/hotelStayEditing.js";
 import { mergeManualImagePayload } from '../src/lib/manualImageState.js';
 import { buildLayoutImageSlots } from '../src/lib/imageSlots.js';
 import { createManualDayCard } from '../src/lib/dayEditorState.js';
+import { selectCustomerRenderData } from '../server/customer-render-data.mjs';
 
 import { fixture } from './support/manual-image-fixture.mjs';
 
@@ -113,6 +114,61 @@ test("酒店裁切只有确认后保存，重读仍保留并拒绝旧图提交",
   await saveSimpleHotelImageCrop({ ...value, slotId: "image:hotel:h1:primary", expectedSrc: "/image-assets/hotel.jpg", crop, render: async ({ mode }) => ({ status: "success", mode, outputPath: "test.png" }) });
   assert.deepEqual(value.store.getFinalResult(value.projectId, value.executionRunId).data.hotels[0].images[0].crop, crop);
   await assert.rejects(saveSimpleHotelImageCrop({ ...value, slotId: "image:hotel:h1:primary", expectedSrc: "/image-assets/old.jpg", crop }), { code: "hotel_crop_image_changed" });
+});
+
+test("封面、餐饮、交通和每日图片裁切确认后均持久化", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.data.heroImage = "/image-assets/cover.jpg";
+  result.data.diningExperiences = [{ id: "d1", title: "晚餐", images: [{ src: "/image-assets/dining.jpg" }] }];
+  result.data.transportSummary = [{ id: "t1", category: "商务车", images: [{ src: "/image-assets/transport.jpg" }] }];
+  result.data.days[0].spots[0].images = [{ src: "/image-assets/day.jpg" }];
+  const bindings = {
+    "image:cover:primary": { module: "cover", imageIndex: 0, fieldPath: "heroImage" },
+    "image:dining:d1:primary": { module: "dining", itemIndex: 0, imageIndex: 0, fieldPath: "diningExperiences.0.images.0" },
+    "image:transport:t1:primary": { module: "transport", itemIndex: 0, imageIndex: 0, fieldPath: "transportSummary.0.images.0" },
+    "image:day:1:primary": { module: "day", dayIndex: 0, spotId: "spot-1", spotIndex: 0, imageIndex: 0, fieldPath: "days.0.spots.0.images.0" },
+  };
+  result.data.simpleImageSlotBindings = bindings;
+  const active = value.store.getProject(value.projectId);
+  const plan = value.store.getPlan(value.projectId, active.activePlanId);
+  plan.imageSlots.push({ slotId: "image:dining:d1:primary", moduleType: "dining", required: false });
+  plan.imageSlots.push({ slotId: "image:transport:t1:primary", moduleType: "transport", required: false });
+  plan.slotBindings = bindings;
+  value.store.activatePlan(value.projectId, { ...plan, planId: "plan-all-crops" });
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const crop = { x: 0.1, y: 0.2, width: 0.6, height: 0.4 };
+  const cases = [
+    ["image:cover:primary", "/image-assets/cover.jpg", (data) => data.heroCrop],
+    ["image:dining:d1:primary", "/image-assets/dining.jpg", (data) => data.diningExperiences[0].images[0].crop],
+    ["image:transport:t1:primary", "/image-assets/transport.jpg", (data) => data.transportSummary[0].images[0].crop],
+    ["image:day:1:primary", "/image-assets/day.jpg", (data) => data.days[0].spots[0].images[0].crop],
+  ];
+  for (const [slotId, expectedSrc, readCrop] of cases) {
+    await saveSimpleImageCrop({ ...value, slotId, expectedSrc, crop, render: async ({ mode }) => ({ status: "success", mode, outputPath: "test.png" }) });
+    assert.deepEqual(readCrop(value.store.getFinalResult(value.projectId, value.executionRunId).data), crop, slotId);
+  }
+  await assert.rejects(saveSimpleImageCrop({ ...value, slotId: "image:cover:primary", expectedSrc: "/image-assets/old.jpg", crop }), { code: "image_crop_image_changed" });
+});
+
+test("隐藏餐饮持久化并使用过滤后的数据重新生成，原始内容保留", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.data.diningExperiences = [{ id: "d1", title: "晚餐", images: [] }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  let renderedData;
+  const answer = await saveSimpleModuleVisibility({ ...value, module: "dining", visible: false, render: async ({ data, mode }) => { renderedData = data; return { status: "success", mode, outputPath: "new.png" }; } });
+  assert.equal(answer.visibility.dining, false);
+  assert.deepEqual(renderedData.diningExperiences, []);
+  assert.equal(value.store.getFinalResult(value.projectId, value.executionRunId).data.diningExperiences.length, 1);
+  assert.equal(buildSimpleManualImagePayload(value.store, value.projectId).project.visibility.dining, false);
+  await assert.rejects(saveSimpleModuleVisibility({ ...value, module: "days", visible: false }), { code: "module_visibility_invalid" });
+});
+
+test("正式渲染数据保留移除缺图占位框的标记", () => {
+  const customer = selectCustomerRenderData({ title: "行程", days: [], transportSummary: [{ category: "草原飞机", images: [] }], suppressMissingImagePlaceholders: true });
+  assert.equal(customer.suppressMissingImagePlaceholders, true);
+  assert.equal(customer.transportSummary[0].images.length, 0);
 });
 
 test("返回图片载荷保留等待期间文案，丢弃迟到的旧版本", async () => {
@@ -332,6 +388,23 @@ test("待处理事项透传 Renderer 的具体阻断原因", async (t) => {
   const renderer = payload.blockingItems.find((item) => item.kind === "renderer");
   assert.equal(renderer.label, "2000px 成品检查");
   assert.match(renderer.message, /未通过原因：DAY 4 正文溢出/);
+});
+
+test("版面问题逐项列出位置，旧裁切误报提示重新检查", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.unresolvedItems = [{ kind: "renderer", id: "renderer:2000", required: true, status: "blocked", qa: { issues: [
+    { severity: "blocker", code: "text_overflow", targetPath: "days.2", message: "DAY 03 的文字超出显示区域" },
+    { severity: "blocker", code: "text_overflow", selector: "span.crop-slot-viewport", message: "文字或模块溢出：span.crop-slot-viewport" },
+  ] } }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const renderer = buildSimpleManualImagePayload(value.store, value.projectId).blockingItems.filter((item) => item.kind === "renderer");
+  assert.equal(renderer.length, 2);
+  assert.equal(renderer[0].targetPath, "days.2");
+  assert.equal(renderer[0].action, "retry_renderer");
+  assert.equal(renderer[1].targetPath, "");
+  assert.match(renderer[1].message, /误判/);
+  assert.doesNotMatch(renderer[1].message, /crop-slot-viewport/);
 });
 
 test("视觉卡文案失败标明 DAY 和图片主题，并指向对应体验卡片", async (t) => {

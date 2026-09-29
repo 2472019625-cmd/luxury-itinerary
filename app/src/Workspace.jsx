@@ -20,8 +20,8 @@ import { displayDiningIntroCopy } from './lib/diningIntroCopy.js';
 import { hotelStayDetails } from './lib/hotelStayPresentation.js';
 import { applyHotelNightChange, planHotelNightChange } from './lib/hotelStayEditing.js';
 import { defaultDeliveryFilenameBase, deliveryDownloadUrl } from './lib/deliveryFilename.js';
-
-import { SharedApiSettings } from "./SharedApiSettings.jsx";
+import { applyModuleVisibility } from './lib/moduleVisibility.js';
+import { SharedApiSettings } from './SharedApiSettings.jsx';
 
 const STORAGE_USERS = "sheyou-workspace-users-v1";
 const STORAGE_SESSION = "sheyou-workspace-session-v1";
@@ -736,17 +736,7 @@ export function ImageReviewStep({ project, onDecision, onResearchSlot, onUploadF
 }
 
 function visibilityData(data, visibility) {
-  const next = clone(data);
-  if (visibility.highlights === false) next.highlights = [];
-  if (visibility.overview === false) next.showOverviewSection = false;
-  if (visibility.hotels === false) next.hotels = [];
-  if (visibility.dining === false) next.diningExperiences = [];
-  if (visibility.transport === false) next.transportSummary = [];
-  if (visibility.expenses === false) { next.totalPrice = null; next.included = []; next.excluded = []; next.cancellation = []; }
-  if (visibility.booking === false) next.showBookingSection = false;
-  if (visibility.security === false) next.showSecuritySection = false;
-  if (visibility.notes === false) next.notes = [];
-  return next;
+  return applyModuleVisibility(data, visibility);
 }
 
 function versionSnapshot(data) {
@@ -898,7 +888,7 @@ function ImagePickerModal({ data, targetSlot, onChoose, onUpload, onResearch, on
   </section></div>;
 }
 
-export function Editor({ project, ItineraryComponent, onProject, onPersistDayEditor, onPersistHotelFact, onPersistHotelRegion, onPersistHotelStay, onPersistHotelImageCrop, onHotelFactSearch, onReplaceHotelFact, onVersions, onResearchSlot, onChooseImage, onOpenImagePicker, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, onRetryCopy, onRetryAllCopy, onRetryAllImages, onRetryRenderer, copyRepairState, issueActionState, blockingItems = [], defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
+export function Editor({ project, ItineraryComponent, onProject, onPersistDayEditor, onPersistHotelFact, onPersistHotelRegion, onPersistHotelStay, onPersistImageCrop, onPersistVisibility, onHotelFactSearch, onReplaceHotelFact, onVersions, onResearchSlot, onChooseImage, onOpenImagePicker, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, onRetryCopy, onRetryAllCopy, onRetryAllImages, onRetryRenderer, copyRepairState, issueActionState, blockingItems = [], defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
   const [selection, setSelection] = useState(initialSelection || { module: "days", itemIndex: Math.min(2, project.data.days.length - 1), subItemIndex: null, imageIndex: 0 });
   const [tab, setTab] = useState(initialTab);
   const [historyTick, setHistoryTick] = useState(0);
@@ -1110,6 +1100,13 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     if (match) return selectModule('notes', Number(match[1]));
     match = targetPath.match(/^highlights\.(\d+)/);
     if (match) return selectModule('highlights', Number(match[1]));
+    match = targetPath.match(/^overview\.(\d+)/);
+    if (match) return selectModule('overview', Number(match[1]));
+    match = targetPath.match(/^dining\.(\d+)/);
+    if (match) return selectModule('dining', Number(match[1]));
+    match = targetPath.match(/^transport\.(\d+)/);
+    if (match) return selectModule('transport', Number(match[1]));
+    if (['cover', 'overview', 'hotels', 'dining', 'transport', 'booking', 'security', 'notes', 'footer'].includes(targetPath)) return selectModule(targetPath);
     if (targetPath === 'highlights') return selectModule('highlights');
     if (targetPath === 'expenses') return selectModule('expenses');
     return false;
@@ -1162,7 +1159,15 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
       requestAnimationFrame(() => setPickerOpen(true));
     }
   };
-  const updateVisibility = (checked) => commit({ ...project, visibility: { ...visibility, [selectedModule.id]: checked } }, `visibility-${selectedModule.id}`);
+  const updateVisibility = async (checked) => {
+    const module = selectedModule.id;
+    if (selectedModule.required) return;
+    if (onPersistVisibility) {
+      try { await onPersistVisibility({ module, visible: checked }); }
+      catch (error) { setImageMessage(`模块显示状态保存失败：${error.message}`); return; }
+    }
+    commit({ ...project, visibility: { ...visibility, [module]: checked } }, `visibility-${module}`);
+  };
   const moveItem = (key, index, delta) => updateData((next) => { const list = next[key]; const target = index + delta; if (target < 0 || target >= list.length) return; [list[index], list[target]] = [list[target], list[index]]; }, `move-${key}-${Date.now()}`);
   const deleteItem = (key, index, after) => {
     if (!window.confirm("确定删除这项内容吗？可以立即使用撤销恢复。")) return;
@@ -1227,12 +1232,10 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     || slots.find((slot) => !selection.spotId && !selection.slotId && (slot.itemIndex ?? null) === (selection.itemIndex ?? null) && (slot.subItemIndex ?? null) === (selection.subItemIndex ?? null) && slot.imageIndex === selection.imageIndex)
     || (simpleBoundMode ? null : slots[0]);
   const [cropTargetRatio, setCropTargetRatio] = useState(16 / 9);
-  const [dayCropOpen, setDayCropOpen] = useState(false);
-  const [hotelCropOpen, setHotelCropOpen] = useState(false);
-  const [hotelCropDraft, setHotelCropDraft] = useState(undefined);
-  const [hotelCropBusy, setHotelCropBusy] = useState(false);
-  useEffect(() => setDayCropOpen(false), [currentSlot?.slotId]);
-  useEffect(() => { setHotelCropOpen(false); setHotelCropDraft(undefined); }, [currentSlot?.slotId, currentSlot?.src]);
+  const [cropOpen, setCropOpen] = useState(false);
+  const [cropDraft, setCropDraft] = useState(undefined);
+  const [cropBusy, setCropBusy] = useState(false);
+  useEffect(() => { setCropOpen(false); setCropDraft(undefined); }, [currentSlot?.slotId, currentSlot?.src]);
   useEffect(() => {
     if (!currentSlot?.src || !previewRef.current) return;
     const nodes = Array.from(previewRef.current.querySelectorAll('img[data-edit-image]'));
@@ -1252,21 +1255,23 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     const previous = getSlotImage(next, slot);
     setSlotImage(next, slot, src ? { ...(previous?.src === src ? previous : {}), src, focus, ...extra } : null);
   }, `image-${slot?.slotId || currentSlot?.slotId}`);
-  const setCrop = (rect) => currentSlot && setImage(currentSlot.src, currentSlot.focus, currentSlot, { crop: rect });
-  const resetCrop = () => currentSlot && setImage(currentSlot.src, '50% 50%', currentSlot, { crop: null });
-  const confirmHotelCrop = async () => {
-    if (!currentSlot?.src || hotelCropBusy) return;
-    setHotelCropBusy(true);
+  const toggleCrop = () => {
+    if (cropOpen) { setCropOpen(false); setCropDraft(undefined); }
+    else { setCropDraft(currentSlot?.crop || null); setCropOpen(true); }
+  };
+  const cancelCrop = () => { setCropDraft(undefined); setCropOpen(false); };
+  const confirmCrop = async () => {
+    if (!currentSlot?.src || cropBusy) return;
+    setCropBusy(true);
     setImageMessage("");
     try {
-      const crop = hotelCropDraft === undefined ? currentSlot.crop || null : hotelCropDraft;
-      if (onPersistHotelImageCrop) await onPersistHotelImageCrop({ slotId: currentSlot.pipelineSlotId || currentSlot.slotId, expectedSrc: currentSlot.src, crop });
+      const crop = cropDraft === undefined ? currentSlot.crop || null : cropDraft;
+      if (onPersistImageCrop) await onPersistImageCrop({ slotId: currentSlot.pipelineSlotId || currentSlot.slotId, expectedSrc: currentSlot.src, crop });
       setImage(currentSlot.src, currentSlot.focus, currentSlot, { crop });
-      setHotelCropOpen(false);
-      setHotelCropDraft(undefined);
+      cancelCrop();
       setImageMessage("裁切已确认并保存");
     } catch (error) { setImageMessage(`裁切保存失败：${error.message}`); }
-    finally { setHotelCropBusy(false); }
+    finally { setCropBusy(false); }
   };
   const selectSlot = (slot) => {
     if (selection.module === "days" && selection.slotId === slot.slotId && collapsedDaySlotId !== slot.slotId) {
@@ -1374,7 +1379,10 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   const moduleFailures = (project.data.imageFailures || []).filter((failure) => String(failure.slot || "").startsWith(failurePrefix));
   const imagePanel = <div className="image-inspector">
     <div className="image-library"><header><strong>本模块图片位置</strong><span>{slots.filter((slot) => slot.src).length} / {slots.length}</span></header><div className="image-thumbnails">{slots.map((slot) => <button key={slot.key} className={currentSlot?.key === slot.key ? "active" : ""} onClick={() => selectSlot(slot)}>{slot.src ? <img src={slot.src} alt={slot.label} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement.classList.add("thumbnail-load-failed"); }} /> : <span className="empty-slot-thumb">缺图</span>}<span>{slot.label}</span></button>)}</div>{!slots.some((slot) => slot.src) && <div className="empty-image-state"><strong>当前模块暂时缺图</strong><span>可以打开换图窗口，从本次行程图片中选择或本地上传。</span>{moduleFailures.map((failure) => <small key={failure.slot}>{failure.label}：{failure.error}</small>)}</div>}</div>
-    {currentSlot && <>{currentSlot.src ? selection.module === "hotels" ? <><ImageSlotPreview src={currentSlot.src} crop={hotelCropOpen && hotelCropDraft !== undefined ? hotelCropDraft : currentSlot.crop} focus={currentSlot.focus} />{hotelCropOpen && <ImageCropEditor key={currentSlot.slotId} src={currentSlot.src} crop={hotelCropDraft !== undefined ? hotelCropDraft : currentSlot.crop} focus={currentSlot.focus} targetRatio={cropTargetRatio} onCommit={setHotelCropDraft} />}</> : <ImageCropEditor key={currentSlot.slotId} src={currentSlot.src} crop={currentSlot.crop} focus={currentSlot.focus} targetRatio={cropTargetRatio} onCommit={setCrop} /> : <div className="empty-image-state"><strong>这个位置还没有图片</strong><span>空位置不会显示破图，也不会阻止继续编辑。</span></div>}<div className="image-actions">{currentSlot.src && selection.module === "hotels" && <Button onClick={() => { setHotelCropDraft((draft) => draft === undefined ? currentSlot.crop || null : draft); setHotelCropOpen((open) => !open); }}>{hotelCropOpen ? "收起裁切" : "调整画面"}</Button>}{currentSlot.src && selection.module === "hotels" && hotelCropOpen && <><Button tone="primary" onClick={confirmHotelCrop} disabled={hotelCropBusy}>{hotelCropBusy ? "正在保存…" : "确认裁切"}</Button><Button onClick={() => { setHotelCropDraft(undefined); setHotelCropOpen(false); }}>取消</Button><Button onClick={() => setHotelCropDraft(null)}>恢复默认构图</Button></>}{currentSlot.src && selection.module !== "hotels" && <Button onClick={resetCrop}>恢复默认构图</Button>}<Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button></div></>}
+    {currentSlot && <>
+      {currentSlot.src ? <><ImageSlotPreview src={currentSlot.src} crop={cropOpen && cropDraft !== undefined ? cropDraft : currentSlot.crop} focus={currentSlot.focus} />{cropOpen && <ImageCropEditor key={currentSlot.slotId} src={currentSlot.src} crop={cropDraft !== undefined ? cropDraft : currentSlot.crop} focus={currentSlot.focus} targetRatio={cropTargetRatio} onCommit={setCropDraft} />}</> : <div className="empty-image-state"><strong>这个位置还没有图片</strong><span>空位置不会显示破图，也不会阻止继续编辑。</span></div>}
+      <div className="image-actions">{currentSlot.src && <Button onClick={toggleCrop}>{cropOpen ? "收起裁切" : "调整画面"}</Button>}{currentSlot.src && cropOpen && <><Button tone="primary" onClick={confirmCrop} disabled={cropBusy}>{cropBusy ? "正在保存…" : "确认裁切"}</Button><Button onClick={cancelCrop}>取消</Button><Button onClick={() => setCropDraft(null)}>恢复默认构图</Button></>}<Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button></div>
+    </>}
     <input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { uploadLocalImage(event.target.files?.[0]); event.target.value = ""; }} />{currentSlot?.src && selection.module !== "cover" && <button className="delete-image-button" onClick={deleteImage}>删除当前图片</button>}<p className="image-source">自动图片已经下载保存并检查；本地素材请确认使用权。</p>
   </div>;
 
@@ -1415,10 +1423,10 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     setDragSpotId(null);
   };
   const selectedDaySlotTools = currentSlot && <div className="day-slot-tools">
-    {currentSlot.src ? <ImageSlotPreview src={currentSlot.src} crop={currentSlot.crop} focus={currentSlot.focus} /> : <div className="day-slot-empty"><UiIcon name="itinerary" /><span>上传真实图片后，这张卡片才会进入中间客户预览</span></div>}
-    {currentSlot.src && dayCropOpen && <ImageCropEditor key={currentSlot.slotId} src={currentSlot.src} crop={currentSlot.crop} focus={currentSlot.focus} targetRatio={cropTargetRatio} onCommit={setCrop} />}
+    {currentSlot.src ? <ImageSlotPreview src={currentSlot.src} crop={cropOpen && cropDraft !== undefined ? cropDraft : currentSlot.crop} focus={currentSlot.focus} /> : <div className="day-slot-empty"><UiIcon name="itinerary" /><span>上传真实图片后，这张卡片才会进入中间客户预览</span></div>}
+    {currentSlot.src && cropOpen && <ImageCropEditor key={currentSlot.slotId} src={currentSlot.src} crop={cropDraft !== undefined ? cropDraft : currentSlot.crop} focus={currentSlot.focus} targetRatio={cropTargetRatio} onCommit={setCropDraft} />}
     {selectedBinding && <div className="day-visual-copy">{selectedBinding.manualEditorCard !== true && <Field label="卡片标题" value={selectedBinding.cardTitle || (selectedBinding.useSpotCopy !== false ? selectedDay?.spots?.[resolveDaySpotIndex(selectedDay, { spotId: currentSlot.spotId, subItemIndex: currentSlot.subItemIndex })]?.name || "" : "")} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardTitle = value; }, `visual-title-${currentSlot.slotId}`)} />}{selectedBinding.useSpotCopy === false && <Field label="图片下方文字" rows={3} value={selectedBinding.cardDescription || ""} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardDescription = value; }, `visual-copy-${currentSlot.slotId}`)} />}</div>}
-    <div className="day-inline-image-actions">{currentSlot.src && <Button onClick={() => setDayCropOpen((open) => !open)}>{dayCropOpen ? '收起裁切' : '调整画面'}</Button>}{selectedBinding?.manualEditorCard ? <Button tone="primary" onClick={() => fileRef.current?.click()}>{currentSlot.src ? "更换上传图片" : "上传体验图片"}</Button> : <Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button>}{currentSlot.src && <Button onClick={resetCrop}>恢复默认构图</Button>}{currentSlot.src && !selectedBinding?.manualEditorCard && <button className="day-image-danger" onClick={deleteImage}>删除图片</button>}</div>
+    <div className="day-inline-image-actions">{currentSlot.src && <Button onClick={toggleCrop}>{cropOpen ? '收起裁切' : '调整画面'}</Button>}{currentSlot.src && cropOpen && <><Button tone="primary" onClick={confirmCrop} disabled={cropBusy}>{cropBusy ? "正在保存…" : "确认裁切"}</Button><Button onClick={cancelCrop}>取消</Button><Button onClick={() => setCropDraft(null)}>恢复默认构图</Button></>}{selectedBinding?.manualEditorCard ? <Button tone="primary" onClick={() => fileRef.current?.click()}>{currentSlot.src ? "更换上传图片" : "上传体验图片"}</Button> : <Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button>}{currentSlot.src && !selectedBinding?.manualEditorCard && <button className="day-image-danger" onClick={deleteImage}>删除图片</button>}</div>
   </div>;
   const dayPanel = selection.module === "days" && <div className="day-editor-flow">
     <section className={`day-editor-section day-info-section ${dayInfoOpen ? "is-open" : ""}`}>
@@ -1470,6 +1478,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
       pendingIssueFocusRef.current = /^days\.\d+\.spots\./.test(item.targetPath || "") ? "图片下方文字" : /^days\.\d+\.theme$/.test(item.targetPath || "") ? "每日主题" : /^days\.\d+/.test(item.targetPath || "") ? "当日行程" : null;
       return selectIssueTarget(item.targetPath);
     }
+    if (item.kind === "renderer" && item.targetPath) return selectIssueTarget(item.targetPath);
     if (item.action === "retry_renderer" || item.action === "retry_render_generation") return onRetryRenderer?.().catch(() => {});
     if (item.action === "review_facts") return onReviewFacts?.();
   };
@@ -1482,7 +1491,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
         <div className="editor-issues-heading"><h2>待处理事项</h2><p>必需项需要完成；待完善项可逐项核实，不会自动编造事实。</p></div>
         <div className="editor-issues-scroll">
           <h3>待处理 · {pendingItems.length} 项</h3>
-          {pendingItems.length ? <div className="editor-issues-list">{pendingItems.map((item) => <article key={`${item.kind}:${item.id}`}><div><strong>{item.label}</strong><small>{item.required === false ? "待完善 · " : "必需完成 · "}{item.message}</small></div><div className="editor-issues-row-actions"><button type="button" onClick={() => openBlockingItem(item)}>{item.kind === "copy" || item.kind === "image" || item.kind === "hotel_fact" ? "去处理" : item.action === "retry_render_generation" ? "重新生成长图" : item.action === "retry_renderer" ? "重新检查版面" : "查看"}</button>{item.action === "retry_copy" && <button type="button" disabled={issueActionState?.busy} onClick={() => onRetryCopy?.(item.id).catch(() => {})}>重新生成</button>}{item.action === "handle_image" && <button type="button" disabled={issueActionState?.busy || Boolean(imageOperations[item.id]?.searching)} onClick={() => retryBlockingImage(item)}>重新搜索</button>}</div></article>)}</div> : <p className="editor-issues-empty">当前没有需要处理的项目。</p>}
+          {pendingItems.length ? <div className="editor-issues-list">{pendingItems.map((item) => <article key={`${item.kind}:${item.id}`}><div><strong>{item.label}</strong><small>{item.required === false ? "待完善 · " : "必需完成 · "}{item.message}</small></div><div className="editor-issues-row-actions"><button type="button" onClick={() => openBlockingItem(item)}>{item.kind === "copy" || item.kind === "image" || item.kind === "hotel_fact" ? "去处理" : item.kind === "renderer" && item.targetPath ? "定位并处理" : item.action === "retry_render_generation" ? "重新生成长图" : item.action === "retry_renderer" ? "重新检查版面" : "查看"}</button>{item.kind === "renderer" && item.targetPath && <button type="button" disabled={issueActionState?.busy} onClick={() => onRetryRenderer?.().catch(() => {})}>重新检查版面</button>}{item.action === "retry_copy" && <button type="button" disabled={issueActionState?.busy} onClick={() => onRetryCopy?.(item.id).catch(() => {})}>重新生成</button>}{item.action === "handle_image" && <button type="button" disabled={issueActionState?.busy || Boolean(imageOperations[item.id]?.searching)} onClick={() => retryBlockingImage(item)}>重新搜索</button>}</div></article>)}</div> : <p className="editor-issues-empty">当前没有需要处理的项目。</p>}
           {(blockingCopyItems.length > 1 || blockingImageItems.length > 1) && <div className="editor-issues-batch"><h3>批量处理</h3>{blockingCopyItems.length > 1 && <button disabled={issueActionState?.busy} onClick={() => onRetryAllCopy?.(blockingCopyItems.map((item) => item.id)).catch(() => {})}>重新生成失败文案（{blockingCopyItems.length}）</button>}{blockingImageItems.length > 1 && <button disabled={issueActionState?.busy} onClick={() => onRetryAllImages?.(blockingImageItems.map((item) => item.id)).catch(() => {})}>重新搜索缺图（{blockingImageItems.length}）</button>}</div>}
           {advisoryCopyTargets.length > 0 && <div className="editor-issues-advisory"><h3>文案建议 · {advisoryCopyTargets.length} 处</h3><p>这些建议与上方必须完成的事项分开，按需查看或修正。</p>{advisoryCopyTargets.map((target) => <article key={target.targetPath}><strong>{target.label}</strong><button onClick={() => { setFinalIssuesOpen(false); selectIssueTarget(target.targetPath); }}>去查看</button>{target.aiRepairable && <button disabled={copyRepairState?.busy} onClick={() => onRepairCopy?.(target.targetPath)}>AI修正</button>}</article>)}<button disabled={copyRepairState?.busy} onClick={() => onRecheckCopy?.()}>重新检查文案</button></div>}
           {issueActionState?.message && <p className="editor-issues-feedback" role="status">{issueActionState.message}</p>}

@@ -4,6 +4,7 @@ import { runCopyWriterSkill } from "./simple-copy-skill.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
 import { buildSimpleManualImagePayload, effectiveUnresolvedItems } from "./simple-manual-images.mjs";
 import { buildRendererUnresolvedItem } from "./simple-render-issues.mjs";
+import { applyModuleVisibility } from "../src/lib/moduleVisibility.js";
 
 const activeRepairs = new Map();
 
@@ -82,12 +83,13 @@ async function renderAfterRepair({ store, root, project, run, result, unresolved
   unresolvedItems = effectiveUnresolvedItems(unresolvedItems, result.data || {}, store.getPlan(project.projectId, project.activePlanId) || {});
   const required = unresolvedItems.filter((item) => item.required);
   const mode = required.length ? "draft" : "final";
-  let renderResult = await safeRender(render, { data: result.data, projectId: project.projectId, root, mode });
+  const customerData = applyModuleVisibility(result.data, result.visibility || {});
+  let renderResult = await safeRender(render, { data: customerData, projectId: project.projectId, root, mode });
   const nextUnresolved = unresolvedItems.filter((item) => item.kind !== "renderer");
   if (mode === "final" && renderResult.status !== "success") {
     const failedFinal = renderResult;
     nextUnresolved.push(rendererIssue(failedFinal));
-    renderResult = await safeRender(render, { data: result.data, projectId: project.projectId, root, mode: "draft" });
+    renderResult = await safeRender(render, { data: customerData, projectId: project.projectId, root, mode: "draft" });
     renderResult = { ...renderResult, mode: "draft", finalAttempt: failedFinal, rendererCalls: Number(failedFinal.rendererCalls || 0) + Number(renderResult.rendererCalls || 0) };
   } else if (renderResult.status !== "success") {
     nextUnresolved.push(rendererIssue(renderResult));
@@ -176,7 +178,7 @@ export async function retrySimpleRenderer({ store, root, projectId, render = run
     const pending = { ...current.result, pipelineStatus: "partial", outputPath: null, renderStatus: "pending_targeted_render" };
     store.saveFinalResult(projectId, current.run.executionRunId, pending);
     store.updateProject(projectId, { status: "partial", progress: 95, currentStage: "正在重新检查成品", outputPath: null });
-    const renderResult = await safeRender(render, { data: current.result.data, projectId, root, mode: "final" });
+    const renderResult = await safeRender(render, { data: applyModuleVisibility(current.result.data, current.result.visibility || {}), projectId, root, mode: "final" });
     const unresolvedItems = (current.result.unresolvedItems || []).filter((item) => item.kind !== "renderer");
     if (renderResult.status !== "success") unresolvedItems.push(rendererIssue(renderResult));
     const saved = saveResultState({ store, project: current.project, run: current.run, result: current.result, renderResult, unresolvedItems, action: { type: "retry_final_renderer" } });

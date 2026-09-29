@@ -20,7 +20,7 @@ import { evaluateAgentImageCompletion } from "./agent-image-plan.mjs";
 import { runImageSearchSkill } from "./simple-image-skill.mjs";
 import { runSimplePipeline } from "./simple-pipeline-executor.mjs";
 import { calculateSimplePipelineProgress } from "./simple-pipeline-progress.mjs";
-import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, saveSimpleHotelFactRow, saveSimpleHotelImageCrop, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "./simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, saveSimpleHotelFactRow, saveSimpleHotelImageCrop, saveSimpleImageCrop, saveSimpleModuleVisibility, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "./simple-manual-images.mjs";
 import { searchSimpleHotelFacts } from "./simple-hotel-fact-search.mjs";
 import { deliveryContentDisposition } from "../src/lib/deliveryFilename.js";
 import { retrySimpleCopyTarget, retrySimpleCopyTargets, retrySimpleRenderer } from "./simple-targeted-repair.mjs";
@@ -627,6 +627,22 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "GET" && simpleManualMatch) {
       try { return json(response, 200, buildSimpleManualImagePayload(simpleStore, decodeURIComponent(simpleManualMatch[1]))); }
       catch (failure) { return json(response, failure.code === "simple_project_incomplete" ? 409 : 404, { error: failure.message, code: failure.code || "simple_project_not_found" }); }
+    }
+    const simpleVisibilityMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/module-visibility$/);
+    if (request.method === "PUT" && simpleVisibilityMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await saveSimpleModuleVisibility({ store: simpleStore, root, projectId: decodeURIComponent(simpleVisibilityMatch[1]), module: payload.module, visible: payload.visible, deferRender: true });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "module_visibility_save_failed" }); }
+    }
+    const simpleImageCropMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images\/([^/]+)\/crop$/);
+    if (request.method === "PUT" && simpleImageCropMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await saveSimpleImageCrop({ store: simpleStore, root, projectId: decodeURIComponent(simpleImageCropMatch[1]), slotId: decodeURIComponent(simpleImageCropMatch[2]), expectedSrc: payload.expectedSrc, crop: payload.crop, deferRender: true });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "image_crop_image_changed" ? 409 : 400, { error: failure.message, code: failure.code || "image_crop_save_failed" }); }
     }
     const simpleHotelCropMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/hotel-images\/([^/]+)\/crop$/);
     if (request.method === "PUT" && simpleHotelCropMatch) {
