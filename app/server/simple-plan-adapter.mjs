@@ -733,7 +733,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     copyTasks.push(copyTask({
       targetId: `copy:hotel:${hotel.id || index + 1}:fact-rows`, targetPath: `hotels.${index}.factRows`, moduleType: "hotel_fact_rows",
       facts,
-      plannerGoal: "按位置、客房、设计、设施固定四行写给最终客户。若提供 hotelSearchSnippets，从当前酒店的搜索片段中选择每类最能体现独特住宿价值的具体信息，写成自然、直观的中文文案；每行通常20—60字，说明特色与住宿感受，不只罗列名词，四行之间不重复同一事实，也不要出现‘让客人’‘适合客人’等向内部解释价值的说法。每个非空行必须引用当前片段中的准确 sourceUrl；缺少依据的行留空并标为 not_found。公开客房信息不得写成此次已订房型，不保证动物出现、景观或未确认服务。不新增搜索片段与订单事实之外的具体设施、数量、奖项或承诺。若没有 hotelSearchSnippets，保持现有已核验事实的程序映射。",
+      plannerGoal: "按位置、客房、设计、设施固定四项写给最终客户。若提供 hotelSearchSnippets，每项只选择一个最有辨识度、已核实的酒店事实，用自然、直观的中文简短带出住宿吸引力；优先具体地点、房型特点、设计细节或设施体验，不堆砌多个事实、不写泛化赞美，四项之间不重复。以 2000px 双列卡约 2—3 行为篇幅参考，通常约 20—38 个汉字；英文专名或必要事实可自然超出，不按字数机械截断。不要出现‘让客人’‘适合客人’等内部讲解句。每个非空项必须引用当前片段中的准确 sourceUrl；缺少依据的项留空并标为 not_found。公开客房信息不得写成此次已订房型，不保证动物出现、景观或未确认服务。不新增搜索片段与订单事实之外的具体设施、数量、奖项、费用、包含状态或承诺。若没有 hotelSearchSnippets，保持现有已核验事实的程序映射。",
       relevantContext: itineraryContext, layoutHints: { placement: "hotel_fact_rows", itemIndex: index }, outputSchema: hotelFactRowsSchema, researchRequest, required: false,
     }));
   });

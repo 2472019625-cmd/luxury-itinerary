@@ -61,7 +61,7 @@ img { display: block; max-width: 100%; }
 .dining-image > .crop-slot-viewport { height: 530px; }
 .dining-card-wide .dining-image > .crop-slot-viewport { height: 100%; min-height: 570px; }
 .transport-image > .crop-slot-viewport { height: 470px; }
-.transport-card-wide .transport-image > .crop-slot-viewport { height: 640px; }
+.transport-card-wide .transport-image > .crop-slot-viewport { min-height: 0; }
 .spot-image > .crop-slot-viewport { aspect-ratio: 3 / 2; }
 .spot-count-1 .spot-image > .crop-slot-viewport { aspect-ratio: 16 / 9; }
 .spot-count-3 .spot-card:nth-child(3) .spot-image > .crop-slot-viewport { aspect-ratio: auto; height: 100%; min-height: 470px; }
@@ -281,12 +281,22 @@ img { display: block; max-width: 100%; }
   align-items: stretch;
 }
 .transport-card-wide .transport-image {
-  height: 640px;
+  position: relative;
+  height: auto;
+  min-height: 640px;
   background: #fffaf2;
 }
-.transport-card-wide .transport-image img {
-  height: 640px;
+.transport-card-wide .transport-image > img,
+.transport-card-wide .transport-image > .crop-slot-viewport {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
 }
+.transport-card-wide .transport-image-count-2 > :first-child { width: 50%; right: auto; }
+.transport-card-wide .transport-image-count-2 > :last-child { width: 50%; left: 50%; }
+.transport-card-wide .transport-image .crop-slot-viewport img { width: 100%; height: 100%; min-height: 0; }
 .transport-card-wide .transport-copy {
   display: flex;
   min-height: 640px;
@@ -296,12 +306,6 @@ img { display: block; max-width: 100%; }
 .transport-card-wide .transport-heading small {
   max-width: 600px;
 }
-.transport-card-wide .transport-editorial {
-  font-size: 32px;
-}
-.transport-card-wide .transport-copy li {
-  font-size: 31px;
-}
 .hotel-copy, .transport-copy { padding: 42px 48px 50px; }
 .hotel-stay-line { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 22px; color: var(--gold-deep); font-family: "Source Han Sans CN", "Microsoft YaHei", sans-serif; font-size: 52px; font-weight: 700; line-height: 1.35; }
 .hotel-stay-pill { display: inline-flex; align-items: center; max-width: 100%; min-height: 40px; padding: 9px 22px; border-radius: 999px; background: rgba(190, 143, 47, 0.11); text-align: center; white-space: nowrap; }
@@ -309,13 +313,13 @@ img { display: block; max-width: 100%; }
 .hotel-copy h3 { display: flex; align-items: center; justify-content: center; min-height: 145px; text-align: center; }
 .hotel-official-name { margin: 8px 0 0; color: var(--muted); font: 400 24px/1.45 Poppins, "Source Han Sans CN", sans-serif; text-align: center; }
 .hotel-fact-rows { display: grid; gap: 28px; margin: 24px 0 0; padding: 0; list-style: none; }
-.hotel-fact-rows li { position: relative; min-width: 0; padding-left: 46px; color: var(--ink); font-family: "Source Han Serif CN", serif; font-size: 54px; font-weight: 600; line-height: 1.48; overflow-wrap: anywhere; }
+.hotel-fact-rows li { position: relative; min-width: 0; padding-left: 46px; color: var(--ink); font-family: "Source Han Serif CN", serif; font-size: 40px; font-weight: 600; line-height: 1.43; overflow-wrap: anywhere; }
 .hotel-fact-rows li::before { position: absolute; top: .49em; left: 0; width: 10px; height: 10px; border-radius: 50%; background: var(--gold-deep); content: ""; }
 .hotel-fact-label { display: block; margin-bottom: 7px; color: var(--gold-deep); font-weight: 700; white-space: nowrap; }
 .hotel-fact-label::after { margin-left: 12px; color: rgba(178,139,51,.72); content: "｜"; }
 .hotel-fact-text { display: block; min-width: 0; }
 .hotel-card-wide .hotel-fact-rows { gap: 24px; }
-.hotel-card-wide .hotel-fact-rows li { font-size: 49px; line-height: 1.43; }
+.hotel-card-wide .hotel-fact-rows li { font-size: 40px; line-height: 1.43; }
 .hotel-facts { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0; }
 .hotel-facts span, .transport-specs span { padding: 10px 18px 12px; border-radius: 14px; color: var(--gold-deep); background: rgba(212,186,154,.17); font-size: 26px; line-height: 1.2; }
 .hotel-editorial, .transport-editorial { margin: 24px 0 0; color: var(--ink); font-family: "Source Han Serif CN", serif; font-size: 30px; font-weight: 400; line-height: 1.65; }
@@ -329,17 +333,16 @@ img { display: block; max-width: 100%; }
 .transport-specs { display: flex; flex-wrap: wrap; gap: 12px; margin: 26px 0; }
 .transport-specs span { font-size: 36px; font-weight: 700; }
 .transport-copy ul { margin: 0; padding: 0; list-style: none; }
-.transport-copy li { position: relative; margin: 12px 0; padding-left: 33px; color: var(--ink); font-family: "Source Han Serif CN", serif; font-size: 45px; font-weight: 600; line-height: 1.45; }
+.transport-copy li { position: relative; margin: 12px 0; padding-left: 33px; color: var(--ink); font-family: "Source Han Serif CN", serif; font-size: 40px; font-weight: 600; line-height: 1.45; }
 .transport-copy li::before { content: ""; position: absolute; top: .65em; left: 0; width: 9px; height: 9px; border-radius: 50%; background: var(--gold); }
 .dining-copy { padding: 42px 48px 50px; }
 .dining-copy > small { display: block; margin-bottom: 10px; color: var(--gold-deep); font-size: 36px; font-weight: 700; line-height: 1.35; letter-spacing: .04em; }
 .dining-copy h3 { margin: 0; color: #3f3a35; font-family: "Source Han Serif CN", serif; font-size: 56px; font-weight: 600; line-height: 1.18; text-align: left; overflow-wrap: anywhere; }
-.dining-official-name { margin: 8px 0 0 !important; color: var(--muted) !important; font: 400 24px/1.45 Poppins, "Source Han Sans CN", sans-serif !important; }
-.dining-copy > p { margin: 24px 0 0; color: var(--ink); font-family: "Source Han Serif CN", serif; font-size: 50px; font-weight: 600; line-height: 1.5; }
+.dining-copy > p { margin: 24px 0 0; color: var(--ink); font-family: "Source Han Serif CN", serif; font-size: 40px; font-weight: 600; line-height: 1.5; }
 .transport-copy h3 { text-align: left; }
-.transport-editorial { font-size: 49px; font-weight: 600; line-height: 1.5; }
-.transport-card-wide .transport-editorial { font-size: 49px; }
-.transport-card-wide .transport-copy li { font-size: 45px; }
+.transport-editorial { font-size: 40px; font-weight: 600; line-height: 1.5; }
+.transport-card-wide .transport-editorial { font-size: 40px; }
+.transport-card-wide .transport-copy li { font-size: 40px; }
 .experience-status { display: inline-flex; margin: 14px 0 18px; padding: 8px 16px 10px; border-left: 5px solid var(--gold); color: #7a552a; background: rgba(212,186,154,.16); font-size: 24px; font-weight: 600; line-height: 1.35; }
 
 .day-header h2 { margin: -5px 0 0; color: #8f5f26; font-family: "Source Han Serif CN", serif; font-size: 54px; font-weight: 700; line-height: 1.3; }
