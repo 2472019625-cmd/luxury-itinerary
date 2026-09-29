@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import sharp from "sharp";
-import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, researchSimpleImageSlot, saveSimpleDayEditor, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "../server/simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, effectiveUnresolvedItems, researchSimpleImageSlot, saveSimpleDayEditor, saveSimpleHotelImageCrop, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "../server/simple-manual-images.mjs";
 import { planHotelNightChange } from "../src/lib/hotelStayEditing.js";
 import { mergeManualImagePayload } from '../src/lib/manualImageState.js';
 import { buildLayoutImageSlots } from '../src/lib/imageSlots.js';
@@ -84,6 +84,35 @@ test("Renderer 异常不丢图片；保存异常必须抛出", async (t) => {
   assert.equal(result.canEnterFinal, false);
   value.store.saveFinalResult = () => { throw new Error('disk full'); };
   await assert.rejects(chooseSimpleImageCandidate({ ...value, slotId: 'image:cover:primary', candidateId: value.candidate.candidateId }), /disk full/);
+});
+
+test("可见体验卡文案失败进入必需待处理，旧贴士空位不计数", () => {
+  const data = { days: [{ dayNotices: [], spots: [{ images: [{ src: "/image-assets/day.jpg" }] }] }], simpleImageSlotBindings: { "image:day:1:supporting:1": { module: "day", dayIndex: 0, spotIndex: 0, imageIndex: 0 } } };
+  const items = effectiveUnresolvedItems([
+    { kind: "copy", id: "copy:visual:image:day:1:supporting:1", required: false },
+    { kind: "copy", id: "copy:notice", targetPath: "days.0.dayNotices.0.text", required: true },
+  ], data);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].required, true);
+});
+
+test("酒店裁切只有确认后保存，重读仍保留并拒绝旧图提交", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+  result.data.hotels = [{ id: "h1", officialName: "Hotel", images: [{ src: "/image-assets/hotel.jpg", focus: "50% 50%" }] }];
+  result.data.simpleImageSlotBindings = {};
+  result.data.simpleImageSlotBindings["image:hotel:h1:primary"] = { module: "hotel", itemIndex: 0, imageIndex: 0, fieldPath: "hotels.0.images.0" };
+  const active = value.store.getProject(value.projectId);
+  const plan = value.store.getPlan(value.projectId, active.activePlanId);
+  plan.imageSlots.push({ slotId: "image:hotel:h1:primary", moduleType: "hotel", required: false });
+  plan.slotBindings["image:hotel:h1:primary"] = result.data.simpleImageSlotBindings["image:hotel:h1:primary"];
+  value.store.activatePlan(value.projectId, { ...plan, planId: "plan-crop-test" });
+  value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  const crop = { x: 0.1, y: 0.2, width: 0.6, height: 0.4 };
+  assert.equal(value.store.getFinalResult(value.projectId, value.executionRunId).data.hotels[0].images[0].crop, undefined);
+  await saveSimpleHotelImageCrop({ ...value, slotId: "image:hotel:h1:primary", expectedSrc: "/image-assets/hotel.jpg", crop, render: async ({ mode }) => ({ status: "success", mode, outputPath: "test.png" }) });
+  assert.deepEqual(value.store.getFinalResult(value.projectId, value.executionRunId).data.hotels[0].images[0].crop, crop);
+  await assert.rejects(saveSimpleHotelImageCrop({ ...value, slotId: "image:hotel:h1:primary", expectedSrc: "/image-assets/old.jpg", crop }), { code: "hotel_crop_image_changed" });
 });
 
 test("返回图片载荷保留等待期间文案，丢弃迟到的旧版本", async () => {

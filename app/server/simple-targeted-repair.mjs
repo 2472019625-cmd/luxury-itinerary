@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runCopyWriterSkill } from "./simple-copy-skill.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
-import { buildSimpleManualImagePayload } from "./simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, effectiveUnresolvedItems } from "./simple-manual-images.mjs";
 import { buildRendererUnresolvedItem } from "./simple-render-issues.mjs";
 
 const activeRepairs = new Map();
@@ -35,10 +35,11 @@ function rendererIssue(renderResult = {}) {
 
 async function safeRender(render, input) {
   try { return await render(input); }
-  catch (error) { return { status: "failed", mode: input.mode, outputPath: null, rendererCalls: 1, error: { code: "renderer_failed", message: error.message || String(error) } }; }
+  catch (error) { return { status: "failed", mode: input.mode, outputPath: null, rendererCalls: 1, error: { code: error.code || "renderer_failed", message: error.message || String(error), diagnostic: error.diagnostic } }; }
 }
 
 function saveResultState({ store, project, run, result, renderResult, unresolvedItems, action, copyExecution = result.copyExecution }) {
+  unresolvedItems = effectiveUnresolvedItems(unresolvedItems, result.data || {}, store.getPlan(project.projectId, project.activePlanId) || {});
   const required = unresolvedItems.filter((item) => item.required);
   const complete = renderResult.status === "success" && renderResult.mode === "final" && required.length === 0;
   const pipelineStatus = complete ? "complete" : "partial";
@@ -78,6 +79,7 @@ function saveResultState({ store, project, run, result, renderResult, unresolved
 }
 
 async function renderAfterRepair({ store, root, project, run, result, unresolvedItems, action, render, copyExecution }) {
+  unresolvedItems = effectiveUnresolvedItems(unresolvedItems, result.data || {}, store.getPlan(project.projectId, project.activePlanId) || {});
   const required = unresolvedItems.filter((item) => item.required);
   const mode = required.length ? "draft" : "final";
   let renderResult = await safeRender(render, { data: result.data, projectId: project.projectId, root, mode });
@@ -104,7 +106,7 @@ async function exclusive(projectId, operation) {
 async function retryCopyTargets({ store, root, projectId, targetIds, copyOptions = {}, runCopy = runCopyWriterSkill, render = runSimpleRenderer, single = false } = {}) {
   return exclusive(projectId, async () => {
     const initial = contextFor(store, projectId);
-    const unresolvedCopy = (initial.result.unresolvedItems || []).filter((item) => item.kind === "copy" && item.required !== false);
+    const unresolvedCopy = effectiveUnresolvedItems(initial.result.unresolvedItems || [], initial.result.data || {}, initial.plan).filter((item) => item.kind === "copy");
     const requestedIds = [...new Set((targetIds?.length ? targetIds : unresolvedCopy.map((item) => item.id)).map(String))];
     const unresolvedIds = new Set(unresolvedCopy.map((item) => item.id));
     const retryIds = requestedIds.filter((id) => unresolvedIds.has(id));
@@ -169,7 +171,7 @@ export async function retrySimpleCopyTargets(options = {}) {
 export async function retrySimpleRenderer({ store, root, projectId, render = runSimpleRenderer } = {}) {
   return exclusive(projectId, async () => {
     const current = contextFor(store, projectId);
-    const otherRequired = (current.result.unresolvedItems || []).filter((item) => item.required && item.kind !== "renderer");
+    const otherRequired = effectiveUnresolvedItems(current.result.unresolvedItems || [], current.result.data || {}, current.plan).filter((item) => item.required && item.kind !== "renderer");
     if (otherRequired.length) throw Object.assign(new Error("请先补齐文案、图片或客户信息，再重新检查成品"), { code: "renderer_prerequisites_missing" });
     const pending = { ...current.result, pipelineStatus: "partial", outputPath: null, renderStatus: "pending_targeted_render" };
     store.saveFinalResult(projectId, current.run.executionRunId, pending);

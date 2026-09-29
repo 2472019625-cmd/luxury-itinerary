@@ -65,7 +65,15 @@ function runRenderer(args, cwd) {
     child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
     child.on("error", reject);
-    child.on("close", (code) => code === 0 ? resolve({ stdout, stderr }) : reject(new Error(stderr.trim().split(/\r?\n/).slice(-4).join(" ") || `Renderer 退出码 ${code}`)));
+    child.on("close", (code) => {
+      if (code === 0) return resolve({ stdout, stderr });
+      const lines = stderr.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      const reason = lines.find((line) => /^(?:Error|TypeError|RangeError):/.test(line)) || `Renderer 退出码 ${code}`;
+      const failure = new Error(reason);
+      failure.code = /Export tile dimensions differ/.test(reason) ? "render_capture_failed" : "renderer_process_failed";
+      failure.diagnostic = stderr.slice(-6000);
+      reject(failure);
+    });
   });
 }
 

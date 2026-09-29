@@ -27,3 +27,10 @@ test("Renderer 阻断事项保存并展示真正的版面失败原因", () => {
   assert.doesNotMatch(item.error.message, /图片放大过多/);
   assert.equal(item.qa.issues.find((issue) => issue.code === "image_upscale_excessive").severity, "warning");
 });
+
+test("截屏程序失败与版面不通过分开，技术堆栈不进入待处理", () => {
+  const item = buildRendererUnresolvedItem({ status: "failed", error: { code: "render_capture_failed", message: "Error: Export tile dimensions differ at 6000", diagnostic: "at captureLongElement (file:///D:/private/render.mjs:24:77)" } });
+  assert.equal(item.error.code, "render_capture_failed");
+  assert.match(item.error.message, /长图截取失败/);
+  assert.doesNotMatch(JSON.stringify(item), /file:\/\/\/|private|版面检查未通过/);
+});

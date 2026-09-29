@@ -148,10 +148,19 @@ export function applySimpleSkillResults({ preparedData, copyTasks = [], copyExec
     error.code = "protected_fact_changed";
     throw error;
   }
+  const effectiveUnresolved = unresolvedItems.filter((item) => {
+    const notice = String(item.targetPath || "").match(/^days\.(\d+)\.dayNotices\.0\.text$/);
+    return !notice || Boolean(data.days?.[Number(notice[1])]?.dayNotices?.[0]);
+  }).map((item) => {
+    if (item.kind !== "copy" || !String(item.id || "").startsWith("copy:visual:")) return item;
+    const slotId = item.id.slice("copy:visual:".length);
+    const binding = data.simpleImageSlotBindings?.[slotId] || slotBindings[slotId];
+    return binding && getSlotImage(data, binding)?.src ? { ...item, required: true } : item;
+  });
   return {
     data,
-    unresolvedItems,
-    requiredUnresolved: unresolvedItems.filter((item) => item.required),
+    unresolvedItems: effectiveUnresolved,
+    requiredUnresolved: effectiveUnresolved.filter((item) => item.required),
     copyWriteback,
     imageWriteback,
   };
