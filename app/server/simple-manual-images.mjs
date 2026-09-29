@@ -347,7 +347,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
       ? { ...searchDiagnostic, planning: buildImageSearchDiagnostic({ ...currentSearch, plannerValidationIssues: currentSearch.plannerValidationIssues || imageResult.plannerValidationIssues || planned?.plannerValidationIssues }).planning }
       : searchDiagnostic;
     if (currentSearch.technicalStatus === "planner_slot_unresolved" && planned
-      && ["non_core_background_choice", "non_core_supporting_choice"].includes(prepareExplicitImageSearchSlot(planned).manualSearchOverride?.reason)) {
+      && ["non_core_background_choice", "non_core_supporting_choice", "transport_overview_pose"].includes(prepareExplicitImageSearchSlot(planned, { plan }).manualSearchOverride?.reason)) {
       currentDiagnostic = { ...currentDiagnostic, planning: { ...currentDiagnostic.planning, reason: "scene_preference" } };
     }
     return {
@@ -1015,7 +1015,7 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
   if (typeof runImage !== "function") throw new Error("单槽图片搜索能力未配置");
   let previousResults = context.result.imageExecution?.results || [];
   const existingImages = previousResults.filter((item) => item.selected || item.provisionalSelected).map((item) => { const image = item.selected || item.provisionalSelected; return { ...image, src: image.localUrl, slotId: item.slotId }; });
-  const target = prepareExplicitImageSearchSlot({ ...slot, ...projectedTargetSlot(context, slotId) });
+  const target = prepareExplicitImageSearchSlot({ ...slot, ...projectedTargetSlot(context, slotId) }, { plan: context.plan });
   const searched = await runImage({ ...imageOptions, root, slots: [target], existingImages });
   context = projectContext(store, projectId);
   previousResults = context.result.imageExecution?.results || [];
@@ -1078,7 +1078,7 @@ export async function researchSimpleImageSlots({ store, root, projectId, slotIds
   const previousById = new Map((context.result.imageExecution?.results || []).map((item) => [item.slotId, item]));
   const retryIds = requestedIds.filter((slotId) => !(previousById.get(slotId)?.status === "success" && previousById.get(slotId)?.selected));
   if (!retryIds.length) throw Object.assign(new Error("当前没有需要重新搜索的缺图位置"), { code: "image_slots_not_unresolved" });
-  const slots = retryIds.map((slotId) => prepareExplicitImageSearchSlot({ ...assertPlannedImageSlot(context, slotId), ...projectedTargetSlot(context, slotId) }));
+  const slots = retryIds.map((slotId) => prepareExplicitImageSearchSlot({ ...assertPlannedImageSlot(context, slotId), ...projectedTargetSlot(context, slotId) }, { plan: context.plan }));
   const existingImages = (context.result.imageExecution?.results || []).filter((item) => item.selected || item.provisionalSelected).map((item) => { const image = item.selected || item.provisionalSelected; return { ...image, src: image.localUrl, slotId: item.slotId }; });
   const searched = await runImage({ ...imageOptions, root, slots, existingImages });
 

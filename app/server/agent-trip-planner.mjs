@@ -711,7 +711,7 @@ function repairEquivalentVisualChoice(slot) {
   } };
 }
 
-function repairTransportOverviewPose(slot, factBasis) {
+export function repairTransportOverviewPose(slot, factBasis, { allowCoreActionChoices = false } = {}) {
   const role = /^transport:(\d+)$/.exec(cleanText(slot.role));
   const transport = role && (factBasis.transport || [])[Number(role[1]) - 1];
   if (!transport || slot.exactIdentityRequired !== false || slot.locationRole !== "scope_only") return null;
@@ -720,8 +720,15 @@ function repairTransportOverviewPose(slot, factBasis) {
     || !/飞机|aircraft|plane/i.test(cleanText(core.subject))
     || [core.subject, core.identity, core.subjectEn, core.identityEn].some((value) => visualChoicePattern.test(cleanText(value)))) return null;
   const visual = cleanText(slot.primaryVisualSubject);
+  if (allowCoreActionChoices && visualSubjectPolicyIssue(visual, core)) return null;
   const ordinaryPose = /(?:起飞|降落|起降|停靠|停放|飞行中|飞行|空中|跑道|taking[ -]?off|landing|parked|flying|in[ -]?flight|airstrip|runway)/i;
-  const choices = splitVisualChoices(visual);
+  // Old saved slots can contain a single Chinese scene while its English
+  // action offers ordinary poses. Only explicit searches opt into this
+  // recovery; automatic planning retains its existing boundary.
+  const choiceText = allowCoreActionChoices && !visualChoicePattern.test(visual)
+    ? [core.action, core.actionEn].map(cleanText).find((value) => visualChoicePattern.test(value)) || visual
+    : visual;
+  const choices = splitVisualChoices(choiceText);
   if (choices.length !== 2 || !choices.every((part) => ordinaryPose.test(part))
     || !/飞机|aircraft|plane/i.test(visual)
     || /机场|航站楼|airport|terminal|直升机|热气球|船只?|商务车|越野车|helicopter|balloon|boat/i.test(`${visual} ${core.subject} ${core.identity}`)) return null;
@@ -730,9 +737,14 @@ function repairTransportOverviewPose(slot, factBasis) {
     return Number.isInteger(number) && number > 0 ? [(factBasis.days || [])[number - 1]] : [];
   }).filter(Boolean);
   if (!sourceDays.length) return null;
-  const sourceFacts = sourceDays.map((day) => `${day.experience || ""} ${day.vehicle || ""}`).join(" ");
-  if (/航拍|空中观光|观景飞行|低空飞越|起飞|降落|停靠|停放|飞行中|scenic[ -]?flight|aerial[ -]?tour|taking[ -]?off|landing|parked/i.test(`${sourceFacts} ${transport.usageLabel || ""}`)
-    || /航拍体验|空中观光|观景飞行|低空飞越|scenic[ -]?flight|aerial[ -]?tour/i.test(visual)) return null;
+  if (allowCoreActionChoices && (transport.modelGuaranteed || cleanText(transport.model))) return null;
+  const sourceFacts = sourceDays.flatMap((day) => [day.experience, day.vehicle,
+    ...(allowCoreActionChoices ? (day.spots || []).flatMap((spot) => [spot.name, spot.description]) : []),
+  ]).filter(Boolean).join(" ");
+  const sourceDetails = allowCoreActionChoices ? [transport.currentCopy, ...(transport.features || [])].filter(Boolean).join(" ") : "";
+  if (/航拍|空中观光|观景飞行|低空飞越|起飞|降落|停靠|停放|飞行中|scenic[ -]?flight|aerial[ -]?tour|taking[ -]?off|landing|parked/i.test(`${sourceFacts} ${transport.usageLabel || ""} ${sourceDetails}`)
+    || /航拍体验|空中观光|观景飞行|低空飞越|scenic[ -]?flight|aerial[ -]?tour/i.test(visual)
+    || allowCoreActionChoices && /航拍|空中观光|观景飞行|低空飞越|起降体验|scenic[ -]?flight|aerial[ -]?tour/i.test(`${visual} ${slot.visualGoal || ""}`)) return null;
   const onlyOrdinaryMotion = (value) => !cleanText(value).replace(/(?:在|于)?[^或\s]{0,16}?(?:跑道)(?:上)?/gu, "")
     .replace(/\b(?:on|at)\s+(?:a\s+)?(?:[a-z-]+\s+){0,3}(?:airstrip|runway)\b/gi, "")
     .replace(/起飞|降落|起降|停靠|停放|飞行中|飞行|空中|taking[ -]?off|landing|parked|flying|in[ -]?flight|flight/gi, "")
