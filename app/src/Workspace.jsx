@@ -21,6 +21,8 @@ import { hotelStayDetails } from './lib/hotelStayPresentation.js';
 import { applyHotelNightChange, planHotelNightChange } from './lib/hotelStayEditing.js';
 import { defaultDeliveryFilenameBase, deliveryDownloadUrl } from './lib/deliveryFilename.js';
 
+import { SharedApiSettings } from "./SharedApiSettings.jsx";
+
 const STORAGE_USERS = "sheyou-workspace-users-v1";
 const STORAGE_SESSION = "sheyou-workspace-session-v1";
 const STORAGE_PROJECTS = "sheyou-workspace-projects-v1";
@@ -171,14 +173,17 @@ export function AuthScreen({ onAuth, storageKeys = FIXED_STORAGE, serverLogin, s
 }
 
 export function AppHeader({ user, project, saved, canGenerate, onHome, onLogout, onGenerate, onProfile, onRename }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   return <header className="workspace-header">
     <button className="header-brand" onClick={onHome}><img src="/assets/logos/logo-gold.png" alt="奢游国际" /><span>行程创建工作台</span></button>
     {project && <div className="header-project"><strong>{projectDisplayName(project)}</strong>{onRename && <button onClick={() => onRename(project)} aria-label="修改项目名称"><UiIcon name="itinerary" size={16} /></button>}</div>}
     <div className="header-actions">
       {project && <span className={`save-state save-${saved}`}><UiIcon name={saved === "saved" ? "included" : "warning"} />{saved === "saving" ? "正在保存" : saved === "error" ? "保存失败" : "已保存"}</span>}
       {project && canGenerate && <Button tone="primary" onClick={onGenerate}>生成版本</Button>}
+      {user?.canManageApiKeys && <button type="button" className="shared-api-settings-trigger" aria-label="接口设置" title="接口设置" onClick={() => setSettingsOpen(true)}><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.07.08-2.1 2.1-.08-.07a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.05 1.57V21h-3v-.78a1.7 1.7 0 0 0-1.05-1.57 1.7 1.7 0 0 0-1.88.34l-.08.07-2.1-2.1.07-.08A1.7 1.7 0 0 0 7 15a1.7 1.7 0 0 0-1.57-1.05H4.6v-3h.78A1.7 1.7 0 0 0 7 9.9a1.7 1.7 0 0 0-.34-1.88l-.07-.08 2.1-2.1.08.07A1.7 1.7 0 0 0 10.65 6a1.7 1.7 0 0 0 1.05-1.57V3.6h3v.78A1.7 1.7 0 0 0 15.75 6a1.7 1.7 0 0 0 1.88-.34l.08-.07 2.1 2.1-.07.08A1.7 1.7 0 0 0 19.4 9.9a1.7 1.7 0 0 0 1.57 1.05h.78v3h-.78A1.7 1.7 0 0 0 19.4 15Z"/></svg></button>}
       <div className="user-chip"><button className="user-profile-trigger" onClick={onProfile} title="编辑我的定制师资料">{user.profile?.avatar ? <img src={user.profile.avatar} alt={user.name} /> : <span>{user.name.slice(0, 1)}</span>}<div><strong>{user.profile?.name || user.name}</strong><small>定制师</small></div></button><button onClick={onLogout}>退出</button></div>
     </div>
+    {settingsOpen && <SharedApiSettings onClose={() => setSettingsOpen(false)} />}
   </header>;
 }
 

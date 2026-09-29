@@ -6,6 +6,82 @@ import path from "node:path";
 import test from "node:test";
 import { AgentPlanStore } from "../server/agent-plan-store.mjs";
 import { createAgentPlannerServer } from "../server/agent-planner-app.mjs";
+import { SharedApiKeyStore } from "../server/shared-api-keys.mjs";
+import { provisionInitialAdmin } from "../server/demo-auth.mjs";
+
+test("共用 Key 仅初始管理账号可设置，员工邀请码账号只使用且不能读取", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-shared-keys-"));
+  const credentialFile = path.join(root, "auth.json");
+  const usersFile = path.join(root, "users.json");
+  const salt = "d".repeat(32);
+  await writeFile(credentialFile, JSON.stringify({ login:"legacy", salt, hash:scryptSync("legacy-secret", salt, 64).toString("hex") }));
+  provisionInitialAdmin({ credentialFile, usersFile, login:"sheyou-admin", name:"负责人", password:"482615" });
+  const origin = "https://sheyou-ai.cn";
+  const runWaiters = [];
+  const nextRun = () => new Promise((resolve) => runWaiters.push(resolve));
+  const runtime = createAgentPlannerServer({
+    port:0, workspaceRoot:path.join(root,"agent"), catalogFile:path.join(root,"catalog.sqlite"), simpleStore:new AgentPlanStore(path.join(root,"projects")),
+    auth:{ enabled:true, file:credentialFile, usersFile, inviteCode:"TEAM-INVITE", origin, secure:false },
+    modelConfig:{ apiKey:"bypass-text-key", baseUrl:"https://text.example/v1", model:"text-model" },
+    searchModelConfig:{ apiKey:"bypass-search-key", baseUrl:"https://search.example/v1", model:"search-model", imageSearchModel:"image-model" },
+    visionModelConfig:{ apiKey:"bypass-vision-key", baseUrl:"https://vision.example/v1", model:"vision-model" },
+    fetchImpl:async () => ({ ok:true, status:200 }),
+    simplePipelineRunner:async (options) => { runWaiters.shift()?.(options); return { pipelineStatus:"complete" }; },
+  });
+  await new Promise((resolve) => runtime.server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise((resolve) => runtime.server.close(resolve)); await rm(root, { recursive:true, force:true }); });
+  const base = `http://127.0.0.1:${runtime.server.address().port}`;
+  const headers = { host:"sheyou-ai.cn", "x-forwarded-for":"203.0.113.5", origin, "content-type":"application/json" };
+  const adminLogin = await fetch(`${base}/api/auth/login`, { method:"POST", headers, body:JSON.stringify({ login:"sheyou-admin", password:"482615" }) });
+  assert.equal(adminLogin.status, 200);
+  assert.equal((await adminLogin.json()).user.canManageApiKeys, true);
+  const adminCookie = adminLogin.headers.get("set-cookie").split(";")[0];
+  const register = await fetch(`${base}/api/auth/register`, { method:"POST", headers, body:JSON.stringify({ invite:"TEAM-INVITE", name:"员工", login:"employee", password:"employee-pin" }) });
+  assert.equal(register.status, 200);
+  assert.equal((await register.json()).user.canManageApiKeys, false);
+  const employeeCookie = register.headers.get("set-cookie").split(";")[0];
+  const keyUrl = `${base}/api/admin/api-keys`;
+  assert.equal((await fetch(keyUrl, { headers:{ ...headers, cookie:employeeCookie } })).status, 403);
+  assert.equal((await fetch(`${keyUrl}/text`, { method:"PUT", headers:{ ...headers, cookie:employeeCookie }, body:JSON.stringify({ apiKey:"forbidden" }) })).status, 403);
+  assert.equal((await fetch(`${keyUrl}/mode`, { method:"POST", headers:{ ...headers, cookie:employeeCookie }, body:JSON.stringify({ mode:"shared" }) })).status, 403);
+  const body = JSON.stringify({ facts:{ destination:"肯尼亚", days:[{ day:1 }] } });
+  const legacyRunStarted = nextRun();
+  assert.equal((await fetch(`${base}/api/simple/projects`, { method:"POST", headers:{ ...headers, cookie:employeeCookie }, body })).status, 202);
+  const legacyRun = await legacyRunStarted;
+  assert.equal(legacyRun.plannerOptions.apiKey, "bypass-text-key");
+  assert.equal(legacyRun.copyOptions.researchApiKey, "bypass-search-key");
+  assert.equal((await (await fetch(keyUrl, { headers:{ ...headers, cookie:adminCookie } })).json()).mode, "legacy");
+  assert.equal((await fetch(`${keyUrl}/mode`, { method:"POST", headers:{ ...headers, cookie:adminCookie }, body:JSON.stringify({ mode:"shared" }) })).status, 400);
+  for (const id of ["text", "search", "vision", "you"]) {
+    const saved = await fetch(`${keyUrl}/${id}`, { method:"PUT", headers:{ ...headers, cookie:adminCookie }, body:JSON.stringify({ apiKey:`private-${id}-secret` }) });
+    assert.equal(saved.status, 200);
+    assert.doesNotMatch(JSON.stringify(await saved.json()), /private-.*-secret/);
+  }
+  const status = await (await fetch(keyUrl, { headers:{ ...headers, cookie:adminCookie } })).json();
+  assert.equal(status.services.filter((service) => service.configured).length, 4);
+  assert.equal(status.mode, "legacy");
+  const tested = await (await fetch(`${keyUrl}/text/test`, { method:"POST", headers:{ ...headers, cookie:adminCookie } })).json();
+  assert.equal(tested.connected, true);
+  const stillLegacyRunStarted = nextRun();
+  assert.equal((await fetch(`${base}/api/simple/projects`, { method:"POST", headers:{ ...headers, cookie:employeeCookie }, body })).status, 202);
+  assert.equal((await stillLegacyRunStarted).plannerOptions.apiKey, "bypass-text-key");
+  const activated = await fetch(`${keyUrl}/mode`, { method:"POST", headers:{ ...headers, cookie:adminCookie }, body:JSON.stringify({ mode:"shared" }) });
+  assert.equal(activated.status, 200);
+  assert.equal((await activated.json()).mode, "shared");
+  const runStarted = nextRun();
+  assert.equal((await fetch(`${base}/api/simple/projects`, { method:"POST", headers:{ ...headers, cookie:employeeCookie }, body })).status, 202);
+  const run = await runStarted;
+  assert.equal(run.plannerOptions.apiKey, "private-text-secret");
+  assert.equal(run.copyOptions.researchApiKey, "private-search-secret");
+  assert.equal(run.copyOptions.hotelSearchApiKey, "private-you-secret");
+  assert.equal(run.imageOptions.visionApiKey, "private-vision-secret");
+  assert.equal((await fetch(`${keyUrl}/text`, { method:"DELETE", headers:{ ...headers, cookie:adminCookie } })).status, 400);
+  const rolledBack = await fetch(`${keyUrl}/mode`, { method:"POST", headers:{ ...headers, cookie:adminCookie }, body:JSON.stringify({ mode:"legacy" }) });
+  assert.equal((await rolledBack.json()).mode, "legacy");
+  const restoredRunStarted = nextRun();
+  assert.equal((await fetch(`${base}/api/simple/projects`, { method:"POST", headers:{ ...headers, cookie:employeeCookie }, body })).status, 202);
+  assert.equal((await restoredRunStarted).plannerOptions.apiKey, "bypass-text-key");
+});
 
 test("Simple 项目按登录定制师隔离且旧项目只归 dsy 兼容账号", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-owner-auth-"));
@@ -18,10 +94,13 @@ test("Simple 项目按登录定制师隔离且旧项目只归 dsy 兼容账号",
   const password = "dsy-password";
   await writeFile(authFile, JSON.stringify({ name:"dsy", login:"dsy", salt, hash:scryptSync(password,salt,64).toString("hex") }));
   const origin = "https://sheyou-ai.cn";
+  const apiKeyStore = new SharedApiKeyStore({ file:path.join(root, "shared-keys.json") });
+  for (const id of ["text", "search", "vision", "you"]) apiKeyStore.set(id, `test-${id}-key`);
   const runtime = createAgentPlannerServer({
     port:0,
     workspaceRoot:path.join(root,"agent"),
     simpleStore,
+    apiKeyStore,
     simplePipelineRunner:async ({ projectId, ownerId }) => {
       simpleStore.createProject({ projectId, ownerId, flowKind:"simple_skill_v1", status:"complete", activePlanId:null, planIds:[], executionRunIds:[] });
       return { pipelineStatus:"complete" };

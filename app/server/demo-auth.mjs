@@ -3,7 +3,7 @@ import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypt
 import path from 'node:path';
 
 const validDigest = (value, length) => new RegExp(`^[a-f0-9]{${length}}$`).test(String(value || ''));
-const publicUser = user => ({ id:user.id, name:user.name, login:user.login, active:user.active !== false });
+const publicUser = user => ({ id:user.id, name:user.name, login:user.login, active:user.active !== false, canManageApiKeys:user.canManageApiKeys === true });
 const passwordMatches = (password, user) => {
   if (typeof password !== 'string' || password.length > 256 || !validDigest(user.salt, 32) || !validDigest(user.hash, 128)) return false;
   return timingSafeEqual(scryptSync(password, user.salt, 64), Buffer.from(user.hash, 'hex'));
@@ -100,9 +100,42 @@ export function createDemoAuth({
       } catch (error) { return reply(error.status || 400,{error:error.message || '登录请求无效'}); }
     }
     if (req.method==='POST' && url.pathname==='/api/auth/logout') { if (key) sessions.delete(key); res.setHeader('set-cookie',cookie('')); return reply(200,{ok:true}); }
+    if (req.method==='POST' && url.pathname==='/api/auth/change-pin') {
+      if (!user || user.id === legacyUser.id) return reply(403,{error:'当前账号不能在这里修改PIN'});
+      try {
+        const data = await readJsonBody(req);
+        if (!passwordMatches(data.currentPin, user)) return reply(401,{error:'当前PIN不正确'});
+        if (!/^\d{6}$/.test(String(data.newPin || '')) || data.newPin === data.currentPin) return reply(400,{error:'请输入与当前不同的6位数字新PIN'});
+        const salt = randomBytes(16).toString('hex');
+        const updated = { ...user, salt, hash:scryptSync(data.newPin,salt,64).toString('hex'), pinUpdatedAt:new Date(now()).toISOString() };
+        writeUsers(readUsers().map(item => item.id === user.id ? updated : item));
+        for (const [sessionKey, value] of sessions) if (sessionKey !== key && value.userId === user.id) sessions.delete(sessionKey);
+        return reply(200,{ok:true});
+      } catch (error) { return reply(error.status || 400,{error:error.message || 'PIN修改失败'}); }
+    }
     if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/image-assets/')) {
       if (!user) return reply(401,{error:'请先登录',code:'AUTH_REQUIRED'});
     }
     return false;
   };
+}
+
+export function provisionInitialAdmin({ credentialFile, usersFile, login, name, password, now = Date.now } = {}) {
+  if (!credentialFile || !usersFile) throw new Error('需要明确的服务端账号文件路径');
+  const account = String(login || '').trim();
+  if (account.length < 3 || !String(name || '').trim() || !/^\d{6}$/.test(String(password || ''))) throw new Error('需要账号、姓名和6位数字初始PIN');
+  const legacy = JSON.parse(readFileSync(credentialFile, 'utf8'));
+  if (!legacy.login || !validDigest(legacy.salt, 32) || !validDigest(legacy.hash, 128)) throw new Error('现有账号文件无效');
+  const target = path.resolve(usersFile);
+  const stored = existsSync(target) ? JSON.parse(readFileSync(target, 'utf8')) : { version:1, users:[] };
+  const users = Array.isArray(stored.users) ? stored.users : [];
+  if (account.toLowerCase() === String(legacy.login).toLowerCase() || users.some(user => user.login?.toLowerCase() === account.toLowerCase())) throw new Error('该登录账号已存在');
+  if (users.some(user => user.canManageApiKeys === true)) throw new Error('初始管理账号已存在，不能重复创建');
+  const salt = randomBytes(16).toString('hex');
+  const created = { id:`user-${randomBytes(12).toString('hex')}`, name:String(name).trim(), login:account, salt, hash:scryptSync(password,salt,64).toString('hex'), active:true, canManageApiKeys:true, createdAt:new Date(now()).toISOString() };
+  mkdirSync(path.dirname(target), { recursive:true });
+  const temporary = `${target}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify({ version:1, users:[...users, created] }, null, 2)}\n`, { encoding:'utf8', mode:0o600 });
+  renameSync(temporary, target);
+  return publicUser(created);
 }
