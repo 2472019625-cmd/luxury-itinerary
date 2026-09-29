@@ -103,6 +103,39 @@ test("错误身份引文仅补核一次，其他候选和有效硬判定不变",
   }
 });
 
+test("可见地标被误填为不存在的来源路径时补核视觉证据，仍逐图验证身份", async (t) => {
+  const { candidate } = await fixtures(t);
+  for (const [identity, features] of [["乞力马扎罗雪山", "雪顶与双峰轮廓"], ["Mount Fuji", "对称锥形山体与峰顶积雪"], ["Eiffel Tower", "四腿拱形底座和镂空铁塔轮廓"]]) {
+    for (const mode of ["supported", "insufficient", "wrong-entity", "hard-conflict", "no-feature"]) {
+      const target = { module: "day", moduleType: "day", exactIdentityRequired: true,
+        queryCore: { subject: "landmark", identity }, minimumVisualProof: { subject: "landmark", identityRequirement: identity } };
+      const malformed = { status: "supported", basis: "knowledge_path", evidenceIds: [candidate.candidateId], quote: identity,
+        visibleIdentifier: mode === "no-feature" ? "" : features, explanation: "通过当前照片的独特外观识别" };
+      let calls = 0;
+      const results = await judgeCandidatesBatch({ slot: target, candidates: [candidate], apiKey: "fixture", baseUrl: "https://vision.invalid", model: "fixture",
+        fetchImpl: async () => {
+          calls++;
+          const result = calls === 1 ? judgment(candidate.candidateId, { identityEvidence: malformed,
+            ...(mode === "hard-conflict" ? { visibleLocationConflict: true, hardRejectCode: "wrong_location", eligible: false } : {}) })
+            : { candidateId: candidate.candidateId, identityEvidence: mode === "insufficient" ? { status: "insufficient", basis: "none", explanation: "不能唯一确认" }
+              : { status: "supported", basis: "visible_identifier", evidenceIds: [], quote: "", visibleIdentifier: `${mode === "wrong-entity" ? "Other Landmark" : identity}：${features}`, explanation: "本图的独特实体外观清楚" }, score: 1 };
+          return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ judgments: [result] }) } }] }) };
+        } });
+      const result = results[0];
+      assert.equal(calls, ["hard-conflict", "no-feature"].includes(mode) ? 1 : 2, `${identity}/${mode}`);
+      assert.equal(result.eligible, mode === "supported");
+      assert.equal(result.score, 94, "补核身份不能覆盖有效视觉分数");
+      if (mode === "supported") {
+        assert.equal(result.identityEvidence.basis, "visible_identifier");
+        assert.equal(failedHardRequirement(target, result), null);
+        assert.equal(result.auditContract.identityEvidenceValidation.initial, "source_evidence_not_bound");
+        assert.equal(result.auditContract.identityEvidenceValidation.final, "supported");
+      } else if (mode === "hard-conflict") assert.equal(result.hardRejectCode, "wrong_location");
+      else assert.equal(result.identityEvidence.status, "insufficient");
+    }
+  }
+});
+
 test("早餐年代冲突在可选场地身份归一化后仍阻止自动采用", async (t) => {
   const { candidate } = await fixtures(t);
   const target = { moduleType: "dining", exactIdentityRequired: false,
