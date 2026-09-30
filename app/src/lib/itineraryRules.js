@@ -1,7 +1,8 @@
 import { synchronizeTravelEntityDisplayFields } from "./travelEntityDisplay.js";
 
 const FLIGHT_OVERNIGHT = /^(?:飞机|飞机上|航班|返程航班|夜航|机上)$/i;
-const NO_OVERNIGHT = /^(?:无住宿|不住宿|无需住宿|行程结束|返程结束|—|-)$/i;
+const NO_OVERNIGHT = /^(?:无住宿|不住宿|无需住宿|行程结束|返程结束)(?:\s*[（(][^）)]*[）)])?$|^(?:—|-)$/i;
+const DAY_STATUS_ONLY = /^(?:全天)?(?:自由行动|自由活动|自行安排)(?:\s*[（(][^）)]*[）)])?$/i;
 const AIRPORT = /机场|航站楼|airport/i;
 const RESERVATION_REQUIRED = /需(?:要)?提前预约|须提前预约|预约后|预约制/i;
 const PENDING_CONFIRMATION = /待确认|尚未确认|以最终确认|视情况|按.*安排/i;
@@ -428,10 +429,11 @@ function sentenceFor(source, pattern) {
 
 export function buildCoreSpots(day = {}) {
   const description = cleanText(day.description);
+  if (DAY_STATUS_ONLY.test(description) || NO_OVERNIGHT.test(description)) return [];
   const descriptionParts = description.split(/[；;，,]/).map(cleanText).filter(Boolean);
   const optionalParts = descriptionParts.filter((part) => /自费|另行付费/.test(part));
   const includedDescription = descriptionParts.filter((part) => !/自费|另行付费/.test(part)).join("，") || description;
-  const nodes = (day.routeNodes?.length ? day.routeNodes : splitRouteNodes(day.city)).filter((node) => !AIRPORT.test(node));
+  const nodes = (day.routeNodes?.length ? day.routeNodes : splitRouteNodes(day.city)).filter((node) => !AIRPORT.test(node) && !DAY_STATUS_ONLY.test(cleanText(node)) && !NO_OVERNIGHT.test(cleanText(node)));
   const destination = nodes.at(-1) || "";
   const spots = [];
   const push = (name, pattern) => {

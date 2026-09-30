@@ -3,11 +3,11 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import sharp from "sharp";
-import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, effectiveUnresolvedItems, researchSimpleImageSlot, saveSimpleDayEditor, saveSimpleHotelImageCrop, saveSimpleImageCrop, saveSimpleModuleVisibility, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "../server/simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, clearSimpleImage, effectiveUnresolvedItems, researchSimpleImageSlot, saveSimpleDayEditor, saveSimpleHotelImageCrop, saveSimpleImageCrop, saveSimpleModuleVisibility, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "../server/simple-manual-images.mjs";
 import { planHotelNightChange } from "../src/lib/hotelStayEditing.js";
 import { mergeManualImagePayload } from '../src/lib/manualImageState.js';
 import { buildLayoutImageSlots } from '../src/lib/imageSlots.js';
-import { createManualDayCard } from '../src/lib/dayEditorState.js';
+import { createManualDayCard, deleteDaySpotPreservingSlots } from '../src/lib/dayEditorState.js';
 import { selectCustomerRenderData } from '../server/customer-render-data.mjs';
 
 import { fixture } from './support/manual-image-fixture.mjs';
@@ -40,6 +40,59 @@ function installKnowledgePreviewCandidate(value, candidateId = "knowledge-previe
   value.store.saveFinalResult(value.projectId, value.executionRunId, result);
   return candidate;
 }
+
+test("自动规划的必需主图可删除并持久化，但保留待补图门禁", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const render = async ({ mode }) => ({ status: "success", mode, outputPath: "test.png" });
+  await chooseSimpleImageCandidate({ ...value, slotId: "image:cover:primary", candidateId: value.candidate.candidateId, render });
+  const cleared = await clearSimpleImage({ ...value, slotId: "image:cover:primary", expectedSrc: value.candidate.localUrl, render });
+  const reloaded = buildSimpleManualImagePayload(value.store, value.projectId);
+  assert.equal(cleared.project.data.heroImage, "");
+  assert.equal(reloaded.project.data.heroImage, "");
+  assert.equal(reloaded.project.data.imageLocks["image:cover:primary"].source, "user_cleared");
+  assert.ok(reloaded.unresolvedRequiredSlotIds.includes("image:cover:primary"));
+  assert.equal(reloaded.canEnterFinal, false);
+  await assert.rejects(clearSimpleImage({ ...value, slotId: "image:cover:primary", expectedSrc: value.candidate.localUrl, render }), { code: "image_clear_image_changed" });
+});
+
+test("用户主动删除 DAY 主图后纯文字正式交付，自动缺图仍阻断", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const renderModes = [];
+  const render = async ({ mode, data }) => {
+    renderModes.push(mode);
+    if (mode === "final" && data.imageLocks?.["image:day:1:primary"]?.source === "user_cleared") assert.equal(selectCustomerRenderData(data).days[0].spots.length, 0);
+    return { status: "success", mode, outputPath: "test.png" };
+  };
+  await chooseSimpleImageCandidate({ ...value, slotId: "image:cover:primary", candidateId: value.candidate.candidateId, render });
+  assert.equal(buildSimpleManualImagePayload(value.store, value.projectId).canEnterFinal, false);
+  const buffer = await sharp({ create: { width: 1200, height: 700, channels: 3, background: "#8b6f47" } }).jpeg().toBuffer();
+  const uploaded = await uploadSimpleImage({ ...value, slotId: "image:day:1:primary", dataUrl: `data:image/jpeg;base64,${buffer.toString("base64")}`, fileName: "day.jpg", render });
+  assert.equal(uploaded.canEnterFinal, true);
+  const source = uploaded.project.data.days[0].spots[0].images[0].src;
+  const cleared = await clearSimpleImage({ ...value, slotId: "image:day:1:primary", expectedSrc: source, render });
+  const reloaded = buildSimpleManualImagePayload(value.store, value.projectId);
+  assert.equal(cleared.project.data.days[0].spots[0].images[0], null);
+  assert.equal(reloaded.project.data.imageLocks["image:day:1:primary"].source, "user_cleared");
+  assert.equal(reloaded.project.data.imageReview.slots.find((slot) => slot.slotId === "image:day:1:primary").status, "user_removed");
+  assert.ok(!reloaded.unresolvedRequiredSlotIds.includes("image:day:1:primary"));
+  assert.equal(reloaded.canEnterFinal, true);
+  assert.equal(reloaded.pipelineStatus, "complete");
+  assert.equal(reloaded.project.data.simpleImageSlotBindings["image:day:1:primary"].required, false);
+  assert.deepEqual(selectCustomerRenderData(reloaded.project.data).days[0].spots, []);
+  assert.equal(renderModes.at(-1), "final");
+});
+
+test("自动规划的可选图片删除后不新增必需待处理", async (t) => {
+  const value = await fixture({ includeOptionalDay: true }); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const render = async ({ mode }) => ({ status: "success", mode, outputPath: "test.png" });
+  const buffer = await sharp({ create: { width: 1200, height: 700, channels: 3, background: "#8b6f47" } }).jpeg().toBuffer();
+  const uploaded = await uploadSimpleImage({ ...value, slotId: "image:day:1:supporting:1", dataUrl: `data:image/jpeg;base64,${buffer.toString("base64")}`, fileName: "optional.jpg", render });
+  const src = uploaded.project.data.days[0].spots[0].images[1].src;
+  const cleared = await clearSimpleImage({ ...value, slotId: "image:day:1:supporting:1", expectedSrc: src, render });
+  assert.equal(cleared.project.data.days[0].spots[0].images[1], null);
+  assert.ok(!cleared.unresolvedRequiredSlotIds.includes("image:day:1:supporting:1"));
+  assert.equal(buildSimpleManualImagePayload(value.store, value.projectId).project.data.days[0].spots[0].images[1], null);
+});
 
 test("保存先于慢 Renderer 返回；新版本不被旧渲染覆盖", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
@@ -95,6 +148,21 @@ test("可见体验卡文案失败进入必需待处理，旧贴士空位不计�
   ], data);
   assert.equal(items.length, 1);
   assert.equal(items[0].required, true);
+});
+
+test("酒店四项已启用时旧介绍问题不再待处理；已删除人工卡片的缺图记录清除", () => {
+  const manualSlotId = "manual:day:1:deleted:primary";
+  const plannedSlotId = "image:day:1:primary";
+  const data = { hotels: [{ factRows: [] }], days: [{ spots: [] }], simpleImageSlotBindings: { [plannedSlotId]: { module: "day", dayIndex: 0 } } };
+  const plan = { imageSlots: [{ slotId: plannedSlotId, required: true }] };
+  const items = effectiveUnresolvedItems([
+    { kind: "copy", id: "copy:hotel:h1", targetPath: "hotels.0.editorialCopy", required: true },
+    { kind: "copy", id: "copy:hotel:h1:proof-points", targetPath: "hotels.0.proofPoints", required: true },
+    { kind: "image", id: manualSlotId, required: true },
+    { kind: "copy", id: `copy:visual:${manualSlotId}`, required: true },
+    { kind: "image", id: plannedSlotId, required: true },
+  ], data, plan);
+  assert.deepEqual(items.map((item) => item.id), [plannedSlotId]);
 });
 
 test("酒店裁切只有确认后保存，重读仍保留并拒绝旧图提交", async (t) => {
@@ -554,6 +622,28 @@ test("人工新增体验卡片先保存为空草稿，上传后才进入客户�
   const manualSpot = payload.project.data.days[0].spots.find((spot) => spot.id === "spot-manual");
   assert.match(manualSpot.images[0].src, /^\/image-assets\/simple-manual-/);
   assert.equal(payload.project.data.simpleImageSlotBindings[slotId].manualEditorCard, true);
+  const cleared = await clearSimpleImage({ ...value, slotId, expectedSrc: manualSpot.images[0].src, render });
+  assert.equal(cleared.project.data.days[0].spots.find((spot) => spot.id === "spot-manual").images[0], null);
+  assert.equal(cleared.project.data.simpleImageSlotBindings[slotId].manualEditorCard, true);
+});
+
+test("删除人工体验卡片后不再展示其旧图片位和待处理项", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const data = structuredClone(buildSimpleManualImagePayload(value.store, value.projectId).project.data);
+  const slotId = "manual:day:1:spot-deleted:primary";
+  createManualDayCard(data, 0, { spotId: "spot-deleted", slotId });
+  const render = async ({ mode }) => ({ status: "success", mode, outputPath: `${mode}.png`, rendererCalls: 1 });
+  const dayBindings = () => Object.fromEntries(Object.entries(data.simpleImageSlotBindings).filter(([, binding]) => binding.module === "day" && binding.dayIndex === 0));
+  await saveSimpleDayEditor({ ...value, dayIndex: 0, day: data.days[0], bindings: dayBindings(), render });
+  const saved = value.store.getFinalResult(value.projectId, value.executionRunId);
+  saved.unresolvedItems.push({ kind: "image", id: slotId, required: true, status: "needs_user_action" });
+  saved.manualImageCompletion.slotIds.push(slotId);
+  value.store.saveFinalResult(value.projectId, value.executionRunId, saved);
+  deleteDaySpotPreservingSlots(data, 0, "spot-deleted");
+  const payload = await saveSimpleDayEditor({ ...value, dayIndex: 0, day: data.days[0], bindings: dayBindings(), render });
+  assert.equal(payload.blockingItems.some((item) => item.id === slotId), false);
+  assert.equal(payload.imageReview.slots.some((slot) => slot.slotId === slotId), false);
+  assert.equal(value.store.getFinalResult(value.projectId, value.executionRunId).manualImageCompletion.slotIds.includes(slotId), false);
 });
 
 test("每日编辑不能绕过酒店模块直接修改住宿", async (t) => {

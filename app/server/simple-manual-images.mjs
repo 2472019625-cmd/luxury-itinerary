@@ -32,7 +32,12 @@ const SLOT_STATUS_LABELS = Object.freeze({
   review_timeout: "候选审核超时",
   processing: "正在处理",
   not_found: "未找到图片",
+  user_removed: "已移除，当天以文字展示",
 });
+
+function userRemovedDayImage(data = {}, slotId = "", binding = {}) {
+  return binding.module === "day" && data.imageLocks?.[slotId]?.source === "user_cleared" && !getSlotImage(data, binding)?.src;
+}
 
 function uniqueCandidates(items = []) {
   const seen = new Set();
@@ -56,12 +61,14 @@ function projectContext(store, projectId) {
 
 function manualSlotIds(result, plan = {}) {
   const saved = result.manualImageCompletion?.slotIds;
+  const plannedIds = new Set((plan.imageSlots || []).map((slot) => slot.slotId));
+  const liveBindings = result.data?.simpleImageSlotBindings || {};
   return [...new Set([
     ...(Array.isArray(saved) ? saved : []),
     ...(result.unresolvedItems || []).filter((item) => item.kind === "image").map((item) => item.id),
     ...(plan.imageSlots || []).filter((slot) => slot.moduleType === "day").map((slot) => slot.slotId),
     ...Object.entries(result.data?.simpleImageSlotBindings || {}).filter(([, binding]) => binding.manualEditorCard === true).map(([slotId]) => slotId),
-  ].filter(Boolean))];
+  ].filter((slotId) => slotId && (plannedIds.has(slotId) || Object.hasOwn(liveBindings, slotId))))];
 }
 
 function unresolvedNotices(items = []) {
@@ -131,9 +138,17 @@ function imageLocation(item = {}, data = {}, plan = {}) {
 }
 
 export function effectiveUnresolvedItems(items = [], data = {}, plan = {}) {
+  const plannedIds = new Set((plan.imageSlots || []).map((slot) => slot.slotId));
+  const liveBindings = data.simpleImageSlotBindings || {};
   return items.filter((item) => {
     const notice = String(item.targetPath || "").match(/^days\.(\d+)\.dayNotices\.0\.text$/);
-    return !notice || Boolean(data.days?.[Number(notice[1])]?.dayNotices?.[0]);
+    if (notice && !data.days?.[Number(notice[1])]?.dayNotices?.[0]) return false;
+    const legacyHotel = String(item.targetPath || "").match(/^hotels\.(\d+)\.(editorialCopy|proofPoints)$/);
+    if (legacyHotel && Array.isArray(data.hotels?.[Number(legacyHotel[1])]?.factRows)) return false;
+    const slotId = item.kind === "image" ? item.id : item.kind === "copy" && String(item.id || "").startsWith("copy:visual:") ? item.id.slice("copy:visual:".length) : "";
+    if (slotId && !plannedIds.has(slotId) && !Object.hasOwn(liveBindings, slotId)) return false;
+    if (slotId && userRemovedDayImage(data, slotId, liveBindings[slotId] || plan.slotBindings?.[slotId] || {})) return false;
+    return true;
   }).map((item) => {
     if (item.kind !== "copy" || !String(item.id || "").startsWith("copy:visual:")) return item;
     const slotId = item.id.slice("copy:visual:".length);
@@ -274,13 +289,14 @@ export function buildSimpleManualImagePayload(store, projectId) {
     const binding = result.data?.simpleImageSlotBindings?.[slotId] || plan.slotBindings?.[slotId];
     const candidates = candidatePool(imageResult).map((candidate) => frontendCandidate(candidate, slotId, binding, selectables.has(candidate.candidateId)));
     const planned = plan.imageSlots.find((item) => item.slotId === slotId);
+    const removedDayImage = userRemovedDayImage(result.data, slotId, binding || {});
     return {
       slotId,
       module: moduleName(slotId),
       label: binding?.cardTitle || planned?.primaryVisualSubject || planned?.subject || SLOT_LABELS[slotId] || slotId,
       primaryVisualSubject: planned?.primaryVisualSubject || planned?.subject || planned?.activity || "",
-      status: slotReviewStatus(imageResult, candidates),
-      required: planned ? planned.required !== false : binding?.required === true,
+      status: removedDayImage ? "user_removed" : slotReviewStatus(imageResult, candidates),
+      required: removedDayImage ? false : planned ? planned.required !== false : binding?.required === true,
       originalVisualTarget: imageResult.manualAction?.originalVisualTarget || (planned ? { location: planned.location, hotel: planned.hotel, activity: planned.activity, subject: planned.subject, visualGoal: planned.visualGoal } : null),
       currentResult: imageResult.manualAction?.currentSearchFallbackResult || { technicalStatus: imageResult.technicalStatus, matchReason: imageResult.matchReason },
       candidateCount: candidates.length,
@@ -306,6 +322,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
     if (!review || binding.module !== "day") return [slotId, binding];
     return [slotId, {
       ...binding,
+      required: review.status === "user_removed" ? false : binding.required,
       editorImageStatus: SLOT_STATUS_LABELS[review.status] || "等待处理",
       editorImageRequired: review.required,
       editorPrimaryVisualSubject: review.primaryVisualSubject,
@@ -362,7 +379,7 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
     copyTasks: [],
     copyExecution: result.copyExecution,
     imageSlots: plan.imageSlots.filter(slot => affected.has(slot.slotId)).map(slot => ({ ...slot, userLocked: false })),
-    slotBindings: plan.slotBindings,
+    slotBindings: action.type === "clear_image" ? { ...plan.slotBindings, ...result.data?.simpleImageSlotBindings } : plan.slotBindings,
     imageExecution,
   });
   writeback.copyWriteback = result.writeback?.copy || [];
@@ -377,11 +394,11 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
       const image = getSlotImage(writeback.data, binding);
       if (image) setSlotImage(writeback.data, binding, { ...image, userProvided: Boolean(selected.userProvided), userSelected: Boolean(selected.userSelected) });
     }
-    if (!explicitSearch) writeback.data.imageLocks = { ...writeback.data.imageLocks, [slotId]: { source: slotId !== action.slotId ? "user_moved_out" : action.type === "upload_real_image" ? "user_upload" : "user_selection", candidateId: selected?.candidateId || null, lockedAt: Date.now() } };
+    if (!explicitSearch) writeback.data.imageLocks = { ...writeback.data.imageLocks, [slotId]: { source: slotId !== action.slotId ? "user_moved_out" : action.type === "clear_image" ? "user_cleared" : action.type === "upload_real_image" ? "user_upload" : "user_selection", candidateId: selected?.candidateId || null, lockedAt: Date.now() } };
   }
   writeback.requiredUnresolved = writeback.unresolvedItems.filter(item => item.required);
   const revision = randomUUID();
-  const pending = { ...result, data: writeback.data, imageExecution, unresolvedItems: writeback.unresolvedItems, outputPath: null, pipelineStatus: "partial", renderStatus: "pending_manual_render", manualImageCompletion: { ...result.manualImageCompletion, revision, version: Number(result.manualImageCompletion?.version || 0) + 1, slotIds: manualSlotIds(result, plan), lastAction: action } };
+  const pending = { ...result, data: writeback.data, imageExecution, unresolvedItems: writeback.unresolvedItems, outputPath: null, pipelineStatus: "partial", renderStatus: "pending_manual_render", manualImageCompletion: { ...result.manualImageCompletion, revision, version: Number(result.manualImageCompletion?.version || 0) + 1, slotIds: manualSlotIds({ ...result, data: writeback.data, unresolvedItems: writeback.unresolvedItems }, plan), lastAction: action } };
   // Save the binding before export verification; stale output must not be downloadable.
   store.saveFinalResult(project.projectId, run.executionRunId, pending);
   store.updateProject(project.projectId, { status: "partial", progress: 90, currentStage: "图片已保存，正在检查成品", outputPath: null });
@@ -422,7 +439,7 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
     manualImageCompletion: {
       ...pending.manualImageCompletion,
       revision,
-      slotIds: manualSlotIds(result, plan),
+      slotIds: manualSlotIds(pending, plan),
       lastAction: action,
       updatedAt: now,
       plannerModelCalls: 0,
@@ -856,6 +873,36 @@ export async function saveSimpleModuleVisibility({ store, root, projectId, modul
   const visibility = { ...(context.result.visibility || {}), [module]: visible };
   const payload = await persistResult({ ...context, result: { ...context.result, visibility }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: 'editor_module_visibility_update', module, visible } });
   return { visibility, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
+}
+
+export async function clearSimpleImage({ store, root, projectId, slotId, expectedSrc, render, deferRender = false } = {}) {
+  const context = projectContext(store, projectId);
+  const editable = editableImageBinding(context, slotId);
+  const currentImage = getSlotImage(context.result.data, editable.binding);
+  if (!expectedSrc || currentImage?.src !== expectedSrc) {
+    throw Object.assign(new Error("图片已变化，请刷新后再删除"), { code: "image_clear_image_changed" });
+  }
+  const nextData = structuredClone(context.result.data);
+  setSlotImage(nextData, editable.binding, null);
+  nextData.imageLocks = { ...nextData.imageLocks, [slotId]: { source: "user_cleared", lockedAt: Date.now() } };
+  const results = context.result.imageExecution?.results || [];
+  const previous = results.find((item) => item.slotId === slotId) || { slotId, candidates: [] };
+  const clearedAt = new Date().toISOString();
+  const nextCurrent = {
+    ...previous,
+    status: "needs_user_action",
+    selected: null,
+    candidates: candidatePool(previous),
+    technicalStatus: "user_cleared_image",
+    manualAction: { ...(previous.manualAction || {}), resolvedBy: null, selectedCandidateId: null, clearedAt },
+  };
+  const imageExecution = {
+    ...context.result.imageExecution,
+    results: results.some((item) => item.slotId === slotId)
+      ? results.map((item) => item.slotId === slotId ? nextCurrent : item)
+      : [...results, nextCurrent],
+  };
+  return persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution, render, deferRender, action: { type: "clear_image", slotId, previousSrc: expectedSrc, clearedAt } });
 }
 
 export async function uploadSimpleImage({ store, root, projectId, slotId, dataUrl, fileName, render, deferRender = false } = {}) {

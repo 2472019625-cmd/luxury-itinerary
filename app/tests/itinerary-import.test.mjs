@@ -3,6 +3,26 @@ import test from "node:test";
 import * as XLSX from "xlsx";
 import { importItineraryWorkbook } from "../src/lib/itineraryImport.js";
 
+test("status-only cells stay in daily facts and do not create hotel or transport products", async () => {
+  const rows = [
+    ["日期", "简要行程", "详细", "用餐", "参考酒店", "用车"],
+    ["DAY 1", "阿鲁沙", "抵达入住", "晚餐", "Azure Retreat", "商务车"],
+    ["DAY 2", "阿鲁沙", "自由行动", "早餐", "Azure Retreat", "无交通"],
+    ["DAY 3", "阿鲁沙→机场", "当日返程", "早餐", "无住宿（当日返程）", "无交通（返程日）"],
+  ];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "行程");
+  const file = new File([XLSX.write(workbook, { type: "array", bookType: "xlsx" })], "status-only.xlsx");
+  const { data } = await importItineraryWorkbook(file, { days: [], highlights: [] });
+  assert.deepEqual(data.hotels.map((hotel) => [hotel.officialName, hotel.nights]), [["Azure Retreat", 2]]);
+  assert.equal(data.days[2].overnightType, "none");
+  assert.equal(data.days[2].hotel, "");
+  assert.equal(data.days[1].description, "自由行动");
+  assert.deepEqual(data.days[1].spots, []);
+  assert.deepEqual(data.transportSummary.map((item) => item.serviceLevel), ["商务车"]);
+  assert.ok(!data.sourceImportCoverage.dailyTransport.some((item) => /无交通/.test(item.text)));
+});
+
 test('住宿栏陌生名称不依赖酒店品牌词，交通同义配置合并但不同座位保留', async () => {
   const rows = [['日期','简要行程','详细','用餐','参考酒店','用车'],
     ['DAY 1','甲地','到达','晚餐','Azure Nyaruswiga','四驱动开顶式越野车'],

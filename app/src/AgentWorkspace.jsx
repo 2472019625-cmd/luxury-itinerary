@@ -70,6 +70,11 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     if (!slotId) throw new Error("当前位置没有对应的 Simple Pipeline 图片位");
     return upload(slotId, file);
   };
+  const deleteImageFromEditor = async (targetSlot) => {
+    const slotId = targetSlot.pipelineSlotId;
+    if (!slotId) throw new Error("当前位置没有对应的 Simple Pipeline 图片位");
+    return request(slotId, "clear", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedSrc: targetSlot.src }) });
+  };
   const research = async (slotId) => {
     return request(slotId, "research", { method:"POST" });
   };
@@ -229,6 +234,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     onPersistHotelRegion={persistHotelRegion}
     onPersistHotelStay={persistHotelStay}
     onPersistImageCrop={persistImageCrop}
+    onDeleteImage={deleteImageFromEditor}
     onPersistVisibility={persistVisibility}
     onHotelFactSearch={searchHotelFact}
     onReplaceHotelFact={async (value) => { await flushHotelFact(value.hotelId, value.key); return saveHotelFact({ ...value, mode: "replace" }); }}
