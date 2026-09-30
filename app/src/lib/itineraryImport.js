@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import { accommodationType, addDays, normalizeItineraryFacts, normalizeSourcePosterHighlights, splitRouteNodes } from "./itineraryRules.js";
+import { accommodationType, inferOvernightType, addDays, normalizeItineraryFacts, normalizeSourcePosterHighlights, splitRouteNodes } from "./itineraryRules.js";
 import { transportUsageLabel } from './transportPresentation.js';
 
 const INTERNAL_PATTERNS = [
@@ -613,8 +613,9 @@ function buildTransportSummary(days) {
   days.forEach((day, dayIndex) => {
     const vehicle = text(day.vehicle);
     if (!vehicle) return;
-    const segments = vehicle.split(/[+＋、，,；;\/]/).map(text).filter(Boolean);
-    for (const segment of segments.length ? segments : [vehicle]) {
+    const segments = vehicle.split(/[+＋、，,；;\/]/).map(text).filter((segment) => segment && !isNoTransportArrangement(segment));
+    if (!segments.length) return;
+    for (const segment of segments) {
       // Normalize only equivalent configuration wording, not the whole category.
       // Seats, brands, models and other qualifiers remain in the grouping key.
       const key = segment.toLowerCase().replace(/\s+/g, "")
@@ -639,11 +640,16 @@ function buildTransportSummary(days) {
   return [...grouped.values()].map((item) => ({ ...item, usageLabel: transportUsageLabel(item), usageSegments: unique(item.usageSegments), sourceEvidence: unique(item.sourceEvidence) }));
 }
 
+function isNoTransportArrangement(value) {
+  return /^(?:无交通|无用车|无车|不安排交通|不含交通|自行安排交通|交通自理|自由行动|自由活动)(?:\s*[（(][^）)]*[）)])?$/i.test(text(value));
+}
+
 function hotelNames(days, lines, sheets) {
   // The accommodation column is evidence of purpose; an unfamiliar proper name
   // must not need a hotel keyword or a known brand to enter the hotel modules.
-  const fromDays = unique(days.filter(day => (!day.overnightType || day.overnightType === "hotel") && accommodationType(day.hotel) === "hotel")
-    .map((day) => day.hotel).filter((line) => line && !/最终确认|待确认|早餐|午餐|晚餐|用餐/.test(line)));
+  const fromDays = unique(days.filter((day, index) => inferOvernightType(day, index, days.length) === "hotel")
+    .map((day) => day.hotel).filter((line) => line && !/最终确认|待确认|早餐|午餐|晚餐|用餐/.test(line)
+      && !/^(?:无|无住宿|不住宿|不含住宿|自行安排|自理|自由行动|自由活动|飞机|航班|夜航|返程)(?:\s*[（(][^）)]*[）)])?$|^[-—–/]+$/i.test(text(line))));
   if (fromDays.length) return fromDays.slice(0, 8);
   const accommodationColumnMapped = sheets.some(({ rows }) => rows.some((row) => {
     const map = headerMap(row);
@@ -757,7 +763,7 @@ export async function importItineraryWorkbook(file, baseData) {
     cancellation: expenses.cancellation,
     priceOffers: priceFacts.priceOffers,
     ...(priceFacts.sourceGroupTotal ? { sourceGroupTotal: priceFacts.sourceGroupTotal } : {}),
-    dailyTransport: days.map((day, dayIndex) => ({ dayIndex, text: text(day.vehicle), sourceEvidence: day.vehicle ? [`DAY ${dayIndex + 1} 用车：${text(day.vehicle)}`] : [] })).filter((item) => item.text),
+    dailyTransport: days.map((day, dayIndex) => ({ dayIndex, text: text(day.vehicle), sourceEvidence: day.vehicle ? [`DAY ${dayIndex + 1} 用车：${text(day.vehicle)}`] : [] })).filter((item) => item.text && !isNoTransportArrangement(item.text)),
     diningCandidates: diningExtraction.candidates,
     diningSelection: {
       selected: diningExtraction.selection.selected.map((item) => ({ id: item.id, title: item.title, semanticType: item.semanticType, dayRefs: item.dayRefs, sourceEvidence: item.sourceEvidence, selectionScore: item.selectionScore })),

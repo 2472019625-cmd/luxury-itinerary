@@ -910,7 +910,7 @@ function ImagePickerModal({ data, targetSlot, onChoose, onReject, onUpload, onRe
   </section></div>;
 }
 
-export function Editor({ project, ItineraryComponent, onProject, onPersistDayEditor, onPersistHotelFact, onPersistHotelRegion, onPersistHotelStay, onPersistImageCrop, onPersistVisibility, onHotelFactSearch, onReplaceHotelFact, onVersions, onResearchSlot, onChooseImage, onRejectImage, onOpenImagePicker, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, onRetryCopy, onRetryAllCopy, onRetryAllImages, onRetryRenderer, copyRepairState, issueActionState, blockingItems = [], defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
+export function Editor({ project, ItineraryComponent, onProject, onPersistDayEditor, onPersistHotelFact, onPersistHotelRegion, onPersistHotelStay, onPersistImageCrop, onDeleteImage, onPersistVisibility, onHotelFactSearch, onReplaceHotelFact, onVersions, onResearchSlot, onChooseImage, onRejectImage, onOpenImagePicker, onUploadImage, onRepairCopy, onRecheckCopy, onReviewFacts, onRetryCopy, onRetryAllCopy, onRetryAllImages, onRetryRenderer, copyRepairState, issueActionState, blockingItems = [], defaultDesigner, initialSelection, initialTab = "copy", openPickerOnImageClick = false, canOpenVersions = true, statusNotice }) {
   const [selection, setSelection] = useState(initialSelection || { module: "days", itemIndex: Math.min(2, project.data.days.length - 1), subItemIndex: null, imageIndex: 0 });
   const [tab, setTab] = useState(initialTab);
   const [historyTick, setHistoryTick] = useState(0);
@@ -956,7 +956,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     try {
       const result = await perform();
       if (result === false) throw new Error('保存失败');
-      const message = kind === 'search' ? imageSearchCompletionMessage(result, slot) : kind === 'upload' ? '上传成功，图片已保存' : kind === 'reject' ? (currentImageReview?.required ? '已移除预填图；此位置仍需补图' : '已移除可选预填图') : '图片替换成功';
+      const message = kind === 'search' ? imageSearchCompletionMessage(result, slot) : kind === 'upload' ? '上传成功，图片已保存' : kind === 'clear' ? '图片已删除并保存' : kind === 'reject' ? (currentImageReview?.required ? '已移除预填图；此位置仍需补图' : '已移除可选预填图') : '图片替换成功';
       show(message, false);
       return true;
     } catch (error) {
@@ -1373,9 +1373,18 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
       setImageMessage('上传成功，图片已保存');
     } catch (error) { setImageMessage(`上传或保存失败，请重试：${error?.message || ''}`); }
   };
-  const deleteImage = () => {
+  const deleteImage = async () => {
     if (currentProvisional && onRejectImage) { rejectProvisional(); return; }
-    if (!currentSlot || selection.module === "cover" || !window.confirm("删除这张图片？可以立即撤销恢复。")) return;
+    if (!currentSlot || (!onDeleteImage && selection.module === "cover")) return;
+    const required = currentSlot.editorImageRequired === true || currentSlot.required === true;
+    const message = onDeleteImage
+      ? `确定删除这张图片吗？${currentSlot.module === "day" ? "当天如无其他图片，将以纯文字展示；之后仍可重新选图。" : required ? "这是必需主图，删除后需补图才能下载正式成品。" : "删除后这张可选图片不会进入客户成品。"}`
+      : "删除这张图片？可以立即撤销恢复。";
+    if (!window.confirm(message)) return;
+    if (onDeleteImage) {
+      await imageAction(currentSlot, 'clear', () => onDeleteImage(currentSlot));
+      return;
+    }
     updateData((next) => { setSlotImage(next, currentSlot, null); next.imageLocks = { ...(next.imageLocks || {}), [currentSlot.slotId]: { source: "user_cleared", lockedAt: Date.now() } }; recordImageDecision(next, { slotId: currentSlot.slotId, action: 'clear', source: 'user_cleared' }); }, `delete-image-${Date.now()}`);
     setSelection({ ...selection, imageIndex: 0 });
   };
@@ -1415,7 +1424,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
       <div className="image-actions">{currentSlot.src && <Button onClick={toggleCrop}>{cropOpen ? "收起裁切" : "调整画面"}</Button>}{currentSlot.src && cropOpen && <><Button tone="primary" onClick={confirmCrop} disabled={cropBusy}>{cropBusy ? "正在保存…" : "确认裁切"}</Button><Button onClick={cancelCrop}>取消</Button><Button onClick={() => setCropDraft(null)}>恢复默认构图</Button></>}<Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button></div>
     </>}
     {provisionalNotice}
-    <input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { uploadLocalImage(event.target.files?.[0]); event.target.value = ""; }} />{currentSlot?.src && selection.module !== "cover" && <button className="delete-image-button" onClick={deleteImage}>删除当前图片</button>}<p className="image-source">自动图片已经下载保存并检查；本地素材请确认使用权。</p>
+    <input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { uploadLocalImage(event.target.files?.[0]); event.target.value = ""; }} />{currentSlot?.src && (selection.module !== "cover" || onDeleteImage) && <button className="delete-image-button" onClick={deleteImage}>删除当前图片</button>}<p className="image-source">自动图片已经下载保存并检查；本地素材请确认使用权。</p>
   </div>;
 
   const dayStatusOptions = [
@@ -1459,7 +1468,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     {currentSlot.src && cropOpen && <ImageCropEditor key={currentSlot.slotId} src={currentSlot.src} crop={cropDraft !== undefined ? cropDraft : currentSlot.crop} focus={currentSlot.focus} targetRatio={cropTargetRatio} onCommit={setCropDraft} />}
     {provisionalNotice}
     {selectedBinding && <div className="day-visual-copy">{selectedBinding.manualEditorCard !== true && <Field label="卡片标题" value={selectedBinding.cardTitle || (selectedBinding.useSpotCopy !== false ? selectedDay?.spots?.[resolveDaySpotIndex(selectedDay, { spotId: currentSlot.spotId, subItemIndex: currentSlot.subItemIndex })]?.name || "" : "")} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardTitle = value; }, `visual-title-${currentSlot.slotId}`)} />}{selectedBinding.useSpotCopy === false && <Field label="图片下方文字" rows={3} value={selectedBinding.cardDescription || ""} onChange={(value) => updateDayData((next) => { next.simpleImageSlotBindings[currentSlot.slotId].cardDescription = value; }, `visual-copy-${currentSlot.slotId}`)} />}</div>}
-    <div className="day-inline-image-actions">{currentSlot.src && <Button onClick={toggleCrop}>{cropOpen ? '收起裁切' : '调整画面'}</Button>}{currentSlot.src && cropOpen && <><Button tone="primary" onClick={confirmCrop} disabled={cropBusy}>{cropBusy ? "正在保存…" : "确认裁切"}</Button><Button onClick={cancelCrop}>取消</Button><Button onClick={() => setCropDraft(null)}>恢复默认构图</Button></>}{selectedBinding?.manualEditorCard ? <Button tone="primary" onClick={() => fileRef.current?.click()}>{currentSlot.src ? "更换上传图片" : "上传体验图片"}</Button> : <Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button>}{currentSlot.src && !selectedBinding?.manualEditorCard && <button className="day-image-danger" onClick={deleteImage}>删除图片</button>}</div>
+    <div className="day-inline-image-actions">{currentSlot.src && <Button onClick={toggleCrop}>{cropOpen ? '收起裁切' : '调整画面'}</Button>}{currentSlot.src && cropOpen && <><Button tone="primary" onClick={confirmCrop} disabled={cropBusy}>{cropBusy ? "正在保存…" : "确认裁切"}</Button><Button onClick={cancelCrop}>取消</Button><Button onClick={() => setCropDraft(null)}>恢复默认构图</Button></>}{selectedBinding?.manualEditorCard ? <Button tone="primary" onClick={() => fileRef.current?.click()}>{currentSlot.src ? "更换上传图片" : "上传体验图片"}</Button> : <Button tone="primary" onClick={() => setPickerOpen(true)}>换图</Button>}{currentSlot.src && <button className="day-image-danger" onClick={deleteImage}>删除图片</button>}</div>
   </div>;
   const dayPanel = selection.module === "days" && <div className="day-editor-flow">
     <section className={`day-editor-section day-info-section ${dayInfoOpen ? "is-open" : ""}`}>
@@ -1482,7 +1491,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
         const status = provisional ? `已预填·待确认${experienceStatus ? ` · ${experienceStatus}` : ""}` : experienceStatus || (slot.src ? "已采用" : "待处理");
         const draggable = Boolean(spot?.id);
         return <article key={slot.slotId} className={`day-card-editor-item ${active ? "is-active" : ""}`} data-day-slot-id={slot.slotId} data-day-spot-id={spot?.id || undefined} draggable={draggable} onDragStart={() => draggable && setDragSpotId(spot.id)} onDragEnd={() => setDragSpotId(null)} onDragOver={(event) => draggable && event.preventDefault()} onDrop={() => draggable && reorderExperience(spot, spotIndex)}>
-          <button className="day-card-editor-summary" onClick={() => selectSlot(slot)} aria-expanded={active}><span className="day-drag-handle" title={draggable ? "拖动排序" : "独立视觉卡片"}><UiIcon name="process" /></span><span className="day-experience-thumb">{slot.src ? <img src={slot.src} alt="" /> : <UiIcon name="itinerary" />}</span><span className="day-experience-copy"><strong>{title}</strong><em>{status}</em><small>{summary.slice(0, 72)}</small><small className="day-card-visibility">{slot.src ? "正在中间预览显示" : binding.manualEditorCard ? "上传图片后显示" : `${slot.editorImageRequired || slot.required ? "必需" : "可选"}图片待处理`}</small></span><UiIcon name="return" /></button>
+          <button className="day-card-editor-summary" onClick={() => selectSlot(slot)} aria-expanded={active}><span className="day-drag-handle" title={draggable ? "拖动排序" : "独立视觉卡片"}><UiIcon name="process" /></span><span className="day-experience-thumb">{slot.src ? <img src={slot.src} alt="" /> : <UiIcon name="itinerary" />}</span><span className="day-experience-copy"><strong>{title}</strong><em>{status}</em><small>{summary.slice(0, 72)}</small><small className="day-card-visibility">{slot.src ? "正在中间预览显示" : project.data.imageLocks?.[slot.slotId]?.source === "user_cleared" ? "图片已移除，当天可纯文字展示" : binding.manualEditorCard ? "上传图片后显示" : `${slot.editorImageRequired || slot.required ? "必需" : "可选"}图片待处理`}</small></span><UiIcon name="return" /></button>
           {active && <div className="day-experience-fields">{spot && <><Field label="体验名称" value={spot.name || ""} onChange={(value) => updateDayData((next) => { const current = next.days[selection.itemIndex].spots[spotIndex]; removeExperienceReferences(next, current.name); current.name = value; synchronizeExperienceStatus(next, selection.itemIndex, spotIndex, current.status || "pending"); }, `spot-name-${spot.id}`)} /><div className="day-status-field"><span>包含情况</span><div>{dayStatusOptions.map(([value, label]) => <button key={value} className={(spot.status || "pending") === value ? "active" : ""} onClick={() => updateDayData((next) => { synchronizeExperienceStatus(next, selection.itemIndex, spotIndex, value); }, `spot-status-${spot.id}`)}>{label}</button>)}</div></div><Field label="图片下方文字" rows={5} value={spot.experience || spot.description || ""} onChange={(value) => updateDayData((next) => { next.days[selection.itemIndex].spots[spotIndex].description = value; delete next.days[selection.itemIndex].spots[spotIndex].experience; }, `spot-copy-${spot.id}`)} /><Field label="补充提醒" rows={3} value={spot.reminder || ""} onChange={(value) => updateDayData((next) => { next.days[selection.itemIndex].spots[spotIndex].reminder = value; }, `spot-reminder-${spot.id}`)} /></>}{selectedDaySlotTools}{binding.manualEditorCard === true && spot && <button className="day-delete-experience" onClick={() => deleteExperienceCard(spot, spotIndex, slot.slotId)}><UiIcon name="trash" />删除这张体验卡片</button>}</div>}
         </article>;
       })}</div>

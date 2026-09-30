@@ -2,7 +2,7 @@ const resolutionCodes = new Set(['image_resolution_insufficient', 'resolution_fa
 
 export function imageActionFailureMessage(kind, error) {
   if (resolutionCodes.has(error?.code)) return `当前位置无法使用这张原图：${error.message}`;
-  const prefix = kind === 'search' ? '搜索失败，请重试' : kind === 'upload' ? '上传或保存失败，请重试' : '图片替换失败，请重试';
+  const prefix = kind === 'search' ? '搜索失败，请重试' : kind === 'upload' ? '上传或保存失败，请重试' : kind === 'clear' ? '图片删除失败，请重试' : '图片替换失败，请重试';
   return `${prefix}${error?.message ? `：${error.message}` : ''}`;
 }
 

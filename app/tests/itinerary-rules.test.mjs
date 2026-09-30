@@ -55,7 +55,13 @@ test("classifies flight and no-stay return days without treating planes as hotel
   assert.equal(inflight.hotel, "");
   assert.equal(inflight.overnightLabel, "返程航班");
   assert.equal(inferOvernightType({ hotel: "无住宿" }, 7, 8), "none");
+  assert.equal(inferOvernightType({ hotel: "无住宿（当日返程）" }, 7, 8), "none");
   assert.equal(inferOvernightType({ hotel: "Four Seasons Safari Lodge" }, 3, 8), "hotel");
+});
+
+test("keeps free activity as a day status rather than an experience card", () => {
+  assert.deepEqual(buildCoreSpots({ city: "桑给巴尔", description: "自由行动" }), []);
+  assert.deepEqual(buildCoreSpots({ city: "桑给巴尔", description: "全天自由活动（可自行安排）" }), []);
 });
 
 test("separates route, travel time and activity while creating grounded daily image subjects", () => {

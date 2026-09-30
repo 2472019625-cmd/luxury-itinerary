@@ -27,6 +27,11 @@ export function selectCustomerRenderData(data = {}, { locale = data?.locale || '
     ...(Array.isArray(hotel.factRows) ? { factRows: hotel.factRows.filter((row) => String(row?.text || '').trim()).map(({ key, label, text }) => ({ key, label, text })) } : {}),
   }));
   result.highlights = normalizeHighlightsForDisplay(result.highlights);
-  if (displayData.simpleImageSlotBindings) result.days = (displayData.days || []).map((day, index) => ({ ...result.days[index], spots: dayVisualCards(day, index, displayData.simpleImageSlotBindings).map(({ spot }) => clean(spot)) }));
+  if (displayData.simpleImageSlotBindings) {
+    const bindings = Object.fromEntries(Object.entries(displayData.simpleImageSlotBindings).map(([slotId, binding]) => [slotId,
+      binding.module === 'day' && displayData.imageLocks?.[slotId]?.source === 'user_cleared' ? { ...binding, required: false } : binding,
+    ]));
+    result.days = (displayData.days || []).map((day, index) => ({ ...result.days[index], spots: dayVisualCards(day, index, bindings).map(({ spot }) => clean(spot)) }));
+  }
   return result;
 }

@@ -22,7 +22,7 @@ import { runSimplePipeline } from "./simple-pipeline-executor.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
 import { assertSimpleRendererOrigin } from "./simple-renderer-runtime.mjs";
 import { calculateSimplePipelineProgress } from "./simple-pipeline-progress.mjs";
-import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, saveSimpleHotelFactRow, saveSimpleHotelImageCrop, saveSimpleImageCrop, saveSimpleModuleVisibility, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "./simple-manual-images.mjs";
+import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, clearSimpleImage, rejectSimpleImageCandidate, researchSimpleImageSlot, researchSimpleImageSlots, saveSimpleDayEditor, saveSimpleHotelFactRow, saveSimpleHotelImageCrop, saveSimpleImageCrop, saveSimpleModuleVisibility, saveSimpleHotelRegion, saveSimpleHotelStay, uploadSimpleImage } from "./simple-manual-images.mjs";
 import { searchSimpleHotelFacts } from "./simple-hotel-fact-search.mjs";
 import { deliveryContentDisposition } from "../src/lib/deliveryFilename.js";
 import { retrySimpleCopyTarget, retrySimpleCopyTargets, retrySimpleRenderer } from "./simple-targeted-repair.mjs";
@@ -661,6 +661,14 @@ export function createAgentPlannerServer(options = {}) {
         const result = await saveSimpleImageCrop({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleImageCropMatch[1]), slotId: decodeURIComponent(simpleImageCropMatch[2]), expectedSrc: payload.expectedSrc, crop: payload.crop, deferRender: true });
         return json(response, 200, result);
       } catch (failure) { return json(response, failure.code === "image_crop_image_changed" ? 409 : 400, { error: failure.message, code: failure.code || "image_crop_save_failed" }); }
+    }
+    const simpleImageClearMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images\/([^/]+)\/clear$/);
+    if (request.method === "POST" && simpleImageClearMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await clearSimpleImage({ store: simpleStore, root, projectId: decodeURIComponent(simpleImageClearMatch[1]), slotId: decodeURIComponent(simpleImageClearMatch[2]), expectedSrc: payload.expectedSrc, deferRender: true });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, failure.code === "image_clear_image_changed" ? 409 : 400, { error: failure.message, code: failure.code || "image_clear_failed" }); }
     }
     const simpleHotelCropMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/hotel-images\/([^/]+)\/crop$/);
     if (request.method === "PUT" && simpleHotelCropMatch) {
