@@ -334,7 +334,7 @@ function extractPriceFacts(sheets, joined) {
         }
       });
 
-      const priceColumn = values.findIndex((value) => /^(?:价格|报价|售价)\s*(?:[（(]元[）)])?$/i.test(value));
+      const priceColumn = values.findIndex((value) => /^(?:价格|报价|售价)\s*(?:[（(]元(?:\s*[/／]\s*人)?[）)])?$/i.test(value));
       if (priceColumn < 0) continue;
       const periodColumn = values.findIndex((value) => /^(?:有效期|日期|出发日期|档期)$/i.test(value));
       const publicColumns = values.map((value, index) => ({ value, index })).filter(({ value }) => value && !INTERNAL_COLUMN_HEADER.test(value));
@@ -348,7 +348,10 @@ function extractPriceFacts(sheets, joined) {
         const offerIndex = result.priceOffers.length;
         const period = periodColumn >= 0 ? text(dataValues[periodColumn]) : "";
         const evidence = dataValues.filter(Boolean).filter((value, index) => !INTERNAL_COLUMN_HEADER.test(values[index]) && !INTERNAL_PATTERNS.some((pattern) => pattern.test(value)));
-        result.priceOffers.push({ amount, period, sheet: sheet.name, address: XLSX.utils.encode_cell({ r: dataRowIndex, c: priceColumn }), sourceEvidence: evidence });
+        const peopleColumn = values.findIndex(value => /^(?:人数|适用人群|人群)$/.test(value));
+        const people = peopleColumn >= 0 ? dataValues[peopleColumn] : "";
+        const audience = /儿童/.test(people) && !/成人/.test(people) ? "child" : /成人/.test(people) && !/儿童/.test(people) ? "adult" : null;
+        result.priceOffers.push({ amount, period, ...(audience ? { audience, sourceCount: Number(people.match(/\d+/)?.[0]) || null, unit: "元 / 人" } : {}), sheet: sheet.name, address: XLSX.utils.encode_cell({ r: dataRowIndex, c: priceColumn }), sourceEvidence: evidence });
         dataValues.forEach((value, columnIndex) => {
           if (!value || INTERNAL_COLUMN_HEADER.test(values[columnIndex])) return;
           result.coverageTargets.push({ sheet: sheet.name, address: XLSX.utils.encode_cell({ r: dataRowIndex, c: columnIndex }), target: `sourceImportCoverage.priceOffers.${offerIndex}` });
@@ -357,6 +360,13 @@ function extractPriceFacts(sheets, joined) {
     }
   }
   result.priceNotes = unique(result.priceNotes);
+  if (result.priceOffers.some(offer => offer.audience)) {
+    const total = joined.match(/(?:三人|\d+人|全团)?(?:合计|总计)\s*([\d,]+(?:\.\d+)?)\s*元/);
+    result.sourceGroupTotal = total ? Number(total[1].replaceAll(",", "")) : null;
+    result.totalPrice = null;
+    result.warnings.push("原报价按成人、儿童分别计价，请确认本次采用金额与计价单位；原组合总价不自动套用。");
+    return result;
+  }
   const distinctOffers = unique(result.priceOffers.map((offer) => String(offer.amount))).map(Number);
   result.totalPrice = priceFrom(joined);
   if (distinctOffers.length) result.totalPrice = Math.min(...distinctOffers, ...(result.totalPrice ? [result.totalPrice] : []));
@@ -746,6 +756,7 @@ export async function importItineraryWorkbook(file, baseData) {
     excluded: expenses.excluded,
     cancellation: expenses.cancellation,
     priceOffers: priceFacts.priceOffers,
+    ...(priceFacts.sourceGroupTotal ? { sourceGroupTotal: priceFacts.sourceGroupTotal } : {}),
     dailyTransport: days.map((day, dayIndex) => ({ dayIndex, text: text(day.vehicle), sourceEvidence: day.vehicle ? [`DAY ${dayIndex + 1} 用车：${text(day.vehicle)}`] : [] })).filter((item) => item.text),
     diningCandidates: diningExtraction.candidates,
     diningSelection: {

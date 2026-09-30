@@ -201,8 +201,8 @@ function projectStatusLabel(project) {
   const remaining = Number(project.unresolvedCount) || 0;
   if (runtime === "cancelled" || (!runtime && project.workflowStage === "cancelled")) return { label: "已停止", tone: "stopped" };
   if (["failed", "interrupted"].includes(runtime)) return { label: "制作中断", tone: "attention" };
-  if (["partial", "awaiting_user_action", "ready_to_render"].includes(runtime) || project.workflowStage === "partial") return { label: remaining ? `待完善 · ${remaining}项` : "待完善", tone: "attention" };
-  if (["complete", "ready_for_editor"].includes(runtime) || (project.flowKind === "simple_skill_v1" && project.workflowStage === "generated")) return { label: "制作完成", tone: "formal" };
+  if (["partial", "awaiting_user_action", "ready_to_render"].includes(runtime) || (!runtime && project.workflowStage === "partial")) return { label: remaining ? `待完善 · ${remaining}项` : "待完善", tone: "attention" };
+  if (["complete", "ready_for_editor"].includes(runtime) || (!runtime && project.flowKind === "simple_skill_v1" && project.workflowStage === "generated")) return { label: "制作完成", tone: "formal" };
   if (["running", "planning", "preparing"].includes(runtime)) return { label: "制作中", tone: "working" };
   const versionCount = project.versions?.length || 0;
   if (versionCount) return { label: `正式版 v${versionCount}.0`, tone: "formal" };
@@ -405,15 +405,18 @@ function PriceOfferConfirmation({ project, onChange }) {
   const data = project.data;
   const offers = listPriceOffers(data);
   const selection = currentPriceSelection(project);
-  if (offers.length < 2) return null;
+  const grouped = offers.some(offer => offer.audience);
+  if (offers.length < 2 && !grouped) return null;
   const saveSelection = (nextSelection) => onChange({ ...data, totalPrice: Number(nextSelection.amount) || null, priceUnit: nextSelection.unit || data.priceUnit || "元 / 人" }, {
     confirmationSelections: { ...(project.confirmationSelections || {}), priceOffer: nextSelection },
   });
   const chooseOffer = (offer, matchedBy = "manual") => saveSelection({ mode: "source", sourceKey: priceOfferKey(offer), period: offer.period || "", amount: Number(offer.amount), unit: data.priceUnit || "元 / 人", matchedBy });
   const chooseCustom = () => saveSelection({ mode: "custom", sourceKey: null, amount: selection?.mode === "custom" ? selection.amount : "", unit: selection?.mode === "custom" ? selection.unit : (data.priceUnit || "元 / 人起"), matchedBy: "manual" });
   return <section className="price-offer-section"><header><h3>报价确认</h3><span>选择本次采用的报价</span></header>
+    {grouped && <p>原报价分人群计价；请在下方填写本次确认金额与单位。原组合总价{formatConfirmedPrice(data.sourceImportCoverage?.sourceGroupTotal)}，不能直接套用到变化后的人数。</p>}
     <div className="price-offer-options">{offers.map((offer) => {
       const key = priceOfferKey(offer);
+      if (grouped) return <div key={key} className="price-offer-option"><span><strong>{offer.audience === "adult" ? "成人" : offer.audience === "child" ? "儿童" : "原报价"}{offer.sourceCount ? ` × ${offer.sourceCount}人` : ""}</strong><small>{formatConfirmedPrice(offer.amount)} {offer.unit || "元 / 人"} · {offer.period}</small></span></div>;
       const checked = selection?.sourceKey === key && selection?.mode !== "custom";
       return <label key={key} className={checked ? "price-offer-option selected" : "price-offer-option"}><input type="radio" name="price-offer" checked={checked} onChange={() => chooseOffer(offer)} /><span><strong>{offer.period || "原报价档期"}</strong><small>{formatConfirmedPrice(offer.amount)} / 人</small></span>{checked && selection?.matchedBy === "date" && <em>已根据出发日期匹配</em>}</label>;
     })}
@@ -489,7 +492,7 @@ function ConfirmStep({ project, onChange, onContinue, onBack, agentMode = false,
       <section className="confirmation-customer-section"><header><h3>旅行日期</h3></header><div className="confirmation-modal-fields">{(requiredPaths.has("startDate") || data.startDate) && <label>出发日期 *<input type="date" value={data.startDate || ""} onChange={(event) => update("startDate", event.target.value)} /></label>}{(requiredPaths.has("endDate") || data.endDate) && <label>返程日期 *<input type="date" value={data.endDate || ""} onChange={(event) => update("endDate", event.target.value)} /></label>}</div></section>
       <PriceOfferConfirmation project={project} onChange={applyChange} />
       {agentMode && confirmations.some((item) => item.status === "pending") && <AgentConfirmationPanel confirmations={confirmations} decisions={agentDecisions} onDecision={onAgentDecision} />}
-    </> : <><ConfirmationPreview project={project} />{modalMessage && <p className="confirmation-modal-message" role="alert">{modalMessage}</p>}</>}</div><footer><Button disabled={startingGeneration} onClick={() => modalStep === "preview" ? setModalStep("form") : setModalOpen(false)}>{modalStep === "preview" ? "返回修改" : "取消"}</Button><Button tone="primary" disabled={startingGeneration} onClick={async () => { if (modalStep === "form") { const pending = buildConfirmationActionItems({ project, data, validation: validateItineraryFacts(data), confirmations, decisions: agentDecisions }); if (pending.length) return setModalMessage(pending.length === 1 ? pending[0].description : `请先完成：${pending.map((item) => item.title).join("、")}`); setModalMessage(""); return setModalStep("preview"); } setStartingGeneration(true); setModalMessage(""); try { await onContinue(); } catch (error) { setModalMessage(error?.status === 409 ? "项目已在其他页面更新，请重新打开项目后再试。" : "保存或启动失败，请稍后重试。你填写的信息仍在当前页面。"); } finally { setStartingGeneration(false); } }}>{modalStep === "form" ? "下一步：确认预览" : startingGeneration ? "正在开始制作…" : "确认并开始生成"}</Button></footer></section></div>}
+    </> : <ConfirmationPreview project={project} />}{modalMessage && <p className="confirmation-modal-message" role="alert">{modalMessage}</p>}</div><footer><Button disabled={startingGeneration} onClick={() => modalStep === "preview" ? setModalStep("form") : setModalOpen(false)}>{modalStep === "preview" ? "返回修改" : "取消"}</Button><Button tone="primary" disabled={startingGeneration} onClick={async () => { if (modalStep === "form") { const pending = buildConfirmationActionItems({ project, data, validation: validateItineraryFacts(data), confirmations, decisions: agentDecisions }); if (pending.length) return setModalMessage(pending.length === 1 ? pending[0].description : `请先完成：${pending.map((item) => item.title).join("、")}`); setModalMessage(""); return setModalStep("preview"); } setStartingGeneration(true); setModalMessage(""); try { await onContinue(); } catch (error) { setModalMessage(error?.status === 409 ? "项目已在其他页面更新，请重新打开项目后再试。" : "保存或启动失败，请稍后重试。你填写的信息仍在当前页面。"); } finally { setStartingGeneration(false); } }}>{modalStep === "form" ? "下一步：确认预览" : startingGeneration ? "正在开始制作…" : "确认并开始生成"}</Button></footer></section></div>}
   </section></main>;
 }
 

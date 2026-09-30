@@ -105,7 +105,7 @@ export function normalizeExperienceSpot(spot = {}, dayIndex = 0, spotIndex = 0) 
 
 function withoutExperience(list, name) {
   const target = normalizeName(name);
-  return (list || []).filter((item) => normalizeName(itemText(item).split(/[：:]/)[0]) !== target);
+  return (list || []).filter((item) => normalizeName(itemText(item).replace(/^DAY\s+\d+\s+/i, "").split(/[：:]/)[0]) !== target);
 }
 
 export function synchronizeExperienceStatus(data, dayIndex, spotIndex, status) {
@@ -575,7 +575,7 @@ function itemText(value) {
 function containsItem(list, name) {
   const target = normalizeName(name);
   return (list || []).some((item) => {
-    const value = normalizeName(itemText(item).split(/[：:]/)[0]);
+    const value = normalizeName(itemText(item).replace(/^DAY\s+\d+\s+/i, "").split(/[：:]/)[0]);
     return target && value && value === target;
   });
 }

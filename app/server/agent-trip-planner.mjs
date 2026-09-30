@@ -556,6 +556,30 @@ function repairUnboundHotelSpecificVisual(slot, factBasis = {}) {
     repair: { code: "hotel_unbound_specific_visual_normalized", message: "酒店主图缺少专属房型或设施的酒店来源承诺，已恢复同店代表空间与完整酒店身份", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: slot.queryCore, primaryVisualSubject } };
 }
 
+export function repairFactBoundAnimalChoice(slot, factBasis) {
+  const role = /^day:(\d+)(?::supporting:\d+)?$/.exec(cleanText(slot.role));
+  const day = role && factBasis.days?.[Number(role[1]) - 1];
+  const core = slot.queryCore || {};
+  if (!day || slot.userLocked || slot.exactIdentityRequired !== false || cleanText(core.identity) || cleanText(core.identityEn)
+    || !boundVisualSource(slot, factBasis) || [core.action, core.actionEn].some(v => visualChoicePattern.test(cleanText(v)))) return null;
+  const zh = cleanText(core.subject).split(/或者|或/).map(cleanText);
+  const en = cleanText(core.subjectEn).split(/\s+or\s+/i).map(cleanText);
+  // Only paired animal names explicitly present in this day's facts. Never
+  // choose between activities, identities, or a generic "wildlife" promise.
+  const animals = { '狮群': /^lion pride$/i, '狮子': /^lions?$/i, '花豹': /^leopards?$/i,
+    '猎豹': /^cheetahs?$/i, '大象': /^elephants?$/i, '象群': /^elephant herd$/i,
+    '斑马': /^zebras?$/i, '长颈鹿': /^giraffes?$/i, '角马': /^wildebeest$/i };
+  const source = cleanText(day.experience);
+  if (zh.length !== 2 || en.length !== 2 || zh[0] === zh[1] || !zh.every((v, i) => animals[v]?.test(en[i]) && source.includes(v))
+    || /保证|必见|仅限|不得|不能|不含|不安排/.test(source)
+    || source.includes(`${zh[0]}或${zh[1]}`) || source.includes(`${zh[1]}或${zh[0]}`)) return null;
+  const queryCore = { ...core, subject: zh[0], subjectEn: en[0] };
+  const primaryVisualSubject = [zh[0], core.action].filter(Boolean).join(' ');
+  const queries = [primaryVisualSubject, [en[0], core.actionEn].filter(Boolean).join(' ')];
+  return { queryCore, primaryVisualSubject, fidelityQuery: queries[0], alternateQueries: queries.slice(1), searchIntent: queries,
+    repair: { code: 'fact_bound_animal_choice_resolved', message: '从本日原始事实明确列出的动物中选择首个画面目标，动作及履约事实不变', originalQueryCore: core, originalPrimaryVisualSubject: slot.primaryVisualSubject } };
+}
+
 export function repairHotelRepresentativeChoice(slot, factBasis) {
   const hotelRole = /^hotel:(\d+)$/.exec(cleanText(slot.role));
   const hotel = hotelRole && (factBasis.hotels || [])[Number(hotelRole[1]) - 1];
@@ -583,6 +607,22 @@ export function repairHotelRepresentativeChoice(slot, factBasis) {
   let visual = cleanText(slot.primaryVisualSubject);
   for (const identity of identityNames.sort((a, b) => b.length - a.length)) {
     visual = visual.replaceAll(identity, "");
+  }
+  // A canonical representative Core followed by a separate descriptive clause
+  // already chooses the hotel, not a particular facility. Keep that clause as
+  // preference rather than parsing every landscape adjective as a category.
+  const representativeDetail = alreadyRepresentative && /^(?:酒店)?代表性空间\s*[，,]/.test(visual.trim());
+  if (representativeDetail && !cleanText(hotel.roomType) && !cleanText(hotel.signatureExperience)
+    && !/专属|私人|指定|总统|蜜月|private|presidential|booked|guaranteed/i.test(visual)
+    && !/另一|其他酒店|隔壁|乘坐|用餐|骑行|游泳|观鸟|\b(?:hotel|lodge|camp|resort|dining|swimming|riding)\b/i.test(visual)
+    && ![hotel.currentCopy, hotel.selectionReason].some(value => /指定|保证|承诺|guaranteed|booked/i.test(cleanText(value)))
+    && !(factBasis.hotels || []).some(other => other !== hotel && cleanText(other.name) && cleanText(slot.primaryVisualSubject).includes(other.name))
+    && /大堂|客房|套房|外观|泳池|甲板/.test(visual)) {
+    const primaryVisualSubject = `${cleanText(core.identity)} 酒店代表性空间`;
+    const queryCore = { ...core };
+    const queries = [`${core.identity} 酒店代表性空间`, `${core.identityEn || core.identity} representative hotel space`];
+    return { primaryVisualSubject, queryCore, fidelityQuery: queries[0], alternateQueries: queries.slice(1), searchIntent: queries,
+      repair: { code: "hotel_representative_choice_resolved", message: "同店代表图保留完整身份，附加空间描述仅作为偏好", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: core, softViewPreferences: [visual.trim()] } };
   }
   // Permit only neutral presentation wording around those category names.
   // An unbound second entity or a named/private facility is not neutral.
@@ -727,6 +767,22 @@ export function repairTransportOverviewPose(slot, factBasis, { allowCoreActionCh
   const transport = role && (factBasis.transport || [])[Number(role[1]) - 1];
   if (!transport || slot.exactIdentityRequired !== false || slot.locationRole !== "scope_only") return null;
   const core = slot.queryCore || {};
+  if (/商务(?:用)?车/.test(`${transport.category} ${transport.serviceLevel}`)
+    && /^(?:商务用车|商务车)$/.test(cleanText(core.subject))
+    && !transport.modelGuaranteed && !cleanText(transport.model)
+    && !cleanText(core.identity) && !cleanText(core.identityEn)
+    && !visualChoicePattern.test(cleanText(core.subjectEn))
+    && !/飞机|直升机|热气球|船|骑行|游猎|接送乘客|登车|下车|helicopter|boat|bicycle/i.test(cleanText(slot.primaryVisualSubject))
+    && /^(?:在城市道路)?行驶$/.test(cleanText(core.action))
+    && /^(?:driving(?: on city road)?)?$/i.test(cleanText(core.actionEn))
+    && /车辆停靠或行驶于市区[。.]?$/.test(cleanText(slot.primaryVisualSubject))
+    && (transport.usageSegments || []).length > 0) {
+    const queryCore = { ...core, action: "", actionEn: "" };
+    const primaryVisualSubject = cleanText(core.subject);
+    const queries = [primaryVisualSubject, cleanText(core.subjectEn) || "business transfer vehicle"];
+    return { queryCore, primaryVisualSubject, fidelityQuery: queries[0], alternateQueries: queries.slice(1), searchIntent: queries,
+      repair: { code: "transport_overview_pose_normalized", message: "商务接送概览的停靠与行驶仅作画面偏好", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: core } };
+  }
   if (!/飞机|aircraft|plane/i.test(`${transport.category} ${transport.serviceLevel}`)
     || !/飞机|aircraft|plane/i.test(cleanText(core.subject))
     || [core.subject, core.identity, core.subjectEn, core.identityEn].some((value) => visualChoicePattern.test(cleanText(value)))) return null;
@@ -755,7 +811,7 @@ export function repairTransportOverviewPose(slot, factBasis, { allowCoreActionCh
   if (/航拍|空中观光|观景飞行|低空飞越|起飞|降落|停靠|停放|飞行中|scenic[ -]?flight|aerial[ -]?tour|taking[ -]?off|landing|parked/i.test(`${sourceFacts} ${transport.usageLabel || ""} ${sourceDetails}`)
     || /航拍体验|空中观光|观景飞行|低空飞越|scenic[ -]?flight|aerial[ -]?tour/i.test(visual)
     || allowCoreActionChoices && /航拍|空中观光|观景飞行|低空飞越|起降体验|scenic[ -]?flight|aerial[ -]?tour/i.test(`${visual} ${slot.visualGoal || ""}`)) return null;
-  const onlyOrdinaryMotion = (value) => !cleanText(value).replace(/(?:在|于)?[^或\s]{0,16}?(?:跑道)(?:上)?/gu, "")
+  const onlyOrdinaryMotion = (value) => !cleanText(value).replace(/(?:在|于)?[^或\s]{0,16}?(?:跑道|机场)(?:上)?/gu, "")
     .replace(/\b(?:on|at)\s+(?:a\s+)?(?:[a-z-]+\s+){0,3}(?:airstrip|runway)\b/gi, "")
     .replace(/起飞|降落|起降|停靠|停放|飞行中|飞行|空中|taking[ -]?off|landing|parked|flying|in[ -]?flight|flight/gi, "")
     .replace(/或者|或|\bor\b|[\s,，.。/\-]+/gi, "");
@@ -793,8 +849,11 @@ function boundVisualSource(slot, factBasis) {
 function repairCrossModuleDuplicate(slot, first, factBasis, slots) {
   const isDay = target => /^day:\d+(?::supporting:\d+)?$/.test(target.role);
   // Do not manufacture extra same-day scenes or collapse hotel spaces. This
-  // recovery serves a DAY and an existing cover/module with the same Core.
-  if (!first || isDay(slot) === isDay(first)
+  // recovery serves a DAY and an existing cover/module, or different days,
+  // with the same Core. Actual photo deduplication remains mandatory.
+  const differentDays = first && isDay(slot) && isDay(first)
+    && /^day:\d+/.exec(slot.role)?.[0] !== /^day:\d+/.exec(first.role)?.[0];
+  if (!first || isDay(slot) === isDay(first) && !differentDays
     || !boundVisualSource(slot, factBasis) || !boundVisualSource(first, factBasis)) return null;
   const day = /^(day:\d+):supporting:/.exec(slot.role);
   const coreKey = target => [target.queryCore?.identity, target.queryCore?.subject, target.queryCore?.action].map(visualKey).filter(Boolean).join("|");
@@ -911,8 +970,18 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
     const issues = issuesByRole.get(role) || [];
     const localRepairs = [];
     let repaired = { ...slot };
+    const omissionRepair = issues.some(issue => issue.code === "image_optional_omission_conflict")
+      && issues.every(issue => issue.code === "image_optional_omission_conflict" || QUERY_REPAIRABLE_CODES.has(issue.code))
+      && candidates.get(role)?.required === false && !slot.userLocked
+      && boundVisualSource(slot, factBasis) && cleanText(slot.queryCore?.subject)
+      && buildKnowledgeQueryPlan(slot, null).queries.length >= 2
+      && !buildKnowledgeQueryPlan(slot, null).validationError;
+    if (omissionRepair) {
+      next.imagePlan.omittedOptionalRoles = (next.imagePlan.omittedOptionalRoles || []).filter(item => item !== role);
+      localRepairs.push({ code: "populated_optional_omission_resolved", message: "保留有事实绑定且目标有效的已规划可选图位，仅移除与其冲突的省略标记" });
+    }
     const visualRepair = issues.some((issue) => issue.code === "ambiguous_visual_subject")
-      ? repairHotelRepresentativeChoice(slot, factBasis) || (boundVisualSource(slot, factBasis) ? repairBackgroundVisualChoice(slot) : null) || repairEquivalentVisualChoice(slot)
+      ? repairFactBoundAnimalChoice(slot, factBasis) || repairHotelRepresentativeChoice(slot, factBasis) || (boundVisualSource(slot, factBasis) ? repairBackgroundVisualChoice(slot) : null) || repairEquivalentVisualChoice(slot)
         || (boundVisualSource(slot, factBasis) ? repairTransportOverviewPose(slot, factBasis, { allowCoreActionChoices: true }) : null)
       : issues.some((issue) => issue.code === "hotel_specific_visual_unbound") ? repairUnboundHotelSpecificVisual(slot, factBasis) : null;
     if (visualRepair) {
@@ -931,6 +1000,7 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
     let unresolved = issues.some((issue) => !QUERY_REPAIRABLE_CODES.has(issue.code) && issue.code !== "invalid_supporting_visual"
       && !(issue.code === "ambiguous_visual_subject" && visualRepair)
       && !(issue.code === "image_location_missing" && scopeRepair)
+      && !(issue.code === "image_optional_omission_conflict" && omissionRepair)
       && !(issue.code === "hotel_specific_visual_unbound" && visualRepair?.repair.code === "hotel_unbound_specific_visual_normalized"));
 
     if (issues.some((issue) => issue.code === "invalid_supporting_visual") && String(role).includes(":supporting:")) {
@@ -1001,7 +1071,9 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
 
   for (const issue of validationErrors) {
     if (["image_search_plan_missing", "image_optional_plan_unaccounted", "image_slot_role_duplicate", "image_optional_omission_conflict"].includes(issue.code)) {
-      for (const role of issue.slotRoles || []) if (!omittedEmptyRoles.has(role)) unresolvedRoles.add(role);
+      for (const role of issue.slotRoles || []) if (!omittedEmptyRoles.has(role)
+        && !(issue.code === "image_optional_omission_conflict" && repairs.some(entry => entry.role === role
+          && entry.repairs.some(repair => repair.code === "populated_optional_omission_resolved")))) unresolvedRoles.add(role);
     }
   }
   return { plan: next, repairs, unresolvedSlotRoles: [...unresolvedRoles] };

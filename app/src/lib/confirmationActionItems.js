@@ -22,7 +22,7 @@ function offerRange(period, fallbackYear) {
 }
 
 export function priceOfferKey(offer = {}) {
-  return `${clean(offer.period)}|${Number(offer.amount) || ""}`;
+  return `${clean(offer.period)}|${Number(offer.amount) || ""}${offer.audience ? `|${offer.audience}|${offer.sourceCount || ""}` : ""}`;
 }
 
 export function listPriceOffers(data = {}) {
@@ -35,6 +35,7 @@ export function matchingPriceOffers(startDate, offers = []) {
   if (departure == null) return [];
   const departureYear = Math.floor(departure / 10000);
   return offers.filter((offer) => {
+    if (offer.audience) return false;
     const range = offerRange(offer.period, departureYear);
     return range && departure >= range.start && departure <= range.end;
   });
@@ -58,6 +59,7 @@ export function isPriceSelectionValid(project = {}, data = project.data || {}) {
   const selection = currentPriceSelection(project);
   if (!selection || !(Number(selection.amount) > 0)) return false;
   if (selection.mode === "custom") return Boolean(clean(selection.unit));
+  if (offers.some(offer => offer.audience)) return false;
   return offers.some((offer) => priceOfferKey(offer) === selection.sourceKey);
 }
 
@@ -100,7 +102,11 @@ export function buildConfirmationActionItems({ project = {}, data = project.data
   }
 
   const price = multiPriceState(project, data, Array.isArray(project.recognition?.warnings) ? project.recognition.warnings : []);
-  if (price.required) {
+  const grouped = listPriceOffers(data).some(offer => offer.audience);
+  if (grouped && !(currentPriceSelection(project)?.mode === "custom" && Number(currentPriceSelection(project)?.amount) > 0 && clean(currentPriceSelection(project)?.unit))) {
+    add({ id: "source:groupPrice", title: "分人群报价", description: "原文件分别列示成人与儿童价格，请确认本次采用金额和计价单位，不直接套用原组合总价。", path: "sourceImportCoverage.priceOffers" });
+  }
+  if (price.required && !grouped) {
     const selection = currentPriceSelection(project);
     if (selection?.mode === "custom" && !(Number(selection.amount) > 0)) add({ id: "source:multiPricePeriod", title: "本次采用金额", description: "请填写本次采用金额。", path: "sourceImportCoverage.priceOffers" });
     else if (selection?.mode === "custom" && !clean(selection.unit)) add({ id: "source:multiPricePeriod", title: "计价单位", description: "请填写本次报价的计价单位。", path: "sourceImportCoverage.priceOffers" });

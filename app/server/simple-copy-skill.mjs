@@ -484,6 +484,7 @@ export async function runCopyWriterSkill({
   emitTaskProgress();
 
   let modelCalls = 0;
+  let hotelTagCountRepairs = 0;
   let transportAttempts = 0;
   let modelMs = 0;
   let researchCalls = 0;
@@ -652,6 +653,49 @@ export async function runCopyWriterSkill({
       transportAttempts += attempts;
       const returned = Array.isArray(response.json?.results) ? response.json.results : [];
       const returnedById = new Map(returned.map((item) => [item?.targetId, item]));
+      // Repair only the observed hotel-tag count violation. Never truncate
+      // facts or regenerate successful prose/rows/other modules.
+      const overfullTags = batchTasks.filter(task => {
+        const item = returnedById.get(task.targetId);
+        return task.moduleType === "hotel_proof_points" && item?.targetPath === task.targetPath
+          && Array.isArray(item.value) && Number.isInteger(task.outputSchema?.maxItems)
+          && item.value.length > task.outputSchema.maxItems
+          && item.value.every(value => typeof value === "string" && value.trim());
+      });
+      if (overfullTags.length && !signal?.aborted) {
+        let repairStartedAt = null;
+        const repairMessages = [messages[0], { role: "user", content: JSON.stringify({
+          instruction: "仅修正以下酒店短标签条数超限：从已有标签中选择最有事实依据和区分度的最多 maxItems 项。不得添加或改写标签，不修改其他字段。返回相同 results 结构。",
+          tasks: overfullTags.map(task => ({ ...task, previousValue: returnedById.get(task.targetId).value })),
+        }) }];
+        try {
+          await onWriterEvidence?.({ batchId, batchKind, phase: "hotel-tag-count-request", messages: repairMessages });
+          const fixed = await copyTaskQueue.add(() => {
+            repairStartedAt = Date.now();
+            modelCalls += 1; transportAttempts += 1; hotelTagCountRepairs += 1;
+            return requestJson({ apiKey, baseUrl, model, messages: repairMessages, reasoningEffort,
+              maxTokens: Math.min(4000, 500 * overfullTags.length), emptyContentRetries: 0, signal, onStatus });
+          }, { taskId: `simple-copy:${batchId}:${batchKind}:hotel-tag-count` });
+          await onWriterEvidence?.({ batchId, batchKind, phase: "hotel-tag-count-response", json: fixed.json });
+          for (const task of overfullTags) {
+            const items = (Array.isArray(fixed.json?.results) ? fixed.json.results : []).filter(item => item?.targetId === task.targetId);
+            const item = items.length === 1 ? items[0] : null;
+            const original = returnedById.get(task.targetId);
+            if (item?.targetPath === task.targetPath && !validateCopyValue(item.value, task.outputSchema).length
+              && item.value.length > 0 && new Set(item.value).size === item.value.length
+              && item.value.every(value => original.value.includes(value))) {
+              returnedById.set(task.targetId, { ...original, value: item.value,
+                warnings: [...(Array.isArray(original.warnings) ? original.warnings : []), "酒店短标签已在原有事实内按数量上限择优"] });
+            }
+          }
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          // Preserve original field failure and every successful sibling.
+          warnings.push({ code: "hotel_tag_count_repair_failed", message: "酒店短标签数量修正未完成，保留字段校验结果" });
+        } finally {
+          if (repairStartedAt !== null) modelMs += Date.now() - repairStartedAt;
+        }
+      }
       for (const task of batchTasks) {
         const item = returnedById.get(task.targetId);
         if (!item) {
@@ -703,5 +747,5 @@ export async function runCopyWriterSkill({
   emitTaskProgress();
   const results = tasks.map((task, index) => resultById.get(task?.targetId || `invalid-${index}`)).filter(Boolean);
   const researchResults = tasks.map((task) => researchResultById.get(task?.targetId)).filter(Boolean);
-  return { batchId, status: batchStatus(results), results, researchResults, warnings, metrics: { businessBatches: physicalBatches.length, physicalBatches: physicalBatches.length, modelCalls, transportAttempts, researchCalls, researchSupplementCalls, researchTransportAttempts, automaticBusinessRetryRounds: 0, reasoningEffort, modelMs, researchMs, durationMs: Date.now() - startedAt } };
+  return { batchId, status: batchStatus(results), results, researchResults, warnings, metrics: { businessBatches: physicalBatches.length, physicalBatches: physicalBatches.length, modelCalls, transportAttempts, researchCalls, researchSupplementCalls, researchTransportAttempts, hotelTagCountRepairs, automaticBusinessRetryRounds: 0, reasoningEffort, modelMs, researchMs, durationMs: Date.now() - startedAt } };
 }

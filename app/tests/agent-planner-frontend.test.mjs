@@ -9,6 +9,20 @@ const workspaceCss = readFileSync(new URL("../src/workspace.css", import.meta.ur
 const confirmationActions = readFileSync(new URL("../src/lib/confirmationActionItems.js", import.meta.url), "utf8");
 const moduleVisibility = readFileSync(new URL("../src/lib/moduleVisibility.js", import.meta.url), "utf8");
 
+test("首页运行状态优先于旧草稿标记，零待处理不能单独判定完成", () => {
+  const source = workspace.slice(workspace.indexOf("function projectStatusLabel"), workspace.indexOf("function projectDisplayName"));
+  const label = new Function(`${source}; return projectStatusLabel;`)();
+  const project = { flowKind: "simple_skill_v1", workflowStage: "partial", unresolvedCount: 0 };
+  assert.equal(label({ ...project, runtimeStatus: "complete" }).label, "制作完成");
+  assert.equal(label({ ...project, runtimeStatus: "running" }).label, "制作中");
+  assert.equal(label({ ...project, runtimeStatus: "cancelled" }).label, "已停止");
+  assert.equal(label({ ...project, runtimeStatus: "failed" }).label, "制作中断");
+  assert.equal(label({ ...project, workflowStage: "generated", runtimeStatus: "running" }).label, "制作中");
+  assert.equal(label({ ...project, runtimeStatus: "partial" }).label, "待完善");
+  assert.equal(label(project).label, "待完善");
+  assert.equal(label({ ...project, workflowStage: "generated" }).label, "制作完成");
+});
+
 test("Step5直接下载客户行程方案且所有入口使用自动名称", () => {
   const versions = workspace.slice(workspace.indexOf("export function VersionsStep"), workspace.indexOf("function ProfilePanel"));
   assert.match(versions, /const deliveryBase = defaultDeliveryFilenameBase\(project\)/);
@@ -98,7 +112,8 @@ test("开始与重新制作绑定当前账号，启动失败留在确认弹窗�
   assert.equal(starts.length, 2);
   assert.match(workspace, /await onContinue\(\)/);
   assert.match(workspace, /startingGeneration \? "正在开始制作…" : "确认并开始生成"/);
-  assert.match(workspace, /<ConfirmationPreview project=\{project\} \/>\{modalMessage && <p className="confirmation-modal-message" role="alert">/);
+  // The alert is outside the form/preview conditional so both steps expose failures.
+  assert.match(workspace, /<\/\> : <ConfirmationPreview project=\{project\} \/>\}\{modalMessage && <p className="confirmation-modal-message" role="alert">/);
 });
 
 test("智能体工作台首页只负责开始和进入唯一项目列表", () => {

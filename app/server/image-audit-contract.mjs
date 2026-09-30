@@ -7,6 +7,22 @@ export const IMAGE_AUDIT_BOOLEAN_FIELDS = Object.freeze([
 ]);
 export const IMAGE_AUDIT_SCORE_FIELDS = Object.freeze(["score", "relevance", "luxury", "cleanliness", "composition"]);
 
+export function conflictingActionJudgmentFields(audit = {}) {
+  // A boolean contradiction is repairable evidence, never permission to
+  // silently override a rejection from an otherwise consistent audit.
+  return audit.coreActionMatch === false && ["", "none"].includes(String(audit.hardRejectCode || ""))
+    && (audit.eligible === true || audit.activityMatch === true)
+    ? ["coreActionMatch", "activityMatch", "eligible", "hardRejectCode", "matchLevel", "reason"] : [];
+}
+
+// These explicit visual failures already make a candidate unusable, even if
+// unrelated adoption/action fields contradict each other. Never infer a pass.
+export function independentVisualRejection(audit) {
+  if (!audit || typeof audit.actualSubject !== 'string' || !audit.actualSubject.trim()) return null;
+  return [['watermarkFree', 'watermark'], ['nonAI', 'ai_generated'], ['photographic', 'non_photographic'],
+    ['technicalUsable', 'low_quality_unusable']].find(([field]) => audit[field] === false)?.[1] || null;
+}
+
 export function missingVisualJudgmentFields(audit = {}) {
   return [
     ...["candidateId", "actualSubject"].filter(field => typeof audit?.[field] !== "string" || !audit[field].trim()),

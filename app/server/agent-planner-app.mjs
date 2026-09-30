@@ -527,7 +527,13 @@ export function createAgentPlannerServer(options = {}) {
         const run = backend?.activeExecutionRunId && (project.flowKind === "simple_skill_v1" ? simpleStore : store).getExecutionRun(project.agentProjectId, backend.activeExecutionRunId);
         const result = run && (project.flowKind === "simple_skill_v1" ? simpleStore : store).getFinalResult(project.agentProjectId, run.executionRunId);
         const inMemoryJob = simpleJobs.get(project.agentProjectId);
-        const runtimeStatus = inMemoryJob?.status || (["running", "planning", "preparing"].includes(backend?.status) ? "interrupted" : backend?.status);
+        // Finished jobs are historical snapshots; manual edits can advance the
+        // persisted project after the original job has already stopped.
+        const activeJob = ["running", "planning", "preparing"].includes(inMemoryJob?.status);
+        const persistedOutcome = ["complete", "ready_for_editor", "partial", "awaiting_user_action", "ready_to_render", "cancelled", "failed", "interrupted"].includes(backend?.status);
+        const runtimeStatus = activeJob ? inMemoryJob.status
+          : persistedOutcome ? backend.status
+          : inMemoryJob?.status || (["running", "planning", "preparing"].includes(backend?.status) ? "interrupted" : backend?.status);
         return { ...project, runtimeStatus, unresolvedCount: result?.unresolvedItems?.length || 0 };
       };
       try {

@@ -3,6 +3,48 @@ import test from "node:test";
 import { buildAgentFactBasis, generateAgentPlan } from "../server/agent-trip-planner.mjs";
 import { materializeSimpleSkillPlan } from "../server/simple-plan-adapter.mjs";
 import { plannerRequestJson } from "./helpers/simple-pipeline-fixture.mjs";
+import { prepareExplicitImageSearchSlot } from "../server/manual-image-search-target.mjs";
+
+test('fact-backed animal alternatives choose one shared automatic/manual target without changing actions', async () => {
+  const original = { role: 'day:1', sourceRefs: ['days.0'], exactIdentityRequired: false, locationRole: 'scope_only', location: '肯尼亚',
+    primaryVisualSubject: '狮群或花豹在草原游猎车旁活动', queryCore: { subject: '狮群或花豹', subjectEn: 'lion pride or leopard', action: '草原游猎车旁活动', actionEn: 'near safari vehicle on savannah', identity: '', identityEn: '' },
+    fidelityQuery: '狮群或花豹 游猎车旁', alternateQueries: ['lion pride or leopard near safari vehicle'] };
+  const { slot, plan, data } = await generateWithVisual(original, { dayDescription: '草原游猎，追踪狮群、花豹。' });
+  assert.equal(slot.needsUserAction, false);
+  assert.equal(slot.queryCore.subject, '狮群');
+  assert.equal(slot.queryCore.action, original.queryCore.action);
+  const simple = materializeSimpleSkillPlan({ data, agentPlan: plan });
+  const target = simple.imageSlots.find(s => s.moduleType === 'day');
+  const manual = prepareExplicitImageSearchSlot({ ...target, ...original, plannerSlotStatus: 'unresolved', needsUserAction: true,
+    plannerValidationIssues: [{code:'ambiguous_visual_subject'}] }, {plan:simple});
+  assert.equal(manual.needsUserAction, false);
+  assert.equal(manual.queryCore.subject, '狮群');
+  for (const [change, context] of [[{}, {dayDescription:'草原游猎'}], [{userLocked:true}, {dayDescription:'追踪狮群、花豹'}],
+    [{queryCore:{...original.queryCore,action:'奔跑或捕猎'}}, {dayDescription:'追踪狮群、花豹'}]]) {
+    const result = await generateWithVisual({...original,...change},context);
+    assert.equal(result.slot.needsUserAction,true);
+  }
+});
+
+test("representative detail clauses and ordinary business car poses recover in automatic and manual paths", async () => {
+  const hotel = hotelVisual({ primaryVisualSubject: "JW Marriott Hotel Nairobi 代表性空间，Westlands 城市酒店大堂或客房城市景观",
+    queryCore: { subject: "酒店代表性空间", subjectEn: "representative hotel space", identity: "JW Marriott Hotel Nairobi", identityEn: "JW Marriott Hotel Nairobi", action: "", actionEn: "" } });
+  const car = { role: "transport:1", sourceRefs: ["transport.0"], location: "肯尼亚", locationRole: "scope_only", exactIdentityRequired: false,
+    primaryVisualSubject: "内罗毕城市道路上的商务用车，车辆停靠或行驶于市区",
+    queryCore: { subject: "商务用车", subjectEn: "business vehicle", action: "在城市道路行驶", actionEn: "driving on city road", identity: "", identityEn: "" },
+    fidelityQuery: "商务用车 行驶", alternateQueries: ["business vehicle driving on city road"] };
+  for (const original of [hotel, car]) {
+    const context = original === car ? { transportFacts: { category: "商务用车", usageSegments: ["DAY 1 接送"] } } : {};
+    const { plan, data, slot } = await generateWithVisual(original, context);
+    assert.equal(slot.needsUserAction, false);
+    const simple = materializeSimpleSkillPlan({ agentPlan: plan, data });
+    const target = simple.imageSlots.find(item => item.moduleType === (original === car ? "transport" : "hotel"));
+    const manual = prepareExplicitImageSearchSlot({ ...target, ...original, plannerSlotStatus: "unresolved", needsUserAction: true,
+      plannerValidationIssues: [{ code: "ambiguous_visual_subject" }] }, { plan: simple });
+    assert.equal(manual.needsUserAction, false);
+    assert.deepEqual(manual.queryCore, slot.queryCore);
+  }
+});
 
 function hotelVisual(overrides = {}) {
   return {

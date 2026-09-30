@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {materializeSimpleSkillPlan} from '../server/simple-plan-adapter.mjs';
 import {generateAgentPlan,buildAgentFactBasis,validateSimpleDayVisuals} from '../server/agent-trip-planner.mjs';
-import {explicitEntityRoute,buildKnowledgeQueryPlan,buildKnowledgeScopePlan,buildKnowledgeHierarchy,resolveKnowledgeScope} from '../server/knowledge-scope-resolver.mjs';
+import {classifyKnowledgeImagePurpose,explicitEntityRoute,buildKnowledgeQueryPlan,buildKnowledgeScopePlan,buildKnowledgeHierarchy,resolveKnowledgeScope} from '../server/knowledge-scope-resolver.mjs';
 import {buildWebExecutionQueries} from '../server/image-web-execution.mjs';
 import {plannerRequestJson} from './helpers/simple-pipeline-fixture.mjs';
 import {runImageSearchSkill} from '../server/simple-image-skill.mjs';
@@ -82,4 +82,13 @@ test('金额单位中的斜杠不误判成两种画面，真正的画面二选�
  const check=s=>validateSimpleDayVisuals({imagePlan:{slots:[s]}},{days:[{spots:[]}]}).map(issue=>issue.code);
  assert.ok(!check(base).includes('ambiguous_visual_subject'));
  assert.ok(check({...base,primaryVisualSubject:'狮子/豹子在草原上奔跑'}).includes('ambiguous_visual_subject'));
+});
+
+test('explicit false on dining never imposes a Knowledge-only restaurant identity',()=>{
+ const slot={moduleType:'dining',activity:'The Carnivore',subject:'烤肉拼盘',primaryVisualSubject:'The Carnivore 餐厅内烤肉拼盘上桌',location:'内罗毕',locationRole:'scope_only',queryCore:{subject:'烤肉拼盘',action:'上桌',identity:''},exactIdentityRequired:false};
+ assert.equal(classifyKnowledgeImagePurpose(slot),'destination_experience');
+ assert.equal(explicitEntityRoute(slot).matched,false);
+ const exact={...slot,exactIdentityRequired:true,queryCore:{...slot.queryCore,identity:'The Carnivore'}};
+ assert.equal(classifyKnowledgeImagePurpose(exact),'explicit_entity');
+ assert.equal(explicitEntityRoute(exact).matched,true);
 });

@@ -49,7 +49,11 @@ async function fetchJson(url, options, { fetchImpl, signal, timeoutMs, stage = "
   try {
     const response = await fetchImpl(url, { ...options, signal: timeout.signal });
     let payload = null;
-    try { payload = await response.json(); } catch { /* Preserve the HTTP status below. */ }
+    try { payload = await response.json(); } catch (error) {
+      // A response body can disconnect after successful headers. Preserve HTTP
+      // errors, but let interrupted successful bodies use the transport path.
+      if (response.ok && !(error instanceof SyntaxError)) throw error;
+    }
     if (!response.ok) {
       throw knowledgeRequestError({
         stage, kind: "http", code: `knowledge_http_${response.status}`, diagnosticId, queryId,
@@ -64,15 +68,19 @@ async function fetchJson(url, options, { fetchImpl, signal, timeoutMs, stage = "
     }
     if (signal?.aborted) throw knowledgeRequestError({ stage, kind: "cancelled", code: "knowledge_cancelled", diagnosticId, queryId, startedAt });
     if (error?.knowledgeStage) throw error;
-    throw knowledgeRequestError({ stage, kind: "transport", code: "knowledge_transport_error", diagnosticId, queryId, startedAt });
+    const failure = knowledgeRequestError({ stage, kind: "transport", code: "knowledge_transport_error", diagnosticId, queryId, startedAt });
+    const transportCode = error?.cause?.code || error?.code;
+    failure.transportCode = /^(?:E[A-Z0-9_]+|UND_ERR_[A-Z0-9_]+)$/.test(String(transportCode || "")) ? transportCode : null;
+    throw failure;
   } finally { timeout.stop(); }
 }
 
 function wait(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason || new Error("aborted"));
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => { clearTimeout(timer); reject(signal.reason || new Error("aborted")); }, { once: true });
+    const onAbort = () => { clearTimeout(timer); reject(signal.reason || new Error("aborted")); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -279,11 +287,26 @@ export async function searchKnowledgeImages({
     });
   }
   const deadline = Date.now() + Math.max(requestTimeoutMs, Number(timeoutMs) || 120_000);
+  const pollRecovery = [];
+  let lastPollError = null;
   while (Date.now() < deadline) {
     const remaining = Math.max(1, deadline - Date.now());
-    const current = await fetchJson(`${normalizedBaseUrl}/api/knowledge/output?query_id=${encodeURIComponent(queryId)}`, {
+    let current;
+    try { current = await fetchJson(`${normalizedBaseUrl}/api/knowledge/output?query_id=${encodeURIComponent(queryId)}`, {
       method: "GET",
-    }, { fetchImpl, signal, timeoutMs: Math.min(requestTimeoutMs, remaining), stage: "poll", diagnosticId, queryId, startedAt });
+    }, { fetchImpl, signal, timeoutMs: Math.min(requestTimeoutMs, remaining), stage: "poll", diagnosticId, queryId, startedAt }); }
+    catch (error) {
+      lastPollError = error;
+      error.pollRecovery = [...pollRecovery];
+      const transient = ["transport", "timeout"].includes(error.knowledgeFailureKind)
+        || error.knowledgeFailureKind === "http" && [502, 503, 504].includes(error.status);
+      if (!transient || signal?.aborted || pollRecovery.length >= 2 || Date.now() >= deadline) throw error;
+      pollRecovery.push({ kind: error.knowledgeFailureKind, code: error.code, transportCode: error.transportCode || null, status: error.status });
+      try { await wait(Math.min(Math.max(1, pollIntervalMs), deadline - Date.now()), signal); }
+      catch { throw knowledgeRequestError({ stage: "poll", kind: "cancelled", code: "knowledge_cancelled", diagnosticId, queryId, startedAt }); }
+      continue;
+    }
+    lastPollError = null;
     if (current.response.status === 202) {
       try {
         await wait(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())), signal);
@@ -297,11 +320,12 @@ export async function searchKnowledgeImages({
     if (status === "completed") {
       const parsed = knowledgeOutputToCandidates(output, { baseUrl: normalizedBaseUrl, queryId, queryText });
       const feedback = completedScopeFeedback(output);
-      return { status, queryId, queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, candidates: parsed.candidates, records: parsed.records, clarificationNodeIds: [], ...feedback };
+      return { status, queryId, queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, pollRecovery, candidates: parsed.candidates, records: parsed.records, clarificationNodeIds: [], ...feedback };
     }
     if (status === "needs_clarification") return { status, queryId, queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, candidates: [], records: [], clarificationNodeIds: Array.isArray(output.clarification_node_ids) ? output.clarification_node_ids : [] };
     if (status !== "failed") throw knowledgeRequestError({ stage: "poll", kind: "invalid_response", code: "knowledge_invalid_output", diagnosticId, queryId, requestId: current.payload?.request_id, status: current.response.status, startedAt });
     return { status: "failed", queryId: safeDiagnosticId(queryId), queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, knowledgeStage: "terminal", knowledgeFailureKind: "terminal_failure", candidates: [], records: [], clarificationNodeIds: [], errorId: safeDiagnosticId(output.error_id), requestId: safeDiagnosticId(current.payload?.request_id) };
   }
+  if (lastPollError) { lastPollError.pollRecovery = [...pollRecovery]; throw lastPollError; }
   throw knowledgeRequestError({ stage: "poll", kind: "client_deadline", code: "knowledge_timeout", diagnosticId, queryId, startedAt });
 }

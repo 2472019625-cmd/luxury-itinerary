@@ -1,6 +1,6 @@
 import { buildKnowledgeQueryPlan } from "./knowledge-scope-resolver.mjs";
 import { resolveScenePreference } from "./image-scene-preferences.mjs";
-import { buildAgentFactBasis, repairTransportOverviewPose, repairHotelRepresentativeChoice } from "./agent-trip-planner.mjs";
+import { buildAgentFactBasis, repairTransportOverviewPose, repairHotelRepresentativeChoice, repairFactBoundAnimalChoice } from "./agent-trip-planner.mjs";
 
 const REPAIRABLE_QUERY_ISSUES = new Set([
   "invalid_image_search_queries", "image_fidelity_query_missing",
@@ -15,8 +15,22 @@ export function prepareExplicitImageSearchSlot(slot, { plan } = {}) {
   const issues = Array.isArray(slot.plannerValidationIssues) ? slot.plannerValidationIssues : [];
   if (!(slot.plannerSlotStatus === "unresolved" || slot.needsUserAction === true)) return target;
   const duplicate = issues.some(issue => issue.code === "duplicate_visual_responsibility");
+  // An event label is a valid discovery query on explicit user request.
+  // Preserve its meaning and all candidate checks; do not invent a vehicle,
+  // venue or action merely to satisfy automatic composition planning.
+  const descriptive = issues.some(issue => issue.code === "abstract_visual_subject");
+  const queryOnly = issues.length > 0 && issues.every(issue => REPAIRABLE_QUERY_ISSUES.has(issue.code));
   const ambiguous = issues.some(issue => issue.code === "ambiguous_visual_subject");
   let preference = ambiguous ? resolveScenePreference(slot) : null;
+  if (ambiguous && !preference && slot.moduleType === "day") {
+    const binding = plan?.slotBindings?.[slot.slotId];
+    if (binding?.module === 'day' && Number.isInteger(binding.dayIndex) && binding.dayIndex >= 0
+      && slot.sourceEvidence?.some(ref => ref === `days.${binding.dayIndex}` || ref.startsWith(`days.${binding.dayIndex}.`))) {
+      const facts = buildAgentFactBasis(plan.preparedData);
+      const repair = repairFactBoundAnimalChoice({ ...slot, role: `day:${binding.dayIndex + 1}`, sourceRefs: slot.sourceEvidence }, facts);
+      if (repair) preference = { reason: 'fact_bound_animal_choice', primaryVisualSubject: repair.primaryVisualSubject, queryCore: repair.queryCore };
+    }
+  }
   if (ambiguous && !preference && slot.moduleType === "transport") {
     // Use the saved binding and confirmed input, never a role guessed from the
     // slot label or generated copy. Filtering in buildAgentFactBasis may change
@@ -44,8 +58,9 @@ export function prepareExplicitImageSearchSlot(slot, { plan } = {}) {
         queryCore: repair.queryCore };
     }
   }
-  if ((!duplicate && !preference) || (ambiguous && !preference)
+  if ((!duplicate && !preference && !descriptive && !queryOnly) || (ambiguous && !preference)
     || issues.some(issue => issue.code !== "duplicate_visual_responsibility"
+      && issue.code !== "abstract_visual_subject"
       && !(issue.code === "ambiguous_visual_subject" && preference)
       && !REPAIRABLE_QUERY_ISSUES.has(issue.code))) return target;
   if (!clean(slot.queryCore?.subject) || !clean(slot.location)
@@ -67,7 +82,7 @@ export function prepareExplicitImageSearchSlot(slot, { plan } = {}) {
       visualContext: { ...slot.visualContext, primaryVisualSubject: preference.primaryVisualSubject } } : {}),
     plannerSlotStatus: "user_requested", needsUserAction: false,
     manualSearchOverride: {
-      reason: preference?.reason || "duplicate_visual_responsibility",
+      reason: preference?.reason || (descriptive ? "explicit_event_search" : queryOnly ? "explicit_query_repair" : "duplicate_visual_responsibility"),
       originalPlannerStatus: slot.plannerSlotStatus, originalIssueCodes: issues.map(issue => issue.code),
       ...(preference ? { originalPrimaryVisualSubject: slot.primaryVisualSubject,
         ...(preference.posePreference ? { originalQueryCore: slot.queryCore, posePreference: preference.posePreference, sourceRef: preference.sourceRef } : {}),

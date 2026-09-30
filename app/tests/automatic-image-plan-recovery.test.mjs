@@ -8,6 +8,19 @@ import { recoveryData, recoveryVisuals, recoveryPlan } from './support/automatic
 import { buildKnowledgeHierarchy } from '../server/knowledge-scope-resolver.mjs';
 import { imageAdapters } from './helpers/simple-pipeline-fixture.mjs';
 
+test('automatic recovery handles the actual Chinese airport action without loosening source requirements', async () => {
+  const { agentPlan } = await recoveryPlan({ mutate(plan) {
+    const slot = plan.imagePlan.slots.find(s => s.role === 'transport:1');
+    slot.primaryVisualSubject = '草原小飞机在草原机场降落或起飞';
+    slot.queryCore.action = '在草原机场降落或起飞';
+    slot.queryCore.actionEn = 'landing or taking off on grass airstrip';
+  }});
+  const slot = agentPlan.imagePlan.slots.find(s => s.role === 'transport:1');
+  assert.equal(slot.needsUserAction, false);
+  assert.equal(slot.queryCore.action, '');
+  assert.equal(slot.queryCore.subject, '草原小飞机');
+});
+
 test('first automatic plan recovers flight poses, cover/DAY elephants and dining/DAY breakfast without another Planner call', async () => {
   const { agentPlan, simple } = await recoveryPlan();
   for (const role of ['transport:1', 'day:1', 'day:2:supporting:1']) {
@@ -155,4 +168,27 @@ test('empty optional omission cannot erase a locked slot or a surviving query', 
     assert.ok(agentPlan.imagePlan.slots.some(slot=>slot.role===role));
     assert.ok(agentPlan.validation.unresolvedSlotRoles.includes(role));
   }
+});
+
+test('valid populated optional dining keeps its search target when omission is the only conflict', async () => {
+  const { agentPlan } = await recoveryPlan({ mutate(raw) {
+    raw.imagePlan.omittedOptionalRoles = [...(raw.imagePlan.omittedOptionalRoles || []), 'dining:1'];
+  }});
+  const slot = agentPlan.imagePlan.slots.find(s => s.role === 'dining:1');
+  assert.ok(slot);
+  assert.equal(slot.needsUserAction, false);
+  assert.ok(slot.plannerLocalRepairs.some(r => r.code === 'populated_optional_omission_resolved'));
+  assert.ok(!agentPlan.imagePlan.omittedOptionalRoles.includes('dining:1'));
+});
+
+test('bound repeated experience on different days searches distinct photos without changing Core', async () => {
+  const { agentPlan } = await recoveryPlan({ mutate(raw) {
+    const first = raw.imagePlan.slots.find(s => s.role === 'day:1');
+    const second = raw.imagePlan.slots.find(s => s.role === 'day:2');
+    Object.assign(second, { primaryVisualSubject: first.primaryVisualSubject, queryCore: structuredClone(first.queryCore),
+      fidelityQuery: first.fidelityQuery, alternateQueries: [...first.alternateQueries], location: first.location, sourceRefs: ['days.1.experience'] });
+  }});
+  const second = agentPlan.imagePlan.slots.find(s => s.role === 'day:2');
+  assert.equal(second.needsUserAction, false);
+  assert.ok(second.plannerLocalRepairs.some(r => r.requireDistinctPhoto));
 });

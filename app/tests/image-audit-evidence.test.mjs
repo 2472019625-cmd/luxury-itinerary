@@ -53,6 +53,40 @@ async function audit(candidates, judgments, slot = identitySlot) {
   return { results, request };
 }
 
+test('a missing identity object gets the existing one-time citation repair when image-bound evidence exists', async t => {
+  const {candidate} = await fixtures(t);
+  let calls=0;
+  const result=await judgeCandidatesBatch({slot:identitySlot,candidates:[{...candidate,alt:'Azure Pavilion suite'}],apiKey:'fixture',baseUrl:'https://vision.invalid',model:'fixture',
+    fetchImpl:async()=>({ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({judgments:[++calls===1?judgment(candidate.candidateId):{
+      candidateId:candidate.candidateId,identityEvidence:{status:'supported',basis:'photo_local',evidenceIds:['alt'],quote:'Azure Pavilion suite',explanation:'Image alt identifies property'}
+    }]})}}]})})});
+  assert.equal(calls,2);
+  assert.equal(result[0].identityEvidence.status,'supported');
+  assert.equal(result[0].auditContract.repairAttempted,true);
+});
+
+test('contradictory optional vehicle action is rechecked once without overriding other hard facts', async t => {
+  const { candidate } = await fixtures(t);
+  for (const repaired of [true, false]) {
+    let calls = 0;
+    const original = judgment(candidate.candidateId, { coreActionMatch: false, activityMatch: true,
+      eligible: true, reason: '静止商务车仍属相同接送类别，可以采用' });
+    const results = await judgeCandidatesBatch({
+      slot: { module: 'transport', exactIdentityRequired: false, minimumVisualProof: { subject: '商务用车', action: '行驶' } },
+      candidates: [candidate], apiKey: 'test', baseUrl: 'https://example.com', model: 'test',
+      fetchImpl: async () => {
+        calls++;
+        const item = calls === 2 && repaired ? { ...original, coreActionMatch: true, matchLevel: 'representative' } : original;
+        return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ judgments: [item] }) } }] }) };
+      },
+    });
+    assert.equal(calls, 2);
+    assert.equal(results[0].auditContract.complete, repaired);
+    assert.equal(results[0].watermarkFree, original.watermarkFree);
+    assert.equal(results[0].coreSubjectMatch, original.coreSubjectMatch);
+  }
+});
+
 test("DAY审核只接收当前图片的Core与偏好，不混入整天酒店和相邻活动", async (t) => {
   const { candidate } = await fixtures(t);
   const target = { moduleType: "day", subject: "象群与雪山", exactIdentityRequired: true,

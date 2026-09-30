@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { TRAVEL_ENTITY_REGISTRY } from "../src/data/travelEntityRegistry.js";
 import { normalizeTravelEntityName } from "../src/lib/travelEntityDisplay.js";
@@ -301,6 +302,10 @@ export function classifyKnowledgeImagePurpose(slot = {}) {
   const namedEntity = namedEntityText(slot);
   if (kind === "cover") return "cover";
   if (kind === "transport" || /(lightaircraft|bushplane|airstrip|草原飞机|轻型飞机|transfervehicle|cartransfer|接送车辆|商务用车)/.test(searchable)) return "transport";
+  // New plans explicitly decide whether the named venue is indispensable.
+  // Do not recreate an entity requirement from the label on the Knowledge
+  // branch while Web and Vision honor false. Legacy plans stay unchanged.
+  if (slot.exactIdentityRequired === false && ["day", "dining"].includes(kind)) return "destination_experience";
   const hotelSemantic = hotelIdentity ? semanticCategory(slot) : null;
   const subjectNamesHotel = hotelEntity && querySourceValues(slot).some((value) => entityNames(hotelEntity).some((name) => identityMatches(value, name)));
   const explicitHotelFacility = /(专属|exclusive|starbed|sleepout|outdoorbed|星空床|winecellar|酒窖|suite|guestroom|pool|spa|套房|客房|泳池|水疗|私人(?:酒窖|泳池|餐厅|用餐|露台|酒廊)|private(?:winecellar|pool|dining|deck|lounge))/.test(searchable);
@@ -1639,7 +1644,11 @@ function entityProbeEvidenceDecision(evidence, identityAnchors, entityType) {
   const pieces = (item) => item.basis === "knowledge_path" ? sourcePathSegments(item.text) : [item.text];
   const conflict = evidence.find((item) => otherEntities.some((entity) => entityProbeIdentityAnchors({ queryCore: { identity: entity.canonicalName } })
     .some((anchor) => pieces(item).some((text) => containsCompleteProbeIdentity(text, anchor)))));
-  const supported = evidence.find((item) => identityAnchors.some((anchor) => pieces(item).some((text) => containsCompleteProbeIdentity(text, anchor))));
+  const supported = evidence.find((item) => identityAnchors.some((anchor) => pieces(item).some((text) => containsCompleteProbeIdentity(text, anchor))))
+    || ((targetType === 'hotel' || targetType === 'entity' && identityAnchors.every(anchor => /\b(?:hotel|lodge|camp|resort)\b|酒店|营地/i.test(anchor)))
+      && evidence.filter(item => item.basis === 'knowledge_path').length > 0
+      && evidence.filter(item => item.basis === 'knowledge_path').every(item => splitHotelPathIdentity(item.text, identityAnchors))
+      && evidence.find(item => item.basis === 'knowledge_path'));
   return {
     match: conflict ? false : supported ? true : null,
     identityStatus: conflict ? "conflict" : supported ? "supported" : "insufficient",
@@ -1649,6 +1658,26 @@ function entityProbeEvidenceDecision(evidence, identityAnchors, entityType) {
     reason: conflict ? "knowledge_source_path_mismatch" : supported ? "image_bound_entity_identity_confirmed" : "entity_probe_identity_insufficient",
     anchors: [...identityAnchors],
   };
+}
+
+function splitHotelPathIdentity(value, anchors) {
+  const segments = sourcePathSegments(value);
+  if (segments.length < 3) return false;
+  const leaf = probeIdentityText(segments.at(-2));
+  const parent = normalized(segments.at(-3));
+  // Require the adjacent geographic parent and exact property leaf from the
+  // same image-bound path. A chain name, country, or filename alone is not proof.
+  // Evidence-only geographic alias; do not change query routing or registry
+  // display normalization for other consumers.
+  const regions = [...TRAVEL_ENTITY_REGISTRY, { entityType: 'place', canonicalName: 'Ngorongoro', aliases: ['恩戈罗恩戈罗'] }];
+  return regions.filter(e => ['place', 'park', 'conservancy'].includes(e.entityType)
+    && entityNames(e).some(name => normalized(name) === parent)).some(region =>
+      anchors.some(anchor => entityNames(region).some(regionName => {
+        const name = probeIdentityText(anchor), geography = probeIdentityText(regionName);
+        if (!geography || !(` ${name} `).includes(` ${geography} `)) return false;
+        const property = name.replace(geography, '').replace(/\b(?:hotel|lodge|safari|camp|resort|the)\b/g, '').replace(/\s+/g, ' ').trim();
+        return property.length >= 4 && property === leaf;
+      })));
 }
 
 function entityProbeImageEvidence(candidate = {}) {
@@ -1812,6 +1841,8 @@ async function hierarchyRetryDelay(delayMs, signal, attempts) {
   });
 }
 
+const mappingWrites = new Map();
+
 export function createKnowledgeScopeResolver({ baseUrl, root, fetchImpl = fetch, signal, hierarchyLoader = loadKnowledgeHierarchy,
   hierarchyTimeoutMs = HIERARCHY_TOTAL_TIMEOUT_MS, hierarchyRetryDelayMs = HIERARCHY_RETRY_DELAY_MS } = {}) {
   const mappingPath = root ? path.join(root, "output", "knowledge-node-mappings.json") : "";
@@ -1822,7 +1853,7 @@ export function createKnowledgeScopeResolver({ baseUrl, root, fetchImpl = fetch,
   let hierarchyTechnicalRetries = 0;
   let hierarchyStatus = "not_started";
   let mappingsPromise;
-  let writeTail = Promise.resolve();
+  let cacheWriteFailure = null;
   const hierarchy = () => {
     if (hierarchyPromise) return hierarchyPromise;
     // A failed in-flight Promise is cleared, but the exhausted batch budget
@@ -1863,19 +1894,26 @@ export function createKnowledgeScopeResolver({ baseUrl, root, fetchImpl = fetch,
     : Promise.resolve({}));
   const persist = async (key, resolution) => {
     if (!mappingPath || !key || resolution?.status !== "resolved") return;
-    writeTail = writeTail.then(async () => {
-      const current = await mappings();
+    const local = await mappings();
+    local[key] = { nodeId: resolution.nodeIds[0], fullPath: resolution.fullPath, updatedAt: new Date().toISOString() };
+    const write = (mappingWrites.get(mappingPath) || Promise.resolve()).catch(() => {}).then(async () => {
+      const current = await readFile(mappingPath, "utf8").then(JSON.parse).catch(() => ({}));
       current[key] = { nodeId: resolution.nodeIds[0], fullPath: resolution.fullPath, updatedAt: new Date().toISOString() };
       await mkdir(path.dirname(mappingPath), { recursive: true });
-      const temporary = `${mappingPath}.${process.pid}.tmp`;
-      await writeFile(temporary, `${JSON.stringify(current, null, 2)}\n`, "utf8");
-      await rename(temporary, mappingPath);
+      const temporary = `${mappingPath}.${process.pid}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, `${JSON.stringify(current, null, 2)}\n`, "utf8");
+        await rename(temporary, mappingPath);
+      } finally { await unlink(temporary).catch(() => {}); }
     });
-    await writeTail;
+    mappingWrites.set(mappingPath, write);
+    try { await write; }
+    catch (error) { cacheWriteFailure = { code: error?.code || "cache_write_failed" }; }
+    finally { if (mappingWrites.get(mappingPath) === write) mappingWrites.delete(mappingPath); }
   };
   return {
     hierarchyStats() {
-      return { status: hierarchyStatus, attempts: hierarchyAttempts, technicalRetries: hierarchyTechnicalRetries,
+      return { status: hierarchyStatus, attempts: hierarchyAttempts, technicalRetries: hierarchyTechnicalRetries, ...(cacheWriteFailure ? { cacheWriteFailure } : {}),
         cycles: hierarchyCycles, failureCode: hierarchyStatus === "failed" ? hierarchyError?.code || null : null };
     },
     async resolve(slot, options = {}) {

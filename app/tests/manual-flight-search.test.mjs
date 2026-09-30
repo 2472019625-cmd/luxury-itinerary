@@ -90,3 +90,14 @@ test('saved bush airport pose alternatives use the same fact-bound manual recove
   slot.primaryVisualSubject='草原飞机在专属机场起降或停靠';
   assert.equal(prepareExplicitImageSearchSlot(slot,{plan}).needsUserAction,true);
 });
+
+test('airport in the Chinese action is an ordinary pose as well as airport in the visual', () => {
+  const slot = flightTarget(), plan = flightPlan();
+  slot.primaryVisualSubject = '草原小飞机在草原机场降落或起飞';
+  slot.queryCore = { subject: '草原小飞机', action: '在草原机场降落或起飞', identity: '', subjectEn: 'light aircraft', actionEn: 'landing or taking off on grass airstrip', identityEn: '' };
+  const before = structuredClone(slot);
+  assert.equal(prepareExplicitImageSearchSlot(slot, { plan }).needsUserAction, false);
+  assert.deepEqual(slot, before);
+  slot.queryCore.action += '观光';
+  assert.equal(prepareExplicitImageSearchSlot(slot, { plan }).needsUserAction, true);
+});

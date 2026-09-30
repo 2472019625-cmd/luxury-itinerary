@@ -134,6 +134,27 @@ test("Visual Card Writer receives existing validation anchors in the same reques
   assert.equal(tasks[0].facts.titleRetention, undefined);
 });
 
+test('overfull hotel tags get one subset-only correction; good siblings and facts stay unchanged', async () => {
+  for (const addNewFact of [false, true]) {
+    const tags = { ...task('tags', 'hotels.0.proofPoints', 'hotel_proof_points'), outputSchema: { type: 'array', maxItems: 3, items: { type: 'string', minLength: 1 } } };
+    const sibling = task('copy', 'hotels.0.editorialCopy', 'hotel');
+    let calls = 0;
+    const result = await runCopyWriterSkill({ tasks: [tags, sibling], requestJson: async ({ messages }) => {
+      calls++;
+      if (calls === 1) return { json: { results: [
+        { targetId: tags.targetId, targetPath: tags.targetPath, value: ['河岸', '帐篷房', '露台', '保护区'] },
+        { targetId: sibling.targetId, targetPath: sibling.targetPath, value: '原有住宿说明。' },
+      ] } };
+      const input = JSON.parse(messages[1].content);
+      assert.deepEqual(input.tasks.map(t => t.targetId), ['tags']);
+      return { json: { results: [{ targetId: tags.targetId, targetPath: tags.targetPath, value: addNewFact ? ['虚构管家服务'] : ['帐篷房', '河岸', '保护区'] }] } };
+    }});
+    assert.equal(calls, 2);
+    assert.equal(result.results.find(r => r.targetId === 'tags').status, addNewFact ? 'failed' : 'success');
+    assert.equal(result.results.find(r => r.targetId === 'copy').value, '原有住宿说明。');
+  }
+});
+
 test("visual composition cannot supply commitment evidence and is separate from actual Writer facts", async () => {
   const input = { ...task("visual-boundary", "simpleImageSlotBindings.visual_boundary", "visual_card"),
     facts: { visualSubject: "保证看到大象的游猎画面", daySourceFacts: "参加游猎，有机会观察动物。", status: "included" },

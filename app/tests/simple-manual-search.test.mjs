@@ -28,6 +28,64 @@ const backgroundTarget = () => ({
   plannerValidationIssues: [{ code: 'ambiguous_visual_subject' }],
 });
 
+const eventTarget = () => ({
+  ...duplicateTarget(), location: '乔莫·肯雅塔国际机场', destination: '肯尼亚',
+  subject: '乔莫·肯雅塔国际机场送机离境', primaryVisualSubject: '乔莫·肯雅塔国际机场送机离境',
+  visualGoal: '展示送机离境收尾',
+  visualContext: { dayIndex: 0, sourceExperience: '酒店早餐后，根据国际航班时间专人送机。' },
+  queryCore: { subject: '机场送别', action: '', identity: '', subjectEn: 'airport farewell', actionEn: '', identityEn: '' },
+  fidelityQuery: '机场 送机 离境', alternateQueries: ['airport departure transfer'],
+  plannerValidationIssues: [{ code: 'abstract_visual_subject' }],
+});
+
+test('explicit event search preserves the event and safety constraints without inventing a new scene', () => {
+  const slot = eventTarget(), before = structuredClone(slot);
+  const prepared = prepareExplicitImageSearchSlot(slot);
+  assert.equal(prepared.needsUserAction, false);
+  assert.equal(prepared.manualSearchOverride.reason, 'explicit_event_search');
+  assert.ok(prepared.searchIntent.length >= 2);
+  for (const key of ['queryCore', 'visualContext', 'primaryVisualSubject', 'location', 'locationRole', 'exactIdentityRequired', 'required']) {
+    assert.deepEqual(prepared[key], slot[key]);
+  }
+  assert.deepEqual(slot, before);
+  for (const code of ['image_source_binding_unproven', 'image_exact_identity_invalid', 'hotel_identity_required', 'ambiguous_visual_subject', 'unknown_future_error']) {
+    assert.equal(prepareExplicitImageSearchSlot({ ...slot, plannerValidationIssues: [...slot.plannerValidationIssues, { code }] }).needsUserAction, true);
+  }
+  assert.equal(prepareExplicitImageSearchSlot({ ...slot, queryCore: {} }).needsUserAction, true);
+  assert.equal(prepareExplicitImageSearchSlot({ ...slot, exactIdentityRequired: true }).needsUserAction, true);
+});
+
+test('query-only planning errors can be normalized on explicit search without changing Core', () => {
+  const slot = duplicateTarget(); slot.plannerValidationIssues = [{ code: 'scope_only_location_in_query' }];
+  const result = prepareExplicitImageSearchSlot(slot);
+  assert.equal(result.needsUserAction, false);
+  assert.equal(result.manualSearchOverride.reason, 'explicit_query_repair');
+  assert.doesNotMatch(result.fidelityQuery, /塞伦盖蒂/);
+  assert.deepEqual(result.queryCore, slot.queryCore);
+});
+
+for (const multi of [false, true]) test(`abstract event stays blocked automatically but explicit ${multi ? 'batch' : 'single'} search executes Knowledge and Web`, async t => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const plan = installTarget(value, eventTarget()), target = plan.imageSlots.find(s => s.slotId === 'image:day:1:primary');
+  const stages = [];
+  const options = { sourceMode: 'knowledge_first', knowledgeScopeNodeIds: ['test-scope'], knowledgeQueriesPerSlot: 1,
+    adapters: { searchKnowledgeImages: async () => { stages.push('knowledge'); return { status: 'completed', records: [], candidates: [] }; },
+      searchWebBatch: async () => { stages.push('web'); return []; }, searchCommonsImages: async () => [] } };
+  const automatic = await runImageSearchSkill({ ...options, root: value.root, slots: [target] });
+  assert.equal(automatic.results[0].technicalStatus, 'planner_slot_unresolved');
+  assert.deepEqual(stages, []);
+  const siblings = value.store.getFinalResult(value.projectId, value.executionRunId).imageExecution.results.filter(r => r.slotId !== target.slotId);
+  await (multi ? researchSimpleImageSlots : researchSimpleImageSlot)({ ...value, slotId: target.slotId, slotIds: [target.slotId],
+    imageOptions: options, runImage: runImageSearchSkill, render });
+  assert.equal(stages[0], 'knowledge'); assert.ok(stages.includes('web'));
+  const final = value.store.getFinalResult(value.projectId, value.executionRunId);
+  const result = final.imageExecution.results.find(r => r.slotId === target.slotId);
+  assert.notEqual(result.technicalStatus, 'planner_slot_unresolved');
+  assert.equal(result.pipelineEvidence.searchTrace.planner.manualSearchOverride.reason, 'explicit_event_search');
+  assert.deepEqual(final.imageExecution.results.filter(r => r.slotId !== target.slotId), siblings);
+  assert.deepEqual(value.store.getPlan(value.projectId, plan.planId), plan);
+});
+
 function installTarget(value, target = duplicateTarget()) {
   const project = value.store.getProject(value.projectId);
   const original = value.store.getPlan(value.projectId, project.activePlanId);

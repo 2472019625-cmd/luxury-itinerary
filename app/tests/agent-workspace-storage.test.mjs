@@ -6,6 +6,35 @@ import test from "node:test";
 import { AgentPlanStore } from "../server/agent-plan-store.mjs";
 import { createAgentPlannerServer } from "../server/agent-planner-app.mjs";
 
+test("首页以手动补齐后的项目状态为准，终止的旧任务不能覆盖完成状态", async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "catalog-completion-"));
+  const simpleStore = new AgentPlanStore(path.join(root, "simple"));
+  const runtime = createAgentPlannerServer({ port: 0, workspaceRoot: path.join(root, "agent", "projects"),
+    simpleStore, catalogFile: path.join(root, "catalog.sqlite"), cleanupIntervalMs: 0 });
+  await new Promise(resolve => runtime.server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise(resolve => runtime.server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  simpleStore.createProject({ projectId: "completed-trip", ownerId: "test-owner", flowKind: "simple_skill_v1", status: "complete", progress: 100 });
+  runtime.catalog.create("test-owner", { id: "card", agentProjectId: "completed-trip", flowKind: "simple_skill_v1", workflowStage: "partial" });
+  const url = `http://127.0.0.1:${runtime.server.address().port}/api/agent-workspace/projects`;
+  const read = async () => (await (await fetch(url, { headers: { "x-agent-local-user": "test-owner" } })).json()).projects[0];
+  runtime.simpleJobs.set("completed-trip", { status: "awaiting_user_action" });
+  assert.equal((await read()).runtimeStatus, "complete");
+  for (const status of ["partial", "cancelled", "failed"]) {
+    simpleStore.updateProject("completed-trip", { status });
+    runtime.simpleJobs.set("completed-trip", { status: "complete" });
+    assert.equal((await read()).runtimeStatus, status);
+  }
+  simpleStore.updateProject("completed-trip", { status: "complete" });
+  runtime.simpleJobs.set("completed-trip", { status: "running" });
+  assert.equal((await read()).runtimeStatus, "running");
+  runtime.simpleJobs.delete("completed-trip");
+  simpleStore.updateProject("completed-trip", { status: "running" });
+  assert.equal((await read()).runtimeStatus, "interrupted");
+  simpleStore.updateProject("completed-trip", { status: "ready_for_execution" });
+  runtime.simpleJobs.set("completed-trip", { status: "failed" });
+  assert.equal((await read()).runtimeStatus, "failed", "尚未落盘的失败仍须显示");
+});
+
 test("服务端目录隔离用户；移入回收站停止制作；恢复和永久清理原始资料", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "agent-workspace-storage-"));
   const simpleStore = new AgentPlanStore(path.join(root, "simple"));

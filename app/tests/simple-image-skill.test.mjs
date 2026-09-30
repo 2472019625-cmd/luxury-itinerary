@@ -3044,7 +3044,7 @@ test("知识库 preview 审核完整但原件不可用时同批转 Web，审核�
     { node_id: "kenya", formal_name: "Kenya", parent_node_id: "root" },
     { node_id: "nairobi", formal_name: "Nairobi", parent_node_id: "kenya" },
   ]);
-  for (const mode of ["resolution", "download", "audit-incomplete"]) {
+  for (const mode of ["resolution", "download", "audit-incomplete", "watermark-conflict"]) {
     const root = await mkdtemp(path.join(os.tmpdir(), `knowledge-original-web-${mode}-`));
     t.after(() => rm(root, { recursive: true, force: true }));
     let webCalls = 0;
@@ -3087,6 +3087,10 @@ test("知识库 preview 审核完整但原件不可用时同批转 Web，审核�
           return { ...candidate, filePath, publicUrl: `${publicPrefix}/${path.basename(filePath)}`, sha256: `original-web-${mode}-${imageIndex}`, width: 1400, height: 900 };
         },
         judgeCandidatesBatch: async ({ candidates }) => candidates.map((candidate) => {
+          if (mode === 'watermark-conflict' && candidate.imageUrl.includes('/preview/')) return completeAudit(candidate, {
+            watermarkFree: false, coreActionMatch: false, eligible: true, activityMatch: true,
+            auditContract: {complete:false,missingFields:['coreActionMatch','eligible'],repairAttempted:true},
+          });
           if (mode === "audit-incomplete" && candidate.imageUrl.includes("/preview/") && candidate.title.includes("-2.")) return { candidateId: candidate.candidateId, actualSubject: "visitor feeding giraffe" };
           return completeAudit(candidate, { actualSubject: "visitor feeding giraffe", score: 95, relevance: 95 });
         }),
@@ -3103,7 +3107,8 @@ test("知识库 preview 审核完整但原件不可用时同批转 Web，审核�
       assert.equal(imageResult.status, "success");
       assert.match(imageResult.selected.sourcePage, /example\.com/);
       assert.ok(imageResult.selected.localUrl);
-      assert.equal(imageResult.pipelineEvidence.sourceFallback.reason, mode === "resolution" ? "knowledge_original_resolution_fallback" : "knowledge_original_download_fallback");
+      assert.equal(imageResult.pipelineEvidence.sourceFallback.reason, mode === 'watermark-conflict' ? 'entity_directory_no_match' : mode === "resolution" ? "knowledge_original_resolution_fallback" : "knowledge_original_download_fallback");
+      if (mode === 'watermark-conflict') assert.ok(imageResult.candidates.some(c => c.rejection === 'watermark'), '原水印候选保留明确拒绝');
       assert.equal(imageResult.candidates[0].originalDownloaded, false);
     }
   }
