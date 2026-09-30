@@ -163,7 +163,7 @@ test("编辑页以紧凑结构栏和右侧待处理视图替代底部重复提�
   assert.match(editor, /structure-compact/);
   assert.match(editor, /editor-issues-trigger/);
   assert.match(editor, /editor-issues-view/);
-  assert.match(editor, /setFinalIssuesOpen\(false\);[\s\S]{0,500}selectBlockingImage\(item\)/);
+  assert.match(editor, /setFinalIssuesOpen\(false\);[\s\S]{0,500}selectBlockingImage\(item, true\)/);
   assert.match(editor, /setDayInfoOpen\(true\)/);
   assert.match(editor, /pendingIssueFocusRef/);
   assert.doesNotMatch(editor, /正式下载还差|可编辑草稿已生成|className=\{`editor-final-step/);

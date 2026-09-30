@@ -71,3 +71,18 @@ test("服务端逐项保存：只补空项、过期替换拒绝、来源不进�
   assert.equal(actual.sourceExcerpt, "公开网页摘要");
   assert.equal(selectCustomerRenderData({ hotels: [{ id: "h1", factRows: [actual] }] }).hotels[0].factRows[0].sourceUrl, undefined);
 });
+
+test("空白酒店事实可由定制师明确确认留空，但不能清掉已有内容", async (t) => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const current = value.store.getFinalResult(value.projectId, value.executionRunId);
+  current.data.hotels = [{ id: "h1", officialName: "Example Lodge", factRows: [
+    { key: "location", label: "位置", text: "保护区内", status: "success" },
+    { key: "rooms", label: "客房", text: "", status: "not_found" },
+  ] }];
+  value.store.saveFinalResult(value.projectId, value.executionRunId, current);
+  const render = async ({ mode }) => ({ status: "success", mode, outputPath: "test.png" });
+  const saved = await saveSimpleHotelFactRow({ ...value, hotelIndex: 0, hotelId: "h1", key: "rooms", text: "", mode: "confirm_blank", render });
+  assert.equal(saved.row.status, "confirmed_empty");
+  assert.equal(saved.row.confirmedByUser, true);
+  await assert.rejects(saveSimpleHotelFactRow({ ...value, hotelIndex: 0, hotelId: "h1", key: "location", text: "", mode: "confirm_blank", render }), { code: "hotel_fact_not_blank" });
+});
