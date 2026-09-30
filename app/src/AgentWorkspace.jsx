@@ -26,6 +26,8 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   const daySaveTimer = useRef(null);
   const hotelSaveTimers = useRef(new Map());
   const hotelSaveInflight = useRef(new Map());
+  const hotelPendingKeys = useRef(new Set());
+  const [hotelFactsSaving, setHotelFactsSaving] = useState(false);
   const [user] = useState(() => {
     if (window.__sheyouServerUser) return window.__sheyouServerUser;
     const session = readStorage(AGENT_STORAGE.session, null);
@@ -46,7 +48,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
         const next = await readJson(await fetch(`/api/simple/projects/${projectId}/manual-images`));
         if (!stopped) setPayload(current => current?.manualRevision === next.manualRevision ? { ...next, project: { ...next.project, data: current.project.data } } : current);
       } catch (failure) { if (!stopped) setError(`图片已保存，成品检查状态获取失败：${failure.message}`); }
-    }, 2000);
+    }, 1000);
     return () => { stopped = true; clearTimeout(timer); };
   }, [payload, projectId]);
   const request = async (slotId, action, body) => {
@@ -154,22 +156,34 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   };
   const saveHotelFact = async ({ hotelId, hotelIndex, key, text, mode = "manual", expectedText, source }) => {
     const next = await readJson(await fetch(`/api/simple/projects/${projectId}/hotel-facts/${hotelIndex}/${key}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ hotelId, text, mode, expectedText, source }), signal: AbortSignal.timeout(60000) }));
-    if (mode === "replace") setPayload((current) => mergeHotelRows(current, hotelId, [next.row], next));
+    if (mode === "replace" || mode === "confirm_blank") setPayload((current) => mergeHotelRows(current, hotelId, [next.row], next));
     else setPayload((current) => ({ ...current, manualRevision: next.manualRevision || current.manualRevision, renderPending: next.renderPending ?? current.renderPending }));
     setError("");
     return next;
   };
   const persistHotelFact = ({ hotelId, hotelIndex, key, text }) => {
     const timerKey = `${hotelId}:${key}`;
+    hotelPendingKeys.current.add(timerKey);
+    setHotelFactsSaving(true);
     clearTimeout(hotelSaveTimers.current.get(timerKey)?.timer);
     const input = { hotelId, hotelIndex, key, text };
     const timer = setTimeout(() => {
       hotelSaveTimers.current.delete(timerKey);
       const saving = saveHotelFact(input);
       hotelSaveInflight.current.set(timerKey, saving);
-      saving.then(() => { if (hotelSaveInflight.current.get(timerKey) === saving) hotelSaveInflight.current.delete(timerKey); }, (failure) => { if (hotelSaveInflight.current.get(timerKey) === saving) hotelSaveInflight.current.delete(timerKey); setError(`酒店信息保存失败：${failure.message}`); });
+      saving.then(() => { if (hotelSaveInflight.current.get(timerKey) === saving) hotelSaveInflight.current.delete(timerKey); if (!hotelSaveTimers.current.has(timerKey)) hotelPendingKeys.current.delete(timerKey); setHotelFactsSaving(hotelPendingKeys.current.size > 0); }, (failure) => { if (hotelSaveInflight.current.get(timerKey) === saving) hotelSaveInflight.current.delete(timerKey); setError(`酒店信息保存失败：${failure.message}`); });
     }, 500);
     hotelSaveTimers.current.set(timerKey, { timer, input });
+  };
+  const confirmHotelFactBlank = async ({ hotelId, hotelIndex, key }) => {
+    await flushHotelFact(hotelId, key);
+    const timerKey = `${hotelId}:${key}`;
+    hotelPendingKeys.current.add(timerKey);
+    setHotelFactsSaving(true);
+    const result = await saveHotelFact({ hotelId, hotelIndex, key, text: "", mode: "confirm_blank" });
+    hotelPendingKeys.current.delete(timerKey);
+    setHotelFactsSaving(hotelPendingKeys.current.size > 0);
+    return result;
   };
   const persistHotelRegion = ({ hotelId, hotelIndex, region }) => {
     const timerKey = `${hotelId}:region`;
@@ -198,6 +212,8 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     clearTimeout(pending.timer);
     hotelSaveTimers.current.delete(timerKey);
     await saveHotelFact(pending.input);
+    hotelPendingKeys.current.delete(timerKey);
+    setHotelFactsSaving(hotelPendingKeys.current.size > 0);
   };
   const searchHotelFact = async (request) => {
     await Promise.all((request.keys || []).map((key) => flushHotelFact(request.hotelId, key)));
@@ -231,6 +247,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     onProject={(project) => setPayload((current) => ({ ...current, project }))}
     onPersistDayEditor={persistDayEditor}
     onPersistHotelFact={persistHotelFact}
+    onConfirmHotelFactBlank={confirmHotelFactBlank}
     onPersistHotelRegion={persistHotelRegion}
     onPersistHotelStay={persistHotelStay}
     onPersistImageCrop={persistImageCrop}
@@ -249,6 +266,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     onVersions={() => payload.canEnterFinal && setScreen("versions")}
     openPickerOnImageClick
     canOpenVersions={payload.canEnterFinal}
+    renderPending={payload.renderPending || hotelFactsSaving}
     blockingItems={payload.blockingItems || []}
     issueActionState={repairState}
     initialSelection={editorSelectionForSlot(payload.project, firstUnresolved)}

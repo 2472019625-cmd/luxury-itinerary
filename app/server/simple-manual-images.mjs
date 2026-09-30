@@ -837,10 +837,11 @@ export async function saveSimpleHotelFactRow({ store, root, projectId, hotelInde
   const currentText = String(current?.text || "");
   if (mode === "fill" && currentText.trim()) return { applied: false, row: current || null };
   if (mode === "replace" && currentText !== String(expectedText ?? "")) throw Object.assign(new Error("这项文字已被修改，请重新查找后再替换"), { code: "hotel_fact_changed" });
-  if (!["manual", "fill", "replace"].includes(mode)) throw Object.assign(new Error("保存方式无效"), { code: "hotel_fact_mode_invalid" });
+  if (!["manual", "fill", "replace", "confirm_blank"].includes(mode)) throw Object.assign(new Error("保存方式无效"), { code: "hotel_fact_mode_invalid" });
   const value = String(text || "").trim().slice(0, 2000);
-  if (mode !== "manual" && (!value || !source?.sourceUrl)) throw Object.assign(new Error("没有可核验的候选文字"), { code: "hotel_fact_evidence_missing" });
-  const row = { key, label: HOTEL_FACT_LABELS[key], text: value, status: value ? "success" : "not_found", ...(mode === "manual" ? { confirmedByUser: true } : { sourceUrl: source.sourceUrl, sourceClass: source.sourceClass || "search_highlight", sourceExcerpt: source.sourceExcerpt || "", checkedAt: source.checkedAt || new Date().toISOString(), ...(mode === "replace" ? { confirmedByUser: true } : {}) }) };
+  if (mode === "confirm_blank" && (value || currentText.trim())) throw Object.assign(new Error("仅可确认尚无内容的字段留空"), { code: "hotel_fact_not_blank" });
+  if (mode !== "manual" && mode !== "confirm_blank" && (!value || !source?.sourceUrl)) throw Object.assign(new Error("没有可核验的候选文字"), { code: "hotel_fact_evidence_missing" });
+  const row = { key, label: HOTEL_FACT_LABELS[key], text: value, status: mode === "confirm_blank" ? "confirmed_empty" : value ? "success" : "not_found", ...(["manual", "confirm_blank"].includes(mode) ? { confirmedByUser: true } : { sourceUrl: source.sourceUrl, sourceClass: source.sourceClass || "search_highlight", sourceExcerpt: source.sourceExcerpt || "", checkedAt: source.checkedAt || new Date().toISOString(), ...(mode === "replace" ? { confirmedByUser: true } : {}) }) };
   const nextData = structuredClone(context.result.data);
   const nextHotel = nextData.hotels[index];
   nextHotel.factRows = [...(nextHotel.factRows || []).filter((item) => item?.key !== key), row];
