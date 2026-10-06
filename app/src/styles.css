@@ -331,6 +331,8 @@ img { display: block; max-width: 100%; }
 .hotel-proof-points span { display: inline-flex; align-items: center; }
 .hotel-proof-points span:not(:last-child)::after { content: "·"; margin: 0 14px; color: rgba(178,139,51,.55); }
 .feature-footnote { max-width: 1540px; margin: 52px auto 0; padding: 26px 34px; border-top: 1px solid rgba(178,139,51,.28); border-bottom: 1px solid rgba(178,139,51,.18); color: var(--muted); text-align: center; font-size: 24px; font-weight: 300; line-height: 1.7; }
+.hotels-section .feature-footnote,
+.transport-section .feature-footnote { font-size: 32px; }
 .transport-heading { display: flex; align-items: center; gap: 24px; }
 .transport-heading small { display: block; margin-bottom: 10px; color: var(--gold-deep); font-size: 36px; font-weight: 700; line-height: 1.35; }
 .transport-icon { flex: 0 0 auto; width: 78px; height: 78px; display: grid; place-items: center; border-radius: 50%; background: linear-gradient(145deg, #d7b47c, #9a672a); }
