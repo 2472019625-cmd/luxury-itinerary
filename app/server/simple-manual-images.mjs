@@ -275,7 +275,13 @@ function blockingItems(items = [], data = {}, plan = {}, renderResult = {}, revi
       const targetPath = item.targetPath || task?.targetPath || "";
       const slotId = task?.layoutHints?.slotId || (item.id.startsWith("copy:visual:") ? item.id.slice("copy:visual:".length) : "");
       const placementFailure = ["target_path_mismatch", "unauthorized_target_path"].includes(item.error?.code);
-      return { kind: "copy", id: item.id, required: item.required === true, targetPath, slotId, label: copyLocation(targetPath, data, slotId, plan), message: placementFailure ? "文案返回的对应位置不一致，尚未保存到此处。请单独重新生成这一项，也可手动填写后确认完成。" : slotId ? "这张体验卡片的文案尚未生成完成，可单独重新生成，也可手动填写后确认完成。" : "这段文案尚未生成完成，可单独重新生成，也可手动填写后确认完成。", action: "retry_copy" };
+      const existing = manualCopyValue(data, { id: item.id, targetPath, slotId });
+      const hasText = value => typeof value === "string" ? Boolean(value.trim()) : Array.isArray(value) ? value.some(hasText) : value && typeof value === "object" ? Object.values(value).some(hasText) : false;
+      const checkedFailure = ["unsupported_copy_commitment", "invalid_output_schema", "invalid_output_structure"].includes(item.error?.code);
+      const message = placementFailure ? "文案返回的对应位置不一致，尚未保存到此处。请单独重新生成这一项，也可手动填写后确认完成。"
+        : hasText(existing) ? checkedFailure ? "此处已有文字，新生成的文案未通过内容检查，尚未替换。可重新生成，或核实当前文字后保存并确认完成。" : "此处已有文字，本次文案生成未完成。可重新生成，或核实当前文字后保存并确认完成。"
+        : "这段文案尚未生成完成，可单独重新生成，也可手动填写后确认完成。";
+      return { kind: "copy", id: item.id, required: item.required === true, targetPath, slotId, label: copyLocation(targetPath, data, slotId, plan), message, action: "retry_copy" };
     }
     if (item.kind === "image") {
       if (item.technicalStatus === "identity_evidence_pending_confirmation") return { kind: "image", id: item.id, slotId: item.id, label: imageLocation(item, data, plan), message: "图片已预填到草稿，具体实体身份尚未证实。请确认这张图，或为可选位置移除图片。", action: "handle_image" };

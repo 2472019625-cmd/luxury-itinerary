@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { addDays, isUsableFinalImageSource, mapDaysFromStart, removeExperienceReferences, synchronizeExperienceStatus, validateItineraryFacts } from "./lib/itineraryRules.js";
 import { applyImageToSlot, canManuallyChooseImageCandidate, canDisplayImageCandidate, canDisplayImageCandidateForSlot, modelApprovedImageNotice, IMAGE_REVIEW_STATE, pendingImageReviewSlots } from "./lib/imageReviewPolicy.js";
-import { groupPendingItems, hotelFactPendingItems, pendingItemsBlockDownload } from "./lib/editorPending.js";
+import { daySpotIssueSelection, groupPendingItems, hotelFactPendingItems, pendingItemsBlockDownload } from "./lib/editorPending.js";
 import { buildLayoutImageSlots, getSlotImage, listImagePlacements, moveImageToSlot, setSlotImage } from "./lib/imageSlots.js";
 import { ImageCropEditor, ImageSlotPreview } from './ImageCropEditor.jsx';
 import { deriveProjectThumbnail } from "./lib/projectThumbnail.js";
@@ -1089,7 +1089,8 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
   };
   const previewNodeForSelection = (value = selection) => matchingDataNode(previewRef.current, "data-edit-slot-id", value.slotId)
     || matchingDataNode(previewRef.current, "data-edit-spot-id", value.spotId)
-    || previewRef.current?.querySelector(`[data-edit-path="${selectionPath(value)}"]`);
+    || previewRef.current?.querySelector(`[data-edit-path="${selectionPath(value)}"]`)
+    || (value.module === "days" ? previewRef.current?.querySelector(`[data-edit-path="days.${value.itemIndex}"]`) : null);
   const inspectorNodeForSelection = (value = selection) => matchingDataNode(inspectorRef.current, "data-day-slot-id", value.slotId)
     || matchingDataNode(inspectorRef.current, "data-day-spot-id", value.spotId);
   const choose = (next, nextTab) => {
@@ -1112,8 +1113,10 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     if (match) {
       const dayIndex = Number(match[1]);
       const spotIndex = Number(match[2]);
-      const spotId = project.data.days?.[dayIndex]?.spots?.[spotIndex]?.id || null;
-      return choose({ module:'days', itemIndex:dayIndex, subItemIndex:spotIndex, imageIndex:0, spotId, slotId:null }, 'copy');
+      const next = daySpotIssueSelection(project.data, dayIndex, spotIndex);
+      if (!next) return false;
+      pendingIssueFocusRef.current = next.slotId ? "图片下方文字" : "体验介绍";
+      return choose(next, 'copy');
     }
     match = targetPath.match(/^days\.(\d+)/);
     if (match) return selectModule('days', Number(match[1]));
@@ -1133,6 +1136,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
     if (match) return selectModule('dining', Number(match[1]));
     match = targetPath.match(/^transport\.(\d+)/);
     if (match) return selectModule('transport', Number(match[1]));
+    if (targetPath === 'title' || targetPath === 'subtitle') return selectModule('cover');
     if (['cover', 'overview', 'hotels', 'dining', 'transport', 'booking', 'security', 'notes', 'footer'].includes(targetPath)) return selectModule(targetPath);
     if (targetPath === 'highlights') return selectModule('highlights');
     if (targetPath === 'expenses') return selectModule('expenses');
@@ -1504,6 +1508,10 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
           {active && <div className="day-experience-fields">{spot && <><Field label="体验名称" value={spot.name || ""} onChange={(value) => updateDayData((next) => { const current = next.days[selection.itemIndex].spots[spotIndex]; removeExperienceReferences(next, current.name); current.name = value; synchronizeExperienceStatus(next, selection.itemIndex, spotIndex, current.status || "pending"); }, `spot-name-${spot.id}`)} /><div className="day-status-field"><span>包含情况</span><div>{dayStatusOptions.map(([value, label]) => <button key={value} className={(spot.status || "pending") === value ? "active" : ""} onClick={() => updateDayData((next) => { synchronizeExperienceStatus(next, selection.itemIndex, spotIndex, value); }, `spot-status-${spot.id}`)}>{label}</button>)}</div></div><Field label="图片下方文字" rows={5} value={spot.experience || spot.description || ""} onChange={(value) => updateDayData((next) => { next.days[selection.itemIndex].spots[spotIndex].description = value; delete next.days[selection.itemIndex].spots[spotIndex].experience; }, `spot-copy-${spot.id}`)} /><Field label="补充提醒" rows={3} value={spot.reminder || ""} onChange={(value) => updateDayData((next) => { next.days[selection.itemIndex].spots[spotIndex].reminder = value; }, `spot-reminder-${spot.id}`)} /></>}{selectedDaySlotTools}{binding.manualEditorCard === true && spot && <button className="day-delete-experience" onClick={() => deleteExperienceCard(spot, spotIndex, slot.slotId)}><UiIcon name="trash" />删除这张体验卡片</button>}</div>}
         </article>;
       })}</div>
+      {selectedSpot && !selection.slotId && <div className="day-experience-fields" data-day-spot-id={selectedSpot.id}>
+        <strong>{selectedSpot.name || "行程体验"}</strong>
+        <Field label="体验介绍" rows={5} value={selectedSpot.experience || selectedSpot.description || ""} onChange={(value) => updateDayData((next) => { next.days[selection.itemIndex].spots[selectedSpotIndex].description = value; delete next.days[selection.itemIndex].spots[selectedSpotIndex].experience; }, `spot-copy-${selectedSpot.id || selectedSpotIndex}`)} />
+      </div>}
     </section>
     <section className={`day-editor-section day-module-settings ${daySettingsOpen ? "is-open" : ""}`}><button className="day-section-toggle" onClick={() => setDaySettingsOpen((value) => !value)} aria-expanded={daySettingsOpen}><span><UiIcon name="city" /><strong>模块设置</strong></span><em>{daySettingsOpen ? "收起" : "展开"}</em></button>{daySettingsOpen && <div className="day-settings-content"><p>每日行程是客户成品的固定模块，不能隐藏。</p><label className="switch"><input type="checkbox" checked disabled /><span /></label></div>}</section>
     <input ref={fileRef} hidden type="file" accept="image/*" onChange={(event) => { uploadLocalImage(event.target.files?.[0]); event.target.value = ""; }} />
@@ -1531,7 +1539,7 @@ export function Editor({ project, ItineraryComponent, onProject, onPersistDayEdi
         return selectBlockingImage({ slotId: visualSlotId });
       }
       if (/^days\.\d+/.test(item.targetPath || "")) setDayInfoOpen(true);
-      pendingIssueFocusRef.current = /^days\.\d+\.spots\./.test(item.targetPath || "") ? "图片下方文字" : /^days\.\d+\.theme$/.test(item.targetPath || "") ? "每日主题" : /^days\.\d+/.test(item.targetPath || "") ? "当日行程" : null;
+      pendingIssueFocusRef.current = item.targetPath === "title" ? "封面标题" : item.targetPath === "subtitle" ? "封面副标题" : item.targetPath === "notes" ? "内容（每行一条）" : /^days\.\d+\.theme$/.test(item.targetPath || "") ? "每日主题" : /^days\.\d+/.test(item.targetPath || "") ? "当日行程" : null;
       return selectIssueTarget(item.targetPath);
     }
     if (item.kind === "renderer" && item.targetPath) return selectIssueTarget(item.targetPath);

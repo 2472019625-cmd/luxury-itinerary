@@ -43,3 +43,16 @@ export function groupPendingItems(items = [], imageReview = { slots: [] }) {
 export function pendingItemsBlockDownload(items = []) {
   return items.some(item => item.blocking !== false);
 }
+
+export function daySpotIssueSelection(data, dayIndex, spotIndex) {
+  const spot = data.days?.[dayIndex]?.spots?.[spotIndex];
+  if (!spot) return null;
+  const entry = Object.entries(data.simpleImageSlotBindings || {}).find(([, binding]) => {
+    if (binding.module !== "day" || binding.useSpotCopy === false) return false;
+    const match = binding.fieldPath?.match(/^days\.(\d+)\.spots\.(\d+)\.images\.(\d+)$/);
+    if (!match || Number(match[1]) !== dayIndex) return false;
+    return binding.spotId ? binding.spotId === spot.id : Number(match[2]) === spotIndex;
+  });
+  return { module: "days", itemIndex: dayIndex, subItemIndex: spotIndex, imageIndex: entry?.[1].imageIndex || 0,
+    spotId: spot.id || null, slotId: entry?.[0] || null };
+}

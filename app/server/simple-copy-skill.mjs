@@ -346,6 +346,15 @@ export function withVisualCardTitleContract(task) {
   };
 }
 
+function sourcedPaidConfirmation(output, match, source) {
+  if (!/^(?:需|需要)/.test(clean(match[0])) || !/确认$/.test(match[0])) return false;
+  if (!/optional_paid|自费|另付|额外(?:收费|付费)/.test(source)) return false;
+  const before = output.slice(0, match.index);
+  const sentence = before.split(/[。！？；\n]/).at(-1) + output.slice(match.index).split(/[。！？；\n]/)[0];
+  return /自费|另付|额外(?:收费|付费)/.test(sentence)
+    && !/必须|务必|至少|强制|预约|预订|申请|提前\s*\d+/.test(sentence);
+}
+
 export function validateCopyCommitments(value, task = {}) {
   const output = task.moduleType === 'visual_card' && value && typeof value === 'object' ? copyText([value.cardTitle, value.cardDescription]) : copyText(value);
   if (!output) return [];
@@ -371,6 +380,7 @@ export function validateCopyCommitments(value, task = {}) {
   }
   for (const match of output.matchAll(/(?:必须|务必|需|需要)\s*(?:提前)?[^，。；]{0,8}(?:预约|预订|确认|申请)/g)) {
     const claim = clean(match[0]);
+    if (sourcedPaidConfirmation(output, match, source)) continue;
     if (!sourceIncludes(source, claim) && !/reservation_required|mandatory|required|必须预约|需预约/i.test(source)) errors.push(`强制预约要求“${claim}”没有订单或已核验依据`);
   }
   const guaranteedOutcome = /(?:保证|确保|一定|必然|百分之百|100%)[^，。；]{0,28}(?:看到|遇到|观察到|出现|狮子|花豹|猎豹|大象|动物|迁徙|渡河|晴天|升级|包场)|(?:看到|遇到|观察到)[^，。；]{0,20}(?:是必然|有保证|百分之百|100%)/g;
