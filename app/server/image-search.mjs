@@ -1,4 +1,5 @@
 import { assertPublicUrl } from "./page-images.mjs";
+import { createOperationTrace, safeErrorDetails, operationAbortDetails } from './operation-trace.mjs';
 
 const officialDomains = [
   "marriott.com", "ritzcarlton.com", "singita.com", "melia.com", "relaischateaux.com",
@@ -100,39 +101,66 @@ function mergeSearchSources(contentResults, metadataResults) {
   return merged;
 }
 
-export async function resolveGroundingRedirect(value, signal, fetchImpl = fetch) {
-  const url = await assertPublicUrl(value);
+export async function resolveGroundingRedirect(value, signal, fetchImpl = fetch, trace) {
+  const measure = (phase, fn) => trace ? trace.measure(phase, fn) : fn();
+  const url = await measure('source_dns', () => assertPublicUrl(value));
   if (!isGroundingRedirectUrl(url.href)) return url.href;
-  const response = await fetchImpl(url, {
+  const response = await measure('redirect_http', () => fetchImpl(url, {
     method: "GET",
     redirect: "manual",
     headers: { "user-agent": "Mozilla/5.0 LuxuryTravelImageResearch/1.0", accept: "text/html,application/xhtml+xml" },
     signal,
-  });
+  }));
   const location = response.headers.get("location");
   if (location) {
     const finalUrl = new URL(location, url).href;
     await response.body?.cancel().catch(() => undefined);
     if (isGroundingRedirectUrl(finalUrl)) throw new Error("grounding_redirect_unresolved");
-    await assertPublicUrl(finalUrl);
+    await measure('source_dns', () => assertPublicUrl(finalUrl));
     return finalUrl;
   }
   if (response.ok) {
-    const html = await response.text();
+    const html = await measure('redirect_body', () => response.text());
     const match = html.match(/<(?:link[^>]+rel=["'][^"']*canonical[^"']*["'][^>]+href|meta[^>]+(?:property|name)=["']og:url["'][^>]+content)=["']([^"']+)["']/i)
       || html.match(/<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^;]+;\s*url=([^"']+)["']/i);
     if (match?.[1]) {
       const finalUrl = new URL(match[1].trim(), url).href;
-      if (!isGroundingRedirectUrl(finalUrl)) { await assertPublicUrl(finalUrl); return finalUrl; }
+      if (!isGroundingRedirectUrl(finalUrl)) { await measure('source_dns', () => assertPublicUrl(finalUrl)); return finalUrl; }
     }
   } else await response.body?.cancel().catch(() => undefined);
   throw new Error("grounding_redirect_unresolved");
 }
 
-async function runSearchRequest({ userPrompt, apiKey, baseUrl, model, count, signal, fetchImpl = fetch }) {
+async function runSearchRequest(input) {
+  const trace = createOperationTrace('web_search', input.traceContext);
+  try { const value = await tracedSearchRequest({ ...input, trace }); trace.emit('search_complete', { resultCount: value.length }); return value; }
+  catch (error) {
+    trace.emit('search_failed', { ...safeErrorDetails(error), ...operationAbortDetails(error, input.signal) });
+    // Preserve the original failure and retry policy while making failed
+    // attempts measurable alongside successful requests.
+    if (error && typeof error === 'object' && Object.isExtensible(error) && !Object.hasOwn(error, 'timing')) {
+      Object.defineProperty(error, 'timing', { value: {requestId: trace.requestId, phases: {...trace.timings}}, enumerable: false, configurable: true });
+    }
+    throw error;
+  }
+}
+
+async function tracedSearchRequest({ userPrompt, apiKey, baseUrl, model, count, signal, fetchImpl = fetch, trace, requestTimeoutMs = 300_000 }) {
   if (!apiKey) throw new Error("尚未配置 Gemini 图片搜索 API 密钥");
   if (!model) throw new Error("尚未配置 Gemini 图片搜索模型");
-  const response = await fetchImpl(`${String(baseUrl).replace(/\/$/, "")}/chat/completions`, {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1, Number(requestTimeoutMs) || 300_000));
+  const requestSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  const timed = fn => async () => {
+    try { return await fn(); }
+    catch (error) {
+      if (controller.signal.aborted && !signal?.aborted) throw Object.assign(new Error('图片搜索响应超时'), { code: 'search_response_timeout', cause: error });
+      throw error;
+    }
+  };
+  let response, payload;
+  try {
+  response = await trace.measure('http_headers', timed(() => fetchImpl(`${String(baseUrl).replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
     body: JSON.stringify({
@@ -146,9 +174,17 @@ async function runSearchRequest({ userPrompt, apiKey, baseUrl, model, count, sig
       ],
       max_tokens: 2400,
     }),
-    signal,
-  });
-  const payload = await response.json().catch(() => ({}));
+    signal: requestSignal,
+  })));
+  trace.emit('http_status', { statusCode: response.status });
+  try { payload = await trace.measure('response_body', timed(() => response.json())); }
+  catch (error) {
+    // Keep an actual HTTP rejection distinguishable from malformed successful
+    // content. The body-read failure is already recorded by the trace.
+    if (response.ok || controller.signal.aborted || signal?.aborted) throw error;
+    payload = {};
+  }
+  } finally { clearTimeout(timer); }
   if (!response.ok) {
     const upstreamCode = String(payload?.error?.code || payload?.code || "").slice(0, 80);
     const upstreamMessage = String(payload?.error?.message || payload?.message || "").slice(0, 300);
@@ -160,24 +196,36 @@ async function runSearchRequest({ userPrompt, apiKey, baseUrl, model, count, sig
     error.upstreamCode = /^[a-z][a-z0-9_.-]{0,79}$/i.test(upstreamCode) ? upstreamCode : null;
     throw error;
   }
-  const contentResults = parseSearchResults(payload?.choices?.[0]?.message?.content);
-  const raw = mergeSearchSources(contentResults, parseSearchMetadata(payload));
-  const resolved = [];
-  const diagnostics = [];
-  for (const [index, item] of raw.slice(0, count).entries()) {
-    try {
-      const pageUrl = await resolveGroundingRedirect(item.pageUrl, signal, fetchImpl);
-      resolved.push({ ...item, pageUrl, media: "", searchRank: index + 1, officialHint: isOfficialSource(pageUrl) });
-    } catch (error) {
-      if (isGroundingRedirectUrl(item.pageUrl)) diagnostics.push({ code: "grounding_redirect_unresolved", pageUrl: item.pageUrl, title: item.title, reason: error?.cause?.message || error?.message || String(error) });
+  const raw = await trace.measure('parse', () => mergeSearchSources(parseSearchResults(payload?.choices?.[0]?.message?.content), parseSearchMetadata(payload)));
+  const sources = raw.slice(0, count);
+  const resolved = new Array(sources.length);
+  const sourceDiagnostics = new Array(sources.length);
+  const concurrencyLimit = 2;
+  let nextIndex = 0, active = 0, concurrencyPeak = 0;
+  // Limit only post-search URL resolution. Indexed writes preserve provider
+  // priority and duplicate precedence even when redirects finish out of order.
+  await trace.measure('source_resolution', () => Promise.all(Array.from({ length: Math.min(concurrencyLimit, sources.length) }, async () => {
+    while (nextIndex < sources.length) {
+      const index = nextIndex++, item = sources[index];
+      active += 1;
+      concurrencyPeak = Math.max(concurrencyPeak, active);
+      try {
+        const pageUrl = await resolveGroundingRedirect(item.pageUrl, signal, fetchImpl, trace);
+        resolved[index] = { ...item, pageUrl, media: "", searchRank: index + 1, officialHint: isOfficialSource(pageUrl) };
+      } catch (error) {
+        if (isGroundingRedirectUrl(item.pageUrl)) sourceDiagnostics[index] = { code: "grounding_redirect_unresolved", pageUrl: item.pageUrl, title: item.title, reason: error?.cause?.message || error?.message || String(error) };
+      } finally { active -= 1; }
     }
-  }
+  })));
+  const diagnostics = sourceDiagnostics.filter(Boolean);
+  trace.emit('source_resolution_summary', { concurrencyLimit, concurrencyPeak, sourceCount: sources.length, resolvedCount: resolved.filter(Boolean).length });
   const output = resolved.filter(Boolean).filter((item, index, array) => array.findIndex((other) => other.pageUrl === item.pageUrl) === index);
   Object.defineProperty(output, "diagnostics", { value: diagnostics, enumerable: false });
+  Object.defineProperty(output, 'timing', { value: { requestId: trace.requestId, phases: trace.timings }, enumerable: false });
   return output;
 }
 
-export async function searchWeb({ query, apiKey, baseUrl, model, count = 10, signal, fetchImpl }) {
+export async function searchWeb({ query, apiKey, baseUrl, model, count = 10, signal, fetchImpl, traceContext, requestTimeoutMs }) {
   return runSearchRequest({
     userPrompt: `搜索包含高清照片或官方图库的页面：${String(query).slice(0, 180)}`,
     apiKey,
@@ -185,11 +233,11 @@ export async function searchWeb({ query, apiKey, baseUrl, model, count = 10, sig
     model,
     count,
     signal,
-    fetchImpl,
+    fetchImpl, traceContext, requestTimeoutMs,
   });
 }
 
-export async function searchWebBatch({ queries, apiKey, baseUrl, model, count = 6, signal, fetchImpl }) {
+export async function searchWebBatch({ queries, apiKey, baseUrl, model, count = 6, signal, fetchImpl, traceContext, requestTimeoutMs }) {
   const normalized = [...new Set((Array.isArray(queries) ? queries : []).map((item) => String(item || "").replace(/\s+/g, " ").trim()).filter(Boolean))].slice(0, 3);
   if (!normalized.length) throw new Error("图片搜索至少需要一个 query");
   return runSearchRequest({
@@ -199,6 +247,6 @@ export async function searchWebBatch({ queries, apiKey, baseUrl, model, count = 
     model,
     count,
     signal,
-    fetchImpl,
+    fetchImpl, traceContext, requestTimeoutMs,
   });
 }

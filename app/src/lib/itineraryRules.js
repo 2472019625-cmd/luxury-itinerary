@@ -179,7 +179,7 @@ export function splitRouteNodes(value) {
   return unique(withoutTravel
     .split(/(?:→|—|－|✈|🚗|🚙|🚌|\/|\||｜|\n|\s+-\s+|(?<=[\u3400-\u9fff])-(?=[\u3400-\u9fff])|至)+/u)
     .map((item) => item.replace(/^(?:抵达|前往|乘车前往|飞往|返回)\s*/, "").replace(/[，,；;。]+$/g, "").trim())
-    .filter((item) => item && !/^(?:车程|飞行|航程|约?\d)/.test(item)))
+    .filter((item) => item && !/^(?:车程|飞行|航程|约?\d)/.test(item) && !/^(?:\(\s*\)|（\s*）)$/.test(item)))
     .slice(0, 6);
 }
 
@@ -437,9 +437,20 @@ function sentenceFor(source, pattern) {
 export function buildCoreSpots(day = {}) {
   const description = cleanText(day.description);
   if (DAY_STATUS_ONLY.test(description) || NO_OVERNIGHT.test(description)) return [];
-  const descriptionParts = description.split(/[；;，,]/).map(cleanText).filter(Boolean);
-  const optionalParts = descriptionParts.filter((part) => /自费|另行付费/.test(part));
-  const includedDescription = descriptionParts.filter((part) => !/自费|另行付费/.test(part)).join("，") || description;
+  // Fee markers apply to the following clauses of this sentence, never to
+  // the previous sentence or the next paragraph. Preserve the source text.
+  const optionalParts = [];
+  const includedParts = [];
+  for (const sentence of description.split(/[。！？!?；;\n]+/).map(cleanText).filter(Boolean)) {
+    const clauses = sentence.split(/[，,]/).map(cleanText).filter(Boolean);
+    const optionalStart = clauses.findIndex(part => /自费|另行付费/.test(part));
+    if (optionalStart < 0) includedParts.push(sentence);
+    else {
+      if (optionalStart > 0) includedParts.push(clauses.slice(0, optionalStart).join('，'));
+      optionalParts.push(clauses.slice(optionalStart).join('，'));
+    }
+  }
+  const includedDescription = includedParts.join('。');
   const nodes = (day.routeNodes?.length ? day.routeNodes : splitRouteNodes(day.city)).filter((node) => !AIRPORT.test(node) && !DAY_STATUS_ONLY.test(cleanText(node)) && !NO_OVERNIGHT.test(cleanText(node)));
   const destination = nodes.at(-1) || "";
   const spots = [];
@@ -449,22 +460,22 @@ export function buildCoreSpots(day = {}) {
     const sourceSentence = sentenceFor(includedDescription, pattern) || includedDescription;
     spots.push({ name: cleanName, description: sourceSentence, sourceEvidence: [sourceSentence], images: [] });
   };
-  const hasBushPlane = /草原(?:小)?飞机|轻型(?:草原)?(?:小)?飞机|bush\s*plane|light\s*aircraft/i.test(`${day.vehicle || ""} ${description}`);
+  const hasBushPlane = /草原(?:小)?飞机|轻型(?:草原)?(?:小)?飞机|bush\s*plane|light\s*aircraft/i.test(`${day.vehicle || ""} ${includedDescription}`);
 
-  if (/迁徙|天国之渡|马拉河/.test(`${destination} ${description}`)) {
-    push(/马拉河/.test(`${destination} ${description}`) ? "马拉河大迁徙" : `${destination}迁徙追踪`, /迁徙|天国之渡|马拉河/);
-  } else if (hasBushPlane && /返程|结束|离开/.test(description)) {
+  if (/迁徙|天国之渡|马拉河/.test(`${destination} ${includedDescription}`) && includedDescription) {
+    push(/马拉河/.test(`${destination} ${includedDescription}`) ? "马拉河大迁徙" : `${destination}迁徙追踪`, /迁徙|天国之渡|马拉河/);
+  } else if (hasBushPlane && /返程|结束|离开/.test(includedDescription)) {
     push("草原飞机返程", /草原(?:小)?飞机|轻型(?:草原)?(?:小)?飞机|飞往|返程/);
-  } else if (/游猎|Safari/i.test(description)) {
+  } else if (/游猎|Safari/i.test(includedDescription)) {
     push(`${destination || "当日"}${/游猎/.test(destination) ? "" : "游猎"}`, /游猎|五霸|动物/);
   } else if (hasBushPlane) {
-    push(/返程|结束|离开/.test(description) ? "草原飞机返程" : "草原飞机抵达", /草原(?:小)?飞机|轻型(?:草原)?(?:小)?飞机|飞往|返程/);
-  } else if (destination) {
+    push(/返程|结束|离开/.test(includedDescription) ? "草原飞机返程" : "草原飞机抵达", /草原(?:小)?飞机|轻型(?:草原)?(?:小)?飞机|飞往|返程/);
+  } else if (destination && includedDescription) {
     push(destination, new RegExp(destination.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 
-  if (/日出/.test(description)) push(`${nodes[0] || destination}日出`, /日出/);
-  if (/观星|星空/.test(description)) push("营地观星", /观星|星空/);
+  if (/日出/.test(includedDescription)) push(`${nodes[0] || destination}日出`, /日出/);
+  if (/观星|星空/.test(includedDescription)) push("营地观星", /观星|星空/);
   optionalParts.forEach((part) => {
     let name = /热气球/i.test(part) ? "清晨热气球 Safari"
       : /马赛部落/.test(part) ? "马赛部落参访"

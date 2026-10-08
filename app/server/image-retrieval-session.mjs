@@ -49,7 +49,8 @@ export function createImageRetrievalSession({ signal, runtimeDirectory, maxBrows
     recordRetry() { diagnostics.technicalRetries += 1; },
     rememberUnavailablePage(pageUrl, error) {
       const code = error?.code;
-      if (code !== 'page_access_blocked' && !(code === 'page_http_error' && /(?:\b404\b|（404）)/.test(String(error?.message || '')))) return false;
+      if (code !== 'page_access_blocked' && !(code === 'page_http_error'
+        && (error?.status === 404 || /(?:\b404\b|（404）)/.test(String(error?.message || ''))))) return false;
       unavailablePages.set(pageUrl, code);
       return true;
     },
@@ -95,7 +96,7 @@ export function createImageRetrievalSession({ signal, runtimeDirectory, maxBrows
     },
     async close() {
       if (closed) return;
-      closed = true; controller.abort(imageNetworkError('request_cancelled', '图片获取会话已结束'));
+      closed = true; controller.abort(imageNetworkError('request_cancelled', '图片获取会话已结束', { abortOrigin: 'session_close' }));
       await browserTail.catch(() => {});
       const browser = browserHandle || await browserPromise?.catch(() => null);
       let safelyStopped = !launchAttempted;

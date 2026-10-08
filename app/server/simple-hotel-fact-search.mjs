@@ -4,7 +4,7 @@ import { saveSimpleHotelFactRow } from "./simple-manual-images.mjs";
 const LABELS = Object.freeze({ location: "位置", rooms: "客房", design: "设计", facilities: "设施" });
 const KEYS = Object.keys(LABELS);
 
-export async function searchSimpleHotelFacts({ store, root, projectId, hotelIndex, hotelId, keys, mode, copyOptions = {}, runCopy = runCopyWriterSkill, saveRow = saveSimpleHotelFactRow } = {}) {
+export async function searchSimpleHotelFacts({ store, root, projectId, hotelIndex, hotelId, keys, mode, copyOptions = {}, render, runCopy = runCopyWriterSkill, saveRow = saveSimpleHotelFactRow } = {}) {
   const index = Number(hotelIndex);
   const project = store.getProject(projectId);
   const run = project?.activeExecutionRunId ? store.getExecutionRun(projectId, project.activeExecutionRunId) : null;
@@ -47,9 +47,9 @@ export async function searchSimpleHotelFacts({ store, root, projectId, hotelInde
   const appliedRows = [];
   let lastSave = null;
   for (const candidate of candidates) {
-    const saved = await saveRow({ store, root, projectId, hotelIndex: index, hotelId, key: candidate.key, text: candidate.text, source: candidate.source, mode: "fill", deferRender: true });
+    const saved = await saveRow({ store, root, projectId, hotelIndex: index, hotelId, key: candidate.key, text: candidate.text, source: candidate.source, mode: "fill", render, deferRender: true });
     lastSave = saved;
     if (saved.applied) appliedRows.push(saved.row);
   }
-  return { mode, hotelId, appliedRows, candidates: [], missingKeys: wanted.filter((key) => !appliedRows.some((row) => row.key === key)), failedKeys, manualRevision: lastSave?.manualRevision, renderPending: lastSave?.renderPending };
+  return { mode, hotelId, appliedRows, candidates: [], missingKeys: wanted.filter((key) => !appliedRows.some((row) => row.key === key)), failedKeys, manualVersion: lastSave?.manualVersion, manualRevision: lastSave?.manualRevision, renderPending: lastSave?.renderPending };
 }

@@ -1,4 +1,5 @@
 import { findSlotById, setSlotImage } from './imageSlots.js';
+import { isNonPhotographicMedia } from './imageMedia.js';
 
 export const IMAGE_REVIEW_STATE = Object.freeze({
   AUTO_APPROVED: "auto_approved",
@@ -15,21 +16,83 @@ export const IMAGE_MODULE_POLICY = Object.freeze({
 });
 
 export function canManuallyChooseImageCandidate(candidate = {}) {
+  if (isNonPhotographicMedia(candidate.hardJudgment)) return false;
   const hasPreview = Boolean(candidate.userProvided || candidate.localPreviewUrl || candidate.previewUrl || candidate.localUrl || candidate.publicUrl);
   const hardRejected = candidate.status === IMAGE_REVIEW_STATE.HARD_REJECTED
     || candidate.autoRejected === true
     || candidate.qualificationStatus === "rejected";
-  return hasPreview && !hardRejected;
+  return hasPreview && (!hardRejected || canConfirmModelApprovedProgramRejection(candidate));
+}
+
+// Only the two observed contradictions may be resolved by an explicit human
+// decision. This does not change automatic qualification or trust UI flags.
+export function canConfirmModelApprovedProgramRejection(candidate = {}) {
+  const audit = candidate.hardJudgment || {};
+  if (isNonPhotographicMedia(audit)) return false;
+  if (candidate.modelDecision?.eligible !== true || audit.auditEvidenceVersion !== 2
+    || audit.auditContract?.complete !== true
+    || audit.visibleIdentityConflict !== false || audit.visibleLocationConflict !== false
+    || !['coreSubjectMatch', 'subjectMatch', 'coreActionMatch', 'activityMatch', 'subjectClear',
+      'identityMatch', 'hotelIdentityMatch', 'transportTypeMatch', 'watermarkFree', 'nonAI', 'photographic', 'technicalUsable']
+      .every(field => audit[field] === true)) return false;
+  const codes = [candidate.rejection, audit.hardRejectCode].filter(code => code && code !== 'none');
+  if (!codes.length || !codes.every(code => ['wrong_location', 'non_photographic'].includes(code))) return false;
+  const identity = audit.identityEvidence?.status;
+  if (!['supported', 'not_required'].includes(identity)) return false;
+  if (identity === 'supported' && audit.locationMatch !== true) return false;
+  return !codes.includes('wrong_location') || audit.locationMatch === true || identity === 'not_required';
 }
 
 export function canRecommendImageCandidateForSlot(candidate = {}, targetSlot = {}) {
   if (!canManuallyChooseImageCandidate(candidate)) return false;
+  return imageCandidateMatchesSlot(candidate, targetSlot);
+}
+
+function imageCandidateMatchesSlot(candidate, targetSlot) {
   const sameTarget = candidate.targetFingerprint && targetSlot.targetFingerprint && candidate.targetFingerprint === targetSlot.targetFingerprint;
   if (candidate.fieldPath) return candidate.fieldPath === targetSlot.fieldPath || Boolean(sameTarget);
   const candidateSlotId = candidate.pipelineSlotId || candidate.slotId;
   const targetSlotId = targetSlot.pipelineSlotId || targetSlot.slotId;
   if (candidateSlotId && targetSlotId && candidateSlotId === targetSlotId) return true;
   return Boolean(sameTarget);
+}
+
+export function modelApprovedImageNotice(candidate = {}) {
+  // Missing historical evidence is unknown. Never infer model approval from
+  // free-form reasons, scores, source credibility or an incomplete review.
+  const approved = candidate.modelDecision
+    ? candidate.modelDecision.eligible === true
+    : candidate.hardJudgment?.eligible === true;
+  const hardRejected = candidate.status === IMAGE_REVIEW_STATE.HARD_REJECTED
+    || candidate.autoRejected === true || candidate.qualificationStatus === 'rejected';
+  if (!approved || !hardRejected && candidate.qualificationStatus !== 'unreviewed') return null;
+  const code = candidate.rejection || candidate.hardJudgment?.hardRejectCode;
+  const reasons = {
+    wrong_hotel: '酒店身份不符合当前位置要求', wrong_location: '地点不符合当前位置要求',
+    wrong_subject: '核心主体不符合要求', wrong_activity: '必要动作不符合要求',
+    wrong_transport_type: '交通类别不符合要求', knowledge_source_path_mismatch: '知识库来源路径不符合检索范围',
+    watermark: '图片含水印', ai_generated: '图片真实性检查未通过', non_photographic: '图片不是实景摄影',
+    broken: '图片无法正常读取', low_quality_unusable: '图片技术可用性检查未通过',
+    subject_not_clear: '核心主体无法可靠识别', forbid: '图片命中禁止使用条件',
+    duplicate: '图片与已用素材重复', duplicate_sha256: '图片与已用素材重复', duplicate_perceptual: '图片与已用素材近似重复',
+  };
+  const reason = reasons[code] || (candidate.hardJudgment?.auditContract?.complete === false
+    ? '审核信息不完整或存在矛盾，尚未通过采用检查'
+    : candidate.hardJudgment?.identityEvidence?.status === 'insufficient'
+      ? '必要实体身份缺少可核对的依据'
+      : candidate.originalDownloadStatus === 'failed'
+        ? '原图获取或尺寸检查未通过'
+        : candidate.reason || candidate.matchReason || '尚未通过采用检查');
+  return { label: hardRejected ? '模型认可 · 采用检查未通过' : '模型认可 · 待人工确认', reason };
+}
+
+export function canDisplayImageCandidate(candidate = {}) {
+  return canManuallyChooseImageCandidate(candidate)
+    || Boolean(candidate.localPreviewUrl && modelApprovedImageNotice(candidate));
+}
+
+export function canDisplayImageCandidateForSlot(candidate = {}, targetSlot = {}) {
+  return canDisplayImageCandidate(candidate) && imageCandidateMatchesSlot(candidate, targetSlot);
 }
 
 const HARD_CODES = new Set(["watermark", "subject_mismatch", "place_mismatch", "broken", "low_resolution", "low_quality", "duplicate", "forbid"]);

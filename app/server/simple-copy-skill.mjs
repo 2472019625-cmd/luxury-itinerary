@@ -278,16 +278,29 @@ const VISUAL_SUBJECT_CONCEPTS = Object.freeze([
   /(?:草原飞机|小型飞机|light aircraft|bush plane|airstrip)/i,
 ]);
 
+function visualCardCoreSubject(task) {
+  const core = task.visualDirection?.queryCore;
+  // The selected subject/action contract takes precedence over ideal details.
+  // Old saved tasks still use their original visual; never borrow another DAY.
+  return clean(core?.subject) || clean(core?.subjectEn)
+    ? [core.subject || core.subjectEn, core.action || core.actionEn, core.identity || core.identityEn].map(clean).filter(Boolean).join(' ')
+    : visualCardSubject(task);
+}
+
+function isRiverCrossingScene(value) {
+  const direct = /(?:渡河|横渡(?:马拉河|[^\s，。；]{0,6}河(?:流|道)?)|天国之渡|river[\s-]?crossing)/i;
+  return direct.test(value) || clean(value).split(/[，,。；;]/).some(clause => /河[^，,。；;]{0,18}横渡(?:中|而过)?\s*$/.test(clause));
+}
+
 export function validateVisualCardSubjectRetention(value, task = {}) {
   if (task.moduleType !== "visual_card" || !value || typeof value !== "object") return [];
-  const subject = visualCardSubject(task);
+  const subject = visualCardCoreSubject(task);
   const title = clean(value.cardTitle);
   if (!subject || !title) return [];
   const missingSubject = () => `Visual Card 标题“${title}”丢失了明确视觉主体“${subject}”，不能退化成泛化游猎或体验名称`;
   const nightSafari = /(?:夜间游猎|夜巡|night safari|night game drive)/i;
   if (/夜巡/.test(title) && !nightSafari.test(subject)) return [missingSubject()];
-  const riverCrossing = /(?:渡河|横渡(?:马拉河|[^\s，。；]{0,6}河(?:流|道)?)|天国之渡|river[\s-]?crossing)/i;
-  if (riverCrossing.test(title) && !riverCrossing.test(subject)) return [missingSubject()];
+  if (isRiverCrossingScene(title) && !isRiverCrossingScene(subject)) return [missingSubject()];
   const subjectConcepts = VISUAL_SUBJECT_CONCEPTS.filter((pattern) => pattern.test(subject));
   // This is one known museum's historical house name, never a synonym for museums in general.
   const karenMuseumSource = /(?:Karen Blixen Museum|凯伦[·\s]?布里克森博物馆|凯伦博物馆|凯伦故居)/i.test(subject);
@@ -314,12 +327,13 @@ function copyFactsWithoutVisualDirection(task) {
 export function withVisualCardTitleContract(task) {
   if (task.moduleType !== "visual_card") return task;
   const subject = visualCardSubject(task);
-  const anchors = [...new Set(VISUAL_SUBJECT_CONCEPTS.flatMap((pattern) => subject.match(pattern)?.[0] || []))];
+  const anchors = [...new Set(VISUAL_SUBJECT_CONCEPTS.flatMap((pattern) => visualCardCoreSubject(task).match(pattern)?.[0] || []))];
   const { visualSubject, otherVisualSubjects, ...relevantContext } = task.relevantContext || {};
   return { ...task, facts: copyFactsWithoutVisualDirection(task), relevantContext,
     visualDirection: {
       visualSubject: clean(task.visualDirection?.visualSubject || task.facts?.visualSubject || visualSubject || subject),
       titleCoreSubject: subject,
+      ...(task.visualDirection?.queryCore ? { queryCore: structuredClone(task.visualDirection.queryCore) } : {}),
       otherVisualSubjects: task.visualDirection?.otherVisualSubjects || otherVisualSubjects || [],
       evidenceRole: "composition_only_not_factual_evidence",
       instruction: "这里只指定画面和标题主题，不证明实体历史、设施、人物关系或现场安排。画面中出现的客观细节须另由facts支持；不同安排之间的地点、先后和或选关系必须沿用原文，不得合并。",

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { mergeManualImagePayload, mergeTargetedRepairPayload } from "./lib/manualImageState.js";
+import { isStaleManualImagePayload, manualCopyValue, mergeManualImageMetadata, mergeManualImagePayload, mergeTargetedRepairPayload } from "./lib/manualImageState.js";
+import { selectImageWithRecovery } from './lib/imageSelectionRequest.js';
 import { AGENT_STORAGE, AgentModeStrip, AppHeader, Editor, VersionsStep, readStorage } from "./Workspace.jsx";
 
 async function readJson(response) { const value = await response.json(); if (!response.ok) throw Object.assign(new Error(value.error || "请求失败"), { code: value.code, payload:value }); return value; }
@@ -24,6 +25,8 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   const [repairState, setRepairState] = useState({ busy:false, targetId:"", message:"" });
   const [screen, setScreen] = useState("editor");
   const daySaveTimer = useRef(null);
+  const pendingDaySave = useRef(null);
+  const daySaveInflight = useRef(Promise.resolve());
   const hotelSaveTimers = useRef(new Map());
   const hotelSaveInflight = useRef(new Map());
   const hotelPendingKeys = useRef(new Set());
@@ -46,7 +49,10 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     const timer = setTimeout(async () => {
       try {
         const next = await readJson(await fetch(`/api/simple/projects/${projectId}/manual-images`));
-        if (!stopped) setPayload(current => current?.manualRevision === next.manualRevision ? { ...next, project: { ...next.project, data: current.project.data } } : current);
+        if (!stopped) {
+          setPayload(current => mergeManualImagePayload(current, next));
+          if (next.manualRevision === payload.manualRevision && next.renderFailed) setError('图片已保存，但成品检查未通过，请查看对应提示。');
+        }
       } catch (failure) { if (!stopped) setError(`图片已保存，成品检查状态获取失败：${failure.message}`); }
     }, 1000);
     return () => { stopped = true; clearTimeout(timer); };
@@ -54,8 +60,8 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   const request = async (slotId, action, body) => {
     setBusy(`${slotId}:${action}`); setError("");
     try {
-      const response = await fetch(`/api/simple/projects/${projectId}/manual-images/${encodeURIComponent(slotId)}/${action}`, { ...body, signal: AbortSignal.timeout(action === 'research' ? 240000 : 60000) });
-      const next = await readJson(response);
+      const next = action === 'select' ? await selectImageWithRecovery({ projectId, slotId, body })
+        : await readJson(await fetch(`/api/simple/projects/${projectId}/manual-images/${encodeURIComponent(slotId)}/${action}`, { ...body, signal: AbortSignal.timeout(action === 'research' ? 240000 : 60000) }));
       setPayload(current => mergeManualImagePayload(current, next));
       return next;
     } catch (failure) { setError(failure.message); throw failure; }
@@ -77,10 +83,10 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     if (!slotId) throw new Error("当前位置没有对应的 Simple Pipeline 图片位");
     return upload(slotId, file);
   };
-  const deleteImageFromEditor = async (targetSlot) => {
+  const deleteImageFromEditor = async (targetSlot, { confirmMissingOptional = false } = {}) => {
     const slotId = targetSlot.pipelineSlotId;
     if (!slotId) throw new Error("当前位置没有对应的 Simple Pipeline 图片位");
-    return request(slotId, "clear", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedSrc: targetSlot.src }) });
+    return request(slotId, "clear", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedSrc: targetSlot.src, confirmMissingOptional }) });
   };
   const research = async (slotId) => {
     return request(slotId, "research", { method:"POST" });
@@ -100,6 +106,29 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     } catch (failure) {
       setError(failure.message);
       setRepairState({ busy:false, targetId:"", message:"本次处理未完成，请重试" });
+      throw failure;
+    }
+  };
+  const confirmManualCopy = async (item, project) => {
+    setRepairState({ busy: true, targetId: item.id, message: '正在保存人工文案…' });
+    setError('');
+    try {
+      clearTimeout(daySaveTimer.current);
+      if (pendingDaySave.current) {
+        const pending = pendingDaySave.current;
+        pendingDaySave.current = null;
+        await queueDaySave(pending.project, pending.dayIndex);
+      } else await daySaveInflight.current;
+      const next = await readJson(await fetch(`/api/simple/projects/${projectId}/repair/copy/${encodeURIComponent(item.id)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(60000),
+        body: JSON.stringify({ value: manualCopyValue(project.data, item), manualConfirmed: true }),
+      }));
+      setPayload(current => mergeManualImagePayload(current, next));
+      setRepairState({ busy: false, targetId: '', message: '人工文案已保存，对应待处理已解除' });
+      return next;
+    } catch (failure) {
+      setError(failure.message);
+      setRepairState({ busy: false, targetId: '', message: failure.message });
       throw failure;
     }
   };
@@ -141,12 +170,23 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   };
   const persistDayEditor = (project, dayIndex, { immediate = false } = {}) => {
     clearTimeout(daySaveTimer.current);
-    if (immediate) return saveDayEditor(project, dayIndex).catch((failure) => { setError(`体验卡片保存失败：${failure.message}`); throw failure; });
-    daySaveTimer.current = setTimeout(() => saveDayEditor(project, dayIndex).catch((failure) => setError(`体验卡片保存失败：${failure.message}`)), 500);
+    pendingDaySave.current = null;
+    if (immediate) return queueDaySave(project, dayIndex).catch((failure) => { setError(`体验卡片保存失败：${failure.message}`); throw failure; });
+    pendingDaySave.current = { project, dayIndex };
+    daySaveTimer.current = setTimeout(() => {
+      pendingDaySave.current = null;
+      queueDaySave(project, dayIndex).catch((failure) => setError(`体验卡片保存失败：${failure.message}`));
+    }, 500);
     return Promise.resolve(null);
+  };
+  const queueDaySave = (project, dayIndex) => {
+    const saving = daySaveInflight.current.catch(() => {}).then(() => saveDayEditor(project, dayIndex));
+    daySaveInflight.current = saving;
+    return saving;
   };
   const mergeHotelRows = (current, hotelId, rows, metadata = {}) => {
     if (!current?.project?.data?.hotels?.length) return current;
+    if (isStaleManualImagePayload(current, metadata)) return current;
     const hotels = current.project.data.hotels.map((hotel) => {
       if (String(hotel.id) !== String(hotelId)) return hotel;
       let factRows = [...(hotel.factRows || [])];
@@ -157,12 +197,12 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
       }
       return { ...hotel, factRows };
     });
-    return { ...current, manualRevision: metadata.manualRevision || current.manualRevision, renderPending: metadata.renderPending ?? current.renderPending, project: { ...current.project, data: { ...current.project.data, hotels } } };
+    return { ...mergeManualImageMetadata(current, metadata), project: { ...current.project, data: { ...current.project.data, hotels } } };
   };
   const saveHotelFact = async ({ hotelId, hotelIndex, key, text, mode = "manual", expectedText, source }) => {
     const next = await readJson(await fetch(`/api/simple/projects/${projectId}/hotel-facts/${hotelIndex}/${key}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ hotelId, text, mode, expectedText, source }), signal: AbortSignal.timeout(60000) }));
     if (mode === "replace" || mode === "confirm_blank") setPayload((current) => mergeHotelRows(current, hotelId, [next.row], next));
-    else setPayload((current) => ({ ...current, manualRevision: next.manualRevision || current.manualRevision, renderPending: next.renderPending ?? current.renderPending }));
+    else setPayload((current) => mergeManualImageMetadata(current, next));
     setError("");
     return next;
   };
@@ -197,7 +237,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
       hotelSaveTimers.current.delete(timerKey);
       try {
         const next = await readJson(await fetch(`/api/simple/projects/${projectId}/hotels/${hotelIndex}/region`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ hotelId, region }), signal: AbortSignal.timeout(60000) }));
-        setPayload((current) => ({ ...current, manualRevision: next.manualRevision || current.manualRevision, renderPending: next.renderPending ?? current.renderPending }));
+        setPayload((current) => mergeManualImageMetadata(current, next));
         setError("");
       } catch (failure) { setError(`酒店所在地保存失败：${failure.message}`); }
     }, 500);
@@ -205,7 +245,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   };
   const persistHotelStay = async ({ hotelId, hotelIndex, desiredNights, expectedSignature }) => {
     const next = await readJson(await fetch(`/api/simple/projects/${projectId}/hotels/${hotelIndex}/stay`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ hotelId, desiredNights, expectedSignature }), signal: AbortSignal.timeout(60000) }));
-    setPayload((current) => ({ ...current, manualRevision: next.manualRevision || current.manualRevision, renderPending: next.renderPending ?? current.renderPending }));
+    setPayload((current) => mergeManualImageMetadata(current, next));
     setError("");
     return next;
   };
@@ -228,13 +268,13 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   };
   const persistImageCrop = async ({ slotId, expectedSrc, crop }) => {
     const result = await readJson(await fetch(`/api/simple/projects/${projectId}/manual-images/${encodeURIComponent(slotId)}/crop`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedSrc, crop }), signal: AbortSignal.timeout(60000) }));
-    setPayload((current) => ({ ...current, manualRevision: result.manualRevision || current.manualRevision, renderPending: result.renderPending ?? current.renderPending }));
+    setPayload((current) => mergeManualImageMetadata(current, result));
     setError("");
     return result;
   };
   const persistVisibility = async ({ module, visible }) => {
     const result = await readJson(await fetch(`/api/simple/projects/${projectId}/module-visibility`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ module, visible }), signal: AbortSignal.timeout(60000) }));
-    setPayload((current) => ({ ...current, manualRevision: result.manualRevision || current.manualRevision, renderPending: result.renderPending ?? current.renderPending }));
+    setPayload((current) => mergeManualImageMetadata(current, result));
     setError("");
     return result;
   };
@@ -266,6 +306,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     onUploadImage={uploadFromEditor}
     onResearchSlot={research}
     onRetryCopy={(targetId) => targetedRepair("copy", targetId)}
+    onConfirmManualCopy={confirmManualCopy}
     onRetryAllCopy={(targetIds) => batchRepair("copy", targetIds)}
     onRetryAllImages={(slotIds) => batchRepair("image", slotIds)}
     onRetryRenderer={() => targetedRepair("renderer", "renderer:2000")}
@@ -275,6 +316,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
     canOpenVersions={payload.canEnterFinal}
     renderPending={payload.renderPending || hotelFactsSaving}
     blockingItems={payload.blockingItems || []}
+    optionalImageItems={payload.optionalImageItems || []}
     issueActionState={repairState}
     initialSelection={editorSelectionForSlot(payload.project, firstUnresolved)}
     initialTab={payload.unresolvedCopyCount ? "copy" : "image"}

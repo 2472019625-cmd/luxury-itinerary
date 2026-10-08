@@ -99,12 +99,17 @@ function findDayNumber(value) {
 
 export function getDesignerCurrentAction(snapshot) {
   const status = snapshot?.project?.status || snapshot?.activeJob?.status || "";
+  if (status === 'queued') {
+    const queue = snapshot?.activeJob?.generationQueue || snapshot?.project?.generationQueue || {};
+    return `等待开始制作，前方还有 ${Math.max(0, Number(queue.position || 1) - 1) + Number(queue.activeCount || 0)} 份行程`;
+  }
   if (["complete", "ready_for_editor"].includes(status)) return "客户版行程已制作完成，可以继续调整文案、图片和版式";
   if (status === "partial") return "可编辑草稿已生成，未完成内容可在编辑页继续处理";
   if (status === "awaiting_confirmation") return "正在等待你确认影响行程安排的重要信息";
   if (status === "awaiting_user_action") return "部分内容需要你在编辑页确认或补充";
   if (["cancelled"].includes(status)) return "本次制作已取消，已确认资料仍然保留";
-  if (["failed", "planning_failed", "execution_failed"].includes(status)) return "本次制作暂时中断，已完成内容和资料仍然保留";
+  if (["failed", "interrupted", "planning_failed", "execution_failed"].includes(status)) return "本次制作暂时中断，已完成内容和资料仍然保留";
+  if (snapshot?.activeJob?.renderQueue?.state === 'queued') return '内容已整理，等待生成并检查客户版长图';
 
   const stage = activeStage(snapshot);
   const target = targetText(snapshot);

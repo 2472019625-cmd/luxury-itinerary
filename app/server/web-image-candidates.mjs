@@ -159,10 +159,12 @@ export function imageRelevanceDecision(candidate, slot) {
   const own = [resourcePath, candidate.alt, candidate.imageTitle, candidate.caption, candidate.structuredImageText].filter(Boolean).join(' | ');
   const local = [own, candidate.localContext].filter(Boolean).join(' | ');
   const hotel = slot.moduleType === 'hotel';
-  const subject = matchTerms([proof.subject, core.subject, core.subjectEn], local);
+  const animalOptions = slot.animalSubjectOptions?.mode === 'any' ? slot.animalSubjectOptions.options || [] : [];
+  const subject = matchTerms([proof.subject, core.subject, core.subjectEn, ...animalOptions.flatMap(option => [option.subject, option.subjectEn, ...(option.members || []).flatMap(member => [member.subject, member.subjectEn])])], local);
   const genericHotelSubjectTerms = new Set(['hotel', 'hotels', 'lodge', 'lodges', 'camp', 'camps', 'resort', 'resorts', 'accommodation', 'property']);
   const subjectSupported = hotel ? subject.matches.some(t => !genericHotelSubjectTerms.has(t)) : subject.matched;
-  const actionValues = [proof.action, core.action, core.actionEn].filter(Boolean);
+  const actionOptions = slot.animalActionOptions?.mode === 'any' ? slot.animalActionOptions.options || [] : [];
+  const actionValues = [proof.action, core.action, core.actionEn, ...actionOptions.flatMap(option => [option.action, option.actionEn])].filter(Boolean);
   const action = matchTerms(actionValues, local);
   const identities = [hotel && slot.hotel, slot.entityName, ...(slot.identityAnchors || []), core.identity, core.identityEn].filter(Boolean);
   const identityAlternatives = identities.map(v => terms(v)).filter(v => v.length);
@@ -184,7 +186,11 @@ export function imageRelevanceDecision(candidate, slot) {
   const namedOtherHotel = hotel && /(?:^|[-_\s])(?:hotel|lodge|camp|resort)$/i.test(filename)
     && filenameTokens.length > 0 && !filenameTokens.some(token => hotelIdentityTokens(slot).includes(token));
   const explicitText = [candidate.alt, candidate.caption, candidate.structuredImageText].filter(Boolean).join(' ').toLowerCase();
-  const negatedCore = [...terms(core.subjectEn), ...terms(core.actionEn)].some(t => new RegExp(`\\b(?:no|not|without)\\s+${t}\\b`, 'i').test(explicitText));
+  const negated = value => terms(value).some(t => new RegExp(`\\b(?:no|not|without)\\s+${t}\\b`, 'i').test(explicitText));
+  const negatedSubject = animalOptions.length ? animalOptions.every(option => option.members?.length
+    ? option.members.every(member => negated(member.subjectEn)) : negated(option.subjectEn)) : negated(core.subjectEn);
+  const negatedAction = actionOptions.length ? actionOptions.every(option => negated(option.actionEn)) : negated(core.actionEn);
+  const negatedCore = negatedSubject || negatedAction;
   // A hotel name on the page or image proves at most its identity. It cannot
   // make a room photograph a strong match for a requested exterior.
   const identitySupportedForRank = hotel ? Boolean(hotelProof) : (!identityCore || identity || Boolean(entityOwnedPageProof));

@@ -4,10 +4,12 @@ import http from 'node:http';
 import https from 'node:https';
 import { Readable, pipeline } from 'node:stream';
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
+import { createOperationTrace, safeErrorDetails, operationAbortDetails } from './operation-trace.mjs';
 
 export const IMAGE_ACCEPT = 'image/avif,image/webp,image/png,image/jpeg';
 export const IMAGE_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 LuxuryTravelImageResearch/1.2';
 const responseCleanup = new WeakMap();
+const responseDeadlines = new WeakMap();
 
 export function imageNetworkError(code, message, details = {}) {
   return Object.assign(new Error(message), { code, ...details });
@@ -123,6 +125,7 @@ export async function closeImageResponse(response) {
   try { await response?.body?.cancel?.(); } catch { /* A reader may already own the stream. */ }
   responseCleanup.get(response)?.();
   responseCleanup.delete(response);
+  responseDeadlines.delete(response);
 }
 
 function deadlineSignal(signal, timeoutMs, keepAlive = false) {
@@ -134,7 +137,10 @@ function deadlineSignal(signal, timeoutMs, keepAlive = false) {
   return { signal: controller.signal, cleanup: () => { clearTimeout(timer); signal?.removeEventListener('abort', cancel); } };
 }
 
-export async function readImageResponse(response, { maxBytes = 5_000_000, timeoutMs = 20_000, signal, onBodyBytes } = {}) {
+export async function readImageResponse(response, { maxBytes = 5_000_000, timeoutMs = 20_000, signal, onBodyBytes, traceContext, logger } = {}) {
+  const trace = createOperationTrace('image_http_body', traceContext, logger);
+  trace.emit('body_read_start');
+  const responseDeadline = responseDeadlines.get(response);
   const deadline = deadlineSignal(signal, timeoutMs, true);
   const reader = response.body?.getReader?.();
   let rejectAbort;
@@ -149,6 +155,7 @@ export async function readImageResponse(response, { maxBytes = 5_000_000, timeou
       const buffer = Buffer.from(body);
       onBodyBytes?.(buffer.length);
       if (buffer.length > maxBytes) throw imageNetworkError('image_body_too_large', '图片或网页超过资源上限');
+      trace.emit('body_read_end', { bytes: buffer.length });
       return buffer;
     }
     while (true) {
@@ -159,7 +166,11 @@ export async function readImageResponse(response, { maxBytes = 5_000_000, timeou
       if (received > maxBytes) throw imageNetworkError('image_body_too_large', '图片或网页超过资源上限');
       chunks.push(Buffer.from(value));
     }
+    trace.emit('body_read_end', { bytes: received });
     return Buffer.concat(chunks);
+  } catch (error) {
+    trace.emit('body_read_failed', { ...safeErrorDetails(error), ...operationAbortDetails(error, deadline.signal, responseDeadline, signal) });
+    throw error;
   } finally {
     deadline.cleanup();
     deadline.signal.removeEventListener('abort', rejectAbort);
@@ -189,26 +200,29 @@ export function classifyImageHttpResponse(status, type = '', body = '') {
   return null;
 }
 
-export async function fetchPublicUrl(value, { signal, headers = {}, timeoutMs = 20_000, maxRedirects = 5, fetchImpl = fetch, onRequest, retrievalSession, sourcePageUrl, followRedirects = true } = {}) {
+export async function fetchPublicUrl(value, { signal, headers = {}, timeoutMs = 20_000, maxRedirects = 5, fetchImpl = fetch, onRequest, retrievalSession, sourcePageUrl, followRedirects = true, traceContext, logger } = {}) {
+  const trace = createOperationTrace('image_http', traceContext, logger);
   let current;
   const deadline = deadlineSignal(signal, timeoutMs);
   const transport = fetchImpl === globalThis.fetch ? nativePublicFetch : fetchImpl;
   let release;
   try {
-    current = (await awaitImageWork(assertPublicUrl(value), deadline.signal)).href;
+    current = (await trace.measure('url_validation', () => awaitImageWork(assertPublicUrl(value), deadline.signal))).href;
     for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
       await awaitImageWork(assertPublicUrl(current), deadline.signal);
-      release = await retrievalSession?.acquire(current, deadline.signal);
+      release = await trace.measure('domain_wait', () => retrievalSession?.acquire(current, deadline.signal));
       const requestHeaders = new Headers(headers);
       // Callers never supply persistent credentials for public fetching.
       requestHeaders.delete('authorization'); requestHeaders.delete('cookie');
       for (const [key, val] of Object.entries(retrievalSession?.headersFor(current, sourcePageUrl) || {})) requestHeaders.set(key, val);
       onRequest?.(current);
-      const response = await transport(current, { redirect: 'manual', headers: requestHeaders, signal: deadline.signal });
+      const response = await trace.measure('http_headers', () => transport(current, { redirect: 'manual', headers: requestHeaders, signal: deadline.signal }));
+      trace.emit('http_status', { statusCode: response.status, redirectCount: redirects });
       retrievalSession?.rememberResponse(current, response.headers);
       if ([429, 503].includes(response.status)) retrievalSession?.cooldown(current, retryAfterMs(response.headers.get('retry-after')) ?? 500);
       const cleanup = () => { deadline.cleanup(); release?.(); release = undefined; };
       responseCleanup.set(response, cleanup);
+      responseDeadlines.set(response, deadline.signal);
       if (![301, 302, 303, 307, 308].includes(response.status)) return response;
       const location = response.headers.get('location');
       if (!location) { await closeImageResponse(response); throw imageNetworkError('page_redirect_error', '重定向响应缺少地址'); }
@@ -218,26 +232,33 @@ export async function fetchPublicUrl(value, { signal, headers = {}, timeoutMs = 
       if (!followRedirects) return response;
       // Keep the same total deadline over every redirect and its body disposal.
       responseCleanup.delete(response);
+      responseDeadlines.delete(response);
       try { await response.body?.cancel?.(); } catch {}
       release?.(); release = undefined;
       current = next;
     }
     throw imageNetworkError('page_redirect_error', '重定向次数过多');
-  } catch (error) { deadline.cleanup(); release?.(); throw error; }
+  } catch (error) {
+    trace.emit('request_failed', { ...safeErrorDetails(error), ...operationAbortDetails(error, deadline.signal, signal) });
+    deadline.cleanup(); release?.(); throw error;
+  }
 }
 
 export async function fetchPublicImageResource(value, { maxBytes = 5_000_000, timeoutMs = 20_000, maxRetryDelayMs = 5_000, ...options } = {}) {
+  const trace = createOperationTrace('image_http_resource', options.traceContext, options.logger);
+  const traceContext = { ...options.traceContext, requestId: trace.requestId };
   const started = Date.now();
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const remaining = timeoutMs - (Date.now() - started);
     if (remaining <= 0) throw imageNetworkError('image_fetch_timeout', '图片资源读取超时');
-    const response = await fetchPublicUrl(value, { ...options, timeoutMs: remaining });
+    trace.emit('attempt_start', { attempt: attempt + 1 });
+    const response = await fetchPublicUrl(value, { ...options, traceContext, timeoutMs: remaining });
     const type = response.headers.get('content-type') || '';
     if (options.skipImageBody && response.status >= 200 && response.status < 300 && type.startsWith('image/')) {
       await closeImageResponse(response);
       return { buffer: null, headers: response.headers, status: response.status, responseUrl: response.url || String(value) };
     }
-    const buffer = await readImageResponse(response, { maxBytes, timeoutMs: remaining, signal: options.signal, onBodyBytes: options.onBodyBytes });
+    const buffer = await readImageResponse(response, { maxBytes, timeoutMs: remaining, signal: options.signal, onBodyBytes: options.onBodyBytes, traceContext, logger: options.logger });
     const body = /html|text|json/i.test(type) || !type ? buffer.subarray(0, 80_000).toString('utf8') : '';
     const failure = options.followRedirects === false && [301, 302, 303, 307, 308].includes(response.status)
       ? null : classifyImageHttpResponse(response.status, type, body);
@@ -249,6 +270,7 @@ export async function fetchPublicImageResource(value, { maxBytes = 5_000_000, ti
     if (!attempt && failure.retryable && wait <= maxRetryDelayMs && Date.now() - started + wait < timeoutMs) {
       options.retrievalSession?.cooldown(value, wait);
       options.retrievalSession?.recordRetry();
+      trace.emit('technical_retry', { attempt: attempt + 1, durationMs: wait, statusCode: response.status });
       await abortableDelay(wait, options.signal);
       continue;
     }

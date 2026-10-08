@@ -1,3 +1,4 @@
+import { isNonPhotographicMedia } from '../src/lib/imageMedia.js';
 export const IMAGE_AUDIT_EVIDENCE_VERSION = 2;
 
 export const HARD_REJECTION_CODES = new Set([
@@ -48,6 +49,7 @@ export function isIdentityEvidenceUnresolved(audit = {}) {
 }
 
 export function candidateQualification(candidate = {}) {
+  if (isNonPhotographicMedia(candidate.hardJudgment)) return 'rejected';
   if (candidate.qualificationStatus === "rejected") return "rejected";
   if (candidate.autoRejected === true) return "rejected";
   // An outer manual-review reason must never mask a specific terminal hard

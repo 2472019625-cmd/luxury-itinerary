@@ -39,3 +39,7 @@ export function groupPendingItems(items = [], imageReview = { slots: [] }) {
   }
   return [...groups].map(([label, entries]) => ({ label, entries }));
 }
+
+export function pendingItemsBlockDownload(items = []) {
+  return items.some(item => item.blocking !== false);
+}

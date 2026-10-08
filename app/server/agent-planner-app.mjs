@@ -26,6 +26,10 @@ import { buildSimpleManualImagePayload, chooseSimpleImageCandidate, clearSimpleI
 import { searchSimpleHotelFacts } from "./simple-hotel-fact-search.mjs";
 import { deliveryContentDisposition } from "../src/lib/deliveryFilename.js";
 import { retrySimpleCopyTarget, retrySimpleCopyTargets, retrySimpleRenderer } from "./simple-targeted-repair.mjs";
+import { simpleImageSelectionState } from './simple-manual-images.mjs';
+import { createOperationTrace } from './operation-trace.mjs';
+import { saveSimpleManualCopy } from './simple-manual-images.mjs';
+import { generationQueue } from './shared-work-queue.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const clientDir = path.join(root, "dist", "client");
@@ -40,6 +44,7 @@ function loadEnvFile(name) {
 }
 
 function json(response, status, value) {
+  if (status === 400 && ['manual_result_stale', 'repair_result_stale'].includes(value?.code)) status = 409;
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   response.end(JSON.stringify(value));
 }
@@ -88,6 +93,7 @@ export function createAgentPlannerServer(options = {}) {
   const controllers = new Map();
   const simpleJobs = new Map();
   const simpleControllers = new Map();
+  const simpleGenerationQueue = options.generationQueue || generationQueue;
   const planner = options.planner || generateAgentPlan;
   const simplePipelineRunner = options.simplePipelineRunner || runSimplePipeline;
   const simpleOrigin = () => `http://127.0.0.1:${server?.address()?.port || port}`;
@@ -144,6 +150,12 @@ export function createAgentPlannerServer(options = {}) {
   };
   const updateSimpleJob = (job, event = {}) => {
     const now = new Date().toISOString();
+    if (event.stage === 'renderer' && event.phase === 'queue_state') {
+      job.renderQueue = event.queueState;
+      job.currentAction = event.queueState.state === 'queued' ? '等待生成并检查客户版长图' : '正在生成并检查客户版长图';
+      job.updatedAt = now;
+      return;
+    }
     if (event.capabilityId === "image_slot_progress" && event.phase === "slot_progress") {
       job.imageSlotProgress = { completed: event.completedSlots, total: event.totalSlots };
     }
@@ -193,9 +205,20 @@ export function createAgentPlannerServer(options = {}) {
     if (event.stage === "planner" && event.phase === "finished") job.totalWorkItems = Number(event.copyTaskCount || 0) + Number(event.imageSlotCount || 0);
   };
   const simpleProjectPayload = (projectId) => {
-    const project = simpleStore.getProject(projectId);
+    let project = simpleStore.getProject(projectId);
     const job = simpleJobs.get(projectId) || null;
     if (!project && !job) return null;
+    // A restarted process cannot resume in-flight model calls or queued closures.
+    // Never recreate permits from stale disk state or silently repeat a batch.
+    if (!job && project?.generationQueue && ['queued', 'running', 'planning', 'preparing'].includes(project.status)) {
+      if (project.activeExecutionRunId) {
+        const oldRun = simpleStore.getExecutionRun(projectId, project.activeExecutionRunId);
+        if (oldRun) simpleStore.updateExecutionRun(projectId, { ...oldRun, status: 'interrupted', executionEnabled: false });
+      }
+      project = simpleStore.updateProject(projectId, { status: 'interrupted', executionEnabled: false,
+        currentStage: '服务重启，本次制作已中断，请重新制作',
+        generationQueue: { ...project.generationQueue, state: 'interrupted', position: 0 } });
+    }
     const plan = project?.activePlanId ? simpleStore.getPlan(projectId, project.activePlanId) : null;
     const executionRun = project?.activeExecutionRunId ? simpleStore.getExecutionRun(projectId, project.activeExecutionRunId) : null;
     const result = executionRun ? simpleStore.getFinalResult(projectId, executionRun.executionRunId) : null;
@@ -264,7 +287,7 @@ export function createAgentPlannerServer(options = {}) {
       if (project.flowKind === "simple_skill_v1") {
         const stored = simpleStore.getProject(id);
         const job = simpleJobs.get(id);
-        if (job?.status === "running" || ["running", "planning", "preparing"].includes(stored?.status)) {
+        if (["queued", "running"].includes(job?.status) || ["queued", "running", "planning", "preparing"].includes(stored?.status)) {
           if (job) job.cancelRequested = true;
           simpleControllers.get(id)?.abort();
           markSimpleProjectCancelled(id, job);
@@ -305,10 +328,10 @@ export function createAgentPlannerServer(options = {}) {
     const projectId = randomUUID();
     const now = new Date().toISOString();
     const job = {
-      jobId: randomUUID(), projectId, flowKind: "simple_skill_v1", status: "running", progress: 1,
-      currentAction: "正在准备新版 Simple Pipeline", completedActions: 0, totalWorkItems: 0,
+      jobId: randomUUID(), projectId, flowKind: "simple_skill_v1", status: "queued", progress: 0,
+      currentAction: "等待开始制作", completedActions: 0, totalWorkItems: 0,
       stageStates: simpleStageState(), stages: simpleStageDefinitions.map(([id, label]) => ({ id, label, status: "pending" })),
-      project: { projectId, flowKind: "simple_skill_v1", status: "planning", currentStage: "资料解析", progress: 1, ...(ownerId ? { ownerId } : {}), createdAt: now, updatedAt: now },
+      project: { projectId, flowKind: "simple_skill_v1", status: "queued", currentStage: "等待开始制作", progress: 0, ...(ownerId ? { ownerId } : {}), createdAt: now, updatedAt: now, activePlanId: null, activeExecutionRunId: null, planIds: [], executionRunIds: [] },
       createdAt: now, updatedAt: now,
     };
     const controller = new AbortController();
@@ -319,19 +342,23 @@ export function createAgentPlannerServer(options = {}) {
       vision: { ...visionModelConfig, apiKey: configuredKey("vision", runMode) },
       you: configuredKey("you", runMode),
     };
+    job.project.generationQueue = { jobId: job.jobId, state: 'queued', position: 0, submittedAt: now };
+    simpleStore.createProject(job.project);
     simpleJobs.set(projectId, job);
     simpleControllers.set(projectId, controller);
     const sourceData = { data: payload.facts, report: payload.report || {}, fileName: payload.sourceName || payload.report?.workbookName || "行程资料.xlsx" };
-    setImmediate(async () => {
+    const trace = createOperationTrace('generation_queue', { projectId, requestId: job.jobId });
+    simpleGenerationQueue.enqueue(async () => {
       try {
         if (!options.simplePipelineRunner) await assertSimpleRendererOrigin(simpleOrigin());
         const result = await simplePipelineRunner({
           projectId,
           ownerId,
+          generationJobId: job.jobId,
           sourceData,
           root,
           origin: simpleOrigin(),
-          adapters: { store: simpleStore },
+          adapters: { store: simpleStore, render: simpleRenderer },
           plannerOptions: runKeys.model,
           copyOptions: {
             ...runKeys.model,
@@ -373,8 +400,32 @@ export function createAgentPlannerServer(options = {}) {
         job.stages = simpleStageDefinitions.map(([id, label]) => ({ id, label, status: job.stageStates[id] }));
       } finally {
         job.updatedAt = new Date().toISOString();
+        job.finishedAt = job.updatedAt;
         simpleControllers.delete(projectId);
       }
+    }, { signal: controller.signal, onState: state => {
+      const actualState = state.state === 'complete' && ['failed', 'cancelled'].includes(job.status) ? job.status : state.state;
+      const queueState = { ...state, state: actualState, jobId: job.jobId, submittedAt: now };
+      trace.emit(actualState, { ...state, durationMs: state.waitMs });
+      job.generationQueue = queueState;
+      if (state.state === 'queued' && !job.cancelRequested) {
+        job.currentAction = `等待开始制作，前方还有 ${Math.max(0, state.position - 1) + state.activeCount} 份行程`;
+      } else if (state.state === 'running' && !job.cancelRequested) {
+        job.status = 'running'; job.progress = 1; job.startedAt = new Date(state.startedAt).toISOString();
+        job.currentAction = '正在整理行程资料';
+      }
+      const stored = simpleStore.getProject(projectId);
+      if (!stored) return;
+      const starting = state.state === 'running' && !job.cancelRequested;
+      const terminal = ['complete', 'failed', 'cancelled'].includes(state.state);
+      job.project = simpleStore.updateProject(projectId, { generationQueue: queueState,
+        ...(starting ? { status: 'running', progress: 1, currentStage: '资料解析' } : {}),
+        ...(terminal ? { status: job.status, progress: job.progress, currentStage: job.currentAction } : {}) });
+    } }).catch(failure => {
+      if (controller.signal.aborted || failure.name === 'AbortError') markSimpleProjectCancelled(projectId, job);
+      else { job.status = 'failed'; job.currentAction = '本次制作暂时中断'; job.error = failure.message; }
+      job.finishedAt = job.updatedAt = new Date().toISOString();
+      simpleControllers.delete(projectId);
     });
     return job;
   };
@@ -529,12 +580,12 @@ export function createAgentPlannerServer(options = {}) {
         const inMemoryJob = simpleJobs.get(project.agentProjectId);
         // Finished jobs are historical snapshots; manual edits can advance the
         // persisted project after the original job has already stopped.
-        const activeJob = ["running", "planning", "preparing"].includes(inMemoryJob?.status);
+        const activeJob = ["queued", "running", "planning", "preparing"].includes(inMemoryJob?.status);
         const persistedOutcome = ["complete", "ready_for_editor", "partial", "awaiting_user_action", "ready_to_render", "cancelled", "failed", "interrupted"].includes(backend?.status);
         const runtimeStatus = activeJob ? inMemoryJob.status
           : persistedOutcome ? backend.status
-          : inMemoryJob?.status || (["running", "planning", "preparing"].includes(backend?.status) ? "interrupted" : backend?.status);
-        return { ...project, runtimeStatus, unresolvedCount: result?.unresolvedItems?.length || 0 };
+          : inMemoryJob?.status || (["queued", "running", "planning", "preparing"].includes(backend?.status) ? "interrupted" : backend?.status);
+        return { ...project, runtimeStatus, generationQueue: activeJob ? inMemoryJob.generationQueue : null, unresolvedCount: result?.unresolvedItems?.length || 0 };
       };
       try {
         if (request.method === "GET" && url.pathname === catalogRoot) return json(response, 200, { projects: catalog.list(ownerId).map(enrich), trashDays: PROJECT_TRASH_DAYS });
@@ -666,7 +717,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "POST" && simpleImageClearMatch) {
       try {
         const payload = await requestBody(request);
-        const result = await clearSimpleImage({ store: simpleStore, root, projectId: decodeURIComponent(simpleImageClearMatch[1]), slotId: decodeURIComponent(simpleImageClearMatch[2]), expectedSrc: payload.expectedSrc, deferRender: true });
+        const result = await clearSimpleImage({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleImageClearMatch[1]), slotId: decodeURIComponent(simpleImageClearMatch[2]), expectedSrc: payload.expectedSrc, confirmMissingOptional: payload.confirmMissingOptional, deferRender: true });
         return json(response, 200, result);
       } catch (failure) { return json(response, failure.code === "image_clear_image_changed" ? 409 : 400, { error: failure.message, code: failure.code || "image_clear_failed" }); }
     }
@@ -690,7 +741,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "POST" && simpleHotelSearchMatch) {
       try {
         const payload = await requestBody(request);
-        const result = await searchSimpleHotelFacts({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelSearchMatch[1]), hotelIndex: Number(simpleHotelSearchMatch[2]), hotelId: payload.hotelId, keys: payload.keys, mode: payload.mode, copyOptions: { ...modelConfig, researchApiKey: searchModelConfig.apiKey, researchBaseUrl: searchModelConfig.baseUrl, researchModel: searchModelConfig.model, hotelSearchApiKey: configuredKey("you") } });
+        const result = await searchSimpleHotelFacts({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleHotelSearchMatch[1]), hotelIndex: Number(simpleHotelSearchMatch[2]), hotelId: payload.hotelId, keys: payload.keys, mode: payload.mode, copyOptions: { ...modelConfig, researchApiKey: searchModelConfig.apiKey, researchBaseUrl: searchModelConfig.baseUrl, researchModel: searchModelConfig.model, hotelSearchApiKey: configuredKey("you") } });
         return json(response, 200, result);
       } catch (failure) { return json(response, failure.code === "hotel_changed" ? 409 : 400, { error: failure.message, code: failure.code || "hotel_fact_search_failed" }); }
     }
@@ -698,7 +749,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "PUT" && simpleHotelFactMatch) {
       try {
         const payload = await requestBody(request);
-        const result = await saveSimpleHotelFactRow({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelFactMatch[1]), hotelIndex: Number(simpleHotelFactMatch[2]), key: decodeURIComponent(simpleHotelFactMatch[3]), hotelId: payload.hotelId, text: payload.text, mode: payload.mode || "manual", expectedText: payload.expectedText, source: payload.source, deferRender: true });
+        const result = await saveSimpleHotelFactRow({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleHotelFactMatch[1]), hotelIndex: Number(simpleHotelFactMatch[2]), key: decodeURIComponent(simpleHotelFactMatch[3]), hotelId: payload.hotelId, text: payload.text, mode: payload.mode || "manual", expectedText: payload.expectedText, source: payload.source, deferRender: true });
         return json(response, 200, result);
       } catch (failure) { return json(response, failure.code === "hotel_fact_changed" || failure.code === "hotel_changed" ? 409 : 400, { error: failure.message, code: failure.code || "hotel_fact_save_failed" }); }
     }
@@ -706,7 +757,7 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "PUT" && simpleHotelRegionMatch) {
       try {
         const payload = await requestBody(request);
-        const result = await saveSimpleHotelRegion({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelRegionMatch[1]), hotelIndex: Number(simpleHotelRegionMatch[2]), hotelId: payload.hotelId, region: payload.region, deferRender: true });
+        const result = await saveSimpleHotelRegion({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleHotelRegionMatch[1]), hotelIndex: Number(simpleHotelRegionMatch[2]), hotelId: payload.hotelId, region: payload.region, deferRender: true });
         return json(response, 200, result);
       } catch (failure) { return json(response, failure.code === "hotel_changed" ? 409 : 400, { error: failure.message, code: failure.code || "hotel_region_save_failed" }); }
     }
@@ -714,18 +765,31 @@ export function createAgentPlannerServer(options = {}) {
     if (request.method === "PUT" && simpleHotelStayMatch) {
       try {
         const payload = await requestBody(request);
-        const result = await saveSimpleHotelStay({ store: simpleStore, root, projectId: decodeURIComponent(simpleHotelStayMatch[1]), hotelIndex: Number(simpleHotelStayMatch[2]), hotelId: payload.hotelId, desiredNights: payload.desiredNights, expectedSignature: payload.expectedSignature, deferRender: true });
+        const result = await saveSimpleHotelStay({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleHotelStayMatch[1]), hotelIndex: Number(simpleHotelStayMatch[2]), hotelId: payload.hotelId, desiredNights: payload.desiredNights, expectedSignature: payload.expectedSignature, deferRender: true });
         return json(response, 200, result);
       } catch (failure) { return json(response, failure.code === "hotel_changed" || failure.code === "hotel_stay_changed" ? 409 : 400, { error: failure.message, code: failure.code || "hotel_stay_save_failed" }); }
     }
     const simpleCandidateMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images\/([^/]+)\/(select|reject)$/);
     if (request.method === "POST" && simpleCandidateMatch) {
+      const trace = createOperationTrace('image_select_http', { requestId: request.headers['x-request-id'], projectId: decodeURIComponent(simpleCandidateMatch[1]), slotId: decodeURIComponent(simpleCandidateMatch[2]) });
+      response.setHeader('x-request-id', trace.requestId);
+      let responseBytes = 0;
+      response.once('finish', () => trace.emit('response_finished', { statusCode: response.statusCode, bytes: responseBytes }));
+      response.once('close', () => { if (!response.writableFinished) trace.emit('client_disconnected'); });
       try {
         const payload = await requestBody(request);
         const input = { store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer, projectId: decodeURIComponent(simpleCandidateMatch[1]), slotId: decodeURIComponent(simpleCandidateMatch[2]), candidateId: String(payload.candidateId || ""), manualConfirmed: payload.manualConfirmed === true };
-        const result = simpleCandidateMatch[3] === "select" ? await chooseSimpleImageCandidate({ ...input, deferRender: true, knowledgeImageConfig }) : await rejectSimpleImageCandidate(input);
-        return json(response, 200, result);
-      } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || "manual_image_decision_failed" }); }
+        const result = simpleCandidateMatch[3] === "select" ? await chooseSimpleImageCandidate({ ...input, trace, deferRender: true, knowledgeImageConfig, compactResponse: request.headers['x-image-response'] === 'compact' }) : await rejectSimpleImageCandidate(input);
+        const encoded = await trace.measure('response_encode', () => JSON.stringify(result));
+        responseBytes = Buffer.byteLength(encoded);
+        response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        return response.end(encoded);
+      } catch (failure) { trace.emit('request_failed', { code: failure.code || 'manual_image_decision_failed' }); return json(response, 400, { error: failure.message, code: failure.code || "manual_image_decision_failed" }); }
+    }
+    const selectionStateMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images\/([^/]+)\/selection-state$/);
+    if (request.method === 'GET' && selectionStateMatch) {
+      try { return json(response, 200, simpleImageSelectionState(simpleStore, decodeURIComponent(selectionStateMatch[1]), decodeURIComponent(selectionStateMatch[2]), url.searchParams.get('requestId'))); }
+      catch (failure) { return json(response, 404, { error: failure.message, code: failure.code || 'simple_project_not_found' }); }
     }
     const simpleUploadMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/manual-images\/([^/]+)\/upload$/);
     if (request.method === "POST" && simpleUploadMatch) {
@@ -818,6 +882,15 @@ export function createAgentPlannerServer(options = {}) {
       } catch (failure) { return json(response, failure.code === "repair_in_progress" ? 409 : 400, { error: failure.message, code: failure.code || "batch_copy_retry_failed" }); }
     }
     const simpleCopyRetryMatch = url.pathname.match(/^\/api\/simple\/projects\/([^/]+)\/repair\/copy\/([^/]+)$/);
+    if (request.method === "PUT" && simpleCopyRetryMatch) {
+      try {
+        const payload = await requestBody(request);
+        const result = await saveSimpleManualCopy({ store: simpleStore, root: simpleRuntimeRoot, render: simpleRenderer,
+          projectId: decodeURIComponent(simpleCopyRetryMatch[1]), targetId: decodeURIComponent(simpleCopyRetryMatch[2]),
+          value: payload.value, manualConfirmed: payload.manualConfirmed, deferRender: true });
+        return json(response, 200, result);
+      } catch (failure) { return json(response, 400, { error: failure.message, code: failure.code || 'manual_copy_save_failed' }); }
+    }
     if (request.method === "POST" && simpleCopyRetryMatch) {
       try {
         const result = await retrySimpleCopyTarget({
@@ -1117,7 +1190,11 @@ export function createAgentPlannerServer(options = {}) {
   const cleanupInterval = simpleRuntimeRoot !== root || options.cleanupIntervalMs === 0 ? null : setInterval(purgeExpiredProjects, options.cleanupIntervalMs || 60 * 60 * 1000);
   cleanupInterval?.unref();
   if (simpleRuntimeRoot === root) queueMicrotask(purgeExpiredProjects);
-  server.on("close", () => { if (cleanupInterval) clearInterval(cleanupInterval); if (!options.catalog) catalog.close(); });
+  server.on("close", () => {
+    if (cleanupInterval) clearInterval(cleanupInterval);
+    for (const controller of simpleControllers.values()) controller.abort();
+    if (!options.catalog) catalog.close();
+  });
   return { server, port, store, jobs, controllers, executor, simpleStore, simpleJobs, simpleControllers, catalog, purgeExpiredProjects };
 }
 
@@ -1128,5 +1205,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   loadEnvFile(".env.image-search.local");
   loadEnvFile(".env.knowledge.local");
   const { server, port } = createAgentPlannerServer();
-  server.listen(port, "127.0.0.1", () => console.log(`行程成品生成智能体：http://127.0.0.1:${port}/agent`));
+  const bindAddress = String(process.env.AGENT_PLANNER_HOST || "127.0.0.1").trim() || "127.0.0.1";
+  server.listen(port, bindAddress, () => console.log(`行程成品生成智能体：http://127.0.0.1:${port}/agent（监听 ${bindAddress}）`));
 }

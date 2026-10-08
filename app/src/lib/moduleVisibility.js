@@ -10,6 +10,6 @@ export function applyModuleVisibility(data, visibility = {}) {
   if (visibility.expenses === false) { next.totalPrice = null; next.included = []; next.excluded = []; next.cancellation = []; }
   if (visibility.booking === false) next.showBookingSection = false;
   if (visibility.security === false) next.showSecuritySection = false;
-  if (visibility.notes === false) next.notes = [];
+  if (visibility.notes === false) { next.notes = []; next.showNotesSection = false; }
   return next;
 }

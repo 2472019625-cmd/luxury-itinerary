@@ -5,6 +5,7 @@ import { assertPublicUrl, fetchPublicUrl } from "./page-images.mjs";
 import { parseJsonWithSyntaxRepair } from "./json-syntax-repair.mjs";
 import { searchHotelHighlights } from "./you-hotel-search.mjs";
 import { searchDiningHighlights } from "./you-dining-search.mjs";
+import { createOperationTrace, safeErrorDetails } from './operation-trace.mjs';
 
 export const COPY_FACTS_RESEARCH_MODEL = "gemini-3.7-flash-search";
 export const COPY_FACTS_RESEARCH_TYPES = Object.freeze(["official_entity_facts", "authoritative_current_facts"]);
@@ -396,7 +397,8 @@ export function buildCopyFactsResearchRequest({ researchRequest, model = COPY_FA
   };
 }
 
-export async function requestCopyFactsResearch({ apiKey, baseUrl, model = COPY_FACTS_RESEARCH_MODEL, researchRequest, signal, fetchImpl = fetch, emptyContentRetries = 1, maxTransportAttempts, onAttempt }) {
+export async function requestCopyFactsResearch({ apiKey, baseUrl, model = COPY_FACTS_RESEARCH_MODEL, researchRequest, signal, fetchImpl = fetch, emptyContentRetries = 1, maxTransportAttempts, onAttempt, traceContext, logger }) {
+  const trace = createOperationTrace('copy_facts_request', traceContext, logger);
   if (!apiKey) throw Object.assign(new Error("尚未配置 Copy Facts Research API Key"), { code: "copy_facts_research_not_configured", requestDispatched: false });
   const attemptUsages = [];
   const attempts = Math.max(1, Math.min(Number(emptyContentRetries) + 1, maxTransportAttempts ?? Infinity));
@@ -406,16 +408,24 @@ export async function requestCopyFactsResearch({ apiKey, baseUrl, model = COPY_F
     await onAttempt?.({ attempt });
     const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000);
     let response;
-    try { response = await fetchImpl(`${String(baseUrl || "https://api.vveai.com/v1").replace(/\/$/, "")}/chat/completions`, {
+    trace.emit('attempt', { attempt });
+    try { response = await trace.measure('http_headers', () => fetchImpl(`${String(baseUrl || "https://api.vveai.com/v1").replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify(body),
       signal: requestSignal,
-    }); } catch (error) {
-      attemptUsages.push({ attempt, outcome: requestSignal.aborted ? "aborted_or_timeout" : "request_failed", usage: null });
+    })); } catch (error) {
+      attemptUsages.push({ attempt, outcome: requestSignal.aborted ? "aborted_or_timeout" : "request_failed", usage: null, ...safeErrorDetails(error) });
       throw Object.assign(error, { code: error?.code || "copy_facts_research_request_failed", attemptUsages });
     }
-    const payload = await response.json().catch(() => ({}));
+    trace.emit('http_status', { statusCode: response.status });
+    let payload;
+    try { payload = await trace.measure('response_body', () => response.json()); }
+    catch (error) {
+      if (!response.ok) error.status = response.status;
+      attemptUsages.push({ attempt, outcome: 'response_body_failed', usage: null, ...safeErrorDetails(error) });
+      throw Object.assign(error, { code: error?.code || 'copy_facts_research_response_failed', attemptUsages });
+    }
     if (!response.ok) {
       attemptUsages.push({ attempt, outcome: "request_failed", status: response.status, usage: payload.usage || null });
       throw Object.assign(new Error(payload?.error?.message || payload?.message || `Copy Facts Research 请求失败（${response.status}）`), { code: "copy_facts_research_request_failed", status: response.status, attemptUsages });
@@ -423,6 +433,7 @@ export async function requestCopyFactsResearch({ apiKey, baseUrl, model = COPY_F
     const content = payload?.choices?.[0]?.message?.content;
     const attemptRecord = { attempt, usage: payload.usage || null, finishReason: payload?.choices?.[0]?.finish_reason || null, receivedContentChars: clean(content).length, outcome: clean(content) ? "received" : "empty_content" };
     attemptUsages.push(attemptRecord);
+    trace.emit('response_shape', { finishReason: attemptRecord.finishReason, receivedContentChars: attemptRecord.receivedContentChars, attempt });
     if (["length", "max_tokens"].includes(attemptRecord.finishReason)) {
       attemptRecord.outcome = "truncated";
       if (attempt < attempts) continue;
@@ -435,11 +446,12 @@ export async function requestCopyFactsResearch({ apiKey, baseUrl, model = COPY_F
     if (!clean(content) && attempt < attempts) continue;
     if (!clean(content)) throw Object.assign(new Error(`Copy Facts Research 连续 ${attempts} 次没有返回可用内容`), { code: "copy_facts_research_empty", attemptUsages });
     try {
-      const parsed = parseJsonWithSyntaxRepair(content, { allowRepair: true });
+      const parsed = await trace.measure('parse', () => parseJsonWithSyntaxRepair(content, { allowRepair: true }));
       if (parsed.result.operations.some((operation) => operation.type === "appended_closing_delimiters")) throw new Error("不接受依靠补齐结束括号恢复的不完整事实输出");
       const json = parsed.json;
       attemptRecord.parseResult = parsed.result;
       const structureErrors = validateResearchResponseJson(json, researchRequest);
+      trace.emit('parsed_contract', { factCount: Array.isArray(json?.facts) ? json.facts.length : 0, issueCount: structureErrors.length, complete: structureErrors.length === 0 });
       if (structureErrors.length) {
         attemptRecord.outcome = "invalid_structure";
         if (attempt < attempts) continue;
@@ -699,19 +711,20 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
     for (const page of state.externalSourcePages || []) verificationContext.externalPagesUsed.add(page);
     return result;
   };
-  const failure = (error, phase) => ({ phase, code: error?.code || "copy_facts_research_failed", reason: error?.code === "copy_facts_research_truncated" ? "research_truncated" : "research_failed" });
+  const trace = createOperationTrace('copy_facts_research');
+  const failure = (error, phase) => ({ phase, ...safeErrorDetails(error), requestId: trace.requestId, code: error?.code || "copy_facts_research_failed", reason: error?.code === "copy_facts_research_truncated" ? "research_truncated" : "research_failed" });
   const dispatch = async (request, phase) => {
     invocationBusinessCalls += 1;
     let observedAttempts = 0;
     try {
-      const response = await requestResearch({ apiKey, baseUrl, model, researchRequest: request, signal,
+      const response = await trace.measure(`${phase}_request`, () => requestResearch({ apiKey, baseUrl, model, researchRequest: request, signal, traceContext: { requestId: trace.requestId },
         maxTransportAttempts: Math.min(2, MAX_RESEARCH_TRANSPORT_ATTEMPTS - transportAttempts),
         onAttempt: async () => {
           if (transportAttempts >= MAX_RESEARCH_TRANSPORT_ATTEMPTS) throw Object.assign(new Error("酒店事实研究请求额度已用完"), { code: "copy_facts_research_transport_budget", requestDispatched: false });
           observedAttempts += 1; transportAttempts += 1; invocationTransportAttempts += 1;
           await save({ transportAttempts });
         },
-      });
+      }));
       // Injected legacy adapters may not implement onAttempt; still record their observed calls.
       if (!observedAttempts) {
         const count = Math.max(1, response.attemptUsages?.length || 0);
@@ -736,7 +749,7 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
         invocationBusinessCalls += 1;
         try {
           const search = researchRequest.entityKind === "hotel" ? hotelSearch : diningSearch;
-          const searchResult = await search({ researchRequest, apiKey: hotelSearchApiKey, signal });
+          const searchResult = await trace.measure('entity_search', () => search({ researchRequest, apiKey: hotelSearchApiKey, signal }));
           const result = { ...searchResult, businessCalls: 1, invocationBusinessCalls, invocationTransportAttempts: 1, durationMs: Date.now() - startedAt };
           await save({ result });
           return result;
@@ -748,7 +761,7 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
       }
       try {
         const response = await dispatch(researchRequest, "main");
-        const verified = await verifyCopyFactsResearch({ researchRequest, candidates: response.json?.facts, reportedOutcomes: response.json?.categoryOutcomes, signal, fetchSource, fetchBrowserSource, verificationContext, onExternalPage, onSourcePage });
+        const verified = await trace.measure('main_verify', () => verifyCopyFactsResearch({ researchRequest, candidates: response.json?.facts, reportedOutcomes: response.json?.categoryOutcomes, signal, fetchSource, fetchBrowserSource, verificationContext, onExternalPage, onSourcePage }));
         mainResult = { ...verified, model: response.model || model, usage: response.usage || null, attemptUsages: response.attemptUsages || [] };
         await save({ mainResult });
       } catch (error) {
@@ -783,7 +796,7 @@ export async function runCopyFactsResearch({ researchRequest, apiKey, baseUrl, m
           if (!allowed) { rejectedDirections.push({ category: candidate.category, sourceUrl: source.sourceUrl, reason: "source_direction_not_allowed" }); return []; }
           return [{ ...candidate, ...source, sources: undefined }];
         }));
-        const supplementary = await verifyCopyFactsResearch({ researchRequest: request, candidates, reportedOutcomes: response.json?.categoryOutcomes, signal, fetchSource, fetchBrowserSource, verificationContext, onExternalPage, onSourcePage });
+        const supplementary = await trace.measure('supplement_verify', () => verifyCopyFactsResearch({ researchRequest: request, candidates, reportedOutcomes: response.json?.categoryOutcomes, signal, fetchSource, fetchBrowserSource, verificationContext, onExternalPage, onSourcePage }));
         result.verifiedFacts = [...mainResult.verifiedFacts, ...supplementary.verifiedFacts];
         result.rejected = [...mainResult.rejected, ...supplementary.rejected, ...rejectedDirections];
         result.categoryOutcomes = mainResult.categoryOutcomes.map((item) => item.status === "success" ? item : buildResearchCategoryOutcomes({ researchRequest: { categories: [item.category] }, verifiedFacts: result.verifiedFacts, rejected: result.rejected, reportedOutcomes: response.json?.categoryOutcomes })[0]);

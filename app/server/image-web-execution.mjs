@@ -1,4 +1,5 @@
 import { cleanupPlannerQueryScope } from "./knowledge-scope-resolver.mjs";
+import { wildlifeQueryBranches } from "./image-fact-bound-recovery.mjs";
 import { TRAVEL_ENTITY_REGISTRY } from "../src/data/travelEntityRegistry.js";
 const name = (value) => String(typeof value === "string" ? value : value?.officialName || value?.name || "").replace(/\s+/g, " ").trim();
 const unique = (items) => [...new Set(items.filter(Boolean).map((item) => item.trim().replace(/\s+/g, " ")))];
@@ -34,6 +35,13 @@ function sceneQuery(slot, queries, subject, action, isEnglish) {
 }
 
 export function buildWebExecutionQueries(slot, queries, purpose = "", route = null) {
+  const animalBranches = wildlifeQueryBranches(slot);
+  if (animalBranches
+    && String(slot.moduleType).toLowerCase() === "day" && slot.exactIdentityRequired !== true) {
+    return unique(animalBranches.map(({ members, ...option }) => buildWebExecutionQueries({
+      ...slot, animalSubjectOptions: undefined, animalActionOptions: undefined, queryCore: { ...slot.queryCore, ...option },
+    }, queries, purpose, route)[0])).slice(0, 2);
+  }
   const hotelModule = String(slot.moduleType).toLowerCase().includes("hotel");
   const hotel = name(slot.hotelOfficialName) || name(slot.hotel) || (route?.matched && route.entityType === "hotel" ? route.entityName : "");
   if (hotelModule) {

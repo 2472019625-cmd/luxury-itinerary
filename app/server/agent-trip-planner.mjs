@@ -10,12 +10,14 @@ import { validateAgentPlan } from "./agent-plan-validator.mjs";
 import { compileAgentExecutionPlan, filterImagePlanForModules } from "./agent-plan-compiler.mjs";
 import { validateReviewDecisionBatch } from "./agent-review-decision.mjs";
 import { buildKnowledgeQueryPlan, cleanupPlannerQueryScope, validatePlannerSearchIntent } from "./knowledge-scope-resolver.mjs";
-import { resolveScenePreference } from "./image-scene-preferences.mjs";
+import { resolveScenePreference, resolveExamplePreference, coreEnglishQueriesSupported, ordinaryHotelSpaceCategory, ordinaryHotelRepresentativeDetails } from "./image-scene-preferences.mjs";
+import { IMAGE_SEARCH_VOCABULARY_VERSION, BUSINESS_TRANSFER_OVERVIEW_VERSION, lookupImageSearchVocabulary, lookupBusinessTransferOverview, vocabularySourceAllows } from "./image-search-vocabulary.mjs";
 import { visualSubjectPolicyIssue } from "./visual-subject-policy.mjs";
 import { highlightToText } from "../src/lib/highlightDisplay.js";
-import { SLOT_VISUAL_CONTRACT, buildDayVisualCoverageTasks } from "./planner-visual-contract.mjs";
+import { SIMPLE_SLOT_VISUAL_CONTRACT, buildDayVisualCoverageTasks, DAY_VISUAL_COVERAGE_CONTRACT, auditDayVisualCoverage } from "./planner-visual-contract.mjs";
+import { repairFactBoundWildlifeChoice, repairFactBoundDepartureVisual, repairSafariAnimalChoice, repairCommonVisualSubject, repairStarBedFacilityVisual } from "./image-fact-bound-recovery.mjs";
 
-export const AGENT_PROMPT_VERSION = "agent-trip-planner-v13-explicit-day-coverage";
+export const AGENT_PROMPT_VERSION = "agent-trip-planner-v15-day-coverage-decisions-media-safe";
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const prompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-trip-planner-v1.md"), "utf8");
 const reviewDecisionPrompt = readFileSync(path.resolve(moduleDir, "../prompts/agent-review-decision-v1.md"), "utf8");
@@ -442,7 +444,7 @@ function includesWordSequence(words, expected) {
 // alias dictionary. Unknown qualifiers (room types, exclusive facilities, etc.)
 // deliberately do not match and remain specific-scene decisions.
 const hotelRepresentativeCategories = [
-  ["exterior", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:建筑外观|建筑|外观)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:building\s+exterior|building|exterior))$/i],
+  ["exterior", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:建筑外观|建筑|外观|外立面)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:building\s+exterior|building|exterior))$/i],
   ["suite", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:套房|客房)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:suites?|(?:guest\s*)?rooms?))$/i],
   ["pool", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:游泳池|泳池)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:swimming\s+)?pools?)$/i],
   ["main_areas", /^(?:(?:城市酒店|酒店|营地|度假村)?(?:公共空间|公共区域|大堂(?:公共区域|公共空间)?)|(?:(?:(?:city\s+)?hotel|camp|resort)\s+)?(?:public\s+(?:spaces?|areas?)|lobb(?:y|ies)))$/i],
@@ -556,7 +558,41 @@ function repairUnboundHotelSpecificVisual(slot, factBasis = {}) {
     repair: { code: "hotel_unbound_specific_visual_normalized", message: "酒店主图缺少专属房型或设施的酒店来源承诺，已恢复同店代表空间与完整酒店身份", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: slot.queryCore, primaryVisualSubject } };
 }
 
-export function repairFactBoundAnimalChoice(slot, factBasis) {
+export function repairKnownImageSearchTarget(slot, factBasis) {
+  const entry = lookupImageSearchVocabulary(slot);
+  if (!entry || !boundVisualSource(slot, factBasis)) return null;
+  const role = /^(transport|day):(\d+)(?::supporting:\d+)?$/.exec(cleanText(slot.role));
+  if (!role) return null;
+  let source;
+  if (role[1] === "transport") {
+    const transport = factBasis.transport?.[Number(role[2]) - 1];
+    if (!transport || transport.modelGuaranteed || cleanText(transport.model)
+      || ![transport.category, transport.serviceLevel].some(value => entry.aliases.includes(cleanText(value)))) return null;
+    const days = (transport.usageSegments || []).map(segment => Number(/\bDAY\s*(\d+)\b/i.exec(cleanText(segment))?.[1]))
+      .map(number => factBasis.days?.[number - 1]).filter(Boolean);
+    if (!days.length) return null;
+    source = [transport.currentCopy, transport.usageLabel, ...(transport.features || []),
+      ...days.flatMap(day => [day.experience, day.vehicle, ...(day.spots || []).flatMap(spot => [spot.name, spot.description])])].filter(Boolean).join(" ");
+  } else {
+    const day = factBasis.days?.[Number(role[2]) - 1];
+    if (!day) return null;
+    source = [day.experience, ...(day.spots || []).flatMap(spot => [spot.name, spot.description])].filter(Boolean).join(" ");
+    if (!source.includes(entry.subject)) return null;
+  }
+  if (!vocabularySourceAllows(entry, source)) return null;
+  const core = slot.queryCore;
+  const queryCore = { ...core, subject: entry.subject, subjectEn: entry.subjectEn,
+    ...(entry.id !== "business-transfer" ? { action: "", actionEn: "" } : {}) };
+  const primaryVisualSubject = [queryCore.subject, queryCore.action].filter(Boolean).join(" ");
+  const queries = [primaryVisualSubject, [queryCore.subjectEn, queryCore.actionEn].filter(Boolean).join(" ")];
+  return { queryCore, primaryVisualSubject, fidelityQuery: queries[0], alternateQueries: queries.slice(1), searchIntent: queries,
+    repair: { code: "known_search_target_normalized", vocabularyVersion: IMAGE_SEARCH_VOCABULARY_VERSION, vocabularyEntry: entry.id,
+      message: "已核对来源，将已收集的同类主体及普通画面选择归一为可检索目标，必要身份与履约事实不变",
+      originalQueryCore: structuredClone(core), originalPrimaryVisualSubject: slot.primaryVisualSubject,
+      softViewPreferences: [slot.primaryVisualSubject] } };
+}
+
+export function repairFactBoundAnimalChoice(slot, factBasis, { allowAlternatives = false } = {}) {
   const role = /^day:(\d+)(?::supporting:\d+)?$/.exec(cleanText(slot.role));
   const day = role && factBasis.days?.[Number(role[1]) - 1];
   const core = slot.queryCore || {};
@@ -564,23 +600,52 @@ export function repairFactBoundAnimalChoice(slot, factBasis) {
     || !boundVisualSource(slot, factBasis) || [core.action, core.actionEn].some(v => visualChoicePattern.test(cleanText(v)))) return null;
   const zh = cleanText(core.subject).split(/或者|或/).map(cleanText);
   const en = cleanText(core.subjectEn).split(/\s+or\s+/i).map(cleanText);
-  // Only paired animal names explicitly present in this day's facts. Never
-  // choose between activities, identities, or a generic "wildlife" promise.
+  // Only paired animal names explicitly present in this day's facts. The
+  // optional OR contract never relaxes activities, identities or promises.
   const animals = { '狮群': /^lion pride$/i, '狮子': /^lions?$/i, '花豹': /^leopards?$/i,
     '猎豹': /^cheetahs?$/i, '大象': /^elephants?$/i, '象群': /^elephant herd$/i,
     '斑马': /^zebras?$/i, '长颈鹿': /^giraffes?$/i, '角马': /^wildebeest$/i };
   const source = cleanText(day.experience);
+  const finish = (queryCore, names) => {
+    const options = names.map(name => ({ subject: name, subjectEn: name === zh[0] ? en[0] : ({
+      '狮群': 'lion pride', '狮子': 'lion', '花豹': 'leopard', '猎豹': 'cheetah',
+      '大象': 'elephant', '象群': 'elephant herd', '斑马': 'zebra', '长颈鹿': 'giraffe', '角马': 'wildebeest',
+    })[name] }));
+    const primaryVisualSubject = [allowAlternatives ? names.join('或') : queryCore.subject, core.action].filter(Boolean).join(' ');
+    const queries = allowAlternatives
+      ? [...options.map(item => [item.subject, core.action].filter(Boolean).join(' ')),
+        ...options.map(item => [item.subjectEn, core.actionEn].filter(Boolean).join(' '))]
+      : [primaryVisualSubject, [queryCore.subjectEn, core.actionEn].filter(Boolean).join(' ')];
+    return { queryCore, primaryVisualSubject, fidelityQuery: queries[0], alternateQueries: queries.slice(1), searchIntent: queries,
+      ...(allowAlternatives ? { animalSubjectOptions: { mode: 'any', options, sourceRefs: [...slot.sourceRefs] } } : {}),
+      repair: { code: 'fact_bound_animal_choice_resolved', message: allowAlternatives
+        ? '两个动物均有本日原始来源，搜索及审核只要求其中任一主体成立；动作与身份不变'
+        : '保留来源支持的单一动物Core，消除画面选择',
+      originalQueryCore: core, originalPrimaryVisualSubject: slot.primaryVisualSubject } };
+  };
+  // A selected Core can retain a legacy choice in its ideal visual. Recover
+  // that choice only when both animals occur in this day's original facts.
+  if (zh.length === 1 && en.length === 1 && animals[zh[0]]?.test(en[0])) {
+    const names = Object.keys(animals).join('|');
+    const pair = new RegExp(`(${names})\\s*(?:或者|或)\\s*(${names})`).exec(cleanText(slot.primaryVisualSubject));
+    if (!pair || pair[1] === pair[2] || ![pair[1], pair[2]].includes(zh[0])
+      || ![pair[1], pair[2]].every(name => source.includes(name))
+      || !allowAlternatives && new RegExp(`${pair[1]}\\s*(?:或者|或)\\s*${pair[2]}|${pair[2]}\\s*(?:或者|或)\\s*${pair[1]}`).test(source)
+      || /保证|必见|仅限|不得|不能|不含|不安排/.test(source)
+      || /捕猎|猎杀|追逐|攀爬|进食|交配/.test(cleanText(slot.primaryVisualSubject))) return null;
+    const remainder = cleanText(slot.primaryVisualSubject).replace(pair[0], zh[0]);
+    if (visualChoicePattern.test(remainder)
+      || Object.keys(animals).some(name => name !== zh[0] && remainder.includes(name))) return null;
+    return finish({ ...core }, [zh[0], ...[pair[1], pair[2]].filter(name => name !== zh[0])]);
+  }
   if (zh.length !== 2 || en.length !== 2 || zh[0] === zh[1] || !zh.every((v, i) => animals[v]?.test(en[i]) && source.includes(v))
     || /保证|必见|仅限|不得|不能|不含|不安排/.test(source)
-    || source.includes(`${zh[0]}或${zh[1]}`) || source.includes(`${zh[1]}或${zh[0]}`)) return null;
+    || !allowAlternatives && (source.includes(`${zh[0]}或${zh[1]}`) || source.includes(`${zh[1]}或${zh[0]}`))) return null;
   const queryCore = { ...core, subject: zh[0], subjectEn: en[0] };
-  const primaryVisualSubject = [zh[0], core.action].filter(Boolean).join(' ');
-  const queries = [primaryVisualSubject, [en[0], core.actionEn].filter(Boolean).join(' ')];
-  return { queryCore, primaryVisualSubject, fidelityQuery: queries[0], alternateQueries: queries.slice(1), searchIntent: queries,
-    repair: { code: 'fact_bound_animal_choice_resolved', message: '从本日原始事实明确列出的动物中选择首个画面目标，动作及履约事实不变', originalQueryCore: core, originalPrimaryVisualSubject: slot.primaryVisualSubject } };
+  return finish(queryCore, zh);
 }
 
-export function repairHotelRepresentativeChoice(slot, factBasis) {
+export function repairHotelRepresentativeChoice(slot, factBasis, { ordinarySpaces = false } = {}) {
   const hotelRole = /^hotel:(\d+)$/.exec(cleanText(slot.role));
   const hotel = hotelRole && (factBasis.hotels || [])[Number(hotelRole[1]) - 1];
   const core = slot.queryCore || {};
@@ -598,8 +663,8 @@ export function repairHotelRepresentativeChoice(slot, factBasis) {
     return result;
   };
   const subjects = [core.subject, core.subjectEn].map(stripIdentity).filter(Boolean);
-  const categorySets = subjects.map((subject) => splitVisualChoices(subject).map(hotelCategory));
-  const alreadyRepresentative = subjects.length > 0 && subjects.every((subject) => /^(?:酒店代表性空间|representative hotel space)$/i.test(subject));
+  const categorySets = subjects.map((subject) => splitVisualChoices(subject).map(value => hotelCategory(value) || (ordinarySpaces && ordinaryHotelSpaceCategory(value))));
+  const alreadyRepresentative = subjects.length > 0 && subjects.every((subject) => /^(?:酒店代表(?:性)?空间|representative hotel space)$/i.test(subject));
   if (!alreadyRepresentative && (!categorySets.length || categorySets.some((items) => items.length < 1 || items.length > 4 || items.some((item) => !item)))) return null;
   const sameCategories = (items) => unique(items).sort().join("|") === unique(categorySets[0]).sort().join("|");
   if (!alreadyRepresentative && !categorySets.every(sameCategories)) return null;
@@ -611,15 +676,17 @@ export function repairHotelRepresentativeChoice(slot, factBasis) {
   // A canonical representative Core followed by a separate descriptive clause
   // already chooses the hotel, not a particular facility. Keep that clause as
   // preference rather than parsing every landscape adjective as a category.
-  const representativeDetail = alreadyRepresentative && /^(?:酒店)?代表性空间\s*[，,]/.test(visual.trim());
+  const representativeDetail = alreadyRepresentative && (ordinarySpaces
+    ? ordinaryHotelRepresentativeDetails(visual.trim())
+    : /^(?:酒店)?代表(?:性)?空间\s*[，,]/.test(visual.trim()));
   if (representativeDetail && !cleanText(hotel.roomType) && !cleanText(hotel.signatureExperience)
     && !/专属|私人|指定|总统|蜜月|private|presidential|booked|guaranteed/i.test(visual)
     && !/另一|其他酒店|隔壁|乘坐|用餐|骑行|游泳|观鸟|\b(?:hotel|lodge|camp|resort|dining|swimming|riding)\b/i.test(visual)
     && ![hotel.currentCopy, hotel.selectionReason].some(value => /指定|保证|承诺|guaranteed|booked/i.test(cleanText(value)))
     && !(factBasis.hotels || []).some(other => other !== hotel && cleanText(other.name) && cleanText(slot.primaryVisualSubject).includes(other.name))
-    && /大堂|客房|套房|外观|泳池|甲板/.test(visual)) {
+    && (ordinarySpaces ? ordinaryHotelRepresentativeDetails(visual.trim()) : /大堂|客房|套房|外观|泳池|甲板/.test(visual))) {
     const primaryVisualSubject = `${cleanText(core.identity)} 酒店代表性空间`;
-    const queryCore = { ...core };
+    const queryCore = { ...core, subject: "酒店代表性空间" };
     const queries = [`${core.identity} 酒店代表性空间`, `${core.identityEn || core.identity} representative hotel space`];
     return { primaryVisualSubject, queryCore, fidelityQuery: queries[0], alternateQueries: queries.slice(1), searchIntent: queries,
       repair: { code: "hotel_representative_choice_resolved", message: "同店代表图保留完整身份，附加空间描述仅作为偏好", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: core, softViewPreferences: [visual.trim()] } };
@@ -630,10 +697,10 @@ export function repairHotelRepresentativeChoice(slot, factBasis) {
     // Canonical representative Core permits generic lodging presentation;
     // named rooms, private facilities and other entities still fail parsing.
     const neutral = alreadyRepresentative ? part.trim().replace(/^(?:(?:帐篷)?(?:营地|度假)?酒店|帐篷营地|营地|度假村)的?/, "") : part;
-    if (alreadyRepresentative && /^(?:代表性空间|representative (?:hotel )?space)$/i.test(neutral)) {
+    if (alreadyRepresentative && /^(?:代表(?:性)?空间|representative (?:hotel )?space)$/i.test(neutral)) {
       return { category: "representative", preference: "" };
     }
-    return hotelVisualCategory(neutral);
+    return hotelVisualCategory(neutral) || (ordinarySpaces && ordinaryHotelSpaceCategory(neutral) ? { category: ordinaryHotelSpaceCategory(neutral), preference: '' } : null);
   });
   if (visualCategories.length < 2 || visualCategories.length > 4 || visualCategories.some((item) => !item)) return null;
   const categoryNames = visualCategories.map((item) => item.category);
@@ -762,10 +829,68 @@ function repairEquivalentVisualChoice(slot) {
   } };
 }
 
+// A transfer action is a Core requirement, unlike an ordinary driving/parked
+// pose. Share this bounded background recovery with explicit searches; never
+// clear the action or choose one of the backgrounds as a new requirement.
+export function repairBusinessTransferBackground(slot, factBasis) {
+  const role = /^transport:(\d+)$/.exec(cleanText(slot.role));
+  const transport = role && factBasis.transport?.[Number(role[1]) - 1];
+  const core = slot.queryCore || {};
+  if (!transport || slot.userLocked || !boundVisualSource(slot, factBasis)
+    || !/^(?:商务用车|商务车|商务接待车辆|商务接送车辆)$/.test(cleanText(core.subject))
+    || !/^(?:(?:chauffeured\s+)?business\s+(?:car|van|vehicle|transfer vehicle)|business_transfer_vehicle)?$/i.test(cleanText(core.subjectEn))
+    || !/^(?:商务用车|商务车|商务接待车辆|商务接送车辆)$/.test(cleanText(transport.category || transport.serviceLevel))
+    || transport.modelGuaranteed || cleanText(transport.model)
+    || !/^(?:接送|接送乘客)$/.test(cleanText(core.action))
+    || !/^(?:(?:airport|passenger) transfer|transferring passengers|picking up passengers|transporting passengers)?$/i.test(cleanText(core.actionEn))) return null;
+  const days = (transport.usageSegments || []).map(segment => Number(/\bDAY\s*(\d+)\b/i.exec(cleanText(segment))?.[1]))
+    .map(number => factBasis.days?.[number - 1]).filter(Boolean);
+  if (!days.length) return null;
+  // Inspect the Planner's explicit queries, not the adapter's derived lookup
+  // aliases: those aliases may be subject-only but never change the audit Core.
+  const originalQueries = unique([slot.fidelityQuery, ...(slot.alternateQueries || [])]);
+  if (!originalQueries.length || originalQueries.some(query =>
+    /飞机|直升机|游猎车|酒店|\b(?:helicopter|plane|safari vehicle|hotel|lodge)\b/i.test(query)
+    || !/接送|\b(?:airport|passenger) transfer\b|transferring passengers|picking up passengers|transporting passengers/i.test(query)
+    || !/商务用车|商务车|商务接待车辆|商务接送车辆|\bbusiness (?:car|van|vehicle|transfer vehicle)\b|\b(?:airport|passenger) transfer\b/i.test(query))) return null;
+  const preference = resolveScenePreference(slot);
+  if (!preference?.backgroundPreference || !preference.backgroundPreference.split(/或者|或|\bor\b/i)
+    .every(value => /^(?:机场|城市道路|市区道路|城市街道|市区|城市|airport|city roads?|urban roads?|city streets?)$/i.test(cleanText(value)))) return null;
+  const queryCore = structuredClone(core);
+  const queryPlan = buildKnowledgeQueryPlan({ ...slot, queryCore, primaryVisualSubject: preference.primaryVisualSubject,
+    fidelityQuery: "", alternateQueries: [], searchIntent: [] }, null);
+  if (queryPlan.validationError || queryPlan.queries.length < 2) return null;
+  return { queryCore, primaryVisualSubject: preference.primaryVisualSubject,
+    fidelityQuery: queryPlan.queries[0], alternateQueries: queryPlan.queries.slice(1), searchIntent: queryPlan.queries,
+    repair: { code: "business_transfer_background_resolved", message: "保留商务车接送Core，机场或城市道路仅作背景偏好",
+      originalQueryCore: structuredClone(core), originalPrimaryVisualSubject: slot.primaryVisualSubject,
+      sourceRefs: [...slot.sourceRefs], backgroundPreference: preference.backgroundPreference } };
+}
+
+export function repairBusinessTransferOverview(slot, factBasis) {
+  const role = /^transport:(\d+)$/.exec(cleanText(slot.role));
+  const transport = role && factBasis.transport?.[Number(role[1]) - 1];
+  const entry = lookupBusinessTransferOverview(slot, transport);
+  if (!entry || !boundVisualSource(slot, factBasis)) return null;
+  const days = (transport.usageSegments || []).map(segment => Number(/\bDAY\s*(\d+)\b/i.exec(cleanText(segment))?.[1]))
+    .map(number => factBasis.days?.[number - 1]).filter(Boolean);
+  if (!days.length) return null;
+  const source = [transport.currentCopy, transport.usageLabel, ...(transport.features || []),
+    ...days.flatMap(day => [day.experience, day.vehicle, ...(day.spots || []).flatMap(spot => [spot.name, spot.description])])].filter(Boolean).join(" ");
+  if (/上下客体验|登车体验|下车体验|迎宾仪式|礼宾迎接|车型|品牌|型号|保证|仅限|限定|不得|不能|不安排|boarding experience|welcome ceremony|guaranteed|specified model/i.test(source)) return null;
+  const queryCore = { ...slot.queryCore, subject: entry.subject, subjectEn: entry.subjectEn, action: "", actionEn: "", identity: "", identityEn: "" };
+  const queries = [entry.subject, entry.subjectEn];
+  return { queryCore, primaryVisualSubject: entry.subject, fidelityQuery: queries[0], alternateQueries: queries.slice(1), searchIntent: queries,
+    repair: { code: "business_transfer_overview_normalized", vocabularyVersion: BUSINESS_TRANSFER_OVERVIEW_VERSION, vocabularyEntry: entry.id,
+      message: "已核对原始商务车交通项，普通行驶或停放仅作画面偏好，商务接送类别继续硬审核",
+      originalQueryCore: structuredClone(slot.queryCore), originalPrimaryVisualSubject: slot.primaryVisualSubject,
+      softViewPreferences: [slot.primaryVisualSubject] } };
+}
+
 export function repairTransportOverviewPose(slot, factBasis, { allowCoreActionChoices = false } = {}) {
   const role = /^transport:(\d+)$/.exec(cleanText(slot.role));
   const transport = role && (factBasis.transport || [])[Number(role[1]) - 1];
-  if (!transport || slot.exactIdentityRequired !== false || slot.locationRole !== "scope_only") return null;
+  if (!transport || slot.userLocked || slot.exactIdentityRequired !== false || slot.locationRole !== "scope_only") return null;
   const core = slot.queryCore || {};
   if (/商务(?:用)?车/.test(`${transport.category} ${transport.serviceLevel}`)
     && /^(?:商务用车|商务车)$/.test(cleanText(core.subject))
@@ -775,7 +900,7 @@ export function repairTransportOverviewPose(slot, factBasis, { allowCoreActionCh
     && !/飞机|直升机|热气球|船|骑行|游猎|接送乘客|登车|下车|helicopter|boat|bicycle/i.test(cleanText(slot.primaryVisualSubject))
     && /^(?:在城市道路)?行驶$/.test(cleanText(core.action))
     && /^(?:driving(?: on city road)?)?$/i.test(cleanText(core.actionEn))
-    && /车辆停靠或行驶于市区[。.]?$/.test(cleanText(slot.primaryVisualSubject))
+    && /(?:车辆停靠或行驶于市区|^(?:商务用车|商务车)在(?:肯尼亚)?城市道路或机场接送)[。.]?$/.test(cleanText(slot.primaryVisualSubject))
     && (transport.usageSegments || []).length > 0) {
     const queryCore = { ...core, action: "", actionEn: "" };
     const primaryVisualSubject = cleanText(core.subject);
@@ -788,7 +913,7 @@ export function repairTransportOverviewPose(slot, factBasis, { allowCoreActionCh
     || [core.subject, core.identity, core.subjectEn, core.identityEn].some((value) => visualChoicePattern.test(cleanText(value)))) return null;
   const visual = cleanText(slot.primaryVisualSubject);
   if (allowCoreActionChoices && visualSubjectPolicyIssue(visual, core)) return null;
-  const ordinaryPose = /(?:起飞|降落|起降|停靠|停放|飞行中|飞行|空中|跑道|taking[ -]?off|landing|parked|flying|in[ -]?flight|airstrip|runway)/i;
+  const ordinaryPose = /(?:起飞|降落|起降|停靠|停放|停泊|飞行中|飞行|空中|跑道|taking[ -]?off|landing|parked|flying|in[ -]?flight|airstrip|runway)/i;
   // A single Chinese scene can have ordinary pose alternatives in its English
   // Core. Automatic and manual callers use the same fact-backed recovery.
   const choiceText = allowCoreActionChoices && !visualChoicePattern.test(visual)
@@ -808,12 +933,13 @@ export function repairTransportOverviewPose(slot, factBasis, { allowCoreActionCh
     ...(allowCoreActionChoices ? (day.spots || []).flatMap((spot) => [spot.name, spot.description]) : []),
   ]).filter(Boolean).join(" ");
   const sourceDetails = allowCoreActionChoices ? [transport.currentCopy, ...(transport.features || [])].filter(Boolean).join(" ") : "";
-  if (/航拍|空中观光|观景飞行|低空飞越|起飞|降落|停靠|停放|飞行中|scenic[ -]?flight|aerial[ -]?tour|taking[ -]?off|landing|parked/i.test(`${sourceFacts} ${transport.usageLabel || ""} ${sourceDetails}`)
+  if (/航拍|空中观光|观景飞行|低空飞越|起飞|降落|停靠|停放|停泊|飞行中|scenic[ -]?flight|aerial[ -]?tour|taking[ -]?off|landing|parked/i.test(`${sourceFacts} ${transport.usageLabel || ""} ${sourceDetails}`)
     || /航拍体验|空中观光|观景飞行|低空飞越|scenic[ -]?flight|aerial[ -]?tour/i.test(visual)
     || allowCoreActionChoices && /航拍|空中观光|观景飞行|低空飞越|起降体验|scenic[ -]?flight|aerial[ -]?tour/i.test(`${visual} ${slot.visualGoal || ""}`)) return null;
-  const onlyOrdinaryMotion = (value) => !cleanText(value).replace(/(?:在|于)?[^或\s]{0,16}?(?:跑道|机场)(?:上)?/gu, "")
+  const onlyOrdinaryMotion = (value) => !cleanText(value).replace(/(?:在|于)?草原(?:上|中)?/gu, "").replace(/(?:在|于)?[^或\s]{0,16}?(?:跑道|机场)(?:上)?/gu, "")
     .replace(/\b(?:on|at)\s+(?:a\s+)?(?:[a-z-]+\s+){0,3}(?:airstrip|runway)\b/gi, "")
-    .replace(/起飞|降落|起降|停靠|停放|飞行中|飞行|空中|taking[ -]?off|landing|parked|flying|in[ -]?flight|flight/gi, "")
+    .replace(/\b(?:over|above)\s+(?:the\s+)?savann?ah?\b/gi, "")
+    .replace(/起飞|降落|起降|停靠|停放|停泊|飞行中|飞行|空中|taking[ -]?off|landing|parked|flying|in[ -]?flight|flight/gi, "")
     .replace(/或者|或|\bor\b|[\s,，.。/\-]+/gi, "");
   if (!onlyOrdinaryMotion(core.action) || !onlyOrdinaryMotion(core.actionEn)) return null;
   const subject = /(?:在|于).*(?:跑道|airstrip|runway)|\b(?:on|at)\s+(?:a\s+)?(?:dirt\s+)?(?:airstrip|runway)/i.test(cleanText(core.subject))
@@ -825,6 +951,43 @@ export function repairTransportOverviewPose(slot, factBasis, { allowCoreActionCh
   if (queryPlan.validationError || queryPlan.queries.length < 2) return null;
   return { primaryVisualSubject, queryCore, fidelityQuery: queryPlan.queries[0], alternateQueries: queryPlan.queries.slice(1, 4), searchIntent: queryPlan.queries.slice(0, 4),
     repair: { code: "transport_overview_pose_normalized", message: "交通概览保留原始飞机类型，普通跑道或空中姿态只作表现偏好", originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: structuredClone(core), primaryVisualSubject } };
+}
+
+export function repairSimpleVisualChoice(slot, factBasis) {
+  if (slot.userLocked || !boundVisualSource(slot, factBasis)
+    || !slot.sourceRefs.every(ref => boundVisualSource({ ...slot, sourceRefs: [ref] }, factBasis))) return null;
+  if (/^hotel:\d+$/.test(slot.role)) {
+    const hotel = factBasis.hotels?.[Number(slot.role.slice(6)) - 1];
+    const names = [hotel?.name, hotel?.officialName, hotel?.shortName].map(visualKey).filter(Boolean);
+    if (cleanText(slot.queryCore?.identityEn) && !names.includes(visualKey(slot.queryCore.identityEn))) return null;
+    const result = repairHotelRepresentativeChoice(slot, factBasis, { ordinarySpaces: true });
+    const queries = [slot.fidelityQuery, ...(slot.alternateQueries || [])];
+    if (result && JSON.stringify(result.queryCore) === JSON.stringify(slot.queryCore)
+      && validatePlannerSearchIntent(queries).valid && !queries.some(value => visualChoicePattern.test(cleanText(value)))) {
+      delete result.fidelityQuery;
+      delete result.alternateQueries;
+      delete result.searchIntent;
+    }
+    return result;
+  }
+  if (!coreEnglishQueriesSupported(slot)) return null;
+  const preference = resolveExamplePreference(slot) || resolveScenePreference(slot);
+  if (!preference) return null;
+  const referencedFacts = (slot.sourceRefs || []).map(ref => {
+    const [key, index] = ref.split('.');
+    return key === 'days' ? factBasis.days?.[Number(index)] : factBasis[key]?.find((item, position) => (item.sourceIndex ?? position) === Number(index));
+  });
+  // A guaranteed example in the original input is not a presentation preference.
+  if (preference.exampleAlternatives && referencedFacts.some(item => {
+    const source = JSON.stringify(item || {});
+    return /保证|承诺|指定|必看|必有|guaranteed|booked/i.test(source)
+      && preference.exampleAlternatives.some(value => source.includes(value));
+  })) return null;
+  const { exampleAlternatives, ...evidence } = preference;
+  return { primaryVisualSubject: preference.primaryVisualSubject,
+    repair: { code: 'non_core_visual_choice_normalized', ...evidence,
+      originalPrimaryVisualSubject: slot.primaryVisualSubject, originalQueryCore: structuredClone(slot.queryCore),
+      originalQueries: [slot.fidelityQuery, ...(slot.alternateQueries || [])], sourceRefs: [...slot.sourceRefs] } };
 }
 
 function boundVisualSource(slot, factBasis) {
@@ -920,7 +1083,7 @@ export function recoverCompletePlannerImageSlots(attemptContents = []) {
   return best;
 }
 
-function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
+function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}, { simpleSkillContract = false } = {}) {
   const next = structuredClone(plan);
   const repairs = [];
   const unresolvedRoles = new Set();
@@ -970,6 +1133,25 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
     const issues = issuesByRole.get(role) || [];
     const localRepairs = [];
     let repaired = { ...slot };
+    const starBed = repairStarBedFacilityVisual(slot, factBasis);
+    if (starBed) {
+      const { repair, ...fields } = starBed;
+      Object.assign(repaired, fields);
+      localRepairs.push(repair);
+      if (/^day:\d+$/.test(role)) {
+        const dayRole = next.dayRoles?.find(item => item.index === Number(role.slice(4)) - 1);
+        if (dayRole) dayRole.primaryVisualSubject = repaired.primaryVisualSubject;
+      }
+    }
+    // Only the fact-bound repair may create an animal OR contract.
+    delete repaired.animalSubjectOptions;
+    delete repaired.animalActionOptions;
+    const businessOverview = repairBusinessTransferOverview(slot, factBasis);
+    if (businessOverview) {
+      const { repair, ...fields } = businessOverview;
+      Object.assign(repaired, fields);
+      localRepairs.push(repair);
+    }
     const omissionRepair = issues.some(issue => issue.code === "image_optional_omission_conflict")
       && issues.every(issue => issue.code === "image_optional_omission_conflict" || QUERY_REPAIRABLE_CODES.has(issue.code))
       && candidates.get(role)?.required === false && !slot.userLocked
@@ -981,13 +1163,20 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
       localRepairs.push({ code: "populated_optional_omission_resolved", message: "保留有事实绑定且目标有效的已规划可选图位，仅移除与其冲突的省略标记" });
     }
     const visualRepair = issues.some((issue) => issue.code === "ambiguous_visual_subject")
-      ? repairFactBoundAnimalChoice(slot, factBasis) || repairHotelRepresentativeChoice(slot, factBasis) || (boundVisualSource(slot, factBasis) ? repairBackgroundVisualChoice(slot) : null) || repairEquivalentVisualChoice(slot)
+      ? (simpleSkillContract ? repairSimpleVisualChoice(slot, factBasis) : null) || repairFactBoundAnimalChoice(slot, factBasis, { allowAlternatives: true }) || repairFactBoundWildlifeChoice(slot, factBasis) || repairSafariAnimalChoice(slot, factBasis) || repairCommonVisualSubject(slot, factBasis) || repairHotelRepresentativeChoice(slot, factBasis) || repairBusinessTransferBackground(slot, factBasis) || (!simpleSkillContract && boundVisualSource(slot, factBasis) ? repairBackgroundVisualChoice(slot) : null) || repairEquivalentVisualChoice(slot)
         || (boundVisualSource(slot, factBasis) ? repairTransportOverviewPose(slot, factBasis, { allowCoreActionChoices: true }) : null)
+        || repairKnownImageSearchTarget(slot, factBasis)
+      : issues.some((issue) => issue.code === "abstract_visual_subject") ? repairFactBoundDepartureVisual(slot, factBasis)
       : issues.some((issue) => issue.code === "hotel_specific_visual_unbound") ? repairUnboundHotelSpecificVisual(slot, factBasis) : null;
     if (visualRepair) {
       const { repair, ...fields } = visualRepair;
       Object.assign(repaired, fields);
       localRepairs.push(repair);
+      if (["fact_bound_wildlife_choice_resolved", "fact_bound_departure_visual_resolved", "safari_animal_choice_resolved", "safari_continuation_visual_resolved", "common_animal_subject_resolved", "common_entity_view_resolved"].includes(repair.code)
+        && /^day:\d+$/.test(role)) {
+        const dayRole = next.dayRoles?.find(item => item.index === Number(role.slice(4)) - 1);
+        if (dayRole) dayRole.primaryVisualSubject = repaired.primaryVisualSubject;
+      }
     }
     const transportRole = /^transport:(\d+)$/.exec(cleanText(role));
     const scopeLocation = transportRole && cleanText((factBasis.transport || [])[Number(transportRole[1]) - 1]?.scopeLocation);
@@ -999,6 +1188,8 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
     }
     let unresolved = issues.some((issue) => !QUERY_REPAIRABLE_CODES.has(issue.code) && issue.code !== "invalid_supporting_visual"
       && !(issue.code === "ambiguous_visual_subject" && visualRepair)
+      && !(issue.code === "abstract_visual_subject" && visualRepair?.repair.code === "fact_bound_departure_visual_resolved")
+      && !(issue.code === "visual_query_branch_conflict" && (visualRepair?.animalSubjectOptions || ["safari_continuation_visual_resolved", "common_animal_subject_resolved", "common_entity_view_resolved"].includes(visualRepair?.repair.code)))
       && !(issue.code === "image_location_missing" && scopeRepair)
       && !(issue.code === "image_optional_omission_conflict" && omissionRepair)
       && !(issue.code === "hotel_specific_visual_unbound" && visualRepair?.repair.code === "hotel_unbound_specific_visual_normalized"));
@@ -1010,7 +1201,8 @@ function applyPlannerFailOpen(plan, validationErrors = [], factBasis = {}) {
     }
 
     if (issues.some((issue) => QUERY_REPAIRABLE_CODES.has(issue.code))) {
-      const querySlot = ["hotel_representative_choice_resolved", "hotel_unbound_specific_visual_normalized"].includes(visualRepair?.repair.code)
+      const querySlot = visualRepair?.animalSubjectOptions ? { ...repaired, moduleType: "day" }
+        : ["hotel_representative_choice_resolved", "hotel_unbound_specific_visual_normalized"].includes(visualRepair?.repair.code)
         ? { ...repaired, moduleType: "hotel", hotel: repaired.queryCore.identity } : repaired;
       const queryPlan = buildKnowledgeQueryPlan(querySlot, null);
       if (queryPlan.queries.length >= 2 && !queryPlan.validationError) {
@@ -1112,20 +1304,21 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   };
   const callStats = { source_parser: 1, trip_planner: 0 };
   const attempts = [];
-  const simpleContractPrompt = "simple-skill-pipeline 额外接口：在原有 JSON 字段之外返回 selectedHighlights 数组。每项只含 sourceText、sourceType(source_designated|official_product|planner_derived)、sourceRefs、selectionReason，不写最终客户文案。你必须在本次规划中最终确定实际采用的亮点集合：第一优先逐条读取 factBasis.sourcePosterHighlights；第二优先只能从 factBasis.officialProductValues 选择奢游已确认服务/产品价值，sourceText 必须原样引用对应候选；前两类仍不足5条时才补充整程级购买理由。目标5—7条，真实事实不足时允许少于5条并在 selectionReason 说明素材不足。不得把普通DAY细节拔高，也不得把 DAY 中的自费热气球标成 official_product。图片规划必须读取封面、每个酒店、每个独立餐饮、每种交通和每个 DAY 的完整事实；对应role使用cover、hotel:N、dining:N、transport:N、day:N。Planner是图片画面的唯一决定者；每个图片位在同一次Planner调用内必须返回primaryVisualSubject、location、locationRole、queryCore、fidelityQuery和alternateQueries。locationRole只能是scope_only或visual_identity。queryCore只用subject/action/identity/subjectEn/actionEn/identityEn：subject是真正必须入镜的通用可见主体，action是定义画面的关键动作且静态画面可为空，identity只供Scope和身份审核。fidelityQuery是一条简短可搜索的第一条画面保真Query，alternateQueries是1—3条同画面的补充Query，合计2—4条；第一条不要求与queryCore逐字相同，同义表达不得因文字差异被改写。locationRole=scope_only时地点和目录身份不得进入任何Query；若地标、实体或命名身份本身必须入镜，必须改成locationRole=visual_identity，而不是一边写scope_only一边把身份留在Query。普通时间、氛围、构图和费用状态不得进入Query。两条准确Query已经足够，不得凑满四条。以上按字段语义通用执行，不得针对国家、动物、酒店、景点或当前案例建立专用词表。dayRoles.primaryVisualSubject只能选已有真实活动并结合differenceFromAdjacent，不能机械取spots[0]或虚构差异；徒步/夜游、文化体验和真实存在的可选活动都可以承担DAY主视觉，自费/可选/待确认体验成为视觉重点时必须保留状态。封面只能有一个核心焦点。DAY、酒店、餐饮、交通和封面每个slot都只能是一张具体可拍画面，禁止A或B、抽象抵达/离境/用餐概念或两个独立体验。输出前以queryCore.identity+subject+action为每个slot生成视觉职责键并全量去重；封面与DAY、独立模块与DAY也不能重复。同一体验跨模块存在时，必须选择不同的可见主体或动作，若DAY已有其他真实高价值画面则优先改用该画面，不能只改primaryVisualSubject或Query措辞。原始资料明确写有游猎时不得判断为无游猎。";
-  const dayVisualPrompt = "DAY 图片继续只使用 imagePlan.slots。每个 DAY 保留一个role为day:N的主视觉；结构上允许0—3个role为day:N:supporting:1等的辅助视觉；0只适用于事实确无第二个合理画面，不是普通日默认值。不要输出slotId、label、required或removable，这些属性由程序根据role补齐。普通核心体验日默认规划2张不同职责的图，事实丰富且职责不同可规划3—4张；转场、返程日规划1—2张，资料确实只有一个合理画面时可只保留主图；不得用抽象的抵达、送机离境、入住、用餐体验或自由活动充当画面。有限图片位内按以下顺序选择：独家或稀缺体验；来源明确的景点、设施或活动；有强视觉主体的动物、地标、自然事件或特色体验；能够与同日其他画面形成真实差异的场景；普通全天、清晨、傍晚游猎只在没有更高价值真实视觉时作为兜底。此顺序按字段语义通用判断，不绑定国家、项目或DAY。每个slot必须选定一个明确场景，禁止A或B、A/B和两个独立体验；同一真实画面可以包含多个自然共现主体。两个不同场景值得展示时拆成两个slot，每天最多4张。primaryVisualSubject只写真正需要入镜的主体和动作。命名地点只是搜索范围时写入location并设locationRole=scope_only；只有地点、地标、建筑、入口、标牌或实体本身必须入镜时才设locationRole=visual_identity并允许Query保留名称。主题可以来自完整experience，不要求与Spot同名。主视觉与dayRoles主线一致，辅助图只能补充主线。每个slot分别输出fidelityQuery和1—3条alternateQueries，中文精准词在前，必要英文同义表达在后；不能照抄primaryVisualSubject长句，不能写时间氛围、姿态构图、图片职责或泛词。两条准确Query已经足够；sourceRefs指向当天原始事实。";
-  const visualSelectionChecklist = "单次规划的逐位最终检查：先从该图片位的原始事实选定唯一一个Core主体、必要动作及身份，再写primaryVisualSubject、queryCore和全部Query；这几处必须始终指向同一张画面。若原文列举多个可选主体或活动，只选其中一个作为本位目标；另一个只有具备独立来源和不同职责时才可另建辅助位。图片里的设备、光源、特定设施或动物必须能由sourceRefs指向的原始事实支持，不凭常识添加。alternateQueries只能改用同一目标的同义搜索表达，绝不可切换成另一主体或动作。dayRoles的主视觉与对应day:N主图必须一致。输出前发现任一视觉句保留二选一，或任一Query跨到另一分支，就在本次规划内部按事实重新确定目标并改正整个位；不要把矛盾留给搜索，也不要增加第二次规划调用。";
-  const visualCoveragePrompt = '输出前逐日复核视觉覆盖，不得把允许辅助图误解为默认每天仅一个主图。资料确实只有一个合理画面时可选1个；普通核心体验日默认2个；事实丰富且有3—4个独立合理视觉职责时可规划3—4个；只有2个合理画面时规划2个；转场、返程日按真实内容选择1—2个，分别写成primary与supporting，而非合并进一个泛化游猎主题。不同主体、必要动作或可见场景具有独立职责时分别规划，不把多个真实画面压成泛化主题。纯返程或简单送机只需一个收尾视觉，不强迫补足。禁止以接送、入住或重复场景凑数。用现有visualDuty/differentiation说明选择价值和覆盖范围；只保留单图时在这两个既有字段中简述事实限制；sourceRefs优先精确引用对应days.N.spots.M或当日事实摘录，便于保留原费用状态，不新增schema。';
+  const simpleContractPrompt = "simple-skill-pipeline 额外接口：在原有 JSON 字段之外返回 selectedHighlights 数组。每项只含 sourceText、sourceType(source_designated|official_product|planner_derived)、sourceRefs、selectionReason，不写最终客户文案。你必须在本次规划中最终确定实际采用的亮点集合：第一优先逐条读取 factBasis.sourcePosterHighlights；第二优先只能从 factBasis.officialProductValues 选择奢游已确认服务/产品价值，sourceText 必须原样引用对应候选；前两类仍不足5条时才补充整程级购买理由。目标5—7条，真实事实不足时允许少于5条并在 selectionReason 说明素材不足。不得把普通DAY细节拔高，也不得把 DAY 中的自费热气球标成 official_product。图片规划必须读取封面、每个酒店、每个独立餐饮、每种交通和每个 DAY 的完整事实；对应role使用cover、hotel:N、dining:N、transport:N、day:N。Planner是图片画面的唯一决定者；每个图片位在同一次Planner调用内必须返回primaryVisualSubject、location、locationRole、queryCore、fidelityQuery和alternateQueries。locationRole只能是scope_only或visual_identity。queryCore只用subject/action/identity/subjectEn/actionEn/identityEn：subject是真正必须入镜的通用可见主体，action是定义画面的关键动作且静态画面可为空，identity只供Scope和身份审核。fidelityQuery是一条简短可搜索的第一条画面保真Query，alternateQueries是1—3条同画面的补充Query，合计2—4条；第一条不要求与queryCore逐字相同，同义表达不得因文字差异被改写。locationRole=scope_only时地点和目录身份不得进入任何Query；若地标、实体或命名身份本身必须入镜，必须改成locationRole=visual_identity，而不是一边写scope_only一边把身份留在Query。普通时间、氛围、构图和费用状态不得进入Query。两条准确Query已经足够，不得凑满四条。以上按字段语义通用执行，不得针对国家、动物、酒店、景点或当前案例建立专用词表。dayRoles.primaryVisualSubject只能选已有真实活动并结合differenceFromAdjacent，不能机械取spots[0]或虚构差异；徒步/夜游、文化体验和真实存在的可选活动都可以承担DAY主视觉，自费/可选/待确认体验成为视觉重点时必须保留状态。封面只能有一个核心焦点。DAY、酒店、餐饮、交通和封面每个slot都只能是一张具体可拍画面，禁止核心主体、必要动作或身份A或B、抽象抵达/离境/用餐概念或两个独立体验；Core已确定时，明确标注的普通背景、示例和同店代表空间选择可作偏好，不能改变Core。输出前以queryCore.identity+subject+action为每个slot生成视觉职责键并全量去重；封面与DAY、独立模块与DAY也不能重复。同一体验跨模块存在时，必须选择不同的可见主体或动作，若DAY已有其他真实高价值画面则优先改用该画面，不能只改primaryVisualSubject或Query措辞。原始资料明确写有游猎时不得判断为无游猎。";
+  const dayVisualPrompt = "DAY 图片继续只使用 imagePlan.slots。每个 DAY 保留一个role为day:N的主视觉；结构上允许0—3个role为day:N:supporting:1等的辅助视觉；0只适用于事实确无第二个合理画面，不是普通日默认值。不要输出slotId、label、required或removable，这些属性由程序根据role补齐。普通核心体验日默认规划2张不同职责的图，事实丰富且职责不同可规划3—4张；转场、返程日规划1—2张，资料确实只有一个合理画面时可只保留主图；不得用抽象的抵达、送机离境、入住、用餐体验或自由活动充当画面。有限图片位内按以下顺序选择：独家或稀缺体验；来源明确的景点、设施或活动；有强视觉主体的动物、地标、自然事件或特色体验；能够与同日其他画面形成真实差异的场景；普通全天、清晨、傍晚游猎只在没有更高价值真实视觉时作为兜底。此顺序按字段语义通用判断，不绑定国家、项目或DAY。每个slot必须选定一个明确场景，禁止核心主体、必要动作或身份A或B、A/B和两个独立体验；Core外的明确普通表现偏好不属于核心二选一；同一真实画面可以包含多个自然共现主体。两个不同场景值得展示时拆成两个slot，每天最多4张。primaryVisualSubject只写真正需要入镜的主体和动作。命名地点只是搜索范围时写入location并设locationRole=scope_only；只有地点、地标、建筑、入口、标牌或实体本身必须入镜时才设locationRole=visual_identity并允许Query保留名称。主题可以来自完整experience，不要求与Spot同名。主视觉与dayRoles主线一致，辅助图只能补充主线。每个slot分别输出fidelityQuery和1—3条alternateQueries，中文精准词在前，必要英文同义表达在后；不能照抄primaryVisualSubject长句，不能写时间氛围、姿态构图、图片职责或泛词。两条准确Query已经足够；sourceRefs指向当天原始事实。";
+  const visualSelectionChecklist = "单次规划的逐位最终检查：先从该图片位的原始事实选定唯一一个Core主体、必要动作及身份，再写primaryVisualSubject、queryCore和全部Query；这几处必须始终指向同一张画面。若原文列举多个可选主体或活动，只选其中一个作为本位目标；另一个只有具备独立来源和不同职责时才可另建辅助位。图片里的设备、光源、特定设施或动物必须能由sourceRefs指向的原始事实支持，不凭常识添加。alternateQueries只能改用同一目标的同义搜索表达，绝不可切换成另一主体或动作。dayRoles的主视觉与对应day:N主图必须一致。输出前发现任一视觉句保留核心主体、必要动作或身份二选一，或任一Query跨到另一分支，就在本次规划内部按事实重新确定目标并改正整个位；不要把矛盾留给搜索，也不要增加第二次规划调用。";
+  const recoveryBoundaryPrompt = "事实绑定的视觉补充：非洲五霸仅含狮子、花豹、大象、犀牛和水牛；猎豹不属于这个集合，不得仅因游猎事实添加猎豹。普通交通概览的飞机起飞、停泊或停放仅是表现姿态；原资料明确承诺观光飞行等体验时仍保留必要动作。最后一日如果明确送机离境且当天vehicle明确商务车，可将主图规划为商务车辆机场接送的具体画面，不把机场送别这个抽象事件作为主体，不添加车型、机场身份或人物承诺。";
+  const visualCoveragePrompt = '输出前逐日复核视觉覆盖，不得把允许辅助图误解为默认每天仅一个主图。资料确实只有一个合理画面时可选1个；普通核心体验日默认2个；事实丰富且有3—4个独立合理视觉职责时可规划3—4个；只有2个合理画面时规划2个；转场、返程日按真实内容选择1—2个，分别写成primary与supporting，而非合并进一个泛化游猎主题。不同主体、必要动作或可见场景具有独立职责时分别规划，不把多个真实画面压成泛化主题。纯返程或简单送机只需一个收尾视觉，不强迫补足。禁止以接送、入住或重复场景凑数。用现有visualDuty/differentiation说明选择价值和覆盖范围；只保留单图时在这两个既有字段中简述事实限制；sourceRefs优先精确引用对应days.N.spots.M或当日事实摘录，便于保留原费用状态。覆盖取舍另按逐日覆盖契约记录。';
   callStats.trip_planner = 1;
   onStatus?.({ status: "planning", message: "正在制定单次轻量业务规划" });
   const dayNumbering = (project.factBasis?.days || []).map((day, i) => `DAY${i + 1}: dayRoles.index=${i}; imagePlan主图role=day:${i + 1}; 辅助role=day:${i + 1}:supporting:1等；只消费factBasis.days[${i}]。`).join('\n');
   const identityPrompt = "每个imagePlan.slots图片位保留boolean字段exactIdentityRequired。唯一含义：true只在如果不是queryCore.identity指向的这个具体实体，即使画面主体和动作都对，也会造成事实错误时成立；图片必须证明该具体身份。反事实检查：去掉这个具体身份以后，主体和必要动作仍然正确的图片能否完成当前图片位的主要展示任务？能则必须false；只有换成别的实体会把明确承诺的唯一地点、建筑、机构本体或实体专属体验错误展示为目标实体时才true。原始行程地点必须准确，不等于照片必须证明唯一地点身份；地点只是体验发生背景、Scope或搜索context，主要展示的是主体+动作时必须false。主体正确、动作正确、交通类别正确均不等于具体实体身份必需；identity非空、地点明确、locationRole=visual_identity也都不是true的依据。不得靠固定关键词、实体类型或地点名称判断。true时queryCore.identity必须明确目标身份，已有identityEn尽量保留正式英文名称。此字段只判断图片身份是否不可替代，不改变原始地点、画面、Query或来源；不要新增解释字段、第二次调用或其他输出结构。";
   const identityDecisionPrompt = "填写exactIdentityRequired前，先在本次规划内区分两个独立问题（不输出推理或新增字段）：①主体与必要动作必须正确，这要求同一种画面/体验，不要求唯一地点身份；②具体实体是否不可替代，这才决定该boolean。事件、自然现象、活动场面及其营销名称不是唯一实体身份；不得把行程主卖点的重要程度当成身份必需性。若主体动作仍正确，只是照片无法证明发生在那个命名地点，不能据此填true。独立酒店模块展示的就是预订的具体酒店，换成另一家会造成事实错误，因此必须true并填写该酒店正式identity。实体专属体验按是否必须属于该实体判断，不能仅因发生于酒店就设true。完成后逐图片位复核这两个问题，保持主体/动作、地点和身份分开；不按国家、动物、活动或品牌词表判断。";
   const identityOutputChecklist = '最终输出 JSON 前逐个遍历 imagePlan.slots，包含 cover、每个 hotel/dining/transport、每个 day:N 主图和每个 supporting：每一个 slot 对象都必须显式写出 "exactIdentityRequired": true 或 "exactIdentityRequired": false。不得省略、使用 null/字符串，也不得只在前几个 slot 输出该字段。先按上面的反事实判断决定每个值，不按 role、locationRole 或 identity 是否非空机械填充；输出完成后再次检查 imagePlan.slots.length 与此布尔字段出现次数完全相同。';
-  const visualTargetPrompt = '视觉目标契约澄清：前文单一画面与禁止A或B约束的是Core主体、必要动作和不可替代身份，不能把理想描述的背景、光线、构图选择提升为硬条件。请在本次输出中直接保持queryCore明确，非核心背景只作表现偏好。独立hotel:N代表图已有外观、套房、泳池、公共空间候选池：若职责是展示这家酒店的真实代表空间，queryCore.subject写酒店代表性空间，action为空，identity是正式酒店身份且exactIdentityRequired=true；primaryVisualSubject可表达代表空间偏好，不能要求每种空间同框。只有客户文案明确承诺并需要图片证明某一特定房型、专属设施或体验时，Core才保留该具体主体与动作，不能归为代表图；DAY、餐饮和交通不得借酒店代表图规则放宽。真正不同Core主体、动作或身份的二选一仍不得输出，不能靠选第一个或删掉限定来解决。此澄清只使用现有字段，不新增输出字段、模型调用或备用画面。';
+  const visualTargetPrompt = '视觉目标契约澄清：前文单一画面约束只针对Core主体、必要动作和不可替代身份，不能把理想描述的背景、光线、构图选择提升为硬条件。请在本次输出中直接保持queryCore明确，非核心背景只作表现偏好。独立hotel:N代表图已有外观、套房、泳池、公共空间候选池：若职责是展示这家酒店的真实代表空间，queryCore.subject写酒店代表性空间，action为空，identity是正式酒店身份且exactIdentityRequired=true；primaryVisualSubject可表达代表空间偏好，不能要求每种空间同框。只有客户文案明确承诺并需要图片证明某一特定房型、专属设施或体验时，Core才保留该具体主体与动作，不能归为代表图；DAY、餐饮和交通不得借酒店代表图规则放宽。真正不同Core主体、动作或身份的二选一仍不得输出，不能靠选第一个或删掉限定来解决。此澄清只使用现有字段，不新增输出字段、模型调用或备用画面。';
   const candidateSlotPrompt = '图片位置契约：用户输入的imageCandidateSlots由原始事实和版面预先确定，每项有稳定role、sourceKey、slotId及required/removable。你只决定画面，不改编号、来源或必要性；每个required=true候选必须在imagePlan.slots中恰好规划一次。sourceRefs必须引用候选的原始sourceKey，不能在事实数组过滤空行后自行重编号。可选的dining:N、transport:N只有确实无独立展示价值时才可不规划，并把对应role明确写入imagePlan.omittedOptionalRoles；没有省略时也输出空数组。不能同时规划又省略同一role，不能省略必需位。未写在omittedOptionalRoles的可选候选也须规划，遗漏不能冒充主动取舍。DAY辅助视觉可从当天真实事实另外选择0—3个；0—3是结构范围，普通核心体验日默认另选一个有独立职责的辅助位，不机械为每个Spot创建图片位。';
   const compactOutputPrompt = '只输出一个完整、紧凑的 JSON 对象，顶层先写 imagePlan，再写其他字段；不加 Markdown、解释、重复事实、冗长 rationale 或未定义字段。保留契约要求的所有字段和全部图片位；每个说明字段只写必要短句，sourceRefs只写可追溯路径。不要靠省略 slot、queryCore、Query 或 exactIdentityRequired 缩短输出。输出结束前确认整个对象闭合。';
-  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, identityPrompt, identityDecisionPrompt, visualTargetPrompt, candidateSlotPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist, visualSelectionChecklist, SLOT_VISUAL_CONTRACT] : []), compactOutputPrompt].join('\n\n') }];
+  const systemMessages = [{ role: 'system', content: [prompt, ...(simpleSkillContract ? [simpleContractPrompt, dayVisualPrompt, visualCoveragePrompt, DAY_VISUAL_COVERAGE_CONTRACT, identityPrompt, identityDecisionPrompt, visualTargetPrompt, recoveryBoundaryPrompt, candidateSlotPrompt, '最终检查：不能只返回最低必需图片集合。请先逐日识别有事实支持、彼此不同的高价值场景，再把所选集合完整写入imagePlan.slots；辅助视觉是正式计划的一部分，不要仅在dayRole文字中提到却省略slot。DAY编号从1开始，只有数组index从0开始，严禁day:0、漏日或跨日借用。以下映射必须逐行覆盖：', dayNumbering, identityOutputChecklist, visualSelectionChecklist, SIMPLE_SLOT_VISUAL_CONTRACT] : []), compactOutputPrompt].join('\n\n') }];
   const plannerPromptFingerprint = createHash("sha256").update(systemMessages[0].content).digest("hex");
   const messages = [...systemMessages, { role: "user", content: JSON.stringify(sharedInput) }];
   const retryMessages = [...systemMessages, { role: "user", content: `${JSON.stringify(sharedInput)}\n\n技术补救：上次响应没有形成完整合法JSON。本次直接输出完整紧凑JSON对象，不写推理、前言或代码块；优先保证全部必需图片位及其完整字段，非图片说明简短。` }];
@@ -1158,8 +1351,9 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
   }
   if (plannerSystemError) validation.errors.unshift({ code: plannerSystemError.code, path: "$", message: plannerSystemError.message });
   validation.valid = validation.errors.length === 0;
-  const failOpen = applyPlannerFailOpen(plan, validation.errors, factBasis);
+  const failOpen = applyPlannerFailOpen(plan, validation.errors, factBasis, { simpleSkillContract });
   const compactErrors = compactPlannerErrors(validation.errors);
+  const dayVisualDecisions = simpleSkillContract ? auditDayVisualCoverage(failOpen.plan, factBasis, { required: true }) : [];
   const completed = {
     ...failOpen.plan,
     validatedAt: new Date().toISOString(),
@@ -1173,7 +1367,7 @@ export async function generateAgentPlan({ project, apiKey, baseUrl, model, reque
       errors: compactErrors,
       unresolvedSlotRoles: failOpen.unresolvedSlotRoles,
       ...(simpleSkillContract ? { imagePositionCoverage: reconcilePlannerImageCandidates(failOpen.plan, factBasis) } : {}),
-      ...(simpleSkillContract ? { dayVisualCoverage: dayVisualCoverage(failOpen.plan, factBasis), plannerPromptFingerprint } : {}),
+      ...(simpleSkillContract ? { dayVisualCoverage: dayVisualCoverage(failOpen.plan, factBasis), dayVisualDecisions, coverageComplete: dayVisualDecisions.every(day => day.status === 'accounted'), plannerPromptFingerprint } : {}),
       localRepairs: failOpen.repairs,
       ...(plannerSystemError ? { plannerSystemError } : {}),
     },

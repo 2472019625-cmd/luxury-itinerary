@@ -87,11 +87,18 @@ export async function runSimplePipeline({
   adapters = {},
   onEvent,
   signal,
+  generationJobId,
 } = {}) {
   const totalStartedAt = Date.now();
   const timingsMs = { parser: 0, planner: 0, copySkill: 0, imageSkill: 0, programWriteback: 0, renderer: 0, persistence: 0, total: 0 };
   const capabilityEvents = [];
-  const emit = (event) => onEvent?.({ at: new Date().toISOString(), ...event });
+  const stageTimeline = [];
+  const emit = (event) => {
+    if (event.stage !== 'capability' && ['started', 'finished', 'failed'].includes(event.phase)) {
+      stageTimeline.push({ stage: event.stage, phase: event.phase, atMs: Date.now() - totalStartedAt });
+    }
+    onEvent?.({ at: new Date().toISOString(), ...event });
+  };
   const capabilityEvent = (event) => { capabilityEvents.push({ at: Date.now(), ...event }); emit({ stage: "capability", ...event }); };
   const parse = adapters.parse || importItineraryWorkbook;
   const planAgent = adapters.planAgent || generateAgentPlan;
@@ -133,6 +140,11 @@ export async function runSimplePipeline({
 
   const projectId = suppliedProjectId || randomUUID();
   const inputFingerprint = fingerprintFacts(parsedData);
+  const reservation = generationJobId ? store.getProject(projectId) : null;
+  if (generationJobId && (!reservation || reservation.generationQueue?.jobId !== generationJobId
+    || reservation.ownerId !== ownerId || reservation.status !== 'running' || reservation.activePlanId || reservation.activeExecutionRunId)) {
+    throw Object.assign(new Error('制作任务已变更，不能开始旧批次'), { code: 'generation_reservation_stale' });
+  }
   const now = new Date().toISOString();
   const project = {
     projectId,
@@ -140,7 +152,7 @@ export async function runSimplePipeline({
     status: "planning",
     currentStage: "Planner",
     progress: SIMPLE_PIPELINE_PROGRESS.parserComplete,
-    createdAt: now,
+    createdAt: reservation?.createdAt || now,
     updatedAt: now,
     inputFingerprint,
     activePlanId: null,
@@ -151,7 +163,8 @@ export async function runSimplePipeline({
   };
   const persistStartedAt = Date.now();
   try {
-    store.createProject(project);
+    if (reservation) store.updateProject(projectId, project);
+    else store.createProject(project);
     store.saveSourceData(projectId, { fileName: sourceData?.fileName || sourceFile?.name || "source.xlsx", inputFingerprint, data: parsedData, report: imported.report || {} });
   } catch (error) {
     const wrapped = new Error(`项目保存失败：${error.message}`);
@@ -263,7 +276,7 @@ export async function runSimplePipeline({
   const imageStartedAt = Date.now();
   emit({ stage: "image_skill", phase: "started", slotCount: simplePlan.imageSlots.length, startedAtMs: imageStartedAt });
   let imageFinishedAt = null;
-  const imagePromise = runImage({ slots: simplePlan.imageSlots, root, ...imageOptions, signal, onCapabilityCall: capabilityEvent })
+  const imagePromise = runImage({ slots: simplePlan.imageSlots, root, ...imageOptions, preparedData: simplePlan.preparedData, signal, onCapabilityCall: capabilityEvent })
     .then((result) => { emit({ stage: "image_skill", phase: "finished", status: result.status }); return result; })
     .catch((error) => { emit({ stage: "image_skill", phase: "failed", status: "failed", error: { code: error?.code || "image_skill_failed", message: error?.message || String(error) } }); throw error; })
     .finally(() => { imageFinishedAt = Date.now(); });
@@ -303,14 +316,15 @@ export async function runSimplePipeline({
   emit({ stage: "renderer", phase: "started", mode: renderMode });
   const rendererStartedAt = Date.now();
   let renderExecution;
-  try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: renderMode, signal }); }
+  const onQueueState = state => emit({ stage: 'renderer', phase: 'queue_state', queueState: state });
+  try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: renderMode, signal, onQueueState }); }
   catch (error) { assertNotCancelled(signal); renderExecution = { status: "failed", mode: renderMode, outputPath: null, rendererCalls: 1, error: { code: error.code || "renderer_failed", message: error.message, diagnostic: error.diagnostic } }; }
   assertNotCancelled(signal);
   if (renderMode === "final" && renderExecution.status !== "success") {
     const finalAttempt = renderExecution;
     writeback.unresolvedItems.push(unresolvedRender(finalAttempt));
     emit({ stage: "renderer", phase: "draft_fallback_started" });
-    try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: "draft", signal }); }
+    try { renderExecution = await render({ data: writeback.data, projectId, root, origin, mode: "draft", signal, onQueueState }); }
     catch (error) { assertNotCancelled(signal); renderExecution = { status: "failed", mode: "draft", outputPath: null, rendererCalls: 1, error: { code: error.code || "renderer_failed", message: error.message, diagnostic: error.diagnostic } }; }
     assertNotCancelled(signal);
     renderExecution = {
@@ -330,6 +344,13 @@ export async function runSimplePipeline({
   const progress = pipelineStatus === "complete" ? SIMPLE_PIPELINE_PROGRESS.complete : (renderExecution.status === "success" ? SIMPLE_PIPELINE_PROGRESS.rendererComplete : SIMPLE_PIPELINE_PROGRESS.writebackComplete);
   timingsMs.total = elapsed(totalStartedAt);
   const legacyEvidence = runtimeLegacyEvidence(capabilityEvents, copyExecution, imageExecution);
+  const automaticImageMetrics = structuredClone(imageExecution.metrics || {});
+  // Preserve original counts/timings without duplicating resource addresses
+  // (which can include signed URLs) into the immutable diagnostic evidence.
+  for (const stats of Object.values(automaticImageMetrics.resourceReuse || {})) {
+    delete stats.attemptsByUrl;
+    delete stats.networkRequestsByUrl;
+  }
   const result = {
     projectId,
     pipelineStatus,
@@ -344,6 +365,15 @@ export async function runSimplePipeline({
     render: renderExecution,
     outputPath: renderExecution.outputPath || null,
     timingsMs,
+    automaticExecution: {
+      version: 1, executionRunId, imageBatchId: imageExecution.batchId || null,
+      recordedAt: new Date().toISOString(), semantics: '首轮自动制作保存前快照（不含最终持久化耗时）；主动补图/修订不覆盖',
+      stageTimeline: structuredClone(stageTimeline),
+      timingsMs: structuredClone(timingsMs),
+      imageMetrics: automaticImageMetrics,
+      slots: (imageExecution.results || []).map(item => ({ slotId: item.slotId, status: item.status,
+        technicalStatus: item.technicalStatus || null, durationMs: item.durationMs || 0 })),
+    },
     callCounts: callCounts({ agentPlan: agentPlanning.plan || agentPlanning, copyExecution, imageExecution, renderExecution }),
     concurrency: { copyImage: parallelEvidence, imagePeak: imageExecution.metrics?.concurrencyPeak || null },
     legacyEvidence,
@@ -364,6 +394,7 @@ export async function runSimplePipeline({
     for (const item of copyExecution.results || []) store.saveTaskResult(projectId, executionRunId, `copy-${item.targetId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, item);
     for (const item of imageExecution.results || []) store.saveTaskResult(projectId, executionRunId, `image-${item.slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, item);
     assertNotCancelled(signal);
+    store.saveEvidence(projectId, executionRunId, 'original-automatic-execution', result.automaticExecution);
     const finalResultRef = store.saveFinalResult(projectId, executionRunId, { ...result, data: writeback.data, render: renderExecution });
     assertNotCancelled(signal);
     store.updateExecutionRun(projectId, { ...initialRun, status: pipelineStatus, progress, executionEnabled: false, updatedAt: new Date().toISOString(), finalResultRef });

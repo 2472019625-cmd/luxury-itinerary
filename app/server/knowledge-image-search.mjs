@@ -1,4 +1,138 @@
 import { randomUUID } from "node:crypto";
+import { createOperationTrace, safeErrorDetails } from './operation-trace.mjs';
+import { knowledgeAdmissionState } from './knowledge-admission-state.mjs';
+import { knowledgeSubmissionRecovery, submissionFingerprint, canReplayKnowledgeSubmission,
+  knowledgeIdempotencyLifetimeMs, knowledgeSubmitRecoveryLimit } from './knowledge-submission-recovery.mjs';
+
+// Two bounded lanes per knowledge service, shared by automatic and manual
+// callers. Each accepted query owns its lane until its terminal state is known.
+const admissionLanes = new Map();
+const connectorIds = new WeakMap();
+let nextConnectorId = 0;
+function memoryAdmissionState() {
+  let value = { phase: 'idle' };
+  return { load: async () => value, save: async state => { value = state; }, clear: async () => { value = { phase: 'idle' }; } };
+}
+export async function searchKnowledgeImages(options = {}) {
+  const connector = options.fetchImpl || fetch;
+  if (!connectorIds.has(connector)) connectorIds.set(connector, ++nextConnectorId);
+  const endpoint = cleanBaseUrl(options.baseUrl);
+  const key = `${endpoint}:${connectorIds.get(connector)}:${options.admissionStateDirectory || ''}`;
+  const throwCancelled = () => { if (options.signal?.aborted) throw knowledgeRequestError({ stage: 'submit', kind: 'cancelled', code: 'knowledge_cancelled', startedAt: Date.now() }); };
+  throwCancelled();
+  const concurrency = options.admissionConcurrency === 1 ? 1 : 2;
+  const group = admissionLanes.get(key) || { lanes: Array.from({ length: concurrency }, (_, index) => ({
+    index, tail: Promise.resolve(), uncertainQueryId: null, pending: 0, busy: false, cancelledSubmission: false,
+    state: knowledgeAdmissionState(options.admissionStateDirectory, endpoint, index) || memoryAdmissionState(),
+    submissionRecovery: options.idempotentSubmissionRecovery === true
+      ? knowledgeSubmissionRecovery(options.submissionRecoveryDirectory, endpoint, index) : null,
+  })), recovery: null };
+  admissionLanes.set(key, group);
+  const lane = group.lanes.reduce((best, candidate) => candidate.pending < best.pending ? candidate : best);
+  lane.pending += 1;
+  const trace = createOperationTrace('knowledge_admission', options.traceContext, options.logger);
+  const queuedAt = Date.now();
+  const state = lane.state;
+  const acceptanceUnknown = () => Object.assign(new Error('知识库提交结果未知，需核对原请求'), { code: 'knowledge_acceptance_unknown' });
+  const clearLane = async (item, key) => {
+    await item.state?.clear();
+    if (key) await item.submissionRecovery?.clear(key);
+  };
+  // Single-flight reconciliation excludes live lanes: a submitting marker is
+  // also normal while POST is in flight. Old incomplete markers remain closed.
+  const recover = () => {
+    if (!group.recovery) group.recovery = (async () => {
+      const saved = await Promise.all(group.lanes.map(item => item.state?.load()));
+      const reconciled = await Promise.allSettled(group.lanes.map(async (item, index) => {
+        if (item.busy) {
+          if (item.cancelledSubmission) { options.onAdmissionEvent?.({ type: 'blocked' }); throw acceptanceUnknown(); }
+          return;
+        }
+        const marker = saved[index];
+        if (marker?.phase === 'submitting') {
+          const record = await item.submissionRecovery?.load();
+          if (options.idempotentSubmissionRecovery !== true || !canReplayKnowledgeSubmission(record, marker)) {
+            options.onAdmissionEvent?.({ type: 'blocked' });
+            throw acceptanceUnknown();
+          }
+          trace.emit('submit_reconciliation_start', { mode: 'same_key_replay' });
+          await executeKnowledgeQuery({ ...options, signal: undefined, trace, state: item.state,
+            submissionRecovery: item.submissionRecovery, resumeSubmission: record });
+          await clearLane(item, marker.idempotencyKey);
+          return;
+        }
+        if (marker?.phase !== 'accepted') return;
+        item.uncertainQueryId = marker.queryId;
+        await executeKnowledgeQuery({ ...options, signal: undefined, resumeQueryId: item.uncertainQueryId, trace });
+        item.uncertainQueryId = null;
+        await clearLane(item, marker.idempotencyKey);
+      }));
+      const failed = reconciled.find(result => result.status === 'rejected');
+      if (failed) throw failed.reason;
+    })().finally(() => { group.recovery = null; });
+    return group.recovery;
+  };
+  let queueTimer, queueExpired = false, acceptedByServer = false, queueWaitMs = 0, executing = false;
+  const operation = lane.tail.then(async () => {
+    clearTimeout(queueTimer);
+    throwCancelled();
+    if (queueExpired || Date.now() - queuedAt > (options.queueTimeoutMs ?? 30 * 60_000)) {
+      throw Object.assign(new Error('知识库排队超时'), { code: 'knowledge_queue_timeout' });
+    }
+    queueWaitMs = Date.now() - queuedAt;
+    trace.emit('queue_ready', { durationMs: queueWaitMs });
+    await recover();
+    throwCancelled();
+    const saved = await state?.load();
+    if (saved?.phase === 'submitting') {
+      options.onAdmissionEvent?.({ type: 'blocked' });
+      throw acceptanceUnknown();
+    }
+    if (saved?.phase === 'accepted') lane.uncertainQueryId = saved.queryId;
+    // An interrupted accepted query is reconciled before submitting another.
+    // A transport failure is not proof that its server-side slot is free.
+    if (lane.uncertainQueryId) {
+      const previous = await executeKnowledgeQuery({ ...options, signal: undefined,
+        resumeQueryId: lane.uncertainQueryId, trace });
+      if (!['completed', 'failed', 'needs_clarification'].includes(previous.status)) throw new Error('knowledge_reconciliation_pending');
+      lane.uncertainQueryId = null;
+      await clearLane(lane, saved?.idempotencyKey);
+      throwCancelled();
+    }
+    try {
+      lane.busy = true;
+      executing = true;
+      const result = await executeKnowledgeQuery({ ...options, trace, state, submissionRecovery: lane.submissionRecovery,
+        onAccepted: () => { acceptedByServer = true; } });
+      await clearLane(lane, (await state?.load())?.idempotencyKey);
+      return { ...result, queueWaitMs, totalDurationMs: Date.now() - queuedAt };
+    }
+    catch (error) {
+      if (error?.queryId) lane.uncertainQueryId = error.queryId;
+      // The durable marker, rather than a sticky process flag, determines
+      // whether the next request may reconcile and continue.
+      error.queueWaitMs = queueWaitMs;
+      error.totalDurationMs = Date.now() - queuedAt;
+      throw error;
+    } finally { lane.busy = false; lane.cancelledSubmission = false; executing = false; }
+  });
+  lane.tail = operation.catch(error => { trace.emit('query_failed', { ...safeErrorDetails(error), queryId: error.queryId,
+    errorId: error.errorId, knowledgeRequestId: error.requestId }); }).finally(() => { lane.pending -= 1; });
+  // Return cancellation promptly; the accepted query continues only polling,
+  // never searching/generating/writing, until its terminal state or deadline.
+  return new Promise((resolve, reject) => {
+    const cleanup = () => { clearTimeout(queueTimer); options.signal?.removeEventListener('abort', cancelled); };
+    const cancelled = () => { if (executing && !acceptedByServer) lane.cancelledSubmission = true;
+      cleanup(); reject(knowledgeRequestError({ stage: acceptedByServer ? 'poll' : 'submit', kind: 'cancelled', code: 'knowledge_cancelled', startedAt: queuedAt })); };
+    options.signal?.addEventListener('abort', cancelled, { once: true });
+    queueTimer = setTimeout(() => {
+      queueExpired = true;
+      cleanup();
+      reject(Object.assign(new Error('知识库排队超时'), { code: 'knowledge_queue_timeout' }));
+    }, options.queueTimeoutMs ?? 30 * 60_000);
+    operation.then(resolve, reject).finally(cleanup);
+  });
+}
 
 const modes = new Set(["knowledge_only", "knowledge_first", "web_only"]);
 
@@ -7,7 +141,7 @@ function safeDiagnosticId(value) {
   return /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(id) ? id : null;
 }
 
-function knowledgeRequestError({ stage, kind, code, diagnosticId, queryId, requestId, errorId, status, startedAt }) {
+function knowledgeRequestError({ stage, kind, code, diagnosticId, queryId, requestId, errorId, status, startedAt, retryAfterMs }) {
   const action = stage === "submit" ? "提交" : stage === "refresh" ? "刷新原件" : "轮询";
   const suffix = kind === "timeout" || kind === "client_deadline" ? "超时" : kind === "cancelled" ? "已取消" : kind === "invalid_response" ? "响应无效" : "失败";
   const error = new Error(`知识库${action}请求${suffix}`);
@@ -21,6 +155,7 @@ function knowledgeRequestError({ stage, kind, code, diagnosticId, queryId, reque
   error.errorId = safeDiagnosticId(errorId);
   error.status = Number.isInteger(status) ? status : null;
   error.durationMs = Date.now() - startedAt;
+  if (Number.isFinite(retryAfterMs)) error.retryAfterMs = retryAfterMs;
   return error;
 }
 
@@ -44,10 +179,22 @@ function abortSignal(signal, timeoutMs) {
   return { signal: combined, stop: () => clearTimeout(timer) };
 }
 
-async function fetchJson(url, options, { fetchImpl, signal, timeoutMs, stage = "poll", diagnosticId = null, queryId = null, startedAt = Date.now() }) {
+async function fetchJson(url, options, { fetchImpl, signal, timeoutMs, stage = "poll", diagnosticId = null, queryId = null, startedAt = Date.now(), onDispatch }) {
   const timeout = abortSignal(signal, timeoutMs);
   try {
-    const response = await fetchImpl(url, { ...options, signal: timeout.signal });
+    timeout.signal.throwIfAborted();
+    let requestOptions = options;
+    if (options.body instanceof FormData) {
+      // Undici can enqueue multipart chunks after an aborted request has closed
+      // its body, throwing outside fetch's rejection handler. Encode our small
+      // text-only form before attaching the request's cancellation signal.
+      const encoded = new Response(options.body);
+      const body = Buffer.from(await encoded.arrayBuffer());
+      requestOptions = { ...options, body, headers: { ...options.headers, "Content-Type": encoded.headers.get("content-type") } };
+    }
+    timeout.signal.throwIfAborted();
+    onDispatch?.();
+    const response = await fetchImpl(url, { ...requestOptions, signal: timeout.signal });
     let payload = null;
     try { payload = await response.json(); } catch (error) {
       // A response body can disconnect after successful headers. Preserve HTTP
@@ -59,6 +206,7 @@ async function fetchJson(url, options, { fetchImpl, signal, timeoutMs, stage = "
         stage, kind: "http", code: `knowledge_http_${response.status}`, diagnosticId, queryId,
         requestId: payload?.request_id, errorId: payload?.error_id || payload?.data?.error_id,
         status: response.status, startedAt,
+        retryAfterMs: retryAfterMilliseconds(response.headers?.get?.('retry-after')),
       });
     }
     return { response, payload };
@@ -82,6 +230,13 @@ function wait(ms, signal) {
     const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function retryAfterMilliseconds(value) {
+  if (!value) return null;
+  const seconds = Number(value);
+  const duration = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - Date.now();
+  return Number.isFinite(duration) ? Math.max(0, duration) : null;
 }
 
 function imagePaths(result = {}) {
@@ -251,65 +406,146 @@ export async function refreshKnowledgeMatchedFile({ baseUrl, queryIds = [], cand
   throw error;
 }
 
-export async function searchKnowledgeImages({
+async function executeKnowledgeQuery({
   queries = [], baseUrl, topK = 5, scopeNodeIds = [], timeoutMs = 120_000,
   requestTimeoutMs = 30_000, pollIntervalMs = 2_000, options = {}, signal, fetchImpl = fetch,
+  capacityWaitMs = 180_000, resumeQueryId = null, trace, onAccepted, state,
+  idempotentSubmissionRecovery = false, submissionRecovery, resumeSubmission = null, onAdmissionEvent,
 } = {}) {
   const startedAt = Date.now();
-  const diagnosticId = randomUUID();
+  const diagnosticId = trace?.requestId || randomUUID();
   const normalizedBaseUrl = cleanBaseUrl(baseUrl);
   if (!normalizedBaseUrl) {
     const error = new Error("未配置图片知识库地址");
     error.code = "knowledge_not_configured";
     throw error;
   }
-  const queryText = String(queries.find((item) => String(item || "").trim()) || "").trim();
+  const queryText = resumeSubmission?.queryText || String(queries.find((item) => String(item || "").trim()) || "").trim();
   if (!queryText) {
     const error = new Error("知识库查询文字不能为空");
     error.code = "knowledge_query_required";
     throw error;
   }
-  const scope = Array.isArray(scopeNodeIds) && scopeNodeIds.length ? { node_ids: scopeNodeIds.map(String) } : null;
-  const request = { scope, result_type: "image", top_k: Math.max(1, Math.min(10, Number(topK) || 5)), options: options && typeof options === "object" && !Array.isArray(options) ? options : {} };
+  const scope = resumeSubmission ? resumeSubmission.request.scope
+    : Array.isArray(scopeNodeIds) && scopeNodeIds.length ? { node_ids: scopeNodeIds.map(String) } : null;
+  const request = resumeSubmission?.request || JSON.parse(JSON.stringify({ scope, result_type: "image", top_k: Math.max(1, Math.min(10, Number(topK) || 5)), options: options && typeof options === "object" && !Array.isArray(options) ? options : {} }));
   const form = new FormData();
   form.append("request", JSON.stringify(request));
   form.append("text", queryText);
-  const accepted = await fetchJson(`${normalizedBaseUrl}/api/knowledge/query`, {
-    method: "POST",
-    headers: { "Idempotency-Key": randomUUID() },
-    body: form,
-  }, { fetchImpl, signal, timeoutMs: requestTimeoutMs, stage: "submit", diagnosticId, startedAt });
-  const queryId = String(accepted.payload?.data?.query_id || "").trim();
-  if (accepted.response.status !== 202 || !queryId) {
+  const idempotencyKey = resumeSubmission?.idempotencyKey || randomUUID();
+  let record = resumeSubmission || { queryText, request, idempotencyKey, submittedAt: Date.now(),
+    requestHash: submissionFingerprint({ queryText, request }), recoveryAttempts: 0, cancelled: false };
+  let accepted;
+  const admissionDeadline = Date.now() + capacityWaitMs;
+  let admissionRetries = 0, submitAttempts = 0, recoveredSubmissions = 0;
+  let cancellationWrite = Promise.resolve();
+  const persistCancellation = () => {
+    record.cancelled = true;
+    cancellationWrite = cancellationWrite.then(() => submissionRecovery?.cancel(idempotencyKey));
+    // The original operation awaits this write; the caller can return promptly.
+    cancellationWrite.catch(() => {});
+  };
+  const admissionInfo = () => ({ admissionRetries, submitAttempts, recoveredSubmissions,
+    idempotencyKey, admissionDurationMs: Date.now() - startedAt });
+  const marker = () => ({ phase: 'submitting', idempotencyKey, requestHash: record.requestHash, submittedAt: record.submittedAt });
+  const clearRejected = async () => { await state?.clear(); await submissionRecovery?.clear(idempotencyKey); };
+  if (!resumeQueryId) {
+    let replay = Boolean(resumeSubmission);
+    let unresolvedDispatch = Boolean(resumeSubmission);
+    signal?.addEventListener('abort', persistCancellation, { once: true });
+    try {
+      while (!accepted) {
+        let dispatched = false, stateRecorded = false;
+        try {
+          signal?.throwIfAborted();
+          if (replay) {
+            if (!canReplayKnowledgeSubmission(record, marker())) throw Object.assign(new Error('知识库提交结果未知，需核对原请求'), { code: 'knowledge_acceptance_unknown' });
+            record = { ...record, recoveryAttempts: record.recoveryAttempts + 1 };
+          }
+          await submissionRecovery?.save(record);
+          await state?.save(marker());
+          stateRecorded = true;
+          accepted = await fetchJson(`${normalizedBaseUrl}/api/knowledge/query`, {
+            method: 'POST', headers: { 'Idempotency-Key': idempotencyKey, 'X-Request-ID': diagnosticId }, body: form,
+          }, { fetchImpl, signal, timeoutMs: Math.min(requestTimeoutMs, Math.max(1, admissionDeadline - Date.now())), stage: 'submit', diagnosticId, startedAt,
+            onDispatch: () => { dispatched = true; unresolvedDispatch = true; submitAttempts += 1;
+              if (replay) recoveredSubmissions += 1;
+              onAdmissionEvent?.({ type: 'dispatch', recovered: replay, idempotencyKey });
+              trace?.emit('submit_dispatch', { retryCount: record.recoveryAttempts, mode: replay ? 'same_key_replay' : 'initial', resourceId: idempotencyKey });
+            } });
+          const id = String(accepted.payload?.data?.query_id || '').trim();
+          if (accepted.response.status !== 202 || !safeDiagnosticId(id)) {
+            throw knowledgeRequestError({ stage: 'submit', kind: 'invalid_response', code: 'knowledge_invalid_acceptance', diagnosticId,
+              requestId: accepted.payload?.request_id, errorId: accepted.payload?.error_id, status: accepted.response.status, startedAt });
+          }
+        } catch (error) {
+          accepted = null;
+          error.admission = admissionInfo();
+          if (!unresolvedDispatch && stateRecorded) await clearRejected();
+          const rejected = error.knowledgeStage === 'submit' && error.knowledgeFailureKind === 'http'
+            && [400, 401, 403, 404, 422, 429].includes(error.status);
+          if (rejected) { await clearRejected(); unresolvedDispatch = false; }
+          trace?.emit('submit_failed', { ...safeErrorDetails(error), transportCode: error.transportCode,
+            retryCount: record.recoveryAttempts, resourceId: idempotencyKey });
+          if (signal?.aborted) { persistCancellation(); throw error; }
+          const capacityRetry = error.status === 429 && admissionRetries < 6;
+          const unknownRetry = idempotentSubmissionRecovery === true && dispatched
+            && ['transport', 'timeout', 'invalid_response'].includes(error.knowledgeFailureKind)
+            && record.recoveryAttempts < knowledgeSubmitRecoveryLimit
+            && Date.now() - record.submittedAt < knowledgeIdempotencyLifetimeMs - 60_000;
+          const delay = capacityRetry ? Math.max(10, error.retryAfterMs ?? Math.min(10_000, 1000 * 2 ** admissionRetries))
+            : Math.min(2_000, 500 * 2 ** record.recoveryAttempts);
+          if ((!capacityRetry && !unknownRetry) || Date.now() + delay >= admissionDeadline) throw error;
+          replay = unknownRetry;
+          if (capacityRetry) admissionRetries += 1;
+          trace?.emit(capacityRetry ? 'capacity_wait' : 'submit_recovery_wait', { retryCount: capacityRetry ? admissionRetries : record.recoveryAttempts + 1,
+            durationMs: delay, knowledgeRequestId: error.requestId, resourceId: idempotencyKey });
+          await wait(delay, signal);
+        }
+      }
+    } catch (error) { error.admission = admissionInfo(); throw error; }
+    finally { signal?.removeEventListener('abort', persistCancellation); await cancellationWrite; }
+  }
+  const queryId = resumeQueryId || String(accepted.payload?.data?.query_id || "").trim();
+  if (!resumeQueryId && (accepted.response.status !== 202 || !queryId)) {
     throw knowledgeRequestError({
       stage: "submit", kind: "invalid_response", code: "knowledge_invalid_acceptance", diagnosticId,
       requestId: accepted.payload?.request_id, errorId: accepted.payload?.error_id, status: accepted.response.status, startedAt,
     });
   }
+  trace?.emit('accepted', { durationMs: Date.now() - startedAt, retryCount: admissionRetries, resumed: Boolean(resumeQueryId), queryId });
+  onAccepted?.();
+  if (!resumeQueryId) onAdmissionEvent?.({ type: 'accepted', queryId, recovered: recoveredSubmissions > 0, idempotencyKey });
+  try { await state?.save({ phase: 'accepted', queryId, ...(!resumeQueryId ? { idempotencyKey } : {}) }); }
+  catch (error) { error.queryId = queryId; throw error; }
+  // Keep the remote lease after caller cancellation. Polling has its own
+  // bounded deadline and never starts a new query or writes itinerary data.
+  const pollSignal = undefined;
   const deadline = Date.now() + Math.max(requestTimeoutMs, Number(timeoutMs) || 120_000);
   const pollRecovery = [];
   let lastPollError = null;
+  const admission = admissionInfo();
   while (Date.now() < deadline) {
     const remaining = Math.max(1, deadline - Date.now());
     let current;
     try { current = await fetchJson(`${normalizedBaseUrl}/api/knowledge/output?query_id=${encodeURIComponent(queryId)}`, {
       method: "GET",
-    }, { fetchImpl, signal, timeoutMs: Math.min(requestTimeoutMs, remaining), stage: "poll", diagnosticId, queryId, startedAt }); }
+    }, { fetchImpl, signal: pollSignal, timeoutMs: Math.min(requestTimeoutMs, remaining), stage: "poll", diagnosticId, queryId, startedAt }); }
     catch (error) {
       lastPollError = error;
       error.pollRecovery = [...pollRecovery];
       const transient = ["transport", "timeout"].includes(error.knowledgeFailureKind)
         || error.knowledgeFailureKind === "http" && [502, 503, 504].includes(error.status);
-      if (!transient || signal?.aborted || pollRecovery.length >= 2 || Date.now() >= deadline) throw error;
+      if (!transient || pollRecovery.length >= 2 || Date.now() >= deadline) throw error;
       pollRecovery.push({ kind: error.knowledgeFailureKind, code: error.code, transportCode: error.transportCode || null, status: error.status });
-      try { await wait(Math.min(Math.max(1, pollIntervalMs), deadline - Date.now()), signal); }
+      try { await wait(Math.min(Math.max(1, pollIntervalMs), deadline - Date.now()), pollSignal); }
       catch { throw knowledgeRequestError({ stage: "poll", kind: "cancelled", code: "knowledge_cancelled", diagnosticId, queryId, startedAt }); }
       continue;
     }
     lastPollError = null;
     if (current.response.status === 202) {
       try {
-        await wait(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())), signal);
+        await wait(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())), pollSignal);
       } catch {
         throw knowledgeRequestError({ stage: "poll", kind: "cancelled", code: "knowledge_cancelled", diagnosticId, queryId, startedAt });
       }
@@ -317,14 +553,15 @@ export async function searchKnowledgeImages({
     }
     const output = current.payload?.data || {};
     const status = String(output.status || "");
+    trace?.emit('poll_state', { queryId, knowledgeRequestId: current.payload?.request_id, status, errorId: output.error_id });
     if (status === "completed") {
       const parsed = knowledgeOutputToCandidates(output, { baseUrl: normalizedBaseUrl, queryId, queryText });
       const feedback = completedScopeFeedback(output);
-      return { status, queryId, queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, pollRecovery, candidates: parsed.candidates, records: parsed.records, clarificationNodeIds: [], ...feedback };
+      return { status, queryId, queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, admission, pollRecovery, candidates: parsed.candidates, records: parsed.records, clarificationNodeIds: [], ...feedback };
     }
-    if (status === "needs_clarification") return { status, queryId, queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, candidates: [], records: [], clarificationNodeIds: Array.isArray(output.clarification_node_ids) ? output.clarification_node_ids : [] };
+    if (status === "needs_clarification") return { status, queryId, queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, admission, candidates: [], records: [], clarificationNodeIds: Array.isArray(output.clarification_node_ids) ? output.clarification_node_ids : [] };
     if (status !== "failed") throw knowledgeRequestError({ stage: "poll", kind: "invalid_response", code: "knowledge_invalid_output", diagnosticId, queryId, requestId: current.payload?.request_id, status: current.response.status, startedAt });
-    return { status: "failed", queryId: safeDiagnosticId(queryId), queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, knowledgeStage: "terminal", knowledgeFailureKind: "terminal_failure", candidates: [], records: [], clarificationNodeIds: [], errorId: safeDiagnosticId(output.error_id), requestId: safeDiagnosticId(current.payload?.request_id) };
+    return { status: "failed", queryId: safeDiagnosticId(queryId), queryText, scope, durationMs: Date.now() - startedAt, diagnosticId, admission, knowledgeStage: "terminal", knowledgeFailureKind: "terminal_failure", candidates: [], records: [], clarificationNodeIds: [], errorId: safeDiagnosticId(output.error_id), requestId: safeDiagnosticId(current.payload?.request_id) };
   }
   if (lastPollError) { lastPollError.pollRecovery = [...pollRecovery]; throw lastPollError; }
   throw knowledgeRequestError({ stage: "poll", kind: "client_deadline", code: "knowledge_timeout", diagnosticId, queryId, startedAt });

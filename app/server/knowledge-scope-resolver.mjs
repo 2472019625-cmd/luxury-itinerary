@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { TRAVEL_ENTITY_REGISTRY } from "../src/data/travelEntityRegistry.js";
 import { normalizeTravelEntityName } from "../src/lib/travelEntityDisplay.js";
+import { wildlifeQueryBranches } from "./image-fact-bound-recovery.mjs";
 
 const GENERIC_NODE_NAMES = new Set(["根知识库", "stay", "food", "experience", "guestareas", "wildlife", "safari", "photo", "确定", "同集团未确认归属营地", "同集团未确定营地归属"]);
 
@@ -384,7 +385,116 @@ function mappingKey(slot) {
   return identity ? `${kind}:${normalized(identity)}` : "";
 }
 
-export function resolveKnowledgeScope(slot = {}, hierarchy, { allowedNodeIds, cachedNodeId } = {}) {
+// A directional child is usable only when its full parent + child name is
+// bound to a real transport segment. This is not a deepest-node tie-break.
+function recoverBoundTransportScope(slot, hierarchy, original, preparedData) {
+  if (original.status !== 'ambiguous' || moduleKind(slot) !== 'transport'
+    || slot.userLocked || slot.locationRole !== 'scope_only' || slot.exactIdentityRequired !== false
+    || clean(slot.queryCore?.identity) || clean(slot.queryCore?.identityEn)) return null;
+  const refs = unique(Array.isArray(slot.sourceEvidence) ? slot.sourceEvidence : []).filter(ref => /^transport\.\d+$/.test(ref));
+  if (refs.length !== 1) return null;
+  const index = Number(refs[0].split('.')[1]);
+  const binding = preparedData?.simpleImageSlotBindings?.[slot.slotId];
+  const item = preparedData?.transportSummary?.[index];
+  if (!item || binding?.module !== 'transport' || binding.itemIndex !== index) return null;
+  const transportPatterns = [
+    /草原飞机|bush\s*plane|light\s*aircraft/i,
+    /四驱|四轮驱动|四轮驱动车|4\s*[x×]\s*4|safari\s*(?:vehicle|jeep)/i,
+  ];
+  const categories = transportPatterns.filter(pattern => pattern.test(`${item.category || ''} ${item.serviceLevel || ''}`));
+  if (categories.length !== 1) return null;
+  const transport = categories[0];
+  const location = normalized(slot.location);
+  if (!location || unique([slot.region, slot.visualContext?.geographicLocation])
+    .some(value => normalized(value) !== location)) return null;
+  const dayNumbers = unique([...(Array.isArray(item.usageSegments) ? item.usageSegments : []), ...(Array.isArray(item.sourceEvidence) ? item.sourceEvidence : [])]
+    .flatMap(value => [...clean(value).matchAll(/DAY\s*(\d+)/gi)].map(match => match[1]))).map(Number);
+  const boundDays = dayNumbers.filter(number => {
+    const day = preparedData?.days?.[number - 1];
+    const route = clean(day?.sourceEvidence?.route || (transport === transportPatterns[0] ? day?.city : ''));
+    const vehicle = clean(day?.sourceEvidence?.vehicle || (transport === transportPatterns[0] ? day?.vehicle : ''));
+    return day && normalized(route).includes(location) && transport.test(vehicle);
+  });
+  if (!boundDays.length) return null;
+  const directions = new Set(['北部', '南部', '东部', '西部', '中部', 'north', 'south', 'east', 'west', 'central']);
+  const countryNames = [['肯尼亚', 'Kenya'], ['坦桑尼亚', 'Tanzania']];
+  const tiedIds = new Set(original.candidates.filter(candidate => candidate.score === original.candidates[0].score).map(candidate => candidate.nodeId));
+  const matches = hierarchy.records.flatMap(node => {
+    if (!directions.has(normalized(node.formalName))) return [];
+    const parent = hierarchy.byId.get(node.parentNodeId);
+    const country = parent && hierarchy.byId.get(parent.parentNodeId);
+    if (!parent || !country || normalized(parent.formalName + node.formalName) !== location
+      || !countryNames.some(names => names.some(name => normalized(name) === normalized(country.formalName)))
+      || /hotel|lodge|camp|restaurant|museum|酒店|营地|餐厅|博物馆/i.test(parent.formalName)
+      || tiedIds.size !== 2 || !tiedIds.has(parent.nodeId) || !tiedIds.has(node.nodeId)
+      || clean(slot.country) && !countryNames.find(names => names.some(name => normalized(name) === normalized(country.formalName)))
+        .some(name => normalized(name) === normalized(slot.country))) return [];
+    return [{ node, parent, country }];
+  });
+  if (matches.length !== 1) return null;
+  const { node, parent, country } = matches[0];
+  if (transport === transportPatterns[1]) {
+    const names = countryNames.find(names => names.some(name => normalized(name) === normalized(country.formalName)));
+    const countries = unique([slot.country, slot.destination, slot.visualContext?.destination, preparedData?.destination]);
+    if (!countries.length || countries.some(value => !names.some(name => normalized(name) === normalized(value)))) return null;
+  }
+  return { ...resolutionForNode(node, 'transport_bound_geographic_chain', original.facts, original.mappingKey),
+    transportGeographicRecovery: { version: 1, sourceRef: refs[0], dayNumbers: boundDays,
+      originalStatus: original.status, originalCandidates: original.candidates,
+      location: clean(slot.location), geographicNodeIds: [parent.nodeId, node.nodeId],
+      countryNodeId: country.nodeId, country: country.formalName,
+      originalDestination: clean(slot.destination || slot.visualContext?.destination) } };
+}
+
+// Resolve only a source-bound geographic parent/direction pair. Other ties,
+// named venues and conflicting countries still require clarification.
+function recoverBoundDayScope(slot, hierarchy, original, preparedData) {
+  if (original.status !== 'ambiguous' || moduleKind(slot) !== 'day'
+    || slot.userLocked || slot.locationRole !== 'scope_only' || slot.exactIdentityRequired !== false
+    || clean(slot.queryCore?.identity) || clean(slot.queryCore?.identityEn)) return null;
+  const refs = unique(Array.isArray(slot.sourceEvidence) ? slot.sourceEvidence : []);
+  const indices = new Set(refs.map(ref => /^days\.(\d+)(?:\.|$)/.exec(ref)?.[1]).filter(Boolean).map(Number));
+  if (indices.size !== 1) return null;
+  const index = [...indices][0];
+  const binding = preparedData?.simpleImageSlotBindings?.[slot.slotId];
+  const day = preparedData?.days?.[index];
+  if (!day || binding?.module !== 'day' || binding.dayIndex !== index || binding.itemIndex !== index) return null;
+  const location = normalized(slot.location);
+  if (!location || unique([slot.region, slot.visualContext?.geographicLocation]).some(value => normalized(value) !== location)) return null;
+  const tiedIds = new Set(original.candidates.filter(candidate => candidate.score === original.candidates[0].score).map(candidate => candidate.nodeId));
+  if (tiedIds.size !== 2) return null;
+  const directions = new Set(['北部', '南部', '东部', '西部', '中部', 'north', 'south', 'east', 'west', 'central']);
+  const countryNames = [['肯尼亚', 'Kenya'], ['坦桑尼亚', 'Tanzania']];
+  // Only original source fields establish geography; generated copy cannot
+  // corroborate the planner's own location. Remove these geographic descriptors
+  // only between the exact parent name and direction (e.g. 塞伦盖蒂大草原中部).
+  const sourceFacts = unique([day.sourceEvidence?.route, day.sourceEvidence?.description]).map(normalized);
+  const matches = hierarchy.records.flatMap(node => {
+    if (!directions.has(normalized(node.formalName)) || !tiedIds.has(node.nodeId)) return [];
+    const parent = hierarchy.byId.get(node.parentNodeId);
+    const country = parent && hierarchy.byId.get(parent.parentNodeId);
+    const names = countryNames.find(names => names.some(name => normalized(name) === normalized(country?.formalName)));
+    if (!parent || !country || !names || !tiedIds.has(parent.nodeId)
+      || normalized(parent.formalName + node.formalName) !== location
+      || /hotel|lodge|camp|restaurant|museum|酒店|营地|餐厅|博物馆/i.test(parent.formalName)) return [];
+    const countries = unique([slot.country, slot.destination, slot.visualContext?.destination, preparedData?.destination]);
+    if (!countries.length || countries.some(value => !names.some(name => normalized(name) === normalized(value)))) return [];
+    const prefix = normalized(parent.formalName);
+    const direction = normalized(node.formalName);
+    const sourceBound = sourceFacts.some(fact => fact.includes(location)
+      || ['大草原', '草原', '国家公园'].some(descriptor => fact.includes(prefix + normalized(descriptor) + direction)));
+    if (!sourceBound) return [];
+    return [{node, parent, country}];
+  });
+  if (matches.length !== 1) return null;
+  const {node, parent, country} = matches[0];
+  return {...resolutionForNode(node, 'day_bound_geographic_chain', original.facts, original.mappingKey),
+    dayGeographicRecovery: {version: 1, sourceRefs: refs, dayIndex: index,
+      originalStatus: original.status, originalCandidates: original.candidates,
+      geographicNodeIds: [parent.nodeId, node.nodeId], countryNodeId: country.nodeId}};
+}
+
+export function resolveKnowledgeScope(slot = {}, hierarchy, { allowedNodeIds, cachedNodeId, preparedData } = {}) {
   if (!hierarchy?.records?.length) return { status: "unresolved", nodeIds: [], reason: "hierarchy_unavailable", facts: slotFacts(slot) };
   const directFacts = slotFacts(slot);
   const allFacts = enrichedFacts(slot);
@@ -410,7 +520,17 @@ export function resolveKnowledgeScope(slot = {}, hierarchy, { allowedNodeIds, ca
   const first = scored[0];
   const second = scored[1];
   if (!first || (second && first.score === second.score)) {
-    return { status: first ? "ambiguous" : "unresolved", nodeIds: [], candidates: scored.slice(0, 8).map((item) => ({ nodeId: item.node.nodeId, fullPath: item.node.fullPath, score: item.score })), reason: first ? "non_unique_match" : "no_deterministic_match", facts: allFacts, mappingKey: mappingKey(slot) };
+    const original = { status: first ? "ambiguous" : "unresolved", nodeIds: [], candidates: scored.slice(0, 8).map((item) => ({ nodeId: item.node.nodeId, fullPath: item.node.fullPath, score: item.score })), reason: first ? "non_unique_match" : "no_deterministic_match", facts: allFacts, mappingKey: mappingKey(slot) };
+    if (kind === 'hotel' && original.status === 'ambiguous' && !slot.userLocked) {
+      const confirmed = confirmHotelDirectory(slot, hierarchy);
+      if (confirmed.status === 'resolved' && (!allowed || allowed.has(confirmed.resolution.nodeIds[0]))) {
+        return { ...confirmed.resolution, facts: allFacts, mappingKey: original.mappingKey,
+          hotelDirectoryRecovery: { originalStatus: original.status, originalCandidates: original.candidates,
+            confirmedPath: confirmed.resolution.fullPath } };
+      }
+    }
+    return recoverBoundTransportScope(slot, hierarchy, original, preparedData)
+      || recoverBoundDayScope(slot, hierarchy, original, preparedData) || original;
   }
   const validatedCache = cachedNodeId && String(cachedNodeId) === first.node.nodeId;
   return { status: "resolved", nodeIds: [first.node.nodeId], node: first.node, fullPath: first.node.fullPath, reason: validatedCache ? "persistent_mapping_validated" : "unique_hierarchy_match", facts: allFacts, mappingKey: mappingKey(slot) };
@@ -649,6 +769,24 @@ function resolveEntityParentProbe(slot, rootResolution, hierarchy, fastPath) {
   const identities = new Set(fastPath.identityAnchors.map(normalized));
   const regions = regionValues
     .filter((name) => !identities.has(normalized(name)) && !countries.includes(normalized(name))).flatMap(exactGeographicNames);
+  // Reuse the already resolved geographic node when a composite location
+  // (country + park + river) has no exact standalone region string. Do not
+  // promote a hotel, unknown venue, ambiguous resolution or country/root.
+  const resolvedNode = rootResolution.nodeIds?.length === 1 && hierarchy?.byId?.get(rootResolution.nodeIds[0]);
+  const resolvedType = resolvedNode && resolutionEntityType(resolutionForNode(resolvedNode));
+  const resolvedAncestors = resolvedNode ? ancestorChain(resolutionForNode(resolvedNode), hierarchy).slice(1) : [];
+  const resolvedRegionalLevel = !resolvedType && ["persistent_mapping_validated", "unique_hierarchy_match"].includes(rootResolution.reason)
+    && countries.includes(normalized(resolvedAncestors[0]?.formalName))
+    && !/\b(?:hotel|resort|lodge|camp|restaurant|museum|airport|viewpoint)\b|酒店|度假村|营地|餐厅|博物馆|机场|观景台/iu.test(resolvedNode?.formalName || "")
+    && regionValues.some(value => normalized(value).includes(normalized(resolvedNode?.formalName)));
+  if (resolvedNode && rootResolution.node?.nodeId === resolvedNode.nodeId
+    && (["place", "park", "conservancy"].includes(resolvedType) || resolvedRegionalLevel)
+    && explicitCountries.every(country => resolvedAncestors.some(parent => parent.parentNodeId
+      && exactGeographicNames(country).includes(normalized(parent.formalName))))
+    && !identities.has(normalized(resolvedNode.formalName)) && !countries.includes(normalized(resolvedNode.formalName))
+    && resolvedAncestors.some(parent => parent.parentNodeId && countries.includes(normalized(parent.formalName)))) {
+    regions.push(normalized(resolvedNode.formalName));
+  }
   const fallbackNames = new Set(fallbackLocations.flatMap(exactGeographicNames));
   if (!countries.length || !regions.length) return null;
   const matches = (hierarchy?.records || []).filter((node) => {
@@ -686,7 +824,9 @@ export function buildKnowledgeScopePlan(slot = {}, rootResolution = null, hierar
   const regionFacts = unique(matchedEntities.map((entity) => entity.region));
   const regionNode = meaningful.find((node) => regionFacts.some((fact) => identityMatches(node.formalName, fact)));
   const inferredCountryNode = regionNode?.parentNodeId ? hierarchy?.byId?.get(regionNode.parentNodeId) : null;
-  const countryNode = meaningful.find((node) => countryFacts.some((fact) => identityMatches(node.formalName, fact)))
+  const recoveredCountry = rootResolution?.reason === 'transport_bound_geographic_chain'
+    ? meaningful.find(node => node.nodeId === rootResolution.transportGeographicRecovery?.countryNodeId) : null;
+  const countryNode = recoveredCountry || meaningful.find((node) => countryFacts.some((fact) => identityMatches(node.formalName, fact)))
     || hierarchy?.records?.find((node) => !GENERIC_NODE_NAMES.has(normalized(node.formalName))
       && countryFacts.some((fact) => identityMatches(node.formalName, fact)))
     || (inferredCountryNode && inferredCountryNode.nodeId !== hierarchyRoot?.nodeId ? inferredCountryNode : null)
@@ -1525,6 +1665,22 @@ export function applyKnowledgeScopeToQueryPlan(basePlan = {}, slot = {}, scopeRe
 
 export function buildKnowledgeQueryPlan(slot = {}, scopeResolution = null, { maxQueries = 4 } = {}) {
   const limit = Math.max(2, Math.min(4, Number(maxQueries) || 4));
+  const animalBranches = wildlifeQueryBranches(slot);
+  if (animalBranches
+    && moduleKind(slot) === "day" && slot.exactIdentityRequired === false) {
+    const branches = animalBranches.map(({ members, ...option }) => {
+      const core = { ...slot.queryCore, ...option };
+      const queries = [[core.subject, core.action], [core.subjectEn, core.actionEn]].map(parts => parts.filter(Boolean).join(" "));
+      return buildKnowledgeQueryPlan({ ...slot, animalSubjectOptions: undefined, animalActionOptions: undefined, queryCore: core,
+        fidelityQuery: queries[0], alternateQueries: queries.slice(1), searchIntent: queries }, scopeResolution, { maxQueries: 2 });
+    });
+    if (branches.every(branch => !branch.validationError && branch.queries.length)) {
+      const querySteps = [0, 1].flatMap(index => branches.map(branch => branch.querySteps[index]).filter(Boolean)).slice(0, limit);
+      const queries = querySteps.map(step => step.query);
+      return { ...branches[0], queries, querySteps, plannerQueries: queries, fallbackQueries: [],
+        strategy: "fact_bound_animal_or", subjectAlternatives: slot.animalSubjectOptions.options };
+    }
+  }
   const purpose = classifyKnowledgeImagePurpose(slot);
   const visualTarget = buildKnowledgeQueryVisualTarget(slot);
   if (moduleKind(slot) === "hotel" && ["hotel_space", "hotel_experience"].includes(purpose)) {
@@ -1844,7 +2000,7 @@ async function hierarchyRetryDelay(delayMs, signal, attempts) {
 const mappingWrites = new Map();
 
 export function createKnowledgeScopeResolver({ baseUrl, root, fetchImpl = fetch, signal, hierarchyLoader = loadKnowledgeHierarchy,
-  hierarchyTimeoutMs = HIERARCHY_TOTAL_TIMEOUT_MS, hierarchyRetryDelayMs = HIERARCHY_RETRY_DELAY_MS } = {}) {
+  hierarchyTimeoutMs = HIERARCHY_TOTAL_TIMEOUT_MS, hierarchyRetryDelayMs = HIERARCHY_RETRY_DELAY_MS, preparedData } = {}) {
   const mappingPath = root ? path.join(root, "output", "knowledge-node-mappings.json") : "";
   let hierarchyPromise;
   let hierarchyError;
@@ -1919,7 +2075,7 @@ export function createKnowledgeScopeResolver({ baseUrl, root, fetchImpl = fetch,
     async resolve(slot, options = {}) {
       const [index, saved] = await Promise.all([hierarchy(), mappings()]);
       const key = mappingKey(slot);
-      const resolution = resolveKnowledgeScope(slot, index, { ...options, cachedNodeId: options.allowedNodeIds ? null : saved[key]?.nodeId });
+      const resolution = resolveKnowledgeScope(slot, index, { ...options, preparedData, cachedNodeId: options.allowedNodeIds ? null : saved[key]?.nodeId });
       await persist(key, resolution);
       return resolution;
     },

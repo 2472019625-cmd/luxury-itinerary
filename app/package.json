@@ -10,6 +10,7 @@
     "app": "npm run build && node server/app.mjs",
     "serve": "node server/app.mjs",
     "agent:serve": "node server/agent-planner-app.mjs",
+    "agent:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-agent-local.ps1",
     "build": "vite build && node scripts/prepare-sites-build.mjs",
     "preview": "vite preview",
     "test:sites": "node --test tests/sites-worker.test.mjs",

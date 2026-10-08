@@ -40,11 +40,12 @@ export function agentDisplayState(snapshot) {
   const simple = snapshot?.project?.flowKind === 'simple_skill_v1';
   const draft = simple ? simpleEditableEditorState(snapshot) === 'draft' : false;
   const renderFailed = simple && draft && !simpleRenderedEditorState(snapshot);
-  const failed = statuses.some(s => ['failed', 'planning_failed', 'execution_failed', 'terminated'].includes(s)) || (simple && !draft && ['partial', 'awaiting_user_action', 'ready_to_render'].includes(snapshot?.project?.status) && ['failed', 'blocked'].includes(snapshot?.result?.render?.status));
+  const failed = statuses.some(s => ['failed', 'interrupted', 'planning_failed', 'execution_failed', 'terminated'].includes(s)) || (simple && !draft && ['partial', 'awaiting_user_action', 'ready_to_render'].includes(snapshot?.project?.status) && ['failed', 'blocked'].includes(snapshot?.result?.render?.status));
   const cancelled = statuses.includes('cancelled');
   const completed = !failed && !cancelled && (simple ? simpleRenderedEditorState(snapshot) === 'complete' : statuses.some(s => ['complete', 'completed', 'ready_for_editor'].includes(s)));
   const disconnected = Boolean(snapshot?._connectionError) && !failed && !cancelled && !completed && !draft;
-  return { failed, cancelled, completed, draft, renderFailed, disconnected, frozen: failed || cancelled || completed || draft || disconnected };
+  const queued = !failed && !cancelled && statuses.includes('queued');
+  return { failed, cancelled, completed, draft, renderFailed, disconnected, queued, frozen: failed || cancelled || completed || draft || disconnected };
 }
 
 export function displayAgentStages(stages, state) {
@@ -64,7 +65,11 @@ export function agentElapsed(snapshot, now = Date.now()) {
   const terminalTime = state.draft
     ? snapshot?.activeJob?.completedAt || snapshot?.activeJob?.finishedAt || snapshot?.activeJob?.updatedAt || snapshot?.executionRun?.updatedAt || snapshot?.project?.updatedAt
     : snapshot?.executionRun?.updatedAt || snapshot?.activeJob?.updatedAt || snapshot?.project?.updatedAt;
-  const startedAt = snapshot?.executionRun?.startedAt || snapshot?.activeJob?.startedAt || snapshot?.executionRun?.createdAt || snapshot?.activeJob?.createdAt || snapshot?.project?.createdAt;
+  // A Simple project is one complete production batch, including planning.
+  // Its execution record is created after planning and must not reset the clock.
+  const startedAt = snapshot?.project?.flowKind === 'simple_skill_v1'
+    ? snapshot?.project?.createdAt || snapshot?.activeJob?.createdAt || snapshot?.executionRun?.startedAt || snapshot?.executionRun?.createdAt
+    : snapshot?.executionRun?.startedAt || snapshot?.activeJob?.startedAt || snapshot?.executionRun?.createdAt || snapshot?.activeJob?.createdAt || snapshot?.project?.createdAt;
   const end = state.disconnected ? snapshot?._observedAt : state.frozen ? Date.parse(terminalTime) : now;
   return Math.max(0, Math.floor(((end || snapshot?._observedAt || now) - Date.parse(startedAt || now)) / 1000));
 }
@@ -77,6 +82,9 @@ function errorText(value) {
 }
 
 export function agentFailurePresentation(snapshot, stageLabel = '当前处理阶段') {
+  if (snapshot?.project?.status === 'interrupted') {
+    return { stageLabel, userMessage: '服务重启后本次制作已中断，已保存的资料仍然保留，请重新制作', technicalError: 'generation_process_interrupted' };
+  }
   const latestEvent = snapshot?.activeJob?.latestEvent || snapshot?.executionRun?.events?.at?.(-1) || {};
   const rawError = snapshot?.project?.lastError || snapshot?.project?.error || snapshot?.executionRun?.error || snapshot?.activeJob?.error || latestEvent.error || latestEvent.reason || latestEvent.message;
   const technicalError = errorText(rawError) || '未提供技术错误信息';

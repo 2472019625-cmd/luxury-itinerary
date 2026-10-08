@@ -4,6 +4,8 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 import { captureLongElement } from "./capture-long-element.mjs";
+import { createOperationTrace } from '../server/operation-trace.mjs';
+import { attachRenderPageDiagnostics, recordRenderDomSnapshot } from './render-page-diagnostics.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const arg = process.argv.find((item) => item.startsWith("--width="));
@@ -18,6 +20,8 @@ const qaArg = process.argv.find((item) => item.startsWith("--qa-output="));
 const qaOutput = qaArg ? path.resolve(qaArg.slice("--qa-output=".length)) : null;
 const originArg = process.argv.find((item) => item.startsWith("--origin="));
 const origin = originArg?.slice("--origin=".length) || "http://127.0.0.1:4173";
+const option = name => process.argv.find(item => item.startsWith(`--${name}=`))?.slice(name.length + 3);
+const trace = createOperationTrace('renderer', { requestId: option('request-id'), projectId: option('project-id'), revision: option('revision') });
 if (![2000, 1080].includes(width)) throw new Error("width 仅支持 2000 或 1080");
 
 const candidates = [
@@ -34,7 +38,7 @@ let browser = null;
 const launchErrors = [];
 for (const executablePath of executablePaths) {
   try {
-    browser = await puppeteer.launch({ executablePath, headless: true, args: ["--disable-gpu", "--font-render-hinting=none"] });
+    browser = await trace.measure('browser_launch', () => puppeteer.launch({ executablePath, headless: true, args: ["--disable-gpu", "--font-render-hinting=none"] }));
     break;
   } catch (error) {
     launchErrors.push(`${path.basename(executablePath)}: ${error?.message || String(error)}`);
@@ -43,6 +47,7 @@ for (const executablePath of executablePaths) {
 if (!browser) throw new Error(`Edge/Chrome 均无法启动：${launchErrors.join(" | ")}`);
 try {
   const page = await browser.newPage();
+  const pageDiagnostics = attachRenderPageDiagnostics(page, trace);
   await page.setViewport({ width: Math.max(2000, width), height: 1200, deviceScaleFactor: 1 });
   let renderedData = null;
   if (dataFile) {
@@ -54,24 +59,30 @@ try {
     }, workspaceData);
   }
   const url = `${origin}/?export=1&width=${width}&dataset=${encodeURIComponent(dataFile ? "workspace" : dataset)}`;
-  await page.goto(url, { waitUntil: "networkidle0", timeout: 120000 });
-  await page.evaluate(() => document.fonts.ready);
-  await page.evaluate(async () => {
+  try { await trace.measure('page_load', () => page.goto(url, { waitUntil: "networkidle0", timeout: 120000 })); }
+  catch (error) {
+    pageDiagnostics.snapshot();
+    await recordRenderDomSnapshot(page, trace);
+    throw error;
+  }
+  pageDiagnostics.snapshot();
+  await trace.measure('fonts', () => page.evaluate(() => document.fonts.ready));
+  await trace.measure('image_decode', () => page.evaluate(async () => {
     await Promise.all([...document.images].map((image) => image.decode?.().catch(() => undefined)));
     window.scrollTo(0, document.documentElement.scrollHeight);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     window.scrollTo(0, 0);
-  });
+  }));
   const target = await page.$("#itinerary");
   if (!target) throw new Error("未找到 #itinerary 渲染节点");
   const output = requestedOutput || path.join(root, "output", `${dataset}-itinerary-${width}.png`);
   fs.mkdirSync(path.dirname(output), { recursive: true });
   const box = await target.boundingBox();
-  const { png, capture } = await captureLongElement(page, target);
-  fs.writeFileSync(output, png);
+  const { png, capture } = await captureLongElement(page, target, { trace });
+  await trace.measure('file_save', () => fs.writeFileSync(output, png));
 
   const expectedPayment = renderedData?.payment || null;
-  const layoutQa = await page.evaluate((expectedPayment) => {
+  const layoutQa = await trace.measure('layout_check', () => page.evaluate((expectedPayment) => {
     const root = document.querySelector('#itinerary');
     const selectorFor = (element) => element.id ? `#${element.id}` : element.dataset?.editPath ? `[data-edit-path="${element.dataset.editPath}"]` : `${element.tagName.toLowerCase()}.${[...element.classList].slice(0, 2).join('.')}`;
     const overflows = [...root.querySelectorAll('h1,h2,h3,h4,p,span,strong,li,section,article')]
@@ -113,8 +124,9 @@ try {
       footer: { ...module('.brand-footer-fixed'), complete: Boolean(footer?.querySelector('img')), missingParts: footer?.querySelector('img') ? [] : ['品牌页脚图片'] },
     };
     return { width: Math.round(root.getBoundingClientRect().width), height: Math.round(root.getBoundingClientRect().height), overflows, brokenImages, cardImageUpscales, largeGaps, footerPresent: fixedModules.footer.present, fixedModules };
-  }, expectedPayment);
+  }, expectedPayment));
   layoutQa.capture = capture;
+  layoutQa.timing = { requestId: trace.requestId, phases: trace.timings };
   if (qaOutput) {
     fs.mkdirSync(path.dirname(qaOutput), { recursive: true });
     fs.writeFileSync(qaOutput, JSON.stringify(layoutQa, null, 2), 'utf8');
@@ -123,6 +135,9 @@ try {
   const footer = await page.$(".brand-footer-fixed");
   if (!footer) throw new Error('固定品牌页脚缺失');
   console.log(JSON.stringify({ output, width, renderedBox: box, layoutQa }, null, 2));
+} catch (error) {
+  trace.emit('render_failed', { code: error?.code || 'renderer_process_failed' });
+  throw error;
 } finally {
-  await browser.close();
+  await trace.measure('browser_close', () => browser.close());
 }

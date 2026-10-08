@@ -64,7 +64,7 @@ function statusFacts(value) {
   return { sourceState: "structured", ...Object.fromEntries(Object.entries(value).filter(([key]) => /status|included|optional|pending|reservation|confirm|feeBoundary/i.test(key)).map(([key, item]) => [key, statusFacts(item)])) };
 }
 
-function copyTask({ targetId, targetPath, moduleType, facts, plannerGoal, relevantContext, layoutHints, outputSchema = stringSchema, researchRequest, required = true }) {
+function copyTask({ targetId, targetPath, moduleType, facts, plannerGoal, relevantContext, visualDirection, layoutHints, outputSchema = stringSchema, researchRequest, required = true }) {
   return {
     targetId,
     targetPath,
@@ -73,6 +73,7 @@ function copyTask({ targetId, targetPath, moduleType, facts, plannerGoal, releva
     factStatuses: statusFacts(facts),
     plannerGoal,
     relevantContext,
+    ...(visualDirection ? { visualDirection: structuredClone(visualDirection) } : {}),
     outputSchema: structuredClone(outputSchema),
     ...(researchRequest ? { researchRequest: structuredClone(researchRequest) } : {}),
     layoutHints,
@@ -114,6 +115,8 @@ function plannedQueryFields(plan = {}) {
       : queries.slice(1, 4),
     searchIntent: queries,
     queryCore: plannedQueryCore(plan),
+    ...(plan.animalSubjectOptions ? { animalSubjectOptions: structuredClone(plan.animalSubjectOptions) } : {}),
+    ...(plan.animalActionOptions ? { animalActionOptions: structuredClone(plan.animalActionOptions) } : {}),
     plannerSlotStatus: plan.plannerSlotStatus || (hasPlannerSlot ? "ready" : "unresolved"),
     needsUserAction: plan.needsUserAction === true || !hasPlannerSlot || !identityValid,
     plannerValidationIssues: [...(Array.isArray(plan.plannerValidationIssues) ? structuredClone(plan.plannerValidationIssues) : !hasPlannerSlot ? [{ code: "image_search_plan_missing", message: "Planner单次输出未提供该图片位，已保留到Step4人工处理" }] : []), ...(!identityValid ? [{code:"image_exact_identity_invalid",message:"具体身份布尔约束缺失/非法或true但identity为空，未按名称猜测"}] : [])],
@@ -762,6 +765,10 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     targetRange: { min: 5, max: 7 },
   }] : [];
   data.highlights = selectedHighlights.map((item) => normalizeHighlightForDisplay(clean(item.sourceText)));
+  for (const day of agentPlan.validation?.dayVisualDecisions || []) if (day.status === 'incomplete') warnings.push({
+    code: 'day_visual_coverage_incomplete', severity: 'warning', dayIndex: day.dayIndex,
+    message: `DAY ${day.dayIndex + 1} 有体验图片的规划去向尚未说明，请复核`,
+  });
   selectedHighlights.forEach((selection, index) => {
     const officialValue = selection.sourceType === "official_product"
       ? publicSheyouProductValues().find((item) => clean(item.sourceText) === clean(selection.sourceText))
@@ -1021,6 +1028,7 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     const visualCopyPath = `simpleImageSlotBindings.${slotId.replace(/:/g, '_')}`;
     copyTasks.push(copyTask({
       targetId: `copy:visual:${slotId}`, targetPath: visualCopyPath, moduleType: 'visual_card',
+      visualDirection: { visualSubject: primarySubject, titleCoreSubject: primarySubject, queryCore: plannedQueryCore(dayPlan) },
       facts: { visualSubject: primarySubject, titleCoreSubject: primarySubject, ...resolvedEntityFacts, daySourceFacts: dayFactText(day), sourceEvidence: dayPlan.sourceRefs || role.sourceRefs || [], experiences: (day.spots || []).map(spotCopyFacts), matchedSpot: matchedIndex >= 0 ? spotCopyFacts(primarySpot) : null, status, statusLabel, feeBoundary: primarySpot?.feeBoundary || '' },
       plannerGoal: `为当前视觉体验返回{cardTitle,cardDescription}。cardTitle写给客户看，采用简短的体验型表达：先写客人如何参与、从什么角度感受或期待什么，而不是把照片主体和构图直接改写成图片说明。标题仍须保留visualSubject/titleCoreSubject中最有辨识度的真实实体、动物、景点或体验锚点，不能退化成“清晨游猎、傍晚游猎、全天游猎”等泛称；可以删去姿态、构图、光线等非核心画面描述，但不能用泛标题掩盖图片不匹配。比如“热气球俯瞰草原角马群”可写“乘热气球遇见草原迁徙”，“营地夜空下的银河”可写“在营地仰望非洲星河”；示例不构成行程事实。不得把英文searchIntent当客户标题，不改视觉主题、不新增体验或保证动物、天气结果。cardDescription写1—2句怎么体验、为什么值得，只使用本日真实事实，不总结整天，不复制泛化Spot全文，不新增事实或费用承诺。有准确匹配Spot时优先复用其适合本体验的短描述。卡片不显示状态标签，但描述不得暗示未购买体验已包含。${entityDisplay.entity ? `当前实体的客户展示名为“${entityDisplay.displayName}”，cardTitle必须原样包含该名称，不得重译或展开官方名称。` : '当前视觉主题未解析为确定实体时，不得擅自创造新的实体译名。'}`,
       relevantContext: { dayRole: role.role, visualSubject: primarySubject, otherVisualSubjects: ordered.map(item => item.primaryVisualSubject).filter(item => item !== primarySubject) },
@@ -1067,6 +1075,9 @@ export function materializeSimpleSkillPlan({ data: sourceData = {}, report = {},
     moduleVisibility,
     plannerSummary: agentPlan.summary || {},
     warnings,
+    // Internal review evidence; never projected into customer copy. Coverage
+    // explanations cannot remove valid images or manufacture supporting slots.
+    plannerCoverage: agentPlan.validation?.dayVisualDecisions || [],
     dayRoles: normalizedRoles,
     copyTasks,
     imageSlots,

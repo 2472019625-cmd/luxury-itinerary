@@ -1,4 +1,6 @@
 import * as cheerio from "cheerio";
+import { createHash } from 'node:crypto';
+import { createOperationTrace } from './operation-trace.mjs';
 import { fetchPublicImageResource, IMAGE_ACCEPT, IMAGE_USER_AGENT } from './public-image-http.mjs';
 import { commonsFileTitleFromUrl, fetchCommonsFileImage } from './commons-search.mjs';
 export { assertPublicUrl, fetchPublicUrl } from './public-image-http.mjs';
@@ -14,11 +16,46 @@ function absolute(value, baseUrl) {
 }
 
 function srcsetUrls(value, baseUrl) {
-  return String(value || "").split(",").map((part) => {
-    const [src, descriptor = ""] = part.trim().split(/\s+/);
-    const numeric = Number.parseFloat(descriptor) || 0;
-    return { url: absolute(src, baseUrl), numeric };
-  }).filter((item) => item.url).sort((a, b) => b.numeric - a.numeric).map((item) => item.url);
+  // A URL token may contain commas (publisher crop coordinates, for example).
+  // Only trailing URL commas or commas after descriptors end a candidate.
+  const input = String(value || "");
+  const candidates = [];
+  let position = 0;
+  while (position < input.length) {
+    while (position < input.length && /[\t\n\f\r ,]/.test(input[position])) position += 1;
+    const start = position;
+    while (position < input.length && !/[\t\n\f\r ]/.test(input[position])) position += 1;
+    let src = input.slice(start, position);
+    if (!src) break;
+    let descriptor = '';
+    if (src.endsWith(',')) src = src.replace(/,+$/, '');
+    else {
+      const descriptorStart = position;
+      let parens = 0;
+      while (position < input.length && (input[position] !== ',' || parens)) {
+        if (input[position] === '(') parens += 1;
+        else if (input[position] === ')' && parens) parens -= 1;
+        position += 1;
+      }
+      descriptor = input.slice(descriptorStart, position).trim();
+      if (input[position] === ',') position += 1;
+    }
+    let width, density, height, invalid = false;
+    for (const token of descriptor.split(/[\t\n\f\r ]+/).filter(Boolean)) {
+      const number = Number(token.slice(0, -1));
+      if (!Number.isFinite(number)) { invalid = true; break; }
+      if (/^\d+w$/.test(token) && number > 0 && width === undefined && density === undefined) width = number;
+      else if (/^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?x$/.test(token)
+        && number >= 0 && width === undefined && density === undefined && height === undefined) density = number;
+      else if (/^\d+h$/.test(token) && number > 0 && height === undefined && density === undefined) height = number;
+      else { invalid = true; break; }
+    }
+    if (invalid || height !== undefined && width === undefined) continue;
+    const numeric = width ?? density ?? 1;
+    const url = absolute(src, baseUrl);
+    if (url) candidates.push({ url, numeric });
+  }
+  return candidates.sort((a, b) => b.numeric - a.numeric).map((item) => item.url);
 }
 
 function imageLike(value) {
@@ -75,6 +112,10 @@ function highResolutionVariants(value, baseUrl) {
   const push = (url) => { if (url && !variants.includes(url)) variants.push(url); };
   try {
     const parsed = new URL(resolved);
+    // Next image sizes and signed transformations are publisher contracts;
+    // changing width, crop or path can invalidate an otherwise usable URL.
+    if (/\/_next\/image\/?$/.test(parsed.pathname)
+      || [...parsed.searchParams.keys()].some(key => /^(?:sig|signature|token|auth|authorization|expires?|policy|key-pair-id|x-amz-.+|x-goog-.+)$/i.test(key))) return [resolved];
     push(wikimediaOriginalImageUrl(resolved));
     const widthKeys = ["w", "width", "imwidth", "wid"];
     const heightKeys = ["h", "height", "imheight", "hei"];
@@ -286,13 +327,13 @@ export function extractImageCandidatesFromHtml(html, page, { responseUrl = page.
   return [...assets.values()].slice(0, maxImages);
 }
 
-export async function fetchImagePageContent(pageUrl, { signal, onRequest, retrievalSession, fetchImpl, timeoutMs = 20_000 } = {}) {
+export async function fetchImagePageContent(pageUrl, { signal, onRequest, retrievalSession, fetchImpl, timeoutMs = 20_000, traceContext, logger } = {}) {
   const started = Date.now();
   let commonsApiFailure;
   const commonsTitle = commonsFileTitleFromUrl(pageUrl);
   if (commonsTitle) {
     try {
-      const candidate = await fetchCommonsFileImage(pageUrl, { signal, onRequest, retrievalSession, fetchImpl, timeoutMs });
+      const candidate = await fetchCommonsFileImage(pageUrl, { signal, onRequest, retrievalSession, fetchImpl, timeoutMs, traceContext, logger });
       return { imageCandidates: [candidate], responseUrl: candidate.pageUrl, acquisitionMethod: 'commons_api' };
     } catch (error) {
       // Only missing/broken metadata can fall back to the normal file page.
@@ -306,7 +347,7 @@ export async function fetchImagePageContent(pageUrl, { signal, onRequest, retrie
   }
   const response = await fetchPublicImageResource(pageUrl, {
     headers: { 'user-agent': IMAGE_USER_AGENT, accept: `text/html,application/xhtml+xml,${IMAGE_ACCEPT}` },
-    signal, timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), onRequest, retrievalSession, fetchImpl, maxBytes: 5_000_000, skipImageBody: true,
+    signal, timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)), onRequest, retrievalSession, fetchImpl, traceContext, logger, maxBytes: 5_000_000, skipImageBody: true,
   }).catch(error => { if (commonsApiFailure) error.commonsApiFailure = commonsApiFailure; throw error; });
   const type = response.headers.get("content-type") || "";
   if (type.startsWith("image/")) return { responseUrl: response.responseUrl, directImage: true, acquisitionMethod: 'http', ...(commonsApiFailure && { commonsApiFailure }) };
@@ -325,8 +366,11 @@ export async function fetchImagePageContent(pageUrl, { signal, onRequest, retrie
   return { html: response.buffer.toString('utf8'), responseUrl: response.responseUrl, acquisitionMethod: 'http', ...(commonsApiFailure && { commonsApiFailure }) };
 }
 
-export async function extractPageImages(page, { signal, maxImages = 36, semanticTerms = [], loadPage = fetchImagePageContent, retrievalSession, onRequest, fetchImpl, timeoutMs } = {}) {
-  const content = await loadPage(page.pageUrl, { signal, retrievalSession, onRequest, fetchImpl, timeoutMs });
+export async function extractPageImages(page, { signal, maxImages = 36, semanticTerms = [], loadPage = fetchImagePageContent, retrievalSession, onRequest, fetchImpl, timeoutMs, traceContext, logger } = {}) {
+  const trace = createOperationTrace('page_images', traceContext, logger);
+  trace.emit('resource', { resourceId: createHash('sha256').update(String(page.pageUrl || '')).digest('hex').slice(0, 16) });
+  const content = await trace.measure('page_fetch', () => loadPage(page.pageUrl, { signal, retrievalSession, onRequest, fetchImpl, timeoutMs, traceContext: { ...traceContext, requestId: trace.requestId }, logger }));
+  trace.emit('page_content', { directImage: Boolean(content.directImage), empty: Boolean(content.empty), imageCount: content.imageCandidates?.length || 0 });
   if (content.imageCandidates) return content.imageCandidates.map(candidate => ({ ...page, ...candidate })).slice(0, maxImages);
   if (content.directImage) {
     const originalUrl = wikimediaOriginalImageUrl(content.responseUrl);
@@ -337,12 +381,14 @@ export async function extractPageImages(page, { signal, maxImages = 36, semantic
   if (content.empty) return [];
   const extract = (result) => extractImageCandidatesFromHtml(result.html, { ...page, requestedPageUrl: page.pageUrl, pageUrl: result.responseUrl, acquisitionMethod: result.acquisitionMethod || 'http', ...(content.commonsApiFailure && { commonsApiFailure: content.commonsApiFailure }) }, { responseUrl: result.responseUrl, maxImages, semanticTerms });
   const candidates = extract(content);
+  trace.emit('static_extract', { candidateCount: candidates.length });
   const needsBrowser = !candidates.length || (candidates.length < 3 && /<script\b/i.test(content.html));
   if (retrievalSession && needsBrowser) {
     try {
-      const rendered = await retrievalSession.renderPage(content.responseUrl || page.pageUrl, { onRequest });
+      const rendered = await trace.measure('browser_page', () => retrievalSession.renderPage(content.responseUrl || page.pageUrl, { onRequest }));
       const browserCandidates = extract(rendered);
       const all = new Map([...candidates, ...browserCandidates].map((candidate) => [canonicalImageAssetKey(candidate.imageUrl), candidate]));
+      trace.emit('browser_extract', { candidateCount: all.size });
       return [...all.values()].slice(0, maxImages);
     } catch (error) {
       if (signal?.aborted || (!candidates.length && error.code !== 'browser_budget_exhausted')) throw error;

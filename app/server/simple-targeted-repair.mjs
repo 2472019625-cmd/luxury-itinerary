@@ -6,6 +6,7 @@ import { runSimpleRenderer } from "./simple-renderer.mjs";
 import { buildSimpleManualImagePayload, effectiveUnresolvedItems } from "./simple-manual-images.mjs";
 import { buildRendererUnresolvedItem } from "./simple-render-issues.mjs";
 import { applyModuleVisibility } from "../src/lib/moduleVisibility.js";
+import { assertSimpleResultCurrent } from './simple-result-version.mjs';
 
 const activeRepairs = new Map();
 
@@ -37,10 +38,14 @@ function rendererIssue(renderResult = {}) {
 
 async function safeRender(render, input) {
   try { return await render(input); }
-  catch (error) { return { status: "failed", mode: input.mode, outputPath: null, rendererCalls: 1, error: { code: error.code || "renderer_failed", message: error.message || String(error), diagnostic: error.diagnostic } }; }
+  catch (error) {
+    if (error.code === 'repair_result_stale') throw error;
+    return { status: "failed", mode: input.mode, outputPath: null, rendererCalls: 1, error: { code: error.code || "renderer_failed", message: error.message || String(error), diagnostic: error.diagnostic } };
+  }
 }
 
-function saveResultState({ store, project, run, result, renderResult, unresolvedItems, action, copyExecution = result.copyExecution }) {
+function saveResultState({ store, project, run, result, renderResult, unresolvedItems, action, copyExecution = result.copyExecution, revision = randomUUID() }) {
+  assertSimpleResultCurrent({ store, project, run, result, code: 'repair_result_stale', operation: action.type });
   unresolvedItems = effectiveUnresolvedItems(unresolvedItems, result.data || {}, store.getPlan(project.projectId, project.activePlanId) || {});
   const required = unresolvedItems.filter((item) => item.required);
   const complete = renderResult.status === "success" && renderResult.mode === "final" && required.length === 0;
@@ -57,7 +62,7 @@ function saveResultState({ store, project, run, result, renderResult, unresolved
     updatedAt: now,
     manualImageCompletion: {
       ...(result.manualImageCompletion || {}),
-      revision: randomUUID(),
+      revision,
       version: repairVersion(result) + 1,
       lastAction: action,
       updatedAt: now,
@@ -81,21 +86,23 @@ function saveResultState({ store, project, run, result, renderResult, unresolved
 }
 
 async function renderAfterRepair({ store, root, project, run, result, unresolvedItems, action, render, copyExecution }) {
+  const revision = randomUUID();
   unresolvedItems = effectiveUnresolvedItems(unresolvedItems, result.data || {}, store.getPlan(project.projectId, project.activePlanId) || {});
   const required = unresolvedItems.filter((item) => item.required);
   const mode = required.length ? "draft" : "final";
   const customerData = applyModuleVisibility(result.data, result.visibility || {});
-  let renderResult = await safeRender(render, { data: customerData, projectId: project.projectId, root, mode });
+  const canRender = () => { assertSimpleResultCurrent({ store, project, run, result, code: 'repair_result_stale', operation: action.type }); return true; };
+  let renderResult = await safeRender(render, { data: customerData, projectId: project.projectId, root, mode, revision, canRender });
   const nextUnresolved = unresolvedItems.filter((item) => item.kind !== "renderer");
   if (mode === "final" && renderResult.status !== "success") {
     const failedFinal = renderResult;
     nextUnresolved.push(rendererIssue(failedFinal));
-    renderResult = await safeRender(render, { data: customerData, projectId: project.projectId, root, mode: "draft" });
+    renderResult = await safeRender(render, { data: customerData, projectId: project.projectId, root, mode: "draft", revision, canRender });
     renderResult = { ...renderResult, mode: "draft", finalAttempt: failedFinal, rendererCalls: Number(failedFinal.rendererCalls || 0) + Number(renderResult.rendererCalls || 0) };
   } else if (renderResult.status !== "success") {
     nextUnresolved.push(rendererIssue(renderResult));
   }
-  return saveResultState({ store, project, run, result, renderResult, unresolvedItems: nextUnresolved, action, copyExecution });
+  return saveResultState({ store, project, run, result, renderResult, unresolvedItems: nextUnresolved, action, copyExecution, revision });
 }
 
 async function exclusive(projectId, operation) {
@@ -117,11 +124,10 @@ async function retryCopyTargets({ store, root, projectId, targetIds, copyOptions
     const taskById = new Map((initial.plan.copyTasks || []).map((item) => [item.targetId, item]));
     const tasks = retryIds.map((id) => taskById.get(id));
     if (tasks.some((task) => !task)) throw Object.assign(new Error("当前计划中找不到对应的文案任务"), { code: "copy_target_not_planned" });
-    const expectedVersion = repairVersion(initial.result);
     const researchStateStore = createCopyResearchStateStore({ store, projectId, executionRunId: initial.run.executionRunId });
     const execution = await runCopy({ itineraryContext: initial.plan.itineraryContext, tasks, ...copyOptions, researchStateStore });
     const current = contextFor(store, projectId);
-    if (repairVersion(current.result) !== expectedVersion) throw Object.assign(new Error("处理期间项目内容已经更新，请重新发起处理"), { code: "repair_result_stale" });
+    assertSimpleResultCurrent({ store, project: initial.project, run: initial.run, result: initial.result, code: 'repair_result_stale', operation: 'copy_model_return' });
 
     const writeback = applySimpleSkillResults({
       preparedData: current.result.data,
@@ -150,7 +156,12 @@ async function retryCopyTargets({ store, root, projectId, targetIds, copyOptions
       ...(current.result.unresolvedItems || []).filter((item) => item.kind !== "renderer" && !(item.kind === "copy" && retryIdSet.has(item.id))),
       ...writeback.unresolvedItems,
     ];
-    const nextResult = { ...current.result, data: writeback.data, copyExecution, outputPath: null };
+    const nextResult = { ...current.result, data: writeback.data, copyExecution, outputPath: null,
+      writeback: { ...(current.result.writeback || {}), copy: [
+        ...(current.result.writeback?.copy || []).filter(item => !retryIdSet.has(item.targetId)),
+        ...writeback.copyWriteback,
+      ] },
+    };
     for (const item of returned) store.saveTaskResult(projectId, current.run.executionRunId, `copy-${item.targetId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, item);
     const successfulTargets = tasks.filter((task) => !writeback.unresolvedItems.some((item) => item.kind === "copy" && item.id === task.targetId)).map((task) => ({ targetId: task.targetId, targetPath: task.targetPath }));
     const successfulIds = new Set(successfulTargets.map((item) => item.targetId));
@@ -180,10 +191,12 @@ export async function retrySimpleRenderer({ store, root, projectId, render = run
     const pending = { ...current.result, pipelineStatus: "partial", outputPath: null, renderStatus: "pending_targeted_render" };
     store.saveFinalResult(projectId, current.run.executionRunId, pending);
     store.updateProject(projectId, { status: "partial", progress: 95, currentStage: "正在重新检查成品", outputPath: null });
-    const renderResult = await safeRender(render, { data: applyModuleVisibility(current.result.data, current.result.visibility || {}), projectId, root, mode: "final" });
+    const revision = randomUUID();
+    const canRender = () => { assertSimpleResultCurrent({ store, ...current, code: 'repair_result_stale', operation: 'retry_final_renderer' }); return true; };
+    const renderResult = await safeRender(render, { data: applyModuleVisibility(current.result.data, current.result.visibility || {}), projectId, root, mode: "final", revision, canRender });
     const unresolvedItems = (current.result.unresolvedItems || []).filter((item) => item.kind !== "renderer");
     if (renderResult.status !== "success") unresolvedItems.push(rendererIssue(renderResult));
-    const saved = saveResultState({ store, project: current.project, run: current.run, result: current.result, renderResult, unresolvedItems, action: { type: "retry_final_renderer" } });
+    const saved = saveResultState({ store, project: current.project, run: current.run, result: current.result, renderResult, unresolvedItems, action: { type: "retry_final_renderer" }, revision });
     return { ...buildSimpleManualImagePayload(store, projectId), repair: { kind: "renderer", targetId: "renderer:2000", status: saved.pipelineStatus === "complete" ? "success" : "failed" } };
   });
 }

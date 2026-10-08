@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import sharp from "sharp";
+import { decodeSafeImage, MAX_IMAGE_BYTES } from './image-decode.mjs';
 import { applySimpleSkillResults } from "./simple-pipeline-writeback.mjs";
 import { runSimpleRenderer } from "./simple-renderer.mjs";
 import { downloadCandidate, imageResolutionPolicyForSlot, withDayGalleryLayout } from "./image-download.mjs";
@@ -9,6 +9,7 @@ import { refreshKnowledgeMatchedFile } from "./knowledge-image-search.mjs";
 import { prepareExplicitImageSearchSlot } from "./manual-image-search-target.mjs";
 export { prepareExplicitImageSearchSlot } from "./manual-image-search-target.mjs";
 import { candidateQualification, isHardRejectedCandidate } from "./image-candidate-eligibility.mjs";
+import { canConfirmModelApprovedProgramRejection } from "../src/lib/imageReviewPolicy.js";
 import { getSlotImage, setSlotImage } from "../src/lib/imageSlots.js";
 import { dayVisualCards } from "../src/lib/dayVisualCards.js";
 import { imageSearchPresentation } from "../src/lib/imageSearchPresentation.js";
@@ -18,6 +19,71 @@ import { buildRendererUnresolvedItem, normalizeRenderIssues, rendererQaIssues } 
 import { hotelStayDetails } from "../src/lib/hotelStayPresentation.js";
 import { applyHotelNightChange, planHotelNightChange } from "../src/lib/hotelStayEditing.js";
 import { applyModuleVisibility, EDITABLE_MODULE_VISIBILITY } from "../src/lib/moduleVisibility.js";
+import { createOperationTrace } from './operation-trace.mjs';
+import { manualCopyValue } from '../src/lib/manualImageState.js';
+import { assertSimpleResultCurrent } from './simple-result-version.mjs';
+
+function manualCopySchema(schema) {
+  if (!schema) return { type: 'string', minLength: 1 };
+  // Writer length/style targets do not grade human prose; layout still runs below.
+  const { minLength, maxLength, pattern, ...shape } = schema;
+  return { ...shape, ...(schema.type === 'string' ? { minLength: 1 } : {}),
+    ...(schema.properties ? { properties: Object.fromEntries(Object.entries(schema.properties).map(([key, value]) => [key, manualCopySchema(value)])) } : {}),
+    ...(schema.items ? { items: manualCopySchema(schema.items) } : {}),
+    ...Object.fromEntries(['anyOf', 'oneOf'].filter(key => Array.isArray(schema[key])).map(key => [key, schema[key].map(manualCopySchema)])) };
+}
+
+function trimManualCopy(value) {
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) return value.map(trimManualCopy);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, trimManualCopy(item)]));
+  return value;
+}
+
+function resolveManualCopy(result, resolutions) {
+  const resolved = new Map(resolutions.map(item => [item.targetId, item]));
+  const oldResults = result.copyExecution?.results || [];
+  const results = oldResults.filter(item => !resolved.has(item.targetId));
+  for (const item of resolutions) {
+    const previous = oldResults.find(entry => entry.targetId === item.targetId);
+    const failure = result.unresolvedItems?.find(entry => entry.kind === 'copy' && entry.id === item.targetId);
+    results.push({ ...previous, ...item, status: 'success', resolution: 'manual_editor', error: null,
+      manualResolution: { confirmedAt: new Date().toISOString(), previousStatus: previous?.status || failure?.status, previousError: previous?.error || failure?.error || null } });
+  }
+  return { ...result,
+    copyExecution: { ...result.copyExecution, results, status: results.every(item => item.status === 'success') ? 'success' : 'partial_success' },
+    unresolvedItems: (result.unresolvedItems || []).filter(item => item.kind !== 'copy' || !resolved.has(item.id)),
+    writeback: { ...result.writeback, copy: [...(result.writeback?.copy || []).filter(item => !resolved.has(item.targetId)), ...resolutions.map(item => ({ targetId: item.targetId, targetPath: item.targetPath, status: 'written', resolution: 'manual_editor' }))] },
+  };
+}
+
+export async function saveSimpleManualCopy({ store, root, projectId, targetId, value, manualConfirmed, render, deferRender = false } = {}) {
+  const context = projectContext(store, projectId);
+  const task = context.plan.copyTasks?.find(item => item.targetId === targetId);
+  if (manualConfirmed !== true) throw Object.assign(new Error('请明确确认使用人工填写的文案'), { code: 'manual_copy_confirmation_required' });
+  // The editor's debounce may already have saved this exact human edit.
+  if (task && context.result.copyExecution?.results?.some(item => item.targetId === targetId && item.resolution === 'manual_editor' && item.status === 'success') &&
+      JSON.stringify(trimManualCopy(value)) === JSON.stringify(trimManualCopy(manualCopyValue(context.result.data, { id: targetId, targetPath: task.targetPath, slotId: task.layoutHints?.slotId })))) return buildSimpleManualImagePayload(store, projectId);
+  if (!task || !context.result.unresolvedItems?.some(item => item.kind === 'copy' && item.id === targetId)) throw Object.assign(new Error('这项文案待处理已变化，请刷新后重试'), { code: 'manual_copy_target_changed' });
+  value = trimManualCopy(value);
+  if (value == null || (typeof value === 'string' && !value)) throw Object.assign(new Error('人工文案未保存，请先填写非空文案'), { code: 'manual_copy_invalid' });
+  const schema = task.outputSchema || (task.moduleType === 'visual_card' && !task.targetPath.endsWith('.description') ? { type: 'object', required: ['cardTitle', 'cardDescription'], additionalProperties: false, properties: { cardTitle: { type: 'string' }, cardDescription: { type: 'string' } } } : undefined);
+  const resolution = { targetId, targetPath: task.targetPath, value };
+  const applied = applySimpleSkillResults({ preparedData: context.result.data, copyTasks: [{ ...task, outputSchema: manualCopySchema(schema) }], copyExecution: { results: [{ ...resolution, status: 'success' }] } });
+  if (applied.unresolvedItems.length) throw Object.assign(new Error(`人工文案未保存，请填写非空文案并保持对应字段格式。${applied.unresolvedItems[0].error?.message || ''}`), { code: 'manual_copy_invalid' });
+  const slotId = task.layoutHints?.slotId;
+  const binding = slotId && applied.data.simpleImageSlotBindings?.[slotId];
+  if (binding?.module === 'day' && binding.useSpotCopy !== false) {
+    const spots = applied.data.days?.[binding.dayIndex]?.spots || [];
+    const spot = binding.spotId ? spots.find(item => item.id === binding.spotId) : spots[binding.spotIndex];
+    if (!spot) throw Object.assign(new Error('对应体验已变化，请刷新后重试'), { code: 'manual_copy_target_changed' });
+    spot.description = value.cardDescription;
+    delete spot.experience;
+  }
+  const result = resolveManualCopy({ ...context.result, data: applied.data }, [resolution]);
+  return persistResult({ ...context, result, store, root, imageExecution: result.imageExecution, render, deferRender,
+    action: { type: 'editor_manual_copy_confirm', targetId, resolvedCopyTargetIds: [targetId] } });
+}
 
 const MIME_EXTENSIONS = Object.freeze({ "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" });
 const manualRenders = new Map();
@@ -111,7 +177,7 @@ function manualSlotIds(result, plan = {}) {
   return [...new Set([
     ...(Array.isArray(saved) ? saved : []),
     ...(result.unresolvedItems || []).filter((item) => item.kind === "image").map((item) => item.id),
-    ...(plan.imageSlots || []).filter((slot) => slot.moduleType === "day").map((slot) => slot.slotId),
+    ...(plan.imageSlots || []).filter((slot) => ["day", "transport"].includes(slot.moduleType)).map((slot) => slot.slotId),
     ...Object.entries(result.data?.simpleImageSlotBindings || {}).filter(([, binding]) => binding.manualEditorCard === true).map(([slotId]) => slotId),
   ].filter((slotId) => slotId && (plannedIds.has(slotId) || Object.hasOwn(liveBindings, slotId))))];
 }
@@ -208,7 +274,8 @@ function blockingItems(items = [], data = {}, plan = {}, renderResult = {}, revi
       const task = (plan.copyTasks || []).find((value) => value.targetId === item.id);
       const targetPath = item.targetPath || task?.targetPath || "";
       const slotId = task?.layoutHints?.slotId || (item.id.startsWith("copy:visual:") ? item.id.slice("copy:visual:".length) : "");
-      return { kind: "copy", id: item.id, required: item.required === true, targetPath, slotId, label: copyLocation(targetPath, data, slotId, plan), message: slotId ? "这张体验卡片的文案尚未生成完成，可查看对应卡片或单独重新生成。" : "这段文案尚未生成完成，可以只重新生成这一项。", action: "retry_copy" };
+      const placementFailure = ["target_path_mismatch", "unauthorized_target_path"].includes(item.error?.code);
+      return { kind: "copy", id: item.id, required: item.required === true, targetPath, slotId, label: copyLocation(targetPath, data, slotId, plan), message: placementFailure ? "文案返回的对应位置不一致，尚未保存到此处。请单独重新生成这一项，也可手动填写后确认完成。" : slotId ? "这张体验卡片的文案尚未生成完成，可单独重新生成，也可手动填写后确认完成。" : "这段文案尚未生成完成，可单独重新生成，也可手动填写后确认完成。", action: "retry_copy" };
     }
     if (item.kind === "image") {
       if (item.technicalStatus === "identity_evidence_pending_confirmation") return { kind: "image", id: item.id, slotId: item.id, label: imageLocation(item, data, plan), message: "图片已预填到草稿，具体实体身份尚未证实。请确认这张图，或为可选位置移除图片。", action: "handle_image" };
@@ -239,6 +306,7 @@ function rendererItemIsOnlyClarityWarning(item = {}, renderResult = {}) {
 function moduleName(slotId) {
   if (slotId.includes(":cover:")) return "封面";
   if (slotId.includes(":hotel:")) return "臻选下榻";
+  if (slotId.includes(":transport:")) return "全程交通";
   const match = slotId.match(/:day:(\d+):/);
   return match ? `DAY ${match[1]}` : "每日行程";
 }
@@ -251,6 +319,46 @@ function candidatePool(imageResult = {}) {
     ...(imageResult.manualAction?.selectableCandidates || []),
     ...(imageResult.candidates || []),
   ]);
+}
+
+// Optional transport pictures are editor reminders, not completion blockers.
+// Derive them from the current execution so saved projects need no migration.
+function optionalTransportImageItems(result, plan) {
+  const byId = new Map((result.imageExecution?.results || []).map(item => [item.slotId, item]));
+  return (plan.imageSlots || []).flatMap(slot => {
+    const binding = result.data?.simpleImageSlotBindings?.[slot.slotId] || plan.slotBindings?.[slot.slotId];
+    const imageResult = byId.get(slot.slotId);
+    if (slot.moduleType !== 'transport' || slot.required !== false || binding?.module !== 'transport'
+      || !imageResult || ['success', 'queued', 'pending', 'running', 'processing'].includes(imageResult.status)
+      || getSlotImage(result.data, binding)?.src || result.data?.imageLocks?.[slot.slotId]?.source === 'user_cleared'
+      || (result.unresolvedItems || []).some(item => item.kind === 'image' && item.id === slot.slotId && item.required)) return [];
+    return [{ kind: 'image', id: slot.slotId, slotId: slot.slotId, required: false, blocking: false,
+      label: imageLocation({id: slot.slotId}, result.data, plan), action: 'handle_image',
+      message: '交通图片尚未找到，可重新搜索、选择或上传，也可确认不使用此图片。此提醒不影响正式导出。' }];
+  });
+}
+
+// Explicit search is a new assessment of the same asset. Do not let an old
+// rejected/selectable alias shadow its latest audit; keep human decisions.
+function refreshedSearchCandidates(previous, returned) {
+  const byId = new Map(candidatePool(previous).map(candidate => [candidate.candidateId, candidate]));
+  for (const candidate of candidatePool(returned)) {
+    const prior = byId.get(candidate.candidateId);
+    const reassessed = candidate.hardJudgment != null || candidate.modelDecision != null || candidate.reviewTimeout === true
+      || ['needs_user_judgment', 'review_timeout'].includes(candidate.candidateStatus);
+    if (prior && !reassessed) continue;
+    const next = { ...candidate };
+    if (prior) {
+      for (const key of ['userDecision', 'userDecidedAt', 'humanDecision']) if (prior[key] != null) next[key] = prior[key];
+      next.previousReview = { qualificationStatus: prior.qualificationStatus, rejection: prior.rejection,
+        modelDecision: prior.modelDecision, actualSubject: prior.actualSubject, matchReason: prior.matchReason };
+    }
+    byId.set(candidate.candidateId, next);
+  }
+  const refresh = items => (items || []).map(candidate => byId.get(candidate.candidateId) || candidate);
+  return { candidates: [...byId.values()], manualAction: { ...(previous.manualAction || {}),
+    ...(previous.manualAction?.rejectedCandidates ? { rejectedCandidates: refresh(previous.manualAction.rejectedCandidates) } : {}),
+    ...(previous.manualAction?.selectableCandidates ? { selectableCandidates: refresh(previous.manualAction.selectableCandidates) } : {}) } };
 }
 
 function selectableIds(result, imageResult) {
@@ -299,8 +407,10 @@ function frontendCandidate(candidate, slotId, binding, canSelect, targetFingerpr
     libraryEligible: canSelect && !hardRejected,
     manualSelectable: canSelect && !hardRejected,
     canPreview: true,
-    canConfirm: !hardRejected,
-    reason: candidate.rejectionReason || candidate.matchReason || candidate.reason || "暂无审核说明",
+    canConfirm: !hardRejected || canConfirmModelApprovedProgramRejection(candidate),
+    reason: hard.auditContract?.complete === false && !hardRejected
+      ? '图片检查返回的信息不完整，补核后仍未完成，暂未自动采用。可查看图片后确认或重新搜索。'
+      : candidate.rejectionReason || candidate.matchReason || candidate.reason || "暂无审核说明",
     terminalAudit: {
       relevance: hard.subjectMatch === true && hard.activityMatch !== false ? "主体相符" : "主体不符",
       luxury: "—",
@@ -350,7 +460,7 @@ function editableImageBinding(context, slotId) {
   throw Object.assign(new Error("该图片位不属于当前可编辑卡片"), { code: "slot_not_editable" });
 }
 
-export function buildSimpleManualImagePayload(store, projectId) {
+export function buildSimpleManualImagePayload(store, projectId, { compact = false } = {}) {
   const { project, run, plan, result } = projectContext(store, projectId);
   const context = { project, run, plan, result };
   const resultById = new Map((result.imageExecution?.results || []).map((item) => [item.slotId, item]));
@@ -373,7 +483,9 @@ export function buildSimpleManualImagePayload(store, projectId) {
       && ["non_core_background_choice", "non_core_supporting_choice", "transport_overview_pose"].includes(prepareExplicitImageSearchSlot(planned, { plan }).manualSearchOverride?.reason)) {
       currentDiagnostic = { ...currentDiagnostic, planning: { ...currentDiagnostic.planning, reason: "scene_preference" } };
     }
-    const removedDayImage = userRemovedDayImage(result.data, slotId, binding || {});
+    const removedDayImage = userRemovedDayImage(result.data, slotId, binding || {})
+      || planned?.moduleType === 'transport' && planned.required === false
+        && result.data?.imageLocks?.[slotId]?.source === 'user_cleared' && !getSlotImage(result.data, binding)?.src;
     return {
       slotId,
       module: moduleName(slotId),
@@ -408,6 +520,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
   const outputUrl = canEnterFinal ? `/api/simple/projects/${projectId}/output` : null;
   const notices = unresolvedNotices(unresolvedItems);
   const blockers = blockingItems(unresolvedItems, result.data || {}, plan, result.render || {}, slots);
+  const optionalImageItems = optionalTransportImageItems(result, plan);
   const draftRendered = result.renderStatus === "success" && result.render?.mode === "draft";
   const reviewBySlotId = new Map(slots.map((slot) => [slot.slotId, slot]));
   const editorBindings = Object.fromEntries(Object.entries(result.data?.simpleImageSlotBindings || plan.slotBindings || {}).map(([slotId, binding]) => {
@@ -422,7 +535,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
       editorPrimaryVisualSubject: review.primaryVisualSubject,
     }];
   }));
-  return {
+  const payload = {
     project: {
       id: project.projectId,
       projectId: project.projectId,
@@ -439,6 +552,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
     manualRevision: result.manualImageCompletion?.revision || null,
     manualVersion: result.manualImageCompletion?.version || 0,
     renderPending: result.renderStatus === "pending_manual_render",
+    renderFailed: ['failed', 'blocked'].includes(result.renderStatus),
     pipelineStatus: result.pipelineStatus,
     outputPath: result.outputPath || null,
     outputUrl,
@@ -448,6 +562,7 @@ export function buildSimpleManualImagePayload(store, projectId) {
     unresolvedImageCount: unresolvedItems.filter((item) => item.kind === "image").length,
     unresolvedNotices: notices,
     blockingItems: blockers,
+    optionalImageItems,
     draftRendered,
     canEnterEditor: true,
     canEnterFinal,
@@ -458,19 +573,40 @@ export function buildSimpleManualImagePayload(store, projectId) {
       automaticImageFollowupRounds: 0,
     },
   };
+  if (compact) {
+    // Identical review objects occur at both top level and project.data.
+    // Opt-in clients restore the shared reference before merging editor state.
+    delete payload.project.data.imageReview;
+    payload.compactImageResponse = true;
+  }
+  return payload;
+}
+
+export function simpleImageSelectionState(store, projectId, slotId, requestId) {
+  const { run, result } = projectContext(store, projectId);
+  const selected = result.imageExecution?.results?.find(item => item.slotId === slotId)?.selected;
+  const saved = Boolean(requestId && selected?.humanDecision?.requestId === requestId);
+  return { requestId, executionRunId: run.executionRunId, saved,
+    candidateId: saved ? selected.candidateId : null,
+    manualRevision: result.manualImageCompletion?.revision || null,
+    manualVersion: result.manualImageCompletion?.version || 0,
+    renderPending: result.renderStatus === 'pending_manual_render',
+    renderFailed: ['failed', 'blocked'].includes(result.renderStatus) };
 }
 
 function selectedCandidate(imageResult, candidateId) {
   return candidatePool(imageResult).find((item) => item.candidateId === candidateId) || null;
 }
 
-async function persistResult({ store, root, project, run, plan, result, imageExecution, action, render = runSimpleRenderer, deferRender = false }) {
+async function persistResult({ store, root, project, run, plan, result, imageExecution, action, render = runSimpleRenderer, deferRender = false, trace, compactResponse = false }) {
+  trace ||= createOperationTrace('manual_image', { projectId: project.projectId, executionRunId: run.executionRunId, slotId: action.slotId, requestId: action.requestId });
   const affected = new Set([...(action.slotIds || []), action.slotId, ...(action.humanDecision?.movedFrom || [])].filter(Boolean));
   const beforeReconcile = new Map((imageExecution.results || []).map((item) => [item.slotId, item]));
-  imageExecution = await reconcileProvisionalImageSelections({ slots: plan.imageSlots, execution: imageExecution, root, preparedData: result.data, slotBindings: result.data?.simpleImageSlotBindings || plan.slotBindings });
+  imageExecution = await trace.measure('reconcile', () => reconcileProvisionalImageSelections({ slots: plan.imageSlots, execution: imageExecution, root, preparedData: result.data, slotBindings: result.data?.simpleImageSlotBindings || plan.slotBindings }));
   for (const item of imageExecution.results || []) {
     if (beforeReconcile.get(item.slotId)?.provisionalSelected && !item.provisionalSelected) affected.add(item.slotId);
   }
+  assertSimpleResultCurrent({ store, project, run, result, operation: action.type });
   const taskResultIds = new Set(affected);
   const explicitSearch = action.type === "explicit_single_slot_search" || action.type === "explicit_multi_slot_search";
   if (action.type === "explicit_single_slot_search" && result.imageExecution?.results?.find(item => item.slotId === action.slotId)?.selected) affected.delete(action.slotId);
@@ -501,22 +637,38 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
   const revision = randomUUID();
   const pending = { ...result, data: writeback.data, imageExecution, unresolvedItems: writeback.unresolvedItems, outputPath: null, pipelineStatus: "partial", renderStatus: "pending_manual_render", manualImageCompletion: { ...result.manualImageCompletion, revision, version: Number(result.manualImageCompletion?.version || 0) + 1, slotIds: manualSlotIds({ ...result, data: writeback.data, unresolvedItems: writeback.unresolvedItems }, plan), lastAction: action } };
   // Save the binding before export verification; stale output must not be downloadable.
+  const persistStarted = Date.now();
+  trace.emit('persist_start');
   store.saveFinalResult(project.projectId, run.executionRunId, pending);
   store.updateProject(project.projectId, { status: "partial", progress: 90, currentStage: "图片已保存，正在检查成品", outputPath: null });
+  trace.emit('persist_end', { durationMs: Date.now() - persistStarted });
+  trace.emit('selection_persisted', { version: pending.manualImageCompletion.version });
   const key = path.resolve(root, project.projectId);
+  const queuedAt = Date.now();
   const finish = async () => {
-  if (store.getFinalResult(project.projectId, run.executionRunId)?.manualImageCompletion?.revision !== revision) return;
+  trace.emit('render_queue_end', { durationMs: Date.now() - queuedAt });
+  if (store.getFinalResult(project.projectId, run.executionRunId)?.manualImageCompletion?.revision !== revision) { trace.emit('render_superseded'); return; }
   const safeRender = async (input) => {
-    try { return await render(input); }
-    catch (error) { return { status: "failed", error: { code: error.code || "manual_render_failed", message: error.message, diagnostic: error.diagnostic } }; }
+    try { return await render({ ...input, requestId: trace.requestId, revision,
+      canRender: () => store.getProject(project.projectId)?.activeExecutionRunId === run.executionRunId
+        && store.getFinalResult(project.projectId, run.executionRunId)?.manualImageCompletion?.revision === revision,
+      onQueueState: state => {
+        if (state.state !== 'queued' && state.state !== 'running') return;
+        const active = store.getProject(project.projectId);
+        if (active?.activeExecutionRunId !== run.executionRunId || store.getFinalResult(project.projectId, run.executionRunId)?.manualImageCompletion?.revision !== revision) return;
+        store.updateProject(project.projectId, { currentStage: state.state === 'queued' ? '图片已保存，等待检查成品' : '图片已保存，正在检查成品' });
+      } }); }
+    catch (error) { return { status: "failed", timing: error.renderTiming, error: { code: error.code || "manual_render_failed", message: error.message, diagnostic: error.diagnostic } }; }
   };
   const renderMode = writeback.requiredUnresolved.length ? "draft" : "final";
   const customerData = applyModuleVisibility(writeback.data, result.visibility || {});
   let renderResult = await safeRender({ data: customerData, projectId: project.projectId, root, mode: renderMode });
+  if (renderResult.status === 'superseded') return;
   if (renderMode === "final" && renderResult.status !== "success") {
     const finalAttempt = renderResult;
     writeback.unresolvedItems.push(buildRendererUnresolvedItem(finalAttempt));
     renderResult = await safeRender({ data: customerData, projectId: project.projectId, root, mode: "draft" });
+    if (renderResult.status === 'superseded') return;
     renderResult = { ...renderResult, mode: "draft", rendererCalls: Number(finalAttempt.rendererCalls || 0) + Number(renderResult.rendererCalls || 0), finalAttempt };
   }
   renderResult.mode ||= renderMode;
@@ -555,12 +707,13 @@ async function persistResult({ store, root, project, run, plan, result, imageExe
   const nextRun = { ...run, status: pipelineStatus, progress: complete ? 100 : 90, executionEnabled: false, currentStage: complete ? "完成" : "可编辑草稿", updatedAt: now };
   store.updateExecutionRun(project.projectId, nextRun);
   store.updateProject(project.projectId, { status: pipelineStatus, currentStage: nextRun.currentStage, progress: nextRun.progress, outputPath: renderResult.outputPath || null });
+  trace.emit('render_complete', { status: renderResult.status, mode: renderMode });
   };
   const job = (manualRenders.get(key) || Promise.resolve()).catch(() => {}).then(finish);
   manualRenders.set(key, job);
   job.catch(error => console.error("Manual image verification failed:", error.message)).finally(() => { if (manualRenders.get(key) === job) manualRenders.delete(key); });
   if (!deferRender) await job;
-  return buildSimpleManualImagePayload(store, project.projectId);
+  return trace.measure('payload_build', () => buildSimpleManualImagePayload(store, project.projectId, { compact: compactResponse }));
 }
 
 function csvValues(value) {
@@ -569,7 +722,7 @@ function csvValues(value) {
 
 async function localizeKnowledgeCandidate({
   candidate, root, projectId, knowledgeImageConfig = {}, downloadImage = downloadCandidate,
-  refreshMatchedFile = refreshKnowledgeMatchedFile, resolutionPolicy = {},
+  refreshMatchedFile = refreshKnowledgeMatchedFile, resolutionPolicy = {}, trace,
 } = {}) {
   if (candidate.localUrl?.startsWith("/image-assets/")) return { candidate, attempts: 0, success: 0, saved: 0, durationMs: 0 };
   if (candidate.sourceKind !== "knowledge_library" || !candidate.knowledgeMatchedFile) {
@@ -581,6 +734,7 @@ async function localizeKnowledgeCandidate({
   const requestTimeoutMs = Number(knowledgeImageConfig.knowledgeRequestTimeoutMs || process.env.IMAGE_KNOWLEDGE_REQUEST_TIMEOUT_MS || 30_000);
   const queryIds = candidate.knowledgeQueryIds?.length ? candidate.knowledgeQueryIds : [candidate.knowledgeQueryId].filter(Boolean);
   let matchedFile = candidate.knowledgeMatchedFile;
+  const refresh = () => trace ? trace.measure('original_url_refresh', () => refreshMatchedFile({ baseUrl, queryIds, candidate, requestTimeoutMs })) : refreshMatchedFile({ baseUrl, queryIds, candidate, requestTimeoutMs });
   let attempts = 0;
   const directory = path.join(root, "output", "image-assets", `simple-manual-${projectId}`);
   const publicPrefix = `/image-assets/simple-manual-${projectId}`;
@@ -608,13 +762,13 @@ async function localizeKnowledgeCandidate({
     };
   };
   try {
-    if (!matchedFile.url) matchedFile = await refreshMatchedFile({ baseUrl, queryIds, candidate, requestTimeoutMs });
+    if (!matchedFile.url) matchedFile = await refresh();
     try {
       const localized = await download();
       return { candidate: localized, attempts, success: 1, saved: 1, durationMs: Date.now() - startedAt };
     } catch (error) {
       if (!baseUrl || !queryIds.length || !/\b(?:401|403|404)\b|expired|失效|签名/i.test(error?.message || "")) throw error;
-      matchedFile = await refreshMatchedFile({ baseUrl, queryIds, candidate, requestTimeoutMs });
+      matchedFile = await refresh();
       const localized = await download();
       return { candidate: localized, attempts, success: 1, saved: 1, durationMs: Date.now() - startedAt };
     }
@@ -693,7 +847,13 @@ function patchCandidateInImageResult(imageResult, candidateId, patch) {
   };
 }
 
-export async function chooseSimpleImageCandidate({ store, root, projectId, slotId, candidateId, manualConfirmed = false, render, deferRender = false, knowledgeImageConfig, downloadImage, refreshMatchedFile } = {}) {
+export async function chooseSimpleImageCandidate(input = {}) {
+  const trace = input.trace || createOperationTrace('image_select', input);
+  try { return await chooseImageCandidate({ ...input, trace }); }
+  catch (error) { trace.emit('select_failed', { code: error?.code || 'manual_image_decision_failed' }); throw error; }
+}
+
+async function chooseImageCandidate({ store, root, projectId, slotId, candidateId, manualConfirmed = false, render, deferRender = false, knowledgeImageConfig, downloadImage, refreshMatchedFile, trace, compactResponse = false } = {}) {
   let context = projectContext(store, projectId);
   assertPlannedImageSlot(context, slotId);
   let imageResults = context.result.imageExecution?.results || [];
@@ -702,7 +862,9 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
   const source = imageResults.find((item) => selectedCandidate(item, candidateId));
   let candidate = source && selectedCandidate(source, candidateId);
   if (!candidate) throw Object.assign(new Error("当前项目中找不到该候选"), { code: "candidate_not_found" });
-  if (isHardRejectedCandidate(candidate)) throw Object.assign(new Error("该候选命中硬拒绝条件，不能采用"), { code: "candidate_hard_rejected" });
+  const programCheckOverride = isHardRejectedCandidate(candidate) && canConfirmModelApprovedProgramRejection(candidate);
+  if (isHardRejectedCandidate(candidate) && !programCheckOverride) throw Object.assign(new Error("该候选命中硬拒绝条件，不能采用"), { code: "candidate_hard_rejected" });
+  if (programCheckOverride && !manualConfirmed) throw Object.assign(new Error("模型认可与采用检查不一致，请查看图片及原因后明确确认采用"), { code: "manual_confirmation_required" });
   if (current.provisionalSelected?.candidateId === candidateId && !manualConfirmed) throw Object.assign(new Error("预填图片须明确确认具体实体身份"), { code: "manual_confirmation_required" });
   const overridesAutomaticJudgment = source.slotId !== slotId || !candidateCanBeSelected(context.result, current, candidate);
   if (overridesAutomaticJudgment && !manualConfirmed) throw Object.assign(new Error("未确认图片风险，不能采用"), { code: "manual_confirmation_required" });
@@ -710,9 +872,9 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
   let delayedOriginal = { attempts: 0, success: 0, saved: 0, durationMs: 0 };
   if (!candidate.localUrl?.startsWith("/image-assets/")) {
     try {
-      delayedOriginal = candidate.sourceKind === "knowledge_library"
-        ? await localizeKnowledgeCandidate({ candidate, root, projectId, knowledgeImageConfig, downloadImage, refreshMatchedFile, resolutionPolicy })
-        : await localizeRemoteCandidate({ candidate, root, projectId, downloadImage, resolutionPolicy });
+      delayedOriginal = await trace.measure('original_download', async () => candidate.sourceKind === "knowledge_library"
+        ? await localizeKnowledgeCandidate({ candidate, root, projectId, knowledgeImageConfig, downloadImage, refreshMatchedFile, resolutionPolicy, trace })
+        : await localizeRemoteCandidate({ candidate, root, projectId, downloadImage, resolutionPolicy }));
       candidate = delayedOriginal.candidate;
     } catch (error) {
       const failureCode = originalDownloadFailureCode(error);
@@ -731,6 +893,7 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
         originalDownloadTimeMs: Number(previousMetrics.originalDownloadTimeMs || 0) + Number(error?.originalDownloadDurationMs || 0),
       } };
       const sourceResult = nextResults.find((item) => item.slotId === source.slotId);
+      assertSimpleResultCurrent({ store, ...context, operation: 'candidate_download_failure' });
       if (sourceResult) store.saveTaskResult(projectId, context.run.executionRunId, `image-${source.slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, sourceResult);
       store.saveFinalResult(projectId, context.run.executionRunId, { ...context.result, imageExecution, updatedAt: new Date().toISOString() });
       error.code = failureCode;
@@ -738,28 +901,30 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
     }
   }
   try {
+    const decodeStarted = Date.now();
+    trace.emit('decode_start');
     if (!candidate.localUrl?.startsWith('/image-assets/')) throw new Error('missing local asset');
     const assets = await realpath(path.join(root, 'output', 'image-assets'));
     const file = await realpath(path.resolve(assets, decodeURIComponent(candidate.localUrl.slice('/image-assets/'.length))));
     const relative = path.relative(assets, file);
     if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('outside assets');
     const info = await stat(file);
-    if (!info.isFile() || !info.size || info.size > 14 * 1024 * 1024) throw new Error('invalid size');
-    const options = { failOn: 'warning', limitInputPixels: 40000000 };
-    const metadata = await sharp(file, options).metadata();
-    if (!['jpeg', 'png', 'webp'].includes(metadata.format)) throw new Error('invalid format');
-    await sharp(file, options).raw().toBuffer();
+    if (!info.isFile() || !info.size || info.size > MAX_IMAGE_BYTES) throw Object.assign(new Error('图片文件为空或超过14MB'), { code: 'image_size_invalid' });
+    const metadata = await decodeSafeImage(file);
     if (!manualConfirmed) assertTargetResolution(metadata.width || 0, metadata.height || 0, targetResolutionPolicy(context, slotId, imageResults.filter((item) => item.slotId !== slotId && (item.selected?.localUrl === candidate.localUrl || item.provisionalSelected?.localUrl === candidate.localUrl)).map((item) => item.slotId)));
     candidate = { ...candidate, width: metadata.width, height: metadata.height };
+    trace.emit('decode_end', { durationMs: Date.now() - decodeStarted, width: metadata.width, height: metadata.height });
   } catch (error) {
-    if (error?.code === "image_resolution_insufficient") throw error;
+    trace.emit('decode_failed', { code: error?.code || 'candidate_file_unusable' });
+    if (['image_resolution_insufficient', 'image_pixel_limit_exceeded', 'image_format_unsupported', 'image_size_invalid'].includes(error?.code)) throw error;
+    if (error?.code === 'ENOENT') throw Object.assign(new Error('图片原件已不存在，请重新搜索或上传'), { code: 'candidate_file_missing' });
     throw Object.assign(new Error('图片文件缺失、损坏或无法安全解码，请重新上传'), { code: 'candidate_file_unusable' });
   }
   context = projectContext(store, projectId);
   imageResults = context.result.imageExecution?.results || [];
   current = imageResults.find(item => item.slotId === slotId);
   const movedFrom = imageResults.filter((item) => item.slotId !== slotId && (item.selected?.localUrl === candidate.localUrl || item.provisionalSelected?.localUrl === candidate.localUrl)).map((item) => item.slotId);
-  const humanDecision = { action: movedFrom.length ? 'move' : 'adopt', decidedAt: new Date().toISOString(), targetSlotId: slotId, sourceSlotId: source.slotId, movedFrom, riskConfirmed: manualConfirmed, overridesAutomaticJudgment, originalRejection: candidate.rejection || null, originalRisk: candidate.rejectionReason || candidate.matchReason || candidate.reason || '' };
+  const humanDecision = { requestId: trace.requestId, action: movedFrom.length ? 'move' : 'adopt', decidedAt: new Date().toISOString(), targetSlotId: slotId, sourceSlotId: source.slotId, movedFrom, riskConfirmed: manualConfirmed, overridesAutomaticJudgment, ...(programCheckOverride ? { programCheckOverride: true } : {}), originalRejection: candidate.rejection || null, originalRisk: candidate.rejectionReason || candidate.matchReason || candidate.reason || '' };
   const { provisionalSelected: _discardedProvisional, ...currentWithoutProvisional } = current;
   const nextCurrent = {
     ...currentWithoutProvisional,
@@ -783,7 +948,7 @@ export async function chooseSimpleImageCandidate({ store, root, projectId, slotI
   } };
   for (const item of nextResults.filter((item) => movedFrom.includes(item.slotId))) store.saveTaskResult(projectId, context.run.executionRunId, `image-${item.slotId.replace(/[^a-zA-Z0-9_-]/g, '-')}`, item);
   store.saveTaskResult(projectId, context.run.executionRunId, `image-${slotId.replace(/[^a-zA-Z0-9_-]/g, "-")}`, nextCurrent);
-  return persistResult({ ...context, store, root, imageExecution, render, deferRender, action: { type: "choose_existing_candidate", slotId, candidateId, humanDecision } });
+  return persistResult({ ...context, store, root, imageExecution, render, deferRender, trace, compactResponse, action: { type: "choose_existing_candidate", slotId, candidateId, requestId: trace.requestId, humanDecision } });
 }
 
 export async function rejectSimpleImageCandidate({ store, root, projectId, slotId, candidateId, render } = {}) {
@@ -878,7 +1043,18 @@ export async function saveSimpleDayEditor({ store, root, projectId, dayIndex, da
   };
   const manuallyResolvedCopy = [];
   for (const item of context.result.unresolvedItems || []) {
-    if (item.kind !== "copy" || !item.id?.startsWith("copy:visual:")) continue;
+    if (item.kind !== "copy") continue;
+    const task = context.plan.copyTasks?.find(task => task.targetId === item.id);
+    if (!task) continue;
+    if (!item.id?.startsWith("copy:visual:")) {
+      if (!new RegExp(`^days\\.${index}\\.(?:theme|description|spots\\.\\d+\\.description)$`).test(task.targetPath)) continue;
+      const target = { ...item, targetPath: task.targetPath };
+      const value = manualCopyValue(nextData, target);
+      if (typeof value !== 'string' || !value.trim() || value === manualCopyValue(currentData, target)) continue;
+      const applied = applySimpleSkillResults({ preparedData: nextData, copyTasks: [{ ...task, outputSchema: manualCopySchema(task.outputSchema) }], copyExecution: { results: [{ targetId: task.targetId, targetPath: task.targetPath, value, status: 'success' }] } });
+      if (!applied.unresolvedItems.length) manuallyResolvedCopy.push({ targetId: task.targetId, targetPath: task.targetPath, value });
+      continue;
+    }
     const slotId = item.id.slice("copy:visual:".length);
     const previousBinding = currentDayBindings[slotId];
     const binding = nextDayBindings[slotId];
@@ -886,15 +1062,15 @@ export async function saveSimpleDayEditor({ store, root, projectId, dayIndex, da
     const previousSpot = currentDay.spots?.find((spot) => spot.id && spot.id === previousBinding.spotId) || currentDay.spots?.[previousBinding.spotIndex];
     const nextSpot = spots.find((spot) => spot.id && spot.id === binding.spotId) || spots[binding.spotIndex];
     const useSpotCopy = binding.useSpotCopy !== false;
-    const previousTitle = useSpotCopy ? previousSpot?.name : previousBinding.cardTitle;
+    const previousTitle = previousBinding.cardTitle || (useSpotCopy ? previousSpot?.name : '');
     const previousDescription = useSpotCopy ? previousSpot?.experience || previousSpot?.description : previousBinding.cardDescription;
-    const title = String(useSpotCopy ? nextSpot?.name || "" : binding.cardTitle || "").trim();
+    const title = String(binding.cardTitle || (useSpotCopy ? nextSpot?.name : '') || '').trim();
     const description = String(useSpotCopy ? nextSpot?.description || nextSpot?.experience || "" : binding.cardDescription || "").trim();
     const changed = title !== String(previousTitle || "").trim() || description !== String(previousDescription || "").trim();
-    if (!changed || title.length < 2 || description.length < 12) continue;
+    if (!changed || !title || !description) continue;
     binding.cardTitle = title;
     binding.cardDescription = description;
-    manuallyResolvedCopy.push({ targetId: item.id, targetPath: item.targetPath, value: { cardTitle: title, cardDescription: description } });
+    manuallyResolvedCopy.push({ targetId: item.id, targetPath: task.targetPath, value: { cardTitle: title, cardDescription: description } });
   }
   if (Array.isArray(included)) nextData.included = included;
   if (Array.isArray(excluded)) nextData.excluded = excluded;
@@ -907,15 +1083,8 @@ export async function saveSimpleDayEditor({ store, root, projectId, dayIndex, da
     if (!imageResults.some((item) => item.slotId === slotId)) imageResults.push({ slotId, status: "needs_user_action", selected: null, candidates: [], technicalStatus: "manual_card_waiting_upload", manualAction: { userRequiredActions: ["upload_real_image"] } });
   }
   const imageExecution = { ...context.result.imageExecution, results: imageResults };
-  const resolvedById = new Map(manuallyResolvedCopy.map((item) => [item.targetId, item]));
-  const copyResults = (context.result.copyExecution?.results || []).map((item) => resolvedById.has(item.targetId) ? { ...item, ...resolvedById.get(item.targetId), status: "success", resolution: "manual_editor", error: null } : item);
-  const copyExecution = manuallyResolvedCopy.length ? {
-    ...context.result.copyExecution,
-    status: copyResults.every((item) => item.status === "success") ? "success" : copyResults.some((item) => item.status === "success") ? "partial_success" : context.result.copyExecution?.status,
-    results: copyResults,
-  } : context.result.copyExecution;
-  const unresolvedItems = (context.result.unresolvedItems || []).filter((item) => !resolvedById.has(item.id));
-  return persistResult({ ...context, result: { ...context.result, data: nextData, copyExecution, unresolvedItems }, store, root, imageExecution, render, deferRender, action: { type: "editor_day_update", slotId: `editor:day:${index + 1}`, dayIndex: index, resolvedCopyTargetIds: manuallyResolvedCopy.map((item) => item.targetId) } });
+  const result = manuallyResolvedCopy.length ? resolveManualCopy({ ...context.result, data: nextData }, manuallyResolvedCopy) : { ...context.result, data: nextData };
+  return persistResult({ ...context, result, store, root, imageExecution, render, deferRender, action: { type: "editor_day_update", slotId: `editor:day:${index + 1}`, dayIndex: index, resolvedCopyTargetIds: manuallyResolvedCopy.map((item) => item.targetId) } });
 }
 
 const HOTEL_FACT_LABELS = Object.freeze({ location: "位置", rooms: "客房", design: "设计", facilities: "设施" });
@@ -931,7 +1100,7 @@ export async function saveSimpleHotelStay({ store, root, projectId, hotelIndex, 
   nextData.copyQuality = { ...(nextData.copyQuality || {}), passed: false, status: "needs_copy_revision", needsReview: true, blocked: false, checkedAt: null, manualEditPendingRecheck: true };
   nextData.humanReview = { ...(nextData.humanReview || {}), exportWithCopyWarningsConfirmed: false };
   const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_hotel_stay_update", hotelId, hotelIndex: plan.hotelIndex, desiredNights: plan.desiredNights, changedDayIndexes: plan.changedDayIndexes } });
-  return { manualRevision: payload.manualRevision, renderPending: payload.renderPending, changedDayIndexes: plan.changedDayIndexes };
+  return { manualVersion: payload.manualVersion, manualRevision: payload.manualRevision, renderPending: payload.renderPending, changedDayIndexes: plan.changedDayIndexes };
 }
 
 export async function saveSimpleHotelRegion({ store, root, projectId, hotelIndex, hotelId, region, render, deferRender = true } = {}) {
@@ -942,7 +1111,7 @@ export async function saveSimpleHotelRegion({ store, root, projectId, hotelIndex
   const nextData = structuredClone(context.result.data);
   nextData.hotels[index].region = String(region || "").trim().slice(0, 200);
   const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_hotel_region_update", hotelId, hotelIndex: index } });
-  return { region: nextData.hotels[index].region, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
+  return { region: nextData.hotels[index].region, manualVersion: payload.manualVersion, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
 }
 
 export async function saveSimpleHotelFactRow({ store, root, projectId, hotelIndex, hotelId, key, text, mode = "manual", expectedText, source, render, deferRender = true } = {}) {
@@ -964,7 +1133,7 @@ export async function saveSimpleHotelFactRow({ store, root, projectId, hotelInde
   const nextHotel = nextData.hotels[index];
   nextHotel.factRows = [...(nextHotel.factRows || []).filter((item) => item?.key !== key), row];
   const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_hotel_fact_update", hotelId, hotelIndex: index, key, mode } });
-  return { applied: true, row, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
+  return { applied: true, row, manualVersion: payload.manualVersion, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
 }
 
 export async function saveSimpleImageCrop({ store, root, projectId, slotId, expectedSrc, crop, render, deferRender = true, hotelOnly = false } = {}) {
@@ -979,7 +1148,7 @@ export async function saveSimpleImageCrop({ store, root, projectId, slotId, expe
   const nextData = structuredClone(context.result.data);
   setSlotImage(nextData, editable.binding, { ...current, crop });
   const payload = await persistResult({ ...context, result: { ...context.result, data: nextData }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: "editor_image_crop_update", imageSlotId: slotId } });
-  return { crop, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
+  return { crop, manualVersion: payload.manualVersion, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
 }
 
 export async function saveSimpleHotelImageCrop(options = {}) {
@@ -991,14 +1160,16 @@ export async function saveSimpleModuleVisibility({ store, root, projectId, modul
   const context = projectContext(store, projectId);
   const visibility = { ...(context.result.visibility || {}), [module]: visible };
   const payload = await persistResult({ ...context, result: { ...context.result, visibility }, store, root, imageExecution: context.result.imageExecution, render, deferRender, action: { type: 'editor_module_visibility_update', module, visible } });
-  return { visibility, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
+  return { visibility, manualVersion: payload.manualVersion, manualRevision: payload.manualRevision, renderPending: payload.renderPending };
 }
 
-export async function clearSimpleImage({ store, root, projectId, slotId, expectedSrc, render, deferRender = false } = {}) {
+export async function clearSimpleImage({ store, root, projectId, slotId, expectedSrc, confirmMissingOptional = false, render, deferRender = false } = {}) {
   const context = projectContext(store, projectId);
   const editable = editableImageBinding(context, slotId);
   const currentImage = getSlotImage(context.result.data, editable.binding);
-  if (!expectedSrc || currentImage?.src !== expectedSrc) {
+  const omitMissing = confirmMissingOptional === true && !expectedSrc && !currentImage?.src
+    && optionalTransportImageItems(context.result, context.plan).some(item => item.id === slotId);
+  if (!omitMissing && (!expectedSrc || currentImage?.src !== expectedSrc)) {
     throw Object.assign(new Error("图片已变化，请刷新后再删除"), { code: "image_clear_image_changed" });
   }
   const nextData = structuredClone(context.result.data);
@@ -1030,12 +1201,15 @@ export async function uploadSimpleImage({ store, root, projectId, slotId, dataUr
   const match = String(dataUrl || "").match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\r\n]+)$/);
   if (!match) throw Object.assign(new Error("仅支持 JPEG、PNG 或 WebP 图片"), { code: "upload_format_invalid" });
   const buffer = Buffer.from(match[2], "base64");
-  if (!buffer.length || buffer.length > 14 * 1024 * 1024) throw Object.assign(new Error("图片文件为空或超过 14MB"), { code: "upload_size_invalid" });
-  const decodeOptions = { failOn: "warning", limitInputPixels: 40000000 };
-  const metadata = await sharp(buffer, decodeOptions).metadata();
+  if (!buffer.length || buffer.length > MAX_IMAGE_BYTES) throw Object.assign(new Error("图片文件为空或超过 14MB"), { code: "upload_size_invalid" });
+  let metadata;
+  try { metadata = await decodeSafeImage(buffer); }
+  catch (error) {
+    if (['image_pixel_limit_exceeded', 'image_format_unsupported'].includes(error?.code)) throw error;
+    throw Object.assign(new Error('图片损坏或无法安全解码，请使用完整原图重新上传'), { code: 'upload_decode_failed' });
+  }
   const contentType = metadata.format === "jpeg" ? "image/jpeg" : metadata.format === "png" ? "image/png" : metadata.format === "webp" ? "image/webp" : "";
   if (!MIME_EXTENSIONS[contentType]) throw Object.assign(new Error("图片无法解码或格式不受支持"), { code: "upload_decode_failed" });
-  await sharp(buffer, decodeOptions).raw().toBuffer();
   const ratio = metadata.width / metadata.height;
   if (ratio < 0.65 || ratio > 3.2) throw Object.assign(new Error("图片比例不适合行程主图"), { code: "upload_ratio_invalid" });
   const sha256 = createHash("sha256").update(buffer).digest("hex");
@@ -1086,14 +1260,15 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
   let previousResults = context.result.imageExecution?.results || [];
   const existingImages = previousResults.filter((item) => item.selected || item.provisionalSelected).map((item) => { const image = item.selected || item.provisionalSelected; return { ...image, src: image.localUrl, slotId: item.slotId }; });
   const target = prepareExplicitImageSearchSlot({ ...slot, ...projectedTargetSlot(context, slotId) }, { plan: context.plan });
-  const searched = await runImage({ ...imageOptions, root, slots: [target], existingImages });
+  const searched = await runImage({ ...imageOptions, root, slots: [target], existingImages, preparedData: context.plan.preparedData });
   context = projectContext(store, projectId);
   previousResults = context.result.imageExecution?.results || [];
   if (searched.status === "failed" || searched.results?.some(item => item.slotId === slotId && item.status === "failed")) throw new Error("搜索失败，请重试");
   const returned = searched.results?.find((item) => item.slotId === slotId) || { slotId, status: "not_found", selected: null, candidates: [], technicalStatus: "missing_skill_result", warnings: ["单槽搜索未返回结果"] };
   const previous = previousResults.find((item) => item.slotId === slotId) || {};
   const priorCandidates = candidatePool(previous);
-  const mergedCandidates = uniqueCandidates([...priorCandidates, ...candidatePool(returned)]);
+  const refreshed = refreshedSearchCandidates(previous, returned);
+  const mergedCandidates = refreshed.candidates;
   const preserveExistingSelection = previous.status === "success" && previous.selected;
   const nextCurrent = returned.status === "success" && !preserveExistingSelection ? {
     ...previous,
@@ -1101,15 +1276,15 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
     provisionalSelected: null,
     requestKind: "user_requested_single_slot_search",
     candidates: mergedCandidates,
-    manualAction: { ...(previous.manualAction || {}), currentSearchFallbackResult: null, preservedExistingSelection: false, lastExplicitSearchAt: new Date().toISOString() },
+    manualAction: { ...refreshed.manualAction, currentSearchFallbackResult: null, preservedExistingSelection: false, lastExplicitSearchAt: new Date().toISOString() },
   } : preserveExistingSelection ? {
     ...previous,
     candidates: mergedCandidates,
     requestKind: "user_requested_single_slot_search",
     manualAction: {
-      ...(previous.manualAction || {}),
+      ...refreshed.manualAction,
       currentSearchFallbackResult: { previousStatus: returned.status, technicalStatus: returned.technicalStatus, matchReason: returned.matchReason, queriesUsed: returned.queriesUsed, sourceEvidence: returned.sourceEvidence, pipelineEvidence: returned.pipelineEvidence, searchDiagnostic: returned.searchDiagnostic || buildImageSearchDiagnostic(returned) },
-      selectableCandidates: uniqueCandidates([...(previous.manualAction?.selectableCandidates || []), ...(returned.status === "success" && returned.selected ? [returned.selected] : [])]),
+      selectableCandidates: uniqueCandidates([...(refreshed.manualAction.selectableCandidates || []), ...(returned.status === "success" && returned.selected ? [returned.selected] : [])]),
       lastExplicitSearchAt: new Date().toISOString(),
       preservedExistingSelection: true,
     },
@@ -1120,9 +1295,9 @@ export async function researchSimpleImageSlot({ store, root, projectId, slotId, 
     requestKind: "user_requested_single_slot_search",
     candidates: mergedCandidates,
     manualAction: {
-      ...(previous.manualAction || {}),
+      ...refreshed.manualAction,
       currentSearchFallbackResult: { previousStatus: returned.status, technicalStatus: returned.technicalStatus, matchReason: returned.matchReason, queriesUsed: returned.queriesUsed, sourceEvidence: returned.sourceEvidence, pipelineEvidence: returned.pipelineEvidence, searchDiagnostic: returned.searchDiagnostic || buildImageSearchDiagnostic(returned) },
-      rejectedCandidates: uniqueCandidates([...(previous.manualAction?.rejectedCandidates || []), ...mergedCandidates]),
+      rejectedCandidates: uniqueCandidates([...(refreshed.manualAction.rejectedCandidates || []), ...mergedCandidates]),
       lastExplicitSearchAt: new Date().toISOString(),
     },
   };
@@ -1150,7 +1325,7 @@ export async function researchSimpleImageSlots({ store, root, projectId, slotIds
   if (!retryIds.length) throw Object.assign(new Error("当前没有需要重新搜索的缺图位置"), { code: "image_slots_not_unresolved" });
   const slots = retryIds.map((slotId) => prepareExplicitImageSearchSlot({ ...assertPlannedImageSlot(context, slotId), ...projectedTargetSlot(context, slotId) }, { plan: context.plan }));
   const existingImages = (context.result.imageExecution?.results || []).filter((item) => item.selected || item.provisionalSelected).map((item) => { const image = item.selected || item.provisionalSelected; return { ...image, src: image.localUrl, slotId: item.slotId }; });
-  const searched = await runImage({ ...imageOptions, root, slots, existingImages });
+  const searched = await runImage({ ...imageOptions, root, slots, existingImages, preparedData: context.plan.preparedData });
 
   context = projectContext(store, projectId);
   const previousResults = context.result.imageExecution?.results || [];
@@ -1160,8 +1335,8 @@ export async function researchSimpleImageSlots({ store, root, projectId, slotIds
   for (const slotId of retryIds) {
     const previous = nextById.get(slotId) || {};
     const returned = returnedById.get(slotId) || { slotId, status: "not_found", selected: null, candidates: [], technicalStatus: "missing_skill_result", warnings: ["批量搜索未返回结果"] };
-    const priorCandidates = candidatePool(previous);
-    const mergedCandidates = uniqueCandidates([...priorCandidates, ...candidatePool(returned)]);
+    const refreshed = refreshedSearchCandidates(previous, returned);
+    const mergedCandidates = refreshed.candidates;
     const preserveExistingSelection = previous.status === "success" && previous.selected;
     const nextCurrent = returned.status === "success" && returned.selected && !preserveExistingSelection ? {
       ...previous,
@@ -1169,12 +1344,12 @@ export async function researchSimpleImageSlots({ store, root, projectId, slotIds
       provisionalSelected: null,
       requestKind: "user_requested_multi_slot_search",
       candidates: mergedCandidates,
-      manualAction: { ...(previous.manualAction || {}), currentSearchFallbackResult: null, preservedExistingSelection: false, lastExplicitSearchAt: now },
+      manualAction: { ...refreshed.manualAction, currentSearchFallbackResult: null, preservedExistingSelection: false, lastExplicitSearchAt: now },
     } : preserveExistingSelection ? {
       ...previous,
       candidates: mergedCandidates,
       requestKind: "user_requested_multi_slot_search",
-      manualAction: { ...(previous.manualAction || {}), lastExplicitSearchAt: now, preservedExistingSelection: true },
+      manualAction: { ...refreshed.manualAction, lastExplicitSearchAt: now, preservedExistingSelection: true },
     } : {
       ...previous,
       ...returned,
@@ -1183,9 +1358,9 @@ export async function researchSimpleImageSlots({ store, root, projectId, slotIds
       requestKind: "user_requested_multi_slot_search",
       candidates: mergedCandidates,
       manualAction: {
-        ...(previous.manualAction || {}),
+        ...refreshed.manualAction,
         currentSearchFallbackResult: { previousStatus: returned.status, technicalStatus: returned.technicalStatus, matchReason: returned.matchReason, queriesUsed: returned.queriesUsed, sourceEvidence: returned.sourceEvidence, pipelineEvidence: returned.pipelineEvidence, searchDiagnostic: returned.searchDiagnostic || buildImageSearchDiagnostic(returned) },
-        rejectedCandidates: uniqueCandidates([...(previous.manualAction?.rejectedCandidates || []), ...mergedCandidates]),
+        rejectedCandidates: uniqueCandidates([...(refreshed.manualAction.rejectedCandidates || []), ...mergedCandidates]),
         lastExplicitSearchAt: now,
       },
     };

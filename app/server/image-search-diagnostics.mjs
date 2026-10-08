@@ -1,5 +1,11 @@
 // Small, URL-free projection for editor explanations. Detailed source evidence
 // remains in the server ledger and must never enter customer copy.
+export function knowledgeAttemptWasExecuted(attempt = {}) {
+  // Older adapters omit admission counters; a successful remote terminal
+  // response still proves execution. Failed local attempts never do.
+  return Boolean(attempt.queryId || attempt.admission?.submitAttempts > 0
+    || !attempt.admission && ['completed', 'needs_clarification'].includes(attempt.status));
+}
 export function buildImageSearchDiagnostic(result = {}) {
   const evidence = result.pipelineEvidence || {};
   const knowledge = evidence.knowledgeSearch || {};
@@ -22,7 +28,7 @@ export function buildImageSearchDiagnostic(result = {}) {
       reason: duplicateOnly ? "duplicate_visual" : "target_unclear",
     },
     knowledge: {
-      queryExecuted: knowledge.knowledgeQueryExecuted === true || attempts.length > 0,
+      queryExecuted: knowledge.knowledgeQueryExecuted === true || attempts.some(knowledgeAttemptWasExecuted),
       attempts: attempts.length, status: knowledge.status || "skipped", scopeState: knowledge.scopeState || null,
       directoryStatus, parentProbeUsed,
     },

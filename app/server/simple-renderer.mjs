@@ -8,6 +8,8 @@ import { selectCustomerRenderData } from "./customer-render-data.mjs";
 import { MAX_CARD_IMAGE_UPSCALE } from "./image-download.mjs";
 import { FIXED_MODULE_NAMES, SIMPLE_PIPELINE_DEFAULT_ORIGIN, fixedModuleExpectations, validateApprovedPayment } from "./simple-fixed-modules.mjs";
 import { normalizeRenderIssues } from "./simple-render-issues.mjs";
+import { createOperationTrace } from './operation-trace.mjs';
+import { rendererQueue } from './shared-work-queue.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const internalVisible = /图片未通过终审|审核分数|候选状态|来源账本|成本|利润|供应商底价|内部报价/i;
@@ -34,7 +36,7 @@ export function deterministicPreflight(data, { root = appRoot, mode = "final" } 
   const customer = selectCustomerRenderData(data);
   const expectedFixedModules = fixedModuleExpectations(customer);
   if (!customer.title || !customer.days?.length) issues.push({ severity: "blocker", code: "required_module_missing", message: "封面标题或每日行程缺失" });
-  if (!Array.isArray(customer.notes) || customer.notes.length === 0) issues.push({ severity: severityFor("fixed_notes_missing", mode), code: "fixed_notes_missing", module: FIXED_MODULE_NAMES.notes, message: `固定必需模块缺失：${FIXED_MODULE_NAMES.notes}` });
+  if (expectedFixedModules.notes && (!Array.isArray(customer.notes) || customer.notes.length === 0)) issues.push({ severity: severityFor("fixed_notes_missing", mode), code: "fixed_notes_missing", module: FIXED_MODULE_NAMES.notes, message: `固定必需模块缺失：${FIXED_MODULE_NAMES.notes}` });
   if (expectedFixedModules.payment) {
     const payment = validateApprovedPayment(customer.payment, { root });
     if (!payment.passed) {
@@ -78,37 +80,80 @@ export function reviewCardImageUpscales(layout = {}, mode = "final") {
     }));
 }
 
-function runRenderer(args, cwd) {
+let activeRendererProcesses = 0;
+function runRenderer(args, cwd, trace) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    activeRendererProcesses++;
+    trace.emit('renderer_active', { activeCount: activeRendererProcesses });
+    let released = false;
+    const release = () => { if (!released) { released = true; activeRendererProcesses--; trace.emit('renderer_active', { activeCount: activeRendererProcesses }); } };
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    let pendingLine = '';
+    const phases = {};
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+      pendingLine += chunk.toString();
+      const lines = pendingLine.split(/\r?\n/); pendingLine = lines.pop();
+      for (const line of lines) {
+        try {
+          const event = JSON.parse(line);
+          if (event.event !== 'operation_trace' || event.operation !== 'renderer') continue;
+          if (typeof event.durationMs === 'number') phases[event.phase] = (phases[event.phase] || 0) + event.durationMs;
+          // Re-emit only controlled fields, not the renderer's customer layout.
+          if (!/^[a-z0-9_]+$/i.test(event.phase || '')) continue;
+          trace.emit(event.phase, Object.fromEntries(['durationMs', 'code', 'tile', 'attempt', 'transportCode', 'errorType', 'errno',
+            'statusCode', 'resourceType', 'resourceId', 'pendingCount', 'requestFailures', 'pageErrors', 'badResponses',
+            'itineraryPresent', 'documentComplete', 'fontsLoaded', 'imageCount', 'pendingImageCount', 'brokenImageCount',
+            'snapshotUnavailable'].map(key => [key, event[key]])));
+        } catch { /* ordinary renderer output is retained privately */ }
+      }
+    });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.on("error", reject);
+    child.on("error", error => { release(); reject(error); });
     child.on("close", (code) => {
-      if (code === 0) return resolve({ stdout, stderr });
+      release();
+      if (code === 0) return resolve({ stdout, stderr, timing: { requestId: trace.requestId, phases } });
       const lines = stderr.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
       const reason = lines.find((line) => /^(?:Error|TypeError|RangeError):/.test(line)) || `Renderer 退出码 ${code}`;
       const failure = new Error(reason);
       failure.code = /Export tile dimensions differ/.test(reason) ? "render_capture_failed" : "renderer_process_failed";
       failure.diagnostic = stderr.slice(-6000);
+      failure.renderTiming = { requestId: trace.requestId, phases };
       reject(failure);
     });
   });
 }
 
-export async function runSimpleRenderer({ data, projectId, root = appRoot, origin = SIMPLE_PIPELINE_DEFAULT_ORIGIN, outputDirectory = path.join(root, "output", "simple-pipeline", projectId), mode = "final" } = {}) {
+export async function runSimpleRenderer(input = {}) {
+  const trace = createOperationTrace('renderer_queue', input);
+  return rendererQueue.enqueue(() => {
+    if (input.canRender && !input.canRender()) {
+      trace.emit('superseded');
+      return { status: 'superseded', outputPath: null, rendererCalls: 0 };
+    }
+    return renderWithPermit({ ...input, requestId: trace.requestId });
+  }, { signal: input.signal, onState: state => {
+    trace.emit(state.state, { ...state, durationMs: state.waitMs });
+    input.onQueueState?.(state);
+  } });
+}
+
+async function renderWithPermit({ data, projectId, root = appRoot, origin = SIMPLE_PIPELINE_DEFAULT_ORIGIN, outputDirectory = path.join(root, "output", "simple-pipeline", projectId), mode = "final", requestId, revision } = {}) {
+  const trace = createOperationTrace('simple_renderer', { projectId, requestId, revision });
   const startedAt = Date.now();
   const draft = mode === "draft";
   const preflight = deterministicPreflight({ ...data, suppressMissingImagePlaceholders: mode === "final" }, { root, mode });
   if (!preflight.passed) return { status: "blocked", outputPath: null, qa: preflight, durationMs: Date.now() - startedAt, rendererCalls: 0 };
   await mkdir(outputDirectory, { recursive: true });
-  const dataFile = path.join(outputDirectory, draft ? "render-data-draft.json" : "render-data.json");
-  const outputPath = path.join(outputDirectory, `${projectId}-itinerary-${draft ? "draft-" : ""}2000.png`);
-  const qaPath = path.join(outputDirectory, draft ? "layout-qa-draft.json" : "layout-qa.json");
+  // A superseded render must not replace a newer request's data, QA or PNG.
+  const suffix = revision ? `-${String(revision).replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
+  const dataFile = path.join(outputDirectory, `render-data${draft ? '-draft' : ''}${suffix}.json`);
+  const outputPath = path.join(outputDirectory, `${projectId}-itinerary-${draft ? "draft-" : ""}2000${suffix}.png`);
+  const qaPath = path.join(outputDirectory, `layout-qa${draft ? '-draft' : ''}${suffix}.json`);
   await writeFile(dataFile, `${JSON.stringify(preflight.customer, null, 2)}\n`, "utf8");
-  await runRenderer([
+  const rendered = await runRenderer([
     path.join(root, "renderer", "render.mjs"),
     "--width=2000",
     "--dataset=workspace",
@@ -116,7 +161,10 @@ export async function runSimpleRenderer({ data, projectId, root = appRoot, origi
     `--output=${outputPath}`,
     `--qa-output=${qaPath}`,
     `--origin=${origin}`,
-  ], root);
+    `--request-id=${trace.requestId}`,
+    `--project-id=${projectId}`,
+    ...(revision ? [`--revision=${revision}`] : []),
+  ], root, trace);
   const layout = JSON.parse(await readFile(qaPath, "utf8"));
   const issues = [];
   if (layout.width !== 2000) issues.push({ severity: draft ? "warning" : "blocker", code: "wrong_width", message: `成品宽度为 ${layout.width}px` });
@@ -128,5 +176,5 @@ export async function runSimpleRenderer({ data, projectId, root = appRoot, origi
   issues.push(...(layout.issues || []), ...(layout.imageQualityIssues || []), ...(layout.imageUpscaleIssues || []));
   const normalizedIssues = normalizeRenderIssues(issues);
   const passed = existsSync(outputPath) && !normalizedIssues.some((item) => item.severity === "blocker");
-  return { status: passed ? "success" : "blocked", mode: draft ? "draft" : "final", outputPath: passed ? outputPath : null, qa: { passed, issues: normalizedIssues, layout }, durationMs: Date.now() - startedAt, rendererCalls: 1 };
+  return { status: passed ? "success" : "blocked", mode: draft ? "draft" : "final", outputPath: passed ? outputPath : null, timing: rendered.timing, qa: { passed, issues: normalizedIssues, layout }, durationMs: Date.now() - startedAt, rendererCalls: 1 };
 }

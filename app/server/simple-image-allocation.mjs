@@ -5,6 +5,7 @@ import { candidateQualification, IMAGE_AUDIT_EVIDENCE_VERSION } from './image-ca
 import { imageResolutionPolicyForSlot, withDayGalleryLayout } from './image-download.mjs';
 import { differenceHash, ImageDeduper } from './image-dedupe.mjs';
 import { getSlotImage } from '../src/lib/imageSlots.js';
+import { IMAGE_MEDIA_POLICY_VERSION } from '../src/lib/imageMedia.js';
 
 const clean = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
 const stable = (value) => Array.isArray(value) ? value.map(stable)
@@ -17,8 +18,11 @@ export function imageTargetFingerprint(slot = {}) {
   if (!subject || slot.plannerSlotStatus === 'unresolved' || slot.needsUserAction === true) return '';
   return JSON.stringify({
     auditEvidenceVersion: IMAGE_AUDIT_EVIDENCE_VERSION,
+    mediaPolicyVersion: IMAGE_MEDIA_POLICY_VERSION,
     module: clean(slot.moduleType),
     subject,
+    ...(slot.animalSubjectOptions ? { animalSubjectOptions: stable(slot.animalSubjectOptions) } : {}),
+    ...(slot.animalActionOptions ? { animalActionOptions: stable(slot.animalActionOptions) } : {}),
     action: clean(core.action || core.actionEn),
     identity: clean(core.identity || core.identityEn),
     hotel: clean(slot.hotel),

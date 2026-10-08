@@ -1,3 +1,4 @@
+import { isNonPhotographicMedia } from '../src/lib/imageMedia.js';
 // Shared by the model response boundary and the automatic adoption gate.
 export const IMAGE_AUDIT_BOOLEAN_FIELDS = Object.freeze([
   "locationMatch", "visibleLocationConflict", "hotelIdentityMatch", "visibleIdentityConflict",
@@ -18,6 +19,7 @@ export function conflictingActionJudgmentFields(audit = {}) {
 // These explicit visual failures already make a candidate unusable, even if
 // unrelated adoption/action fields contradict each other. Never infer a pass.
 export function independentVisualRejection(audit) {
+  if (isNonPhotographicMedia(audit)) return 'non_photographic';
   if (!audit || typeof audit.actualSubject !== 'string' || !audit.actualSubject.trim()) return null;
   return [['watermarkFree', 'watermark'], ['nonAI', 'ai_generated'], ['photographic', 'non_photographic'],
     ['technicalUsable', 'low_quality_unusable']].find(([field]) => audit[field] === false)?.[1] || null;
