@@ -487,12 +487,12 @@
   "showPaymentSection": true,
   "payment": {
     "accountTitle": "奢游国际指定收款账户",
-    "companyName": "卓越国际旅行社深圳东分公司",
-    "alipayAccount": "19928731347",
-    "accountName": "卓越国际旅行社有限公司深圳东分公司",
-    "bankAccount": "755964554910902",
+    "companyName": "广东奢游国际文化旅游有限公司",
+    "alipayAccount": "498030570@qq.com",
+    "accountName": "广东奢游国际文化旅游有限公司",
+    "bankAccount": "7559 7154 3510 001",
     "bankName": "招商银行深圳横岗支行",
-    "qrImage": "/assets/security/alipay-qr-original.png",
+    "qrImage": "/assets/security/alipay-qr-guangdong.png",
     "notice": "请勿向任何个人账户转款"
   },
   "contact": { "consultant": "待补充", "phone": "400-000-2026", "wechat": "@奢游国际", "email": "service@example.com" },

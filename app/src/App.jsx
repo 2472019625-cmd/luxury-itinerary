@@ -355,9 +355,9 @@ function SecurityAndPayment({ payment, showSecuritySection = true, showPaymentSe
   const accountTitle = payment?.accountTitle || "奢游国际指定收款账户";
   const companyName = payment?.companyName || payment?.company;
   const accountLines = [
-    payment?.alipayAccount && `对公支付宝账号：${payment.alipayAccount}`,
-    payment?.accountName && `账户名称：${payment.accountName}`,
-    payment?.bankAccount && `银行账号：${payment.bankAccount}`,
+    payment?.alipayAccount && `企业支付宝：${payment.alipayAccount}`,
+    payment?.accountName && `户名：${payment.accountName}`,
+    payment?.bankAccount && `账户：${payment.bankAccount}`,
     payment?.bankName && `开户行：${payment.bankName}`,
   ].filter(Boolean);
   const legacyFallback = [payment?.account, payment?.bank].filter(Boolean);
