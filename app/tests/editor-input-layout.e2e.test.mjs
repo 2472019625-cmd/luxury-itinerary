@@ -6,6 +6,7 @@ import test from 'node:test';
 import puppeteer from 'puppeteer-core';
 import { createAgentPlannerServer } from '../server/agent-planner-app.mjs';
 import { fixture } from './support/manual-image-fixture.mjs';
+import { APPROVED_PAYMENT } from '../server/simple-fixed-modules.mjs';
 
 async function editor(t, prepare = () => {}) {
   const executablePath = [process.env.LUXURY_TRAVEL_BROWSER, 'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -37,6 +38,30 @@ async function field(page, label, kind = 'textarea') {
   assert.ok(handle.asElement(), `Missing editor field ${label}`);
   return handle.asElement();
 }
+
+test('fresh editor renders the approved company payment details and actual QR pixels', async t => {
+  const { page } = await editor(t, value => {
+    const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+    result.data.payment = { ...APPROVED_PAYMENT };
+    result.data.showPaymentSection = true;
+    value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  });
+  await page.waitForFunction(() => {
+    const qr = document.querySelector('.payment-qr');
+    return qr?.complete && qr.naturalWidth > 0;
+  });
+  const rendered = await page.$eval('.payment-visual', node => ({
+    heading: node.querySelector('.payment-heading')?.textContent,
+    lines: [...node.querySelectorAll('.payment-account-lines > p')].map(line => line.textContent),
+    src: node.querySelector('.payment-qr').getAttribute('src'),
+    width: node.querySelector('.payment-qr').naturalWidth,
+  }));
+  assert.ok(rendered.heading.includes(APPROVED_PAYMENT.companyName));
+  assert.deepEqual(rendered.lines, [`企业支付宝：${APPROVED_PAYMENT.alipayAccount}`, `户名：${APPROVED_PAYMENT.accountName}`,
+    `账户：${APPROVED_PAYMENT.bankAccount}`, `开户行：${APPROVED_PAYMENT.bankName}`]);
+  assert.equal(rendered.src, APPROVED_PAYMENT.qrImage);
+  assert.equal(rendered.width, 1238);
+});
 
 async function replaceText(page, input, text) {
   await input.focus(); await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
