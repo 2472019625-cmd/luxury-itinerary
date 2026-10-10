@@ -90,7 +90,9 @@ export function inferExperienceStatus(spot = {}) {
 export function normalizeExperienceSpot(spot = {}, dayIndex = 0, spotIndex = 0) {
   const status = inferExperienceStatus(spot);
   const evidence = spotEvidence(spot);
-  const name = cleanText(spot.name) || `第${spotIndex + 1}项体验`;
+  // An explicitly cleared manual card is an editing draft, not missing input
+  // for automatic fact normalization. Do not regenerate its display title.
+  const name = cleanText(spot.name) || (spot.userProvided === true ? "" : `第${spotIndex + 1}项体验`);
   return {
     ...spot,
     id: cleanText(spot.id) || `day-${dayIndex + 1}-spot-${stableTextId(`${name}|${evidence.join("|")}`)}`,
@@ -117,6 +119,7 @@ export function synchronizeExperienceStatus(data, dayIndex, spotIndex, status) {
   data.included = withoutExperience(data.included, spot.name);
   data.excluded = withoutExperience(data.excluded, spot.name);
   data.pendingConfirmations = withoutExperience(data.pendingConfirmations, spot.name);
+  if (!spot.name) return spot;
   if (status === EXPERIENCE_STATUS.OPTIONAL_PAID) data.excluded.push(`${spot.name}：自费可选，费用以最终预订确认为准`);
   else if (status === EXPERIENCE_STATUS.PENDING) data.pendingConfirmations.push(`${spot.name}：待确认`);
   else data.included.push(`${spot.name}：${status === EXPERIENCE_STATUS.RESERVATION_REQUIRED ? '已包含，需提前预约' : '已包含'}`);

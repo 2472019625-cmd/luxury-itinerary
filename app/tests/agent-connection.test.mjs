@@ -26,7 +26,8 @@ test('completed generation freezes elapsed time and removes stale active stages'
  assert.deepEqual(displayAgentStages([{state:'complete'},{state:'active'},{state:'pending'}],state).map(x=>x.state),['complete','complete','complete']);
 });
 test('rendered simple draft opens the editor despite catalog/runtime status wording differences',()=>{
- const s={project:{flowKind:'simple_skill_v1',status:'partial',activeExecutionRunId:'run-1',createdAt:'2026-09-08T00:00:00Z',updatedAt:'2026-09-08T00:30:00Z'},executionRun:{executionRunId:'run-1',status:'partial',createdAt:'2026-09-08T00:01:00Z',updatedAt:'2026-09-08T00:12:00Z'},activeJob:{status:'awaiting_user_action',createdAt:'2026-09-08T00:01:00Z',updatedAt:'2026-09-08T00:10:00Z'},result:{data:{title:'draft'},outputPath:'draft-2000.png',render:{status:'success',mode:'draft',outputPath:'draft-2000.png'}}};
+ // The batch waited one minute before starting; editing later must not extend it.
+ const s={project:{flowKind:'simple_skill_v1',status:'partial',activeExecutionRunId:'run-1',createdAt:'2026-09-08T00:00:00Z',updatedAt:'2026-09-08T00:30:00Z'},executionRun:{executionRunId:'run-1',status:'partial',createdAt:'2026-09-08T00:01:00Z',updatedAt:'2026-09-08T00:12:00Z'},activeJob:{status:'awaiting_user_action',createdAt:'2026-09-08T00:01:00Z',startedAt:'2026-09-08T00:01:00Z',updatedAt:'2026-09-08T00:10:00Z'},result:{data:{title:'draft'},outputPath:'draft-2000.png',render:{status:'success',mode:'draft',outputPath:'draft-2000.png'}}};
  assert.equal(simpleRenderedEditorState(s),'draft');
  assert.equal(agentDisplayState(s).draft,true);
  assert.equal(agentDisplayState(s).failed,false);
@@ -77,4 +78,46 @@ test('rendered state requires a current successful render while a failed render 
  const failedRender=agentDisplayState({...s,result:{...s.result,render:{status:'failed'}}});
  assert.deepEqual({failed:failedRender.failed,draft:failedRender.draft,renderFailed:failedRender.renderFailed,completed:failedRender.completed},
    {failed:false,draft:true,renderFailed:true,completed:false});
+});
+
+test('whole-trip admission waiting does not start the generation clock',()=>{
+ const submitted='2026-10-08T09:00:00Z';
+ const s={project:{flowKind:'simple_skill_v1',status:'queued',createdAt:submitted,generationQueue:{state:'queued',queuedAt:Date.parse(submitted)}},activeJob:{status:'queued',createdAt:submitted}};
+ assert.equal(agentElapsed(s,Date.parse('2026-10-08T09:12:00Z')),0);
+ assert.equal(agentElapsed({...s,_connectionError:'network',_observedAt:Date.parse('2026-10-08T09:12:00Z')},Date.parse('2026-10-08T09:15:00Z')),0);
+});
+
+test('execution clock excludes admission waiting but includes planning and internal resource waiting',()=>{
+ const s={project:{flowKind:'simple_skill_v1',status:'planning',createdAt:'2026-10-08T09:00:00Z'},activeJob:{status:'running',startedAt:'2026-10-08T09:12:00Z',generationQueue:{state:'running',startedAt:Date.parse('2026-10-08T09:12:00Z'),waitMs:720000}}};
+ assert.equal(agentElapsed(s,Date.parse('2026-10-08T09:12:00Z')),0);
+ assert.equal(agentElapsed(s,Date.parse('2026-10-08T09:12:30Z')),30);
+ s.project.status='ready_for_execution'; s.executionRun={status:'running',createdAt:'2026-10-08T09:13:00Z'};
+ assert.equal(agentElapsed(s,Date.parse('2026-10-08T09:15:00Z')),180);
+});
+
+test('persisted running queue keeps its execution clock when there is no in-memory job',()=>{
+ const s={project:{flowKind:'simple_skill_v1',status:'running',createdAt:'2026-10-08T09:00:00Z',generationQueue:{state:'running',startedAt:Date.parse('2026-10-08T09:12:00Z'),waitMs:720000}},executionRun:{status:'running',createdAt:'2026-10-08T09:13:00Z'}};
+ assert.equal(agentElapsed(s,Date.parse('2026-10-08T09:15:00Z')),180);
+ s.project.generationQueue={state:'running',waitMs:720000};
+ assert.equal(agentElapsed(s,Date.parse('2026-10-08T09:15:00Z')),180);
+});
+
+test('finished queue duration remains fixed after reopening and later editor saves',()=>{
+ const s={project:{flowKind:'simple_skill_v1',status:'partial',activeExecutionRunId:'run',createdAt:'2026-10-08T09:00:00Z',updatedAt:'2026-10-08T10:00:00Z',generationQueue:{state:'complete',waitMs:720000,executionMs:900123}},executionRun:{executionRunId:'run',status:'partial',updatedAt:'2026-10-08T10:00:00Z'},result:{data:{title:'fresh fixture'},render:{status:'success'},outputPath:'draft.png'}};
+ assert.equal(agentElapsed(s,Date.parse('2026-10-08T11:00:00Z')),900);
+ assert.equal(agentElapsed({...s,activeJob:{status:'complete',updatedAt:'2026-10-08T12:00:00Z'}},Date.parse('2026-10-08T13:00:00Z')),900);
+});
+
+test('cancelling or interrupting an unstarted queued batch has zero execution time',()=>{
+ for(const state of ['cancelled','interrupted']){
+  const s={project:{flowKind:'simple_skill_v1',status:state,createdAt:'2026-10-08T09:00:00Z',updatedAt:'2026-10-08T09:12:00Z',generationQueue:{state,waitMs:720000}}};
+  assert.equal(agentElapsed(s,Date.parse('2026-10-08T09:15:00Z')),0);
+ }
+});
+
+test('disconnection and running cancellation freeze elapsed time from actual execution start',()=>{
+ const s={project:{flowKind:'simple_skill_v1',status:'running',createdAt:'2026-10-08T09:00:00Z'},activeJob:{status:'running',startedAt:'2026-10-08T09:12:00Z'},_observedAt:Date.parse('2026-10-08T09:15:00Z'),_connectionError:'network'};
+ assert.equal(agentElapsed(s,Date.parse('2026-10-08T09:30:00Z')),180);
+ const cancelled={...s,project:{...s.project,status:'cancelled',updatedAt:'2026-10-08T09:16:00Z'},activeJob:{...s.activeJob,status:'cancelled',updatedAt:'2026-10-08T09:16:00Z'},_connectionError:null};
+ assert.equal(agentElapsed(cancelled,Date.parse('2026-10-08T09:30:00Z')),240);
 });

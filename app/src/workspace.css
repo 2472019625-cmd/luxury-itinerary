@@ -484,10 +484,12 @@
 .copy-issue-target b { font-size: 10px; }
 .copy-issue-target small { color: #9a8261; font-size: 9px; }
 .inspector-panel h2 { max-width: 300px; margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
-.inspector-tabs { height: 48px; display: flex; align-items: flex-end; gap: 18px; padding: 0 24px; border-bottom: 1px solid var(--ws-line); }
+.inspector-tabs { height: 48px; flex: 0 0 auto; display: flex; align-items: flex-end; gap: 18px; padding: 0 24px; border-bottom: 1px solid var(--ws-line); }
 .inspector-tabs button { height: 100%; padding: 0 2px; color: var(--ws-muted); border: 0; border-bottom: 2px solid transparent; background: transparent; }
 .inspector-tabs button.active { color: var(--ws-ink); border-color: var(--ws-gold); }
-.inspector-body { flex: 1; overflow: auto; padding: 22px 24px; }
+.inspector-body { flex: 1; min-height: 0; overflow: auto; padding: 22px 24px; }
+.inspector-body:has(> .inspector-content) { padding: 0; }
+.inspector-content { padding: 22px 24px; }
 .inspector-body .ws-button { width: 100%; }
 .history-actions { display: flex; gap: 5px; }
 .history-actions button { display: grid; justify-items: center; gap: 2px; padding: 5px 6px; color: var(--ws-muted); border: 0; border-radius: 4px; background: transparent; font-size: 9px; }
@@ -572,7 +574,7 @@ body:has(.editor-page) { overflow: hidden; }
 .add-image-button { margin-top: 10px; }
 .delete-image-button { width: 100%; margin-top: 8px; padding: 9px; color: var(--ws-danger); border: 0; background: transparent; font-size: 11px; }
 .image-source { padding: 12px; color: #8a8178; background: var(--ws-soft); font-size: 11px; line-height: 1.7; }
-.module-toggle { min-height: 78px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 24px; border-top: 1px solid var(--ws-line); }
+.module-toggle { min-height: 78px; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 24px; border-top: 1px solid var(--ws-line); }
 .module-toggle > div { display: flex; align-items: center; gap: 10px; }
 .module-toggle > div span { display: grid; gap: 2px; }
 .module-toggle strong { font-size: 12px; }
@@ -1148,6 +1150,12 @@ body:has(.editor-page) { overflow: hidden; }
 .image-picker-modal > footer > button { justify-self: end; grid-column: 2; }
 
 /* Editor workspace: keep preview and contextual controls close together. */
+.workspace-editor-mode { height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.workspace-editor-mode > :not(.editor-page) { flex: 0 0 auto; }
+.workspace-editor-mode > .editor-page { flex: 1; height: auto; display: flex; flex-direction: column; }
+.workspace-editor-mode .editor-page > .step-rail { flex: 0 0 auto; }
+.workspace-editor-mode .editor-grid { flex: 1; height: auto; }
+.workspace-editor-mode .inspector-panel > header { flex: 0 0 auto; }
 .editor-grid.structure-compact { grid-template-columns: 88px minmax(0, 1fr) clamp(500px, 34vw, 640px); }
 .editor-grid.structure-expanded { grid-template-columns: 236px minmax(0, 1fr) clamp(500px, 34vw, 640px); }
 .structure-expand-toggle { width: 28px; height: 28px; border: 1px solid var(--ws-line); border-radius: 5px; background: #fffefa; color: var(--ws-gold-deep); font-size: 20px; line-height: 1; cursor: pointer; }
@@ -1183,7 +1191,7 @@ body:has(.editor-page) { overflow: hidden; }
 .editor-issues-trigger:hover { background: #f7edd9; }
 .editor-grid .inspector-panel > header { min-height: 70px; padding-right: 22px; padding-left: 22px; }
 .editor-grid .inspector-panel h2 { max-width: 390px; font-size: 17px; }
-.editor-grid .inspector-body { padding-right: 24px; padding-left: 24px; }
+.editor-grid .inspector-body:not(:has(> .inspector-content)) { padding-right: 24px; padding-left: 24px; }
 .editor-grid .day-inspector-body { padding: 0 0 24px; }
 .editor-grid .day-editor-flow { padding: 18px 22px 28px; }
 .editor-grid .inspector-panel > .copy-review-banner,

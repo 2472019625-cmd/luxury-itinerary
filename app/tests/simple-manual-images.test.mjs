@@ -720,6 +720,26 @@ test("人工新增体验卡片先保存为空草稿，上传后才进入客户�
   assert.equal(cleared.project.data.simpleImageSlotBindings[slotId].manualEditorCard, true);
 });
 
+test('人工体验名称清空可持久保存，并可重新填写；原自动体验空名称仍沿用既有处理', async t => {
+  const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
+  const data = structuredClone(buildSimpleManualImagePayload(value.store, value.projectId).project.data);
+  const slotId = 'manual:day:1:empty-title:primary';
+  createManualDayCard(data, 0, { spotId: 'empty-title', slotId });
+  data.days[0].spots.at(-1).name = '';
+  const bindings = Object.fromEntries(Object.entries(data.simpleImageSlotBindings).filter(([, item]) => item.module === 'day' && item.dayIndex === 0));
+  const render = async ({ mode }) => ({ status: 'success', mode, outputPath: `${mode}.png`, rendererCalls: 1 });
+  const first = await saveSimpleDayEditor({ ...value, dayIndex: 0, day: data.days[0], bindings, render });
+  assert.equal(first.project.data.days[0].spots.at(-1).name, '');
+  assert.equal(value.store.getFinalResult(value.projectId, value.executionRunId).data.days[0].spots.at(-1).name, '');
+  const nextDay = structuredClone(first.project.data.days[0]);
+  nextDay.spots.at(-1).name = '人工填写的新标题';
+  const next = await saveSimpleDayEditor({ ...value, dayIndex: 0, day: nextDay, bindings, render });
+  assert.equal(next.project.data.days[0].spots.at(-1).name, '人工填写的新标题');
+  nextDay.spots[0].name = '';
+  const original = await saveSimpleDayEditor({ ...value, dayIndex: 0, day: nextDay, bindings, render });
+  assert.equal(original.project.data.days[0].spots[0].name, '新体验卡片');
+});
+
 test("删除人工体验卡片后不再展示其旧图片位和待处理项", async (t) => {
   const value = await fixture(); t.after(() => rm(value.root, { recursive: true, force: true }));
   const data = structuredClone(buildSimpleManualImagePayload(value.store, value.projectId).project.data);

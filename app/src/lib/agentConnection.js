@@ -62,16 +62,34 @@ export function displayAgentStages(stages, state) {
 
 export function agentElapsed(snapshot, now = Date.now()) {
   const state = agentDisplayState(snapshot);
+  if (state.queued) return 0;
+  const simple = snapshot?.project?.flowKind === 'simple_skill_v1';
+  const queue = snapshot?.activeJob?.generationQueue || snapshot?.project?.generationQueue;
+  // The persisted queue duration survives reopening and later editor saves.
+  if (simple && ['complete', 'failed'].includes(queue?.state)
+    && Number.isFinite(queue.executionMs) && queue.executionMs >= 0) {
+    return Math.floor(queue.executionMs / 1000);
+  }
+  const timestamp = value => typeof value === 'number' ? value : Date.parse(value);
+  const queueStart = timestamp(queue?.startedAt);
+  const jobStart = timestamp(snapshot?.activeJob?.startedAt);
+  if (simple && queue && !Number.isFinite(queueStart) && !Number.isFinite(jobStart)
+    && ['queued', 'cancelled', 'interrupted'].includes(queue.state)
+    && !Number.isFinite(queue.executionMs)) return 0;
   const terminalTime = state.draft
     ? snapshot?.activeJob?.completedAt || snapshot?.activeJob?.finishedAt || snapshot?.activeJob?.updatedAt || snapshot?.executionRun?.updatedAt || snapshot?.project?.updatedAt
     : snapshot?.executionRun?.updatedAt || snapshot?.activeJob?.updatedAt || snapshot?.project?.updatedAt;
-  // A Simple project is one complete production batch, including planning.
-  // Its execution record is created after planning and must not reset the clock.
-  const startedAt = snapshot?.project?.flowKind === 'simple_skill_v1'
-    ? snapshot?.project?.createdAt || snapshot?.activeJob?.createdAt || snapshot?.executionRun?.startedAt || snapshot?.executionRun?.createdAt
+  // Count planning from the whole-batch execution start, excluding admission
+  // waiting. Older records without queue metadata retain their original clock.
+  const submittedAt = timestamp(snapshot?.project?.createdAt || snapshot?.activeJob?.createdAt);
+  const simpleStart = Number.isFinite(jobStart) ? jobStart : Number.isFinite(queueStart) ? queueStart
+    : Number.isFinite(queue?.waitMs) && Number.isFinite(submittedAt) ? submittedAt + queue.waitMs : submittedAt;
+  const startedAt = simple
+    ? simpleStart || snapshot?.executionRun?.startedAt || snapshot?.executionRun?.createdAt
     : snapshot?.executionRun?.startedAt || snapshot?.activeJob?.startedAt || snapshot?.executionRun?.createdAt || snapshot?.activeJob?.createdAt || snapshot?.project?.createdAt;
   const end = state.disconnected ? snapshot?._observedAt : state.frozen ? Date.parse(terminalTime) : now;
-  return Math.max(0, Math.floor(((end || snapshot?._observedAt || now) - Date.parse(startedAt || now)) / 1000));
+  const start = timestamp(startedAt);
+  return Math.max(0, Math.floor(((end || snapshot?._observedAt || now) - (Number.isFinite(start) ? start : now)) / 1000));
 }
 
 function errorText(value) {

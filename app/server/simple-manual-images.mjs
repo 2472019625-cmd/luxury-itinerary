@@ -994,7 +994,7 @@ export async function saveSimpleDayEditor({ store, root, projectId, dayIndex, da
       ...(previous || {}),
       ...spot,
       id,
-      name: text(spot.name, 120) || "新体验卡片",
+      name: text(spot.name, 120) || (previous?.userProvided === true || spot.userProvided === true ? "" : "新体验卡片"),
       description: text(spot.description || spot.experience, 2000),
       reminder: text(spot.reminder, 800),
       images: Array.isArray(previous?.images) ? previous.images : [],

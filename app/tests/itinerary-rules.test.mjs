@@ -10,9 +10,22 @@ import {
   mapDaysFromStart,
   normalizeDayFacts,
   normalizeItineraryFacts,
+  normalizeExperienceSpot,
   synchronizeExperienceStatus,
   validateItineraryFacts,
 } from "../src/lib/itineraryRules.js";
+
+test('cleared manual experience title stays empty without anonymous fee entries; automatic facts keep fallback', () => {
+  const data = { days: [{ spots: [{ id: 'manual-empty', name: '', userProvided: true, description: '', status: 'pending' }] }],
+    included: [], excluded: [], pendingConfirmations: [] };
+  synchronizeExperienceStatus(data, 0, 0, 'pending');
+  assert.equal(data.days[0].spots[0].name, '');
+  assert.deepEqual(data.pendingConfirmations, []);
+  data.days[0].spots[0].name = '人工体验';
+  synchronizeExperienceStatus(data, 0, 0, 'optional_paid');
+  assert.deepEqual(data.excluded, ['人工体验：自费可选，费用以最终预订确认为准']);
+  assert.equal(normalizeExperienceSpot({ name: '' }, 0, 1).name, '第2项体验');
+});
 
 test('草原飞机体验只从当天明确工具事实生成，国际航班与商务送机不冒充', () => {
   const returnFlight = buildCoreSpots({ routeNodes: ['甲地', '机场'], vehicle: '商务用车', description: '酒店早餐后，按国际航班时间专人送机，结束旅程。' });

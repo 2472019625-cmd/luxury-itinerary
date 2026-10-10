@@ -287,7 +287,7 @@ function SimpleManualImagePage({ projectId, ItineraryComponent }) {
   const firstUnresolved = payload.unresolvedRequiredSlotIds?.[0] || "image:cover:primary";
   const pendingSummary = payload.unresolvedNotices?.map((item) => item.message) || [];
   const provisionalCount = payload.project.data.imageReview?.slots?.filter((slot) => slot.status === "provisional_pending_confirmation").length || 0;
-  return <div className="workspace-shell workspace-agent-mode"><AppHeader user={workspaceUser} project={headerProject} saved="saved" canGenerate={false} onHome={goHome} onLogout={logout} /><AgentModeStrip showHome onHome={goHome} /><Editor
+  return <div className="workspace-shell workspace-agent-mode workspace-editor-mode"><AppHeader user={workspaceUser} project={headerProject} saved="saved" canGenerate={false} onHome={goHome} onLogout={logout} /><AgentModeStrip showHome onHome={goHome} /><Editor
     project={payload.project}
     ItineraryComponent={ItineraryComponent}
     onProject={(project) => setPayload((current) => ({ ...current, project }))}
