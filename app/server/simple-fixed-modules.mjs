@@ -3,15 +3,15 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 export const SIMPLE_PIPELINE_DEFAULT_ORIGIN = "http://127.0.0.1:4174";
-export const APPROVED_PAYMENT_QR_PATH = "/assets/security/alipay-qr-original.png";
-export const APPROVED_PAYMENT_QR_SHA256 = "b2dc93f6205f647bfeb19dad1c6da7d6bd5e715e327271d14b752b3805f34670";
+export const APPROVED_PAYMENT_QR_PATH = "/assets/security/alipay-qr-guangdong.png";
+export const APPROVED_PAYMENT_QR_SHA256 = "0002cbcc82755d41141ffcc3302743eeeaace848c399df668d7ed5d44228da2f";
 
 export const APPROVED_PAYMENT = Object.freeze({
   accountTitle: "奢游国际指定收款账户",
-  companyName: "卓越国际旅行社深圳东分公司",
-  alipayAccount: "19928731347",
-  accountName: "卓越国际旅行社有限公司深圳东分公司",
-  bankAccount: "755964554910902",
+  companyName: "广东奢游国际文化旅游有限公司",
+  alipayAccount: "498030570@qq.com",
+  accountName: "广东奢游国际文化旅游有限公司",
+  bankAccount: "7559 7154 3510 001",
   bankName: "招商银行深圳横岗支行",
   qrImage: APPROVED_PAYMENT_QR_PATH,
   notice: "请勿向任何个人账户转款",

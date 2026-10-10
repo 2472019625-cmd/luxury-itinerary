@@ -34,7 +34,24 @@ test("没有 notes 时草稿预检允许继续渲染但保留明确提醒", () =
   assert.ok(result.issues.some((item) => item.code === "fixed_notes_missing" && item.severity === "warning"));
 });
 
-test("批准收款数据和本机二维码资产完整，且伪造字段不能通过", () => {
+test("批准收款数据和本机二维码资产完整，且伪造字段不能通过", async () => {
+  assert.deepEqual({
+    companyName: APPROVED_PAYMENT.companyName,
+    alipayAccount: APPROVED_PAYMENT.alipayAccount,
+    accountName: APPROVED_PAYMENT.accountName,
+    bankAccount: APPROVED_PAYMENT.bankAccount,
+    bankName: APPROVED_PAYMENT.bankName,
+  }, {
+    companyName: "广东奢游国际文化旅游有限公司",
+    alipayAccount: "498030570@qq.com",
+    accountName: "广东奢游国际文化旅游有限公司",
+    bankAccount: "7559 7154 3510 001",
+    bankName: "招商银行深圳横岗支行",
+  });
+  for (const name of ["sample-itinerary.json", "sample-itinerary-africa.json", "kenya-luxury-8d.json", "tanzania-luxury-10d.json"]) {
+    const { payment } = JSON.parse(await readFile(path.join(appRoot, "data", name), "utf8"));
+    assert.deepEqual(payment, APPROVED_PAYMENT, `${name} 的收款信息与批准配置不一致`);
+  }
   const approved = validateApprovedPayment(APPROVED_PAYMENT, { root: appRoot });
   assert.equal(approved.passed, true);
   assert.equal(approved.assetStatus, "approved");
