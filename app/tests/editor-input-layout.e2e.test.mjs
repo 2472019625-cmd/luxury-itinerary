@@ -7,11 +7,12 @@ import puppeteer from 'puppeteer-core';
 import { createAgentPlannerServer } from '../server/agent-planner-app.mjs';
 import { fixture } from './support/manual-image-fixture.mjs';
 
-async function editor(t) {
+async function editor(t, prepare = () => {}) {
   const executablePath = [process.env.LUXURY_TRAVEL_BROWSER, 'C:/Program Files/Google/Chrome/Application/chrome.exe',
     'C:/Program Files/Microsoft/Edge/Application/msedge.exe'].filter(Boolean).find(existsSync);
   assert.ok(executablePath, 'A browser is required for editor interaction verification');
   const value = await fixture();
+  await prepare(value);
   const runtime = createAgentPlannerServer({ port: 0, workspaceRoot: path.join(value.root, 'agent'),
     simpleRuntimeRoot: value.root, simpleStore: value.store, auth: { enabled: false },
     simpleRenderer: async ({ mode }) => ({ status: 'success', mode, outputPath: `${mode}.png`, rendererCalls: 1 }) });
@@ -79,6 +80,50 @@ test('route textarea keeps Enter and blank draft lines while persisting normaliz
   await page.click('.day-info-section .day-section-toggle');
   const reloaded = await field(page, '路线节点');
   assert.equal(await reloaded.evaluate(node => node.value), 'Nairobi\nMara');
+});
+
+test('expense line lists retain Enter, blank drafts and separate items after switching modules', async t => {
+  const { page } = await editor(t);
+  await page.click('.structure-panel nav > button[title="费用说明"]');
+  const labels = ['报价说明', '费用包含', '费用不含', '退改政策'];
+  for (const label of labels) {
+    const input = await field(page, label);
+    await replaceText(page, input, '第一条');
+    await page.keyboard.press('Enter');
+    assert.equal(await input.evaluate(node => node.value), '第一条\n', `${label}: Enter must remain available for the next item`);
+    await page.keyboard.press('Enter'); await page.keyboard.type('第二条');
+    assert.equal(await input.evaluate(node => node.value), '第一条\n\n第二条', `${label}: editing must preserve blank draft lines`);
+    await page.click('.inspector-panel header h2');
+    assert.equal(await input.evaluate(node => node.value), '第一条\n第二条', `${label}: completed input uses separate canonical items`);
+  }
+  await page.click('.structure-panel nav > button[title="封面"]');
+  await page.click('.structure-panel nav > button[title="费用说明"]');
+  for (const label of labels) {
+    const input = await field(page, label);
+    assert.equal(await input.evaluate(node => node.value), '第一条\n第二条', `${label}: module navigation must keep both items`);
+  }
+  if (process.env.EXPENSE_LINES_SCREENSHOT) await page.screenshot({ path: process.env.EXPENSE_LINES_SCREENSHOT });
+});
+
+test('note line draft belongs to the selected note rather than leaking between items', async t => {
+  const { page } = await editor(t, value => {
+    const result = value.store.getFinalResult(value.projectId, value.executionRunId);
+    result.data.notes = [{ title: '提示一', items: ['原提示一'] }, { title: '提示二', items: ['原提示二'] }];
+    value.store.saveFinalResult(value.projectId, value.executionRunId, result);
+  });
+  await page.click('.structure-panel nav > button[title="注意事项"]');
+  const input = await field(page, '内容（每行一条）');
+  await replaceText(page, input, '第一条'); await page.keyboard.press('Enter');
+  assert.equal(await input.evaluate(node => node.value), '第一条\n');
+  await page.keyboard.type('第二条');
+  await page.select('.item-picker select', '1');
+  const second = await field(page, '内容（每行一条）');
+  assert.equal(await second.evaluate(node => node.value), '原提示二');
+  await second.focus(); await page.keyboard.press('End'); await page.keyboard.press('Enter');
+  assert.equal(await second.evaluate(node => node.value), '原提示二\n');
+  await page.select('.item-picker select', '0');
+  const first = await field(page, '内容（每行一条）');
+  assert.equal(await first.evaluate(node => node.value), '第一条\n第二条');
 });
 
 test('module visibility remains entirely inside short desktop viewports and outside scrollable content', async t => {
